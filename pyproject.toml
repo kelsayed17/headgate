@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "headgate"
+version = "0.1.0"
+description = "An httpx2 client base with retries, rate limiting, a circuit breaker, caching and a declared-response contract."
+readme = "README.md"
+requires-python = ">=3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Khaled Elsayed", email = "4119211+kelsayed17@users.noreply.github.com" }]
+dependencies = [
+    "httpx2[http2]>=2.13.1",
+    "hishel>=1.4.0",
+    "aiolimiter>=1.2.1",
+    "msgspec>=0.22",
+]
+
+[project.optional-dependencies]
+pydantic = ["pydantic>=2.12"]
+curl = ["curl_cffi>=0.16.2"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "pytest-asyncio>=1.4",
+    "syrupy>=6.1.1",
+    "pytest-httpx>=0.36.2",
+    "time-machine",
+    "anysqlite",
+    "ruff",
+    "ty",
+    "headgate[pydantic,curl]",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/headgate"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/headgate", "examples", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_test_loop_scope = "session"
+asyncio_default_fixture_loop_scope = "session"
+addopts = "--import-mode=importlib -p headgate_pytest_alias"
+markers = ["transport_policy: the test's subject is the retry/breaker/throttle, so it keeps the real rate-limiter wait"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.uv.sources]
+headgate = { workspace = true }
+
+[tool.ty.environment]
+extra-paths = ["examples"]

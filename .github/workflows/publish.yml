@@ -1,0 +1,16 @@
+name: publish
+on:
+  release:
+    types: [published]
+jobs:
+  publish:
+    # Disabled until the operator enables trusted publishing on PyPI.
+    if: false
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - run: uv publish
