@@ -29,6 +29,7 @@ from headgate._core._events import (
     RetryScheduled,
 )
 from headgate._core._origin import origin_of, origin_text, same_origin
+from headgate._core._retry_after import RETRY_AFTER_STATUSES, parse_retry_after, retry_after_of
 from headgate._core._seams import BREAKER_GATE, CredentialStamper
 from headgate._core._switch import policy_disabled, policy_is_disabled
 from headgate._core._time import (
@@ -46,6 +47,7 @@ from headgate._core._time import (
 __all__ = [
     "BREAKER_GATE",
     "OBSERVER_FAILURES",
+    "RETRY_AFTER_STATUSES",
     "SILENT",
     "SYSTEM_TIMING",
     "AttemptFinished",
@@ -75,8 +77,10 @@ __all__ = [
     "current_timing",
     "origin_of",
     "origin_text",
+    "parse_retry_after",
     "policy_disabled",
     "policy_is_disabled",
+    "retry_after_of",
     "same_origin",
     "system_random",
     "timing_override",

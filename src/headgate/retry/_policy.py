@@ -17,19 +17,13 @@ layer concluded about the call's last attempt, which the client folds into the e
 from __future__ import annotations
 
 import math
-import re
 import sys
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 import httpx2
 
-from headgate._core import Clock, RandomSource, Slot, system_random
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
+from headgate._core import Clock, RandomSource, Slot, retry_after_of, system_random
 
 __all__ = [
     "IDEMPOTENT_METHODS",
@@ -46,8 +40,6 @@ __all__ = [
     "RetryBudget",
     "RetryOutcome",
     "RetryPolicy",
-    "parse_retry_after",
-    "retry_after_of",
 ]
 
 #: The methods RFC 9110 defines as idempotent that the client sends: re-sent after any retryable failure.
@@ -72,71 +64,12 @@ NEVER_SENT_ERRORS: tuple[type[httpx2.TransportError], ...] = (
 #: Failures that are the request's own fault, so sending it again cannot succeed: never retried.
 LOCAL_ERRORS: tuple[type[Exception], ...] = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2.InvalidURL)
 
-#: The statuses a ``Retry-After`` means something on: rate limited (RFC 6585) and unavailable (RFC 9110).
-_RETRY_AFTER_STATUSES: Final = frozenset({429, 503})
-
 #: The methods a hedge may never be configured for: RFC 9110 does not define them as idempotent.
 _UNHEDGEABLE_METHODS: Final = frozenset({"POST", "PATCH"})
 
 #: The largest exponent the backoff raises 2 to. ``2.0 ** 1024`` overflows a float, so a budget of more than 1023
 #: retries would otherwise raise ``OverflowError`` instead of waiting; the clamp leaves every smaller exponent exact.
 _MAX_BACKOFF_EXPONENT = 1023
-
-#: A non-negative decimal number of seconds: ``Retry-After`` defines whole seconds, and fractions are accepted too.
-_DECIMAL = re.compile(r"\d+(?:\.\d+)?")
-
-#: Milliseconds in a second, for ``retry-after-ms``.
-_MS_PER_SECOND = 1000.0
-
-#: What ``parsedate_to_datetime`` raises for a value it cannot parse.
-_RETRY_AFTER_ERRORS = (TypeError, ValueError)
-
-
-def _utc_now() -> datetime:
-    """Return the current UTC time."""
-    return datetime.now(UTC)
-
-
-def _decimal_seconds(value: str) -> float | None:
-    """Return *value* as a finite non-negative number, or ``None`` when it is not a plain decimal."""
-    if not (value.isascii() and _DECIMAL.fullmatch(value)):
-        return None
-    seconds = float(value)
-    return seconds if math.isfinite(seconds) else None
-
-
-def parse_retry_after(value: str, *, now: Callable[[], datetime] = _utc_now) -> float | None:
-    """Parse a ``Retry-After`` value into seconds; ``None`` when it is neither a decimal number nor an HTTP-date.
-
-    Whole and fractional seconds are accepted. A zone-less date is read as UTC; a past date is 0. *now* supplies the
-    wall-clock time a date is measured from.
-    """
-    value = value.strip()
-    seconds = _decimal_seconds(value)
-    if seconds is not None:
-        return seconds
-    try:
-        when = parsedate_to_datetime(value)
-    except _RETRY_AFTER_ERRORS:
-        return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=UTC)
-    return max(0.0, (when - now()).total_seconds())
-
-
-def retry_after_of(response: httpx2.Response) -> float | None:
-    """Return the seconds a 429 or 503 *response* asks to wait: ``retry-after-ms`` if it parses, else ``Retry-After``.
-
-    ``None`` for any other status, which RFC 9110 and RFC 6585 give the header no meaning on, and when neither header
-    is present or parses.
-    """
-    if response.status_code not in _RETRY_AFTER_STATUSES:
-        return None
-    millis = _decimal_seconds(response.headers.get("retry-after-ms", "").strip())
-    if millis is not None:
-        return millis / _MS_PER_SECOND
-    header = response.headers.get("retry-after")
-    return None if header is None else parse_retry_after(header)
 
 
 def _check_non_negative(name: str, value: float) -> None:

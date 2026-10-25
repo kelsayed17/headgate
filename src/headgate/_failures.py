@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Final
 
 import httpx2
 
+from headgate._core import retry_after_of
 from headgate._url import redact_secrets, sanitize_url
 from headgate.errors import (
     AuthError,
@@ -40,7 +41,6 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
-from headgate.retry._policy import retry_after_of
 
 if TYPE_CHECKING:
     from headgate._responses import RefusedError

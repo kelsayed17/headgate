@@ -30,7 +30,8 @@ from typing import TYPE_CHECKING, Final
 
 import httpx2
 
-from headgate.retry._policy import LOCAL_ERRORS, NEVER_SENT_ERRORS, retry_after_of
+from headgate._core import retry_after_of
+from headgate.retry._policy import LOCAL_ERRORS, NEVER_SENT_ERRORS
 
 if TYPE_CHECKING:
     from headgate._core import SendProgress

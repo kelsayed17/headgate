@@ -5,7 +5,8 @@
 
 Three sources are read, in this order of precedence:
 
-* ``Retry-After`` on a 429 or 503 (RFC 9110 section 10.2.3): whole seconds or an HTTP-date;
+* ``retry-after-ms`` or ``Retry-After`` on a 429 or 503, read as the retry layer reads them
+  (:func:`headgate._core.retry_after_of`), so the pause the budget takes is the wait the retry layer makes;
 * ``RateLimit`` with ``RateLimit-Policy`` (draft-ietf-httpapi-ratelimit-headers-11): Structured Field Lists of policy
   items. An item with ``r=0`` (no quota left) is exhausted, and its ``t`` is the seconds until quota returns. An item
   naming a policy whose ``qu`` is not ``"requests"`` (``content-bytes``, ``concurrent-requests``) is not about request
@@ -21,18 +22,17 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import UTC
-from email.utils import parsedate_to_datetime
 from typing import TYPE_CHECKING, Final
 
 import httpx2
 
+from headgate._core import retry_after_of
 from headgate.ratelimit._fields import parse_list
 
 if TYPE_CHECKING:
     from headgate.ratelimit._fields import Item
 
-__all__ = ["Feedback", "parse_retry_after", "read_feedback"]
+__all__ = ["Feedback", "read_feedback"]
 
 #: The statuses that say the server refused for load or quota.
 _PUSHBACK_STATUSES: Final = frozenset({httpx2.codes.TOO_MANY_REQUESTS, httpx2.codes.SERVICE_UNAVAILABLE})
@@ -44,9 +44,6 @@ _REQUESTS_UNIT: Final = "requests"
 _EPOCH_SECONDS_FLOOR: Final = 1_000_000_000
 _EPOCH_MILLIS_FLOOR: Final = 1_000_000_000_000
 _MILLIS: Final = 1000
-
-#: What ``parsedate_to_datetime`` raises for a value it cannot parse.
-_DATE_ERRORS = (TypeError, ValueError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +62,7 @@ def read_feedback(response: httpx2.Response, *, now: float) -> Feedback:
     """Return what *response* says about the rate budget; *now* is the wall-clock Unix time, for absolute times."""
     headers = response.headers
     refused = response.status_code in _PUSHBACK_STATUSES
-    retry_after = parse_retry_after(headers.get("Retry-After", ""), now=now) if refused else None
+    retry_after = retry_after_of(response, now=now)
     exhausted, reset = _ietf_quota(headers)
     if exhausted is None:
         exhausted, reset = _de_facto_quota(headers, now=now)
@@ -73,23 +70,6 @@ def read_feedback(response: httpx2.Response, *, now: float) -> Feedback:
         return _NOTHING
     pause = retry_after if retry_after is not None else reset if exhausted else None
     return Feedback(pushback=True, pause=pause)
-
-
-def parse_retry_after(value: str, *, now: float) -> float | None:
-    """Return a ``Retry-After`` as seconds from *now* (Unix time), at least 0; ``None`` when it is neither form."""
-    value = value.strip()
-    if not value:
-        return None
-    if value.isascii() and value.isdigit():
-        return float(value)
-    try:
-        when = parsedate_to_datetime(value)
-    except _DATE_ERRORS:
-        return None
-    # A zone-less date comes back naive; an HTTP-date is always GMT.
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=UTC)
-    return max(0.0, when.timestamp() - now)
 
 
 def _ietf_quota(headers: httpx2.Headers) -> tuple[bool | None, float | None]:

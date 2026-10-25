@@ -13,7 +13,7 @@ from __future__ import annotations
 import httpx2
 import pytest
 
-from headgate.ratelimit._feedback import Feedback, parse_retry_after, read_feedback
+from headgate.ratelimit._feedback import Feedback, read_feedback
 from headgate.ratelimit._fields import Item, parse_list
 
 #: The wall clock every test reads, as a Unix time (2023-11-14T22:13:20Z).
@@ -30,27 +30,6 @@ def _feedback(status: int = 200, **headers: str) -> Feedback:
 
 
 # --- Retry-After ---
-
-
-@pytest.mark.parametrize(
-    ("value", "seconds"),
-    [
-        ("7", 7.0),
-        (" 7 ", 7.0),
-        ("Tue, 14 Nov 2023 22:14:02 GMT", _RESET_IN),
-        ("Tue, 14 Nov 2023 22:14:02 -0000", _RESET_IN),
-        ("Tue, 14 Nov 2023 22:00:00 GMT", 0.0),
-    ],
-)
-def test_a_retry_after_is_seconds_or_an_http_date(value: str, seconds: float) -> None:
-    """Read whole seconds as they are and a date relative to now; a past date is no wait at all."""
-    assert parse_retry_after(value, now=_NOW) == seconds
-
-
-@pytest.mark.parametrize("value", ["", "soon", "-1", "1.5", "٣"])
-def test_a_retry_after_in_neither_form_is_ignored(value: str) -> None:
-    """Ignore a value that is neither whole ASCII seconds nor an HTTP-date."""
-    assert parse_retry_after(value, now=_NOW) is None
 
 
 def test_a_429_or_503_is_pushback_and_its_retry_after_the_pause() -> None:
