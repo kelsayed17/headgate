@@ -11,22 +11,16 @@ whose subject is the throttle's own timing opts out of the no-op rate-limiter wa
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING
 
 import pytest
 
-from headgate._core import Timing, timing_override
 from headgate.breaker import DEFAULT_REGISTRY
 from headgate.ratelimit import AsyncRateLimiter
+from headgate.testing import instant_retries
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-
-
-async def _yield_only(_seconds: float, /) -> None:
-    """Yield to the event loop once instead of sleeping, as a zero-second backoff would."""
-    await asyncio.sleep(0)
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +29,7 @@ def instant_retry_sleep() -> Iterator[None]:
 
     Clients read their timing when they are built, and every client in a test is built inside this fixture's block.
     """
-    with timing_override(Timing(sleep=_yield_only)):
+    with instant_retries():
         yield
 
 

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 from dataclasses import dataclass, replace
 from string.templatelib import Template
 from typing import TYPE_CHECKING, Literal, Self, TypedDict, Unpack
@@ -36,9 +37,11 @@ import httpx2
 
 from headgate._auth import failed_on_auth_hop
 from headgate._body import read_capped, read_head
+from headgate._breaker_scope import scoped_breakers
 from headgate._cache import host_untested
 from headgate._core import SILENT, CallContext, CallFinished, CallInfo, CallStarted, Emitter, current_timing
 from headgate._core import policy_is_disabled as _policy_is_disabled
+from headgate._deprecation import announce_deprecation
 from headgate._failures import (
     SHAPE_ERRORS,
     CallSite,
@@ -62,10 +65,11 @@ from headgate._options import (
 )
 from headgate._responses import Expect, Reader, RefusedError
 from headgate._stack import build_http_client, build_transport_stack
-from headgate._url import render_path, route_template
+from headgate._url import render_path, route_template, sanitize_url
+from headgate._view import KEEP, ROOT_DEFAULTS, Keep, overlay_timeout
 from headgate.breaker import BreakerOpenError
 from headgate.breaker._registry import NO_BREAKER
-from headgate.errors import CircuitOpenError, ClientError, ClientTimeoutError
+from headgate.errors import CircuitOpenError, ClientError, ClientTimeoutError, DecodeError
 from headgate.retry import NO_RETRY, RetryPolicy
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
 
@@ -219,6 +223,7 @@ class AsyncBaseClient:
         self._policy_off = _policy_is_disabled()
         if self._policy_off:
             policy = replace(policy, retry=NO_RETRY, breaker=None)
+        policy = scoped_breakers(policy)
         self._source = type(self).__name__
         self._policy = policy
         self._timing = current_timing()
@@ -227,11 +232,13 @@ class AsyncBaseClient:
         self._request_id_headers = http.request_id_headers
         self._timeout = http.timeout
         self._emitter = Emitter(http.observers) if http.observers else SILENT
+        self._view = ROOT_DEFAULTS
+        self._owns_pool = True
         stack = build_transport_stack(rate, policy, http, self._timing)
         self._http_client = build_http_client(base_url=base_url, auth=auth, http=http, transport=stack)
 
     async def __aenter__(self) -> Self:
-        """Return the client; leaving the block closes it."""
+        """Return the client; leaving the block closes it (a view's block closes nothing, see :meth:`with_options`)."""
         return self
 
     async def __aexit__(
@@ -241,8 +248,48 @@ class AsyncBaseClient:
         await self.aclose()
 
     async def aclose(self) -> None:
-        """Close the connection pool and the transport stack under it (a cache's storage included)."""
-        await self._http_client.aclose()
+        """Close the connection pool and the transport stack under it (a cache's storage included).
+
+        On a view (see :meth:`with_options`) it does nothing: the client the view was made from owns the pool.
+        """
+        if self._owns_pool:
+            await self._http_client.aclose()
+
+    def with_options(
+        self,
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: Timeouts | float | None = None,
+        deadline: float | Literal[Keep.KEEP] | None = KEEP,
+        retry: bool | RetryPolicy | None = None,
+    ) -> Self:
+        """Return a view of this client whose calls take different defaults; the client itself is unchanged.
+
+        * ``headers``: sent on every call of the view, over the client's; a call's ``headers=`` still wins a clash.
+        * ``timeout``: replaces the client's :class:`~headgate.Timeouts` (a number replaces the read timeout only).
+        * ``deadline``: seconds each call may take, or ``None`` for no deadline.
+        * ``retry``: ``False`` sends once, a :class:`~headgate.RetryPolicy` replaces the client's, ``True`` restores it.
+
+        An option left out keeps the client's (or, on a view of a view, the outer view's). A call's own options win
+        over the view's, and the view's over a :class:`~headgate.Route`'s.
+
+        The view shares everything that makes calls cooperate: the connection pool and transport stack, so the rate
+        budget and the retry layer's state; the circuit breakers; the auth and its cached token; the observers. It is a
+        shallow copy, so a subclass's own attributes are shared too. **The client it was made from owns the pool**:
+        closing a view, or leaving its ``async with`` block, closes nothing, and a view stops working once that client
+        is closed.
+
+        :raises ValueError: for a timeout or deadline that is not positive.
+        """
+        layered = self._view.layered(headers=headers, deadline=deadline, retry=retry)
+        view = copy.copy(self)
+        # A shallow copy shares the pool, the stack and any subclass state; only the view's own settings differ.
+        vars(view).update(
+            _view=layered,
+            _owns_pool=False,
+            _timeout=self._timeout if timeout is None else overlay_timeout(self._timeout, timeout),
+        )
+        return view
 
     # Public API: the verbs.
 
@@ -349,6 +396,7 @@ class AsyncBaseClient:
         prepared = self._prepare(_Call("GET", url, {"deadline": None}, follow_redirects=follow_redirects))
         async with self._reported(prepared.context) as report, self._exchange(prepared) as streamed:
             report.status_code = streamed.status_code
+            announce_deprecation(prepared.context, streamed)
             if (refused := _refusal(self._refusal_check, streamed)) is not None:
                 head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
                 raise refusal_error(refused, head, self._site(prepared)) from refused
@@ -371,7 +419,7 @@ class AsyncBaseClient:
             url, route = render_path(call.url), route_template(call.url)
         else:
             url, route = call.url, None
-        info = CallInfo(method=call.method, url=loggable_url(url), route=route)
+        log_url = loggable_url(url)
         follow = self._http_client.follow_redirects if call.follow_redirects is None else call.follow_redirects
         # The per-call half of the constructor's check: the client itself never follows with a refusal_check.
         if self._refusal_check is not None and follow:
@@ -384,13 +432,16 @@ class AsyncBaseClient:
                 call.method,
                 url,
                 params=None if params is None else _query_pairs(params),
-                headers=options.get("headers"),
+                headers=self._view.headers_for(options.get("headers")),
                 json=options.get("json"),
                 data=options.get("data"),
                 timeout=httpx_timeout(self._timeout, options.get("timeout")),
             )
         except httpx2.InvalidURL as exc:
-            raise _invalid_url(exc, CallSite(self._source, call.method, info.url)) from exc
+            raise _invalid_url(exc, CallSite(self._source, call.method, log_url)) from exc
+        # The absolute URL is for observers only (an OpenTelemetry span's url.full and server.address).
+        full_url = sanitize_url(str(request.url)) if self._emitter.active else None
+        info = CallInfo(method=call.method, url=log_url, route=route, full_url=full_url)
         route_policy = match_route(self._policy.routes, request.url.path)
         context = CallContext(
             info, clock=self._timing.clock, deadline_after=self._deadline_of(call, route_policy), emitter=self._emitter
@@ -406,23 +457,27 @@ class AsyncBaseClient:
         return _Prepared(request, context, follow)
 
     def _deadline_of(self, call: _Call, route: Route | None) -> float | None:
-        """Return the seconds *call* may take: its own ``deadline=``, else its route's, else the policy's."""
+        """Return the seconds *call* may take: its own ``deadline=``, else the view's, its route's, the policy's."""
         if "deadline" in call.options:
             deadline = call.options["deadline"]
             if deadline is not None and not deadline > 0:
                 msg = f"deadline must be > 0, or None (got {deadline})"
                 raise ValueError(msg)
             return deadline
+        if self._view.deadline is not KEEP:
+            return self._view.deadline
         if route is not None and route.deadline is not None:
             return route.deadline
         return self._policy.deadline
 
     def _retry_of(self, call: _Call, route: Route | None) -> RetryPolicy | None:
-        """Return *call*'s own retry policy when it overrides the client's: per call, else per route; else ``None``."""
+        """Return *call*'s own retry policy when it overrides the client's: per call, view or route; else ``None``."""
         if self._policy_off or call.retry is False:
             return NO_RETRY
         if isinstance(call.retry, RetryPolicy):
             return call.retry
+        if self._view.retry is not None:
+            return self._view.retry
         return None if route is None else route.retry
 
     def _stamp_idempotency_key(self, request: httpx2.Request, context: CallContext, key: str | None) -> None:
@@ -582,8 +637,11 @@ class AsyncBaseClient:
         """
         spec: Expect[T] = expect if isinstance(expect, Expect) else Expect(expect)
         prepared = self._prepare(call)
+        if spec.accept is not None:
+            _stamp_accept(prepared.request, self._view.headers_for(call.options.get("headers")), spec.accept)
         async with self._reported(prepared.context) as report:
             async with self._deadline(prepared), self._exchange(prepared) as streamed:
+                announce_deprecation(prepared.context, streamed)
                 resp = await read_capped(streamed, self._max_response_bytes, self._site(prepared))
             report.status_code = resp.status_code
             return self._dispatch(resp, spec, self._site(prepared))
@@ -598,6 +656,10 @@ class AsyncBaseClient:
                 raise status_error(resp, site)
             read = spec.ok
         try:
+            if not spec.accepts(resp):
+                content_type = resp.headers.get("content-type") or "no Content-Type"
+                msg = f"expected {spec.accept}, got {content_type}"
+                raise DecodeError(msg)
             return read(resp)
         # The one place a reader's RefusedError is caught: it becomes the ClientError carrying the status the wire sent.
         except RefusedError as refused:
@@ -616,6 +678,15 @@ def _refusal(check: RefusalCheck | None, resp: httpx2.Response) -> RefusedError 
         return check(resp)
     except RefusedError as refused:
         return refused
+
+
+def _stamp_accept(request: httpx2.Request, explicit: Mapping[str, str] | None, accept: str) -> None:
+    """Send *accept* as *request*'s ``Accept``, over the client's default but never over an *explicit* one.
+
+    *explicit* is what the call and its view set in ``headers=``.
+    """
+    if explicit is None or "accept" not in {name.lower() for name in explicit}:
+        request.headers["Accept"] = accept
 
 
 def _invalid_url(exc: httpx2.InvalidURL, site: CallSite) -> ClientError:

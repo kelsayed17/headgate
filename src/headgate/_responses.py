@@ -20,6 +20,7 @@ on :func:`json_reader`.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -118,17 +119,47 @@ class Expect[T]:
 
     The constructor refuses exactly what :meth:`on` refuses, since an ``Expect`` built with ``answers`` makes the same
     claim, and then freezes ``answers`` into a read-only copy that neither the caller's dict nor the default can change.
+
+    ``accept`` names the media types the endpoint answers with (``"application/json"``, or a comma-separated list).
+    The client sends it as the request's ``Accept`` header, unless the call sets one in ``headers=``, and checks every
+    non-empty response it hands a reader against it before the reader runs (see :meth:`accepts`). A body of another
+    type raises ``ResponseParseError`` naming the status and the ``Content-Type`` on a 2xx; on a declared non-2xx it
+    falls through to the status ladder, as an unreadable body does.
     """
 
     ok: Reader[T]
     answers: Mapping[int, Reader[T]] = field(default_factory=dict)
+    accept: str | None = field(default=None, kw_only=True)
+    _ranges: tuple[tuple[str, str], ...] = field(default=(), init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        """Refuse every unclaimable status in ``answers``, then replace it with a read-only copy."""
+        """Refuse every unclaimable status in ``answers`` and a malformed ``accept``, then freeze ``answers``."""
         for status in self.answers:
             _refuse_unclaimable(status)
         # A frozen, slotted dataclass refuses plain assignment even here; object.__setattr__ is the documented route.
         object.__setattr__(self, "answers", MappingProxyType(dict(self.answers)))
+        if self.accept is not None:
+            object.__setattr__(self, "_ranges", _media_ranges(self.accept))
+
+    def accepts(self, resp: httpx2.Response) -> bool:
+        """Return whether *resp*'s ``Content-Type`` is one ``accept`` names; always ``True`` without ``accept``.
+
+        Media types compare case-insensitively with their parameters ignored (``application/json; charset=utf-8``
+        is ``application/json``); ``*/*`` and ``type/*`` match as in ``Accept``; and a structured-syntax suffix
+        (RFC 6839) matches its base type, so ``application/problem+json`` is an ``application/json``. An empty body
+        (a 204, a HEAD) has nothing to check, and passes.
+        """
+        if not self._ranges or not resp.content:
+            return True
+        found = _media_type(resp.headers.get("content-type", ""))
+        if found is None:
+            return False
+        kind, subtype = found
+        suffix = subtype.rpartition("+")[2]
+        return any(
+            want_kind in {"*", kind} and want_subtype in {"*", subtype, suffix}
+            for want_kind, want_subtype in self._ranges
+        )
 
     def on[E](self, status: int, read: Reader[E]) -> Expect[T | E]:
         """Return a new ``Expect`` that also reads *status* with *read*, widening the result type to ``T | E``.
@@ -145,7 +176,29 @@ class Expect[T]:
             msg = f"{status} is already declared on this Expect"
             raise ValueError(msg)
         widened: dict[int, Reader[T | E]] = {**self.answers, status: read}
-        return Expect(self.ok, widened)
+        return Expect(self.ok, widened, accept=self.accept)
+
+
+#: A media type's ``type/subtype``, each an RFC 9110 token, lower-cased.
+_MEDIA_TYPE: Final = re.compile(r"([!#$%&'*+\-.^_`|~0-9a-z]+)/([!#$%&'*+\-.^_`|~0-9a-z]+)")
+
+
+def _media_type(text: str) -> tuple[str, str] | None:
+    """Return the ``(type, subtype)`` of a media type or range *text*, lower-cased and without parameters."""
+    match = _MEDIA_TYPE.fullmatch(text.partition(";")[0].strip().lower())
+    return None if match is None else (str(match[1]), str(match[2]))
+
+
+def _media_ranges(accept: str) -> tuple[tuple[str, str], ...]:
+    """Return the media ranges a comma-separated *accept* names; ``ValueError`` for an empty or malformed one."""
+    ranges: list[tuple[str, str]] = []
+    for item in accept.split(","):
+        found = _media_type(item)
+        if found is None:
+            msg = f"accept must name media types such as 'application/json' (got {accept!r})"
+            raise ValueError(msg)
+        ranges.append(found)
+    return tuple(ranges)
 
 
 def json_reader[T](
