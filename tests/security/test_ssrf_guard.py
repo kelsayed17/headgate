@@ -11,8 +11,9 @@ raises ``ForbiddenDestinationError``, which is not retried and not charged to th
 from __future__ import annotations
 
 import socket
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, override
 
+import httpx2
 import pytest
 
 from headgate import BreakerPolicy, ForbiddenDestinationError, HttpOptions, RetryPolicy, TransportError, TransportPolicy
@@ -97,9 +98,9 @@ async def test_a_name_resolving_to_a_private_address_is_refused() -> None:
             await client.get("x", expect=RESPONSE)
 
 
-def _web_client(web: Web, resolver: _Names) -> StubClient:
-    """Return a guarded client over *web*, a custom transport, resolving through *resolver*."""
-    return web.client(http=HttpOptions(allow_private_hosts=False, resolver=resolver))
+def _web_client(web: Web, resolver: _Names, *, base_url: str = BASE) -> StubClient:
+    """Return a guarded client on *base_url* over *web*, a custom transport, resolving through *resolver*."""
+    return web.client(http=HttpOptions(allow_private_hosts=False, resolver=resolver), base_url=base_url)
 
 
 @pytest.mark.parametrize(
@@ -163,3 +164,44 @@ def test_a_guard_setting_that_cannot_work_is_refused(options: object, message: s
     assert callable(options)
     with pytest.raises(ValueError, match=message):
         options()
+
+
+class _Recording(_Names):
+    """A resolver over a fixed table that records each ``(host, port)`` it is asked for."""
+
+    def __init__(self, **table: str) -> None:
+        """Resolve each name in *table*, recording every lookup."""
+        super().__init__(**table)
+        self.asked: list[tuple[str, int]] = []
+
+    @override
+    async def __call__(self, host: str, port: int) -> Sequence[str]:
+        """Record the lookup, then resolve *host*."""
+        self.asked.append((host, port))
+        return await super().__call__(host, port)
+
+
+#: A port no scheme defaults to, so the resolver can only have learned it from the URL.
+_ODD_PORT: Final = 8443
+
+
+async def test_the_resolver_is_asked_for_each_hops_host_and_port_over_a_custom_transport() -> None:
+    """Ask the resolver for each hop's host and port: one the URL names, a scheme's default, 0 for an unknown scheme."""
+    first = f"http://api.example:{_ODD_PORT}/start"
+    web = Web({first: "http://api.example/next", "http://api.example/next": "custom://api.example/last"})
+    names = _Recording(api_example=_PUBLIC)
+    async with _web_client(web, names, base_url=f"http://api.example:{_ODD_PORT}") as client:
+        await client.get("start", expect=RESPONSE)
+
+    assert names.asked == [("api.example", _ODD_PORT), ("api.example", 80), ("api.example", 0)]
+
+
+async def test_a_failed_lookup_is_chained_to_a_connect_error_naming_the_hop() -> None:
+    """Chain the failed lookup's ``TransportError`` to the ``httpx2.ConnectError`` for the hop it failed on."""
+    async with _web_client(Web(), _Names()) as client:
+        with pytest.raises(TransportError) as exc:
+            await client.get("x", expect=RESPONSE)
+
+    cause = exc.value.__cause__
+    assert isinstance(cause, httpx2.ConnectError)
+    assert str(cause.request.url) == f"{BASE}/x"

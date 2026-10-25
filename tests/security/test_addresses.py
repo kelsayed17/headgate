@@ -71,6 +71,15 @@ async def test_the_default_resolver_asks_the_event_loop() -> None:
     assert all(forbidden_reason(address) == "loopback" for address in addresses)
 
 
+#: A public address the default resolver returns as it is, without asking any name server.
+_NUMERIC_HOST = "93.184.216.34"
+
+
+async def test_the_default_resolver_resolves_the_host_it_is_given() -> None:
+    """Resolve the host asked for, not the local machine: a numeric host comes back as itself, once."""
+    assert await resolve_with_loop(_NUMERIC_HOST, 443) == [_NUMERIC_HOST]
+
+
 class _Answer:
     """A resolver answering every name with *addresses*, recording each lookup."""
 
