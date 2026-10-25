@@ -24,11 +24,12 @@ from typing import TYPE_CHECKING, override
 
 import httpx2
 
+from headgate._failures import mint_error
 from headgate._url import register_secret_params
 from headgate.errors import ClientConfigurationError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Mapping
+    from collections.abc import AsyncGenerator, Awaitable, Mapping
 
 __all__ = [
     "AUTH_HOP",
@@ -155,6 +156,13 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     The lock is held while a mint flow's requests are in flight, so requests that need a token wait for the mint to
     finish or fail, bounded by the hop's own timeout. Closing the flow (an error, or the caller's cancellation)
     releases it.
+
+    **A failed mint is reported as the token endpoint's failure**, never the API call's (see
+    :func:`~headgate._failures.mint_error`): an exception the mint code raises (a ``ConnectError`` on its own client,
+    a ``raise_for_status()``, an unreadable token response) becomes the ``ClientError`` it means, named for this auth
+    class and the token endpoint, chained to the original. It is raised from the auth flow, so the API host's circuit
+    breaker records nothing for it. A hop :meth:`_mint_flow` yields travels the owning client's stack and fails as any
+    request there does.
     """
 
     def __init__(self, *, refresh_margin_s: float = 120.0) -> None:
@@ -264,6 +272,16 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         """
         return token == self._token and time.monotonic() - self._minted_at < FRESH_TOKEN_S
 
+    async def _mint_step(self, step: Awaitable[httpx2.Request | Minted[TokenT]]) -> httpx2.Request | Minted[TokenT]:
+        """Await the mint's next *step*, raising a failure in the mint code as the ``ClientError`` it means."""
+        try:
+            return await step
+        except Exception as exc:
+            mapped = mint_error(exc, source=type(self).__name__)
+            if mapped is exc:
+                raise
+            raise mapped from exc
+
     @override
     async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         if self._skips(request):
@@ -284,10 +302,11 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
                     # request the mint yields and hands its response back in.
                     mint = self._mint_flow(request)
                     try:
-                        step = await anext(mint)
+                        step = await self._mint_step(anext(mint))
                         while isinstance(step, httpx2.Request):
                             step.extensions = {**step.extensions, AUTH_HOP: True}
-                            step = await mint.asend((yield step))
+                            hop_response = yield step
+                            step = await self._mint_step(mint.asend(hop_response))
                     except StopAsyncIteration:
                         msg = f"{type(self).__name__}._mint_flow ended without yielding Minted"
                         raise RuntimeError(msg) from None

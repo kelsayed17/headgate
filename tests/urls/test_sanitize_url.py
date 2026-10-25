@@ -28,8 +28,8 @@ def test_a_secret_parameter_is_redacted_and_the_others_are_kept() -> None:
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
-        ("https://user:hunter2@api.example.test/x", "https://user:***@api.example.test/x"),
-        ("https://user:p@ss@api.example.test/x", "https://user:***@api.example.test/x"),
+        ("https://user:hunter2@api.example.test/x", "https://***@api.example.test/x"),
+        ("https://user:p@ss@api.example.test/x", "https://***@api.example.test/x"),
         (
             "https://api.example.test/cb#access_token=abc&state=s",
             "https://api.example.test/cb#access_token=***&state=s",
@@ -40,12 +40,16 @@ def test_a_secret_parameter_is_redacted_and_the_others_are_kept() -> None:
         ),
         ("https://api.example.test/token?refresh_token=abc", "https://api.example.test/token?refresh_token=%2A%2A%2A"),
         ("https://api.example.test/x?api%5Fkey=abc", "https://api.example.test/x?api%5Fkey=%2A%2A%2A"),
-        ("https://user@api.example.test/x", "https://user@api.example.test/x"),
-        ("https://user:@api.example.test/x", "https://user:@api.example.test/x"),
+        ("https://ghp_SECRETTOKEN@api.example.test/x", "https://***@api.example.test/x"),
+        ("https://user:@api.example.test/x", "https://***@api.example.test/x"),
     ],
 )
 def test_credentials_outside_known_query_names_are_redacted(url: str, expected: str) -> None:
-    """Redact a userinfo password, a fragment credential, and a percent-encoded parameter name."""
+    """Redact the whole userinfo, a fragment credential, and a percent-encoded parameter name.
+
+    A bare username is redacted too, since a token sent as the username (``https://ghp_…@host``) is how several hosts
+    take one.
+    """
     assert sanitize_url(url) == expected
 
 
@@ -87,3 +91,24 @@ def test_a_registered_name_is_secret_whatever_its_spelling() -> None:
     assert is_secret_param(f"{unique}-registered")
     redacted = sanitize_url(f"https://x.test/?{unique}registered=v")
     assert redacted == f"https://x.test/?{unique}registered=%2A%2A%2A"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "failed to reach https://user:pw@h.test/x?token=abc",
+            "failed to reach https://***@h.test/x?token=***",
+        ),
+        ("cloning 'https://ghp_SECRET@github.test/o/r.git'", "cloning 'https://***@github.test/o/r.git'"),
+        ("see https://h.test/a@b and //not-a-host", "see https://h.test/a@b and //not-a-host"),
+    ],
+)
+def test_redact_secrets_replaces_a_url_userinfo_in_free_text(text: str, expected: str) -> None:
+    """Redact the userinfo of a URL inside a message, and leave an ``@`` later in a path alone."""
+    assert redact_secrets(text) == expected
+
+
+def test_a_url_too_malformed_to_split_is_redacted_as_text_rather_than_raising() -> None:
+    """Redact an unclosed IPv6 bracket's URL as free text: its message must still be safe, and it must not raise."""
+    assert sanitize_url("http://u:pw@[::1/x?api_key=SECRET") == "http://***@[::1/x?api_key=***"

@@ -8,6 +8,9 @@ an HTTP-policy layer with no serialization knowledge of its own. :func:`decode` 
 :func:`decoder` builds a response reader on it, and :func:`to_builtins` prepares a request body. Every decode failure
 is the shared :class:`~headgate.errors.DecodeError`.
 
+A ``DecodeError``'s message is msgspec's own diagnosis (the expected type and the path), bounded, with the one input
+value msgspec quotes (an unknown enum value) left out.
+
 Drift detection is strict **typing**, not unknown-field rejection. ``strict=True`` catches a field that changes type
 on the wire, which silently corrupts values. ``forbid_unknown_fields`` would catch a field appearing, which providers
 do routinely and without notice: rejecting one turns a harmless upstream addition into a failure on every call, while
@@ -21,11 +24,13 @@ types the result as exactly that expression.
 from __future__ import annotations
 
 import functools
+import re
 from typing import TYPE_CHECKING, overload
 
 import msgspec
 
 from headgate._codec import drop_none as _drop_none
+from headgate._failures import shorten
 from headgate._responses import json_reader
 from headgate.errors import DecodeError
 
@@ -37,6 +42,10 @@ if TYPE_CHECKING:
     from headgate._responses import Reader, RefusedError
 
 __all__ = ["decode", "decoder", "to_builtins"]
+
+#: The one msgspec diagnosis that quotes the input: ``Invalid enum value '<the value>'``, whatever its length, before
+#: the `` - at `$…` `` path when there is one.
+_ENUM_VALUE = re.compile(r"(Invalid enum value) .*?(?= - at `\$|$)", re.DOTALL)
 
 
 def _json_decoder[T](type_: TypeForm[T], *, strict: bool) -> msgspec.json.Decoder[T]:
@@ -55,7 +64,12 @@ def _decode_with[T](json_decoder: msgspec.json.Decoder[T], content: bytes) -> T:
         return json_decoder.decode(content)
     # msgspec.ValidationError subclasses msgspec.DecodeError, so the base covers malformed and mistyped bodies alike.
     except msgspec.DecodeError as exc:
-        raise DecodeError(str(exc)) from exc
+        raise DecodeError(_describe(exc)) from exc
+
+
+def _describe(exc: msgspec.DecodeError) -> str:
+    """Return msgspec's diagnosis with any quoted input value dropped, bounded like every decode message."""
+    return shorten(_ENUM_VALUE.sub(r"\1", str(exc)))
 
 
 def decode[T](content: bytes, type_: TypeForm[T], *, strict: bool = True) -> T:

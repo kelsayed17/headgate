@@ -12,6 +12,10 @@ The same surface as :mod:`headgate.msgspec`, so switching flavor is changing one
 Strictness parity with the msgspec flavor is held by tests: a JSON string where an ``int`` is declared fails, an
 unknown field is ignored, and every failure is the shared :class:`~headgate.errors.DecodeError`.
 
+A ``DecodeError``'s message names the first few failures by location and reason, and how many there were. It never
+repeats an input value: ``str(ValidationError)`` lists every failure with the value that failed, so a body of 5,000 bad
+rows makes a message of most of a megabyte, and a token field that failed validation is quoted back in full.
+
 Requires the ``pydantic`` extra: ``pip install headgate[pydantic]``.
 """
 
@@ -28,6 +32,7 @@ except ImportError as exc:
     raise ImportError(msg) from exc
 
 from headgate._codec import drop_none as _drop_none
+from headgate._failures import shorten
 from headgate._responses import json_reader
 from headgate.errors import DecodeError
 
@@ -39,6 +44,9 @@ if TYPE_CHECKING:
     from headgate._responses import Reader, RefusedError
 
 __all__ = ["decode", "decoder", "to_builtins"]
+
+#: How many of a validation's failures a ``DecodeError`` message names; the count of the rest follows them.
+_ERRORS_SHOWN = 5
 
 
 @functools.cache
@@ -63,7 +71,17 @@ def _validate_with[T](adapter: TypeAdapter[T], content: bytes, *, strict: bool) 
     try:
         return adapter.validate_json(content, strict=strict)
     except ValidationError as exc:
-        raise DecodeError(str(exc)) from exc
+        raise DecodeError(_describe(exc)) from exc
+
+
+def _describe(exc: ValidationError) -> str:
+    """Summarize *exc* without any input value: its first :data:`_ERRORS_SHOWN` failures, and the count, bounded."""
+    errors = exc.errors(include_input=False, include_url=False, include_context=False)[:_ERRORS_SHOWN]
+    shown = "; ".join(f"{'.'.join(map(str, error['loc'])) or '<body>'}: {error['msg']}" for error in errors)
+    count = exc.error_count()
+    more = f" (+{count - len(errors)} more)" if count > len(errors) else ""
+    noun = "error" if count == 1 else "errors"
+    return shorten(f"{count} validation {noun} for {exc.title}: {shown}{more}")
 
 
 def decode[T](content: bytes, type_: TypeForm[T], *, strict: bool = True) -> T:

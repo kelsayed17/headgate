@@ -28,7 +28,15 @@ import httpx2
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-__all__ = ["DEFAULT_BACKOFF_FACTOR", "RETRIED_METHODS", "ZERO_RETRY", "Retry", "RetryTransport", "build_retry"]
+__all__ = [
+    "DEFAULT_BACKOFF_FACTOR",
+    "NETWORK_ERRORS",
+    "RETRIED_METHODS",
+    "ZERO_RETRY",
+    "Retry",
+    "RetryTransport",
+    "build_retry",
+]
 
 #: The methods the retry layer re-sends: every method the clients send, POST included (a token fetch, a bulk
 #: submission). A non-idempotent write opts out per call with ``retry=False``. Any other method is sent once.
@@ -37,8 +45,10 @@ RETRIED_METHODS = frozenset(("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "O
 #: The statuses that are re-sent: 429 and every 5xx.
 _RETRIED_STATUSES = frozenset((429, *range(500, 600)))
 
-#: The exceptions that are re-sent, matched with ``isinstance``: every httpx2 error and every ``OSError``.
-_RETRIED_EXCEPTIONS: tuple[type[Exception], ...] = (httpx2.HTTPError, OSError)
+#: The exceptions that are re-sent, matched with ``isinstance``: every httpx2 error and every ``OSError``. The one
+#: definition of a network failure: the cache shares exactly these between waiting requests and passes them through
+#: its storage guard, and ``AsyncBaseClient`` maps exactly these onto ``TransportError``.
+NETWORK_ERRORS: tuple[type[httpx2.HTTPError], type[OSError]] = (httpx2.HTTPError, OSError)
 
 #: No single wait, backoff or ``Retry-After``, exceeds this many seconds.
 _MAX_BACKOFF_WAIT = 5.0
@@ -176,7 +186,7 @@ class RetryTransport(httpx2.AsyncBaseTransport):
             try:
                 response = await self._transport.handle_async_request(request)
             except Exception as exc:
-                if policy.exhausted or not isinstance(exc, _RETRIED_EXCEPTIONS):
+                if policy.exhausted or not isinstance(exc, NETWORK_ERRORS):
                     raise
                 failure = exc
                 continue

@@ -37,8 +37,9 @@ type Reader[T] = Callable[[httpx2.Response], T]
 
 A reader receives the whole response (status, headers, body), because it may need what a header declares, such as a
 ``content-type`` choosing between JSON and an event stream. It may raise :class:`~headgate.errors.DecodeError` (the
-body is not what was declared) or :class:`RefusedError` (the provider said no inside the body). It never builds a
-``ClientError`` itself: the base client does, so the error carries the real status and the client's name.
+body is not what was declared; a ``ValueError``, ``LookupError`` or ``TypeError`` from code over ``response.json()``
+counts the same) or :class:`RefusedError` (the provider said no inside the body). It never builds a ``ClientError``
+itself: the base client does, so the error carries the real status and the client's name.
 """
 
 #: Statuses that mean "we could not ask", never an answer about the request: our own credentials (401, 407), and the
@@ -95,9 +96,9 @@ type RefusalCheck = Callable[[httpx2.Response], RefusedError | None]
 """A per-host check, run on the final response before anything the call declared.
 
 It names a refusal the status line alone cannot show, such as a key-error redirect, and returns ``None`` for
-everything else. It reads the status line and headers, never the body: a refusal written in a body is its reader's to
-raise. A client carrying one does not follow redirects (the base client enforces it), because the check sees only the
-final response.
+everything else; raising the :class:`RefusedError` instead of returning it is treated the same. It reads the status
+line and headers, never the body: a refusal written in a body is its reader's to raise. A client carrying one does not
+follow redirects (the base client enforces it), because the check sees only the final response.
 """
 
 

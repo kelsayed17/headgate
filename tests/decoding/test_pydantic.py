@@ -18,6 +18,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from headgate import msgspec as msgspec_flavor
+from headgate._failures import MESSAGE_TEXT_LIMIT
 from headgate._responses import RefusedError
 from headgate.errors import DecodeError
 from headgate.pydantic import decode, decoder, to_builtins
@@ -203,3 +204,41 @@ def test_importing_without_pydantic_names_the_extra(monkeypatch: pytest.MonkeyPa
     with pytest.raises(ImportError, match=r"pip install headgate\[pydantic\]") as caught:
         importlib.import_module("headgate.pydantic")
     assert isinstance(caught.value.__cause__, ImportError)
+
+
+class _Credential(BaseModel):
+    model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
+
+    token: int
+
+
+#: Enough malformed rows that ``str(ValidationError)`` would run to most of a megabyte.
+_BAD_ROWS = 5000
+
+
+def test_a_decode_error_names_a_few_failures_and_counts_the_rest_within_a_bound() -> None:
+    """Summarize thousands of failures as the first few by location, and how many there were, in a bounded message."""
+    body = b"[" + b",".join([b'{"x": "bad"}'] * _BAD_ROWS) + b"]"
+
+    with pytest.raises(DecodeError) as raised:
+        decode(body, list[_Model])
+
+    message = str(raised.value)
+    assert len(message) <= MESSAGE_TEXT_LIMIT
+    assert message.startswith(f"{_BAD_ROWS} validation errors for list[_Model]: 0.x: Input should be a valid integer")
+    assert message.endswith(f"(+{_BAD_ROWS - 5} more)")
+
+
+def test_a_decode_error_never_repeats_an_input_value() -> None:
+    """Leave out the value that failed, which for a credential field is the credential itself."""
+    with pytest.raises(DecodeError) as raised:
+        decode(b'{"token": "sk-live-SECRET"}', _Credential)
+
+    assert "SECRET" not in str(raised.value)
+    assert str(raised.value) == "1 validation error for _Credential: token: Input should be a valid integer"
+
+
+def test_a_decode_error_for_malformed_json_names_the_body() -> None:
+    """Name the whole body as the location of a failure that has none, such as invalid JSON."""
+    with pytest.raises(DecodeError, match=r"^1 validation error for _Model: <body>: Invalid JSON"):
+        decode(b'{"x":', _Model)

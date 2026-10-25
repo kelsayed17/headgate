@@ -19,8 +19,10 @@ encodes ``params=`` itself.
 
 **Redaction.** :data:`SECRET_QUERY_PARAMS` names the query parameters that carry a credential, and a ``QueryParamAuth``
 adds the names it injects with :func:`register_secret_params`. :func:`sanitize_url` redacts every URL a ``ClientError``
-message names, :func:`redact_secrets` redacts ``name=value`` pairs in free text such as an httpx2 exception message,
-and the HTTP cache strips the same parameters before it stores a request.
+message names, :func:`redact_secrets` redacts ``name=value`` pairs and URL userinfo in free text such as an httpx2
+exception message, and the HTTP cache strips the same parameters before it stores a request. A URL's whole userinfo is a
+credential, a bare ``user@`` included: a token sent as the username (``https://ghp_…@host``) is how several hosts
+take one.
 """
 
 from __future__ import annotations
@@ -90,6 +92,9 @@ _REDACTED: Final = "***"
 #: in an exception message ends.
 _PAIR: Final = re.compile(r"([A-Za-z][\w-]*)=([^&\s'\"]+)")
 
+#: The userinfo of a URL in free text: everything between ``//`` and an ``@`` before the first ``/``, ``?`` or ``#``.
+_USERINFO: Final = re.compile(r"//[^/?#\s@'\"]+@")
+
 #: A value that escapes to nothing but dots is a structural dot segment, not data. See :func:`escape_segment`.
 _DOT_SEGMENTS: Final = {".": "%2E", "..": "%2E%2E"}
 
@@ -111,7 +116,11 @@ def is_secret_param(name: str) -> bool:
 
 
 def redact_secrets(text: str) -> str:
-    """Return *text* with the value of every ``name=value`` pair whose name is a credential replaced by ``***``."""
+    """Return *text* with every URL userinfo, and the value of every credential ``name=value`` pair, replaced.
+
+    A userinfo (``//user:pw@`` or ``//token@``) becomes ``//***@``; a pair whose name is a credential keeps its name.
+    """
+    text = _USERINFO.sub(f"//{_REDACTED}@", text)
     return _PAIR.sub(lambda m: f"{m[1]}={_REDACTED}" if is_secret_param(m[1]) else m[0], text)
 
 
@@ -202,22 +211,25 @@ def _redact_query(query: str) -> str:
 
 
 def _redact_userinfo(netloc: str) -> str:
-    """Return *netloc* with a non-empty userinfo password replaced by ``***``."""
+    """Return *netloc* with its whole userinfo, when it has one, replaced by ``***``."""
     userinfo, _, hostport = netloc.rpartition("@")
-    user, _, password = userinfo.partition(":")
-    return f"{user}:{_REDACTED}@{hostport}" if password else netloc
+    return f"{_REDACTED}@{hostport}" if userinfo else netloc
 
 
 def sanitize_url(url: str) -> str:
-    """Return *url* with its credentials replaced by ``***``.
+    """Return *url* with its credentials replaced by ``***``; it never raises.
 
-    That covers secret query parameters, a userinfo password, and secret ``name=value`` pairs in the fragment (an OAuth
+    That covers secret query parameters, the whole userinfo, and secret ``name=value`` pairs in the fragment (an OAuth
     implicit-flow ``#access_token=``). Everything else in the URL is kept byte for byte, so the URL a message names is
-    the one that was sent.
+    the one that was sent. A URL too malformed to split (an unclosed IPv6 bracket) is redacted as free text with
+    :func:`redact_secrets` instead, since its message still has to be safe to show.
     """
     if not any(marker in url for marker in ("?", "#", "@")):
         return url
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return redact_secrets(url)
     return urlunsplit(
         parts._replace(
             netloc=_redact_userinfo(parts.netloc),

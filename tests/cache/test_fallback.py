@@ -20,13 +20,16 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import sqlite3
 from typing import TYPE_CHECKING, override
 
 import httpx2
 import pytest
-from hishel import AsyncBaseStorage, BaseFilter, Entry, FilterPolicy, Request, Response
+from hishel import AsyncBaseStorage, AsyncSqliteStorage, BaseFilter, Entry, FilterPolicy, Request, Response
 
-from headgate._cache import CACHE_DEGRADATIONS, CACHE_DEGRADED_EXT, CacheStorageError
+from headgate import HttpCache, HttpOptions, TransportError
+from headgate._breaker import HOST_BREAKERS
+from headgate._cache import CACHE_DEGRADATIONS, CACHE_DEGRADED_EXT, HOST_UNTESTED, CacheStorageError, host_untested
 from tests.cache._helpers import (
     NETWORK_BODY,
     FaultyStorage,
@@ -34,13 +37,13 @@ from tests.cache._helpers import (
     TrackedStream,
     TrackingNetwork,
     cache_transport,
+    every_get_policy,
+    stub_client,
 )
 
 if TYPE_CHECKING:
     import uuid
-    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-
-    from hishel import AsyncSqliteStorage
+    from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator
 
 _HOST = "example.test"
 _URL = f"https://{_HOST}/series?api_key=secret"
@@ -74,6 +77,17 @@ async def test_lookup_fault_degrades_to_network(exc: Exception, storage: AsyncSq
     assert network.calls == 1
     assert type(exc).__name__ in resp.extensions[CACHE_DEGRADED_EXT]
     assert "secret" not in resp.extensions[CACHE_DEGRADED_EXT], "the query, and any key in it, is dropped"
+
+
+async def test_the_degraded_marker_names_the_backend_error_by_type_alone(storage: AsyncSqliteStorage) -> None:
+    """A backend's message can carry its DSN and password, so the marker a caller can read never repeats it."""
+    faulty = FaultyStorage(
+        storage, sqlite3.OperationalError("unable to open postgres://admin:hunter2@db"), failing="get_entries"
+    )
+
+    resp = await cache_transport(faulty, Network()).handle_async_request(httpx2.Request("GET", _URL))
+
+    assert resp.extensions[CACHE_DEGRADED_EXT] == f"https://{_HOST}/series: OperationalError"
 
 
 async def test_store_fault_still_serves_the_request(storage: AsyncSqliteStorage) -> None:
@@ -117,24 +131,59 @@ async def test_a_network_failure_while_the_storage_stores_the_body_is_not_a_stor
 
 
 class _DropsMidBody(TrackedStream):
-    """A network body that sends one chunk and then loses the connection."""
+    """A network body that sends one chunk and then fails with *exc*: by default, a lost connection."""
+
+    def __init__(self, exc: Exception | None = None) -> None:
+        """Fail with *exc*, or an ``httpx2.ReadError`` when none is given."""
+        super().__init__()
+        self._exc = exc or httpx2.ReadError("connection reset")
 
     @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         yield b"from-"
-        msg = "connection reset"
-        raise httpx2.ReadError(msg)
+        raise self._exc
 
 
 class _FlakyNetwork(TrackingNetwork):
-    """The network leg, answering every request with a body that fails part-way."""
+    """The network leg, answering every request with a body that fails part-way with *exc*."""
+
+    def __init__(self, exc: Exception | None = None) -> None:
+        """Fail every body with *exc*, or an ``httpx2.ReadError`` when none is given."""
+        super().__init__()
+        self._exc = exc
 
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         self.urls.append(str(request.url))
-        stream = _DropsMidBody()
+        stream = _DropsMidBody(self._exc)
         self.streams.append(stream)
         return httpx2.Response(httpx2.codes.OK, stream=stream)
+
+
+async def test_an_oserror_while_the_storage_stores_the_body_is_a_network_failure(storage: AsyncSqliteStorage) -> None:
+    """A custom transport's ``OSError`` mid-body is a network failure, as the retry layer counts it, not a fault.
+
+    It reaches the retry layer as itself after one fetch, rather than being redone live and counted as a degradation.
+    """
+    network = _FlakyNetwork(ConnectionResetError("peer reset"))
+    degraded_before = CACHE_DEGRADATIONS[_HOST]
+
+    with pytest.raises(ConnectionResetError):
+        await cache_transport(storage, network).handle_async_request(httpx2.Request("GET", _URL))
+
+    assert len(network.urls) == 1
+    assert CACHE_DEGRADATIONS[_HOST] == degraded_before
+
+
+async def test_an_oserror_from_the_storage_itself_is_still_a_storage_fault(storage: AsyncSqliteStorage) -> None:
+    """Outside the body of a miss an ``OSError`` comes from the backend (a full disk), so the request degrades."""
+    network = Network()
+    faulty = FaultyStorage(storage, OSError("No space left on device"), failing="get_entries")
+
+    resp = await cache_transport(faulty, network).handle_async_request(httpx2.Request("GET", _URL))
+
+    assert await resp.aread() == NETWORK_BODY
+    assert resp.extensions[CACHE_DEGRADED_EXT].endswith(": OSError")
 
 
 async def test_a_network_failure_in_the_degraded_fetch_is_raised_and_closes_it(storage: AsyncSqliteStorage) -> None:
@@ -256,7 +305,7 @@ async def test_a_storage_that_returns_a_synchronous_body_degrades_to_network(sto
     second = await transport.handle_async_request(httpx2.Request("GET", _URL))
 
     assert await second.aread() == NETWORK_BODY
-    assert "synchronous" in second.extensions[CACHE_DEGRADED_EXT]
+    assert second.extensions[CACHE_DEGRADED_EXT].endswith(": TypeError"), "the backend error is named by type alone"
     assert network.calls == len(("the first fetch", "the live redo of the broken hit"))
 
 
@@ -362,14 +411,18 @@ _OPERATIONS: dict[str, Callable[[AsyncBaseStorage, uuid.UUID], Awaitable[object]
 async def test_every_storage_operation_raises_a_backend_failure_as_a_storage_error(
     method: str, storage: AsyncSqliteStorage
 ) -> None:
-    """The transport's storage raises any backend failure as one error, chained from the backend's own."""
-    fault = StorageTimeoutError("timeout")
+    """The transport's storage raises any backend failure as one error, chained from the backend's own.
+
+    Its message is the backend error's type alone, since a backend's text may carry its DSN and password.
+    """
+    fault = StorageTimeoutError("timeout at postgres://admin:hunter2@db")
     guarded = cache_transport(FaultyStorage(storage, fault, failing=method), Network()).storage
     entry_id = (await storage.create_entry(Request("GET", _URL), Response(httpx2.codes.OK), "key")).id
 
-    with pytest.raises(CacheStorageError, match="StorageTimeoutError: timeout") as raised:
+    with pytest.raises(CacheStorageError) as raised:
         await _OPERATIONS[method](guarded, entry_id)
 
+    assert str(raised.value) == "StorageTimeoutError"
     assert raised.value.__cause__ is fault
 
 
@@ -379,3 +432,67 @@ async def test_the_guarded_storage_delegates_a_close_to_the_backend(storage: Asy
 
     with pytest.raises(StorageTimeoutError):
         await cache_transport(backend, Network()).storage.close()
+
+
+class _FailsWhileStoring(AsyncSqliteStorage):
+    """A real SQLite storage whose write of a miss's body fails on the third chunk, with a DSN in the message."""
+
+    @override
+    async def _save_stream(self, stream: AsyncIterable[bytes], entry_id: bytes) -> AsyncIterator[bytes]:
+        chunks = 0
+        async for chunk in stream:
+            chunks += 1
+            if chunks == len(("first", "second", "third")):
+                msg = "disk I/O error (db=postgres://admin:hunter2@db)"
+                raise sqlite3.OperationalError(msg)
+            yield chunk
+
+
+@dataclasses.dataclass
+class _Received:
+    """How many bytes a stream yielded, kept outside the stream so a test sees what arrived before a failure."""
+
+    total: int = 0
+
+    async def drain(self, chunks: AsyncIterator[bytes]) -> None:
+        """Count every byte of *chunks*."""
+        async for chunk in chunks:
+            self.total += len(chunk)
+
+
+async def test_a_storage_fault_while_an_unheld_body_streams_is_a_value_free_transport_error() -> None:
+    """Past the cap a body streams on through the storage's tee after the fallback has returned.
+
+    A fault there fails the read as a ``TransportError`` naming only the backend error's type, never its text (a DSN
+    with a password), and charges the host nothing, since the network did not fail.
+    """
+    store = _FailsWhileStoring()
+    client = stub_client(
+        transport=TrackingNetwork((b"x" * 10,) * 10),
+        cache=HttpCache(policy=every_get_policy(), storage=store),
+        http=HttpOptions(max_response_bytes=15),
+    )
+    received = _Received()
+    try:
+        with pytest.raises(TransportError) as raised:
+            await received.drain(client.stream_get("big"))
+    finally:
+        await client.aclose()
+        await store.close()
+
+    assert received.total, "the head of the body was yielded before the fault"
+    assert "OperationalError" in str(raised.value)
+    assert "hunter2" not in str(raised.value)
+    read_error = raised.value.__cause__
+    assert isinstance(read_error, httpx2.ReadError)
+    assert read_error.__cause__ is None, "the backend's own error is not chained"
+    assert read_error.__suppress_context__
+    assert host_untested(read_error)
+    assert HOST_BREAKERS["x"].failure_count == 0
+
+
+def test_an_unmarked_response_or_error_is_host_evidence() -> None:
+    """Only what the cache marked says nothing about the host."""
+    assert not host_untested(httpx2.Response(httpx2.codes.OK))
+    assert not host_untested(httpx2.ConnectError("refused"))
+    assert host_untested(httpx2.Response(httpx2.codes.OK, extensions={HOST_UNTESTED: True}))

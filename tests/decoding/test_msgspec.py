@@ -10,9 +10,12 @@
 
 from __future__ import annotations
 
+import enum
+
 import msgspec
 import pytest
 
+from headgate._failures import MESSAGE_TEXT_LIMIT
 from headgate.errors import DecodeError
 from headgate.msgspec import decode, decoder, to_builtins
 from tests.support.responses import response
@@ -218,3 +221,30 @@ def test_to_builtins_drop_none_walks_lists_and_tuples() -> None:
     """Drop ``None`` fields inside list and tuple fields: msgspec keeps a tuple field as a tuple."""
     body = to_builtins(_DropContainers([_DropInner(a="x")], (_DropInner(b="y"),)), drop_none=True)
     assert body == {"listed": [{"a": "x"}], "tupled": ({"b": "y"},)}
+
+
+# --- What a DecodeError's message repeats ---
+
+
+class _Side(enum.Enum):
+    BUY = "buy"
+
+
+class _Order(msgspec.Struct, frozen=True):
+    side: _Side
+
+
+def test_a_decode_error_never_repeats_an_unknown_enum_value() -> None:
+    """Leave out the one input value msgspec quotes, keeping the diagnosis and its path."""
+    with pytest.raises(DecodeError) as raised:
+        decode(b'{"side": "sk-live-SECRET"}', _Order)
+
+    assert str(raised.value) == "Invalid enum value - at `$.side`"
+
+
+def test_a_decode_error_is_bounded_whatever_the_input() -> None:
+    """Bound the message even where msgspec would echo an input of any length."""
+    with pytest.raises(DecodeError) as raised:
+        decode(b'"' + b"x" * (10 * MESSAGE_TEXT_LIMIT) + b'"', _Side)
+
+    assert str(raised.value) == "Invalid enum value"

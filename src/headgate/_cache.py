@@ -22,7 +22,15 @@ stamps :class:`HttpCache`'s ``ttl``, and ``AsyncBaseClient`` stamps a per-call `
 **Faults.** A storage fault never fails a request that would otherwise succeed. Every call into the storage, and every
 body it streams, goes through a guard that raises any backend failure as :class:`CacheStorageError`; the transport
 counts it (:func:`headgate.health.cache_degradations`), redoes the request on the live transport, and marks the response
-with :data:`CACHE_DEGRADED_EXT`. Anything else raised inside hishel is a bug, not an outage, and propagates.
+with :data:`CACHE_DEGRADED_EXT`. Anything else raised inside hishel is a bug, not an outage, and propagates. A backend's
+own message can carry its DSN, password included, so nothing a caller can see repeats it: the degraded marker and
+every error raised past this layer name only the backend exception's type.
+
+**Outcomes that say nothing about the host.** Two things this layer hands up did not come from this request's own
+attempt on the network: a response or network failure another identical GET fetched (see
+:class:`ResilientCacheTransport`), and a storage fault while a body too large to hold streams. Both carry
+:data:`HOST_UNTESTED` (:func:`host_untested` reads it), so ``AsyncBaseClient`` records neither against the host's
+circuit breaker: one upstream failure shared by five waiting requests is one failure, not five.
 """
 
 from __future__ import annotations
@@ -35,12 +43,14 @@ from collections import Counter
 from collections.abc import Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from operator import itemgetter
 from typing import TYPE_CHECKING, override
 
 import httpx2
 from hishel import AsyncBaseStorage, BaseFilter, CachePolicy, Entry, FilterPolicy, Request, Response
 from hishel.httpx2 import AsyncCacheTransport
 
+from headgate._retry import NETWORK_ERRORS
 from headgate._url import is_secret_param
 
 if TYPE_CHECKING:
@@ -51,12 +61,14 @@ if TYPE_CHECKING:
 __all__ = [
     "CACHE_DEGRADATIONS",
     "CACHE_DEGRADED_EXT",
+    "HOST_UNTESTED",
     "CacheStorageError",
     "HttpCache",
     "MethodFilter",
     "PathFragmentFilter",
     "ResilientCacheTransport",
     "StatusCodeFilter",
+    "host_untested",
 ]
 
 
@@ -127,28 +139,39 @@ class StatusCodeFilter(BaseFilter[Response]):
 
 
 class CacheStorageError(Exception):
-    """A failure inside the cache storage, raised from the backend's own exception."""
+    """A failure inside the cache storage, raised from the backend's own exception.
+
+    Its message is the backend exception's type name alone; the backend's text, which may carry a DSN, stays on the
+    chained cause.
+    """
+
+
+#: What passes through the guard on a storage call: only an httpx2 error, which no backend raises for itself.
+_PASS_FROM_STORAGE: tuple[type[Exception], ...] = (httpx2.HTTPError,)
 
 
 @contextlib.contextmanager
-def _storage_faults() -> Generator[None]:
-    """Raise any failure in the block as :class:`CacheStorageError`, except an ``httpx2.HTTPError``.
+def _storage_faults(passing: tuple[type[Exception], ...] = _PASS_FROM_STORAGE) -> Generator[None]:
+    """Raise any failure in the block as :class:`CacheStorageError`, except one of *passing*.
 
     An ``httpx2.HTTPError`` passes through because a storage that stores a miss streams the network body while writing
-    it, so a network failure can surface from inside the storage and must still reach the retry layer as one.
+    it, so a network failure can surface from inside the storage and must still reach the retry layer as one. The body
+    of a miss passes every one of :data:`~headgate._retry.NETWORK_ERRORS`, an ``OSError`` from a custom transport
+    included; anywhere else an ``OSError`` comes from the backend (a full disk) and is a storage fault.
     """
     try:
         yield
-    except httpx2.HTTPError:
+    except passing:
         raise
     except Exception as exc:
-        msg = f"{type(exc).__name__}: {exc}"
-        raise CacheStorageError(msg) from exc
+        raise CacheStorageError(type(exc).__name__) from exc
 
 
-async def _guarded_chunks(chunks: Iterator[bytes] | AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+async def _guarded_chunks(
+    chunks: Iterator[bytes] | AsyncIterator[bytes], passing: tuple[type[Exception], ...]
+) -> AsyncIterator[bytes]:
     """Yield *chunks*, a body a storage streams, raising a failure while it streams as :class:`CacheStorageError`."""
-    with _storage_faults():
+    with _storage_faults(passing):
         if isinstance(chunks, Iterator):
             msg = "an async storage returned a synchronous body stream"
             raise TypeError(msg)
@@ -156,11 +179,10 @@ async def _guarded_chunks(chunks: Iterator[bytes] | AsyncIterator[bytes]) -> Asy
             yield chunk
 
 
-def _guarded_body(entry: Entry) -> Entry:
+def _guarded_body(entry: Entry, passing: tuple[type[Exception], ...] = _PASS_FROM_STORAGE) -> Entry:
     """Return *entry* with its response body streamed through :func:`_guarded_chunks`."""
-    return dataclasses.replace(
-        entry, response=dataclasses.replace(entry.response, stream=_guarded_chunks(entry.response.stream))
-    )
+    stream = _guarded_chunks(entry.response.stream, passing)
+    return dataclasses.replace(entry, response=dataclasses.replace(entry.response, stream=stream))
 
 
 class _GuardedStorage(AsyncBaseStorage):
@@ -178,7 +200,8 @@ class _GuardedStorage(AsyncBaseStorage):
     async def create_entry(self, request: Request, response: Response, key: str, id_: uuid.UUID | None = None) -> Entry:
         with _storage_faults():
             entry = await self._backend.create_entry(request, response, key, id_)
-        return _guarded_body(entry)
+        # The new entry's body is the network body, teed into the backend as it streams.
+        return _guarded_body(entry, NETWORK_ERRORS)
 
     @override
     async def get_entries(self, key: str) -> list[Entry]:
@@ -227,12 +250,34 @@ class _CacheCall:
 #: concurrent request on a client. Set only around hishel, so the layer below never runs without it.
 _CALL: ContextVar[_CacheCall] = ContextVar("headgate_cache_call")
 
-#: The response extension a request that found the cache broken carries: the URL (query dropped) and the error.
+#: The response extension a request that found the cache broken carries: the URL (query and userinfo dropped) and the
+#: backend exception's type name.
 CACHE_DEGRADED_EXT = "headgate.cache_degraded"
+
+#: The response extension, and the exception attribute, marking an outcome this request's own network attempt did not
+#: produce, so the circuit breaker must not record it. See :func:`host_untested`.
+HOST_UNTESTED = "headgate.host_untested"
 
 #: How many requests per host found the cache broken and were redone on the live transport, since process start.
 #: Process-global like the breaker registry, read through :func:`headgate.health.cache_degradations`.
 CACHE_DEGRADATIONS: Counter[str] = Counter()
+
+
+def host_untested(outcome: httpx2.Response | BaseException) -> bool:
+    """Return whether *outcome* says nothing about its host's health, because this layer marked it so.
+
+    True for a response or network failure a request received from another identical GET's fetch, and for the error a
+    storage fault raises while an unheld body streams.
+    """
+    if isinstance(outcome, httpx2.Response):
+        return bool(outcome.extensions.get(HOST_UNTESTED))
+    return bool(vars(outcome).get(HOST_UNTESTED))
+
+
+def _mark_host_untested[E: BaseException](exc: E) -> E:
+    """Mark *exc* as saying nothing about its host (see :func:`host_untested`) and return it."""
+    vars(exc)[HOST_UNTESTED] = True
+    return exc
 
 
 def _without_secret_params(url: httpx2.URL) -> httpx2.URL:
@@ -299,8 +344,15 @@ class _ReplayStream(httpx2.AsyncByteStream):
     async def __aiter__(self) -> AsyncIterator[bytes]:
         for chunk in self._head:
             yield chunk
-        async for chunk in self._rest:
-            yield chunk
+        try:
+            async for chunk in self._rest:
+                yield chunk
+        except CacheStorageError as fault:
+            # Past the cap the fetch's fallback has already returned, so the fault can only fail the read. It is raised
+            # as the read failure it is, value-free and unchained, since the backend's text may carry its DSN; and the
+            # host is not charged, since the network was not what failed.
+            msg = f"the cache storage failed while the body streamed ({fault})"
+            raise _mark_host_untested(httpx2.ReadError(msg)) from None
 
     @override
     async def aclose(self) -> None:
@@ -359,13 +411,33 @@ class _Download:
         return cls(response.status_code, httpx2.Headers(response.headers), body, dict(response.extensions))
 
     def response(self) -> httpx2.Response:
-        """Build a response of this download's own, for one waiting request to read."""
+        """Build a response of this download's own for one waiting request to read, marked :data:`HOST_UNTESTED`."""
         return httpx2.Response(
             self.status_code,
             headers=self.headers,
             stream=httpx2.ByteStream(self.body),
-            extensions=dict(self.extensions),
+            extensions={**self.extensions, HOST_UNTESTED: True},
         )
+
+
+#: A network failure, as the retry layer defines it (:data:`~headgate._retry.NETWORK_ERRORS`).
+type _NetworkError = httpx2.HTTPError | OSError
+
+
+def _shared_failure(exc: _NetworkError) -> _NetworkError:
+    """Return a copy of *exc* for one waiting request to raise, chained to it and marked :data:`HOST_UNTESTED`.
+
+    Each waiting request raises its own copy, so the original's traceback is not extended once per task that re-raises
+    it. The copy is built without ``__init__``, as pickling would, so an exception whose constructor takes required
+    keywords copies as well as any other; it keeps the type the retry and timeout mapping above read.
+    """
+    copy = type(exc).__new__(type(exc), *exc.args)
+    vars(copy).update(vars(exc))
+    if "__notes__" in vars(exc):
+        # Its own list, so a note one waiting request adds does not appear on every other copy.
+        copy.__notes__ = [*exc.__notes__]
+    copy.__cause__ = exc
+    return _mark_host_untested(copy)
 
 
 class _Unshared(enum.Enum):
@@ -378,10 +450,11 @@ class _Unshared(enum.Enum):
     """It was cancelled or failed outside the network: the first waiting request to go again fetches for the rest."""
 
 
-type _Outcome = _Download | _Unshared | httpx2.HTTPError
+type _Outcome = _Download | _Unshared | _NetworkError
 
-#: What two in-flight GETs must agree on to share one download: the URL and every request header.
-type _SharingKey = tuple[str, tuple[tuple[str, str], ...]]
+#: What two in-flight GETs must agree on to share one download: the URL, every request header, the timeouts and the
+#: retry policy.
+type _SharingKey = tuple[str, tuple[tuple[str, str], ...], tuple[tuple[str, object], ...], object]
 
 
 @dataclass(slots=True)
@@ -396,9 +469,13 @@ def _sharing_key(request: httpx2.Request) -> _SharingKey:
     """Return what two in-flight GETs must agree on to share one download.
 
     Headers as well as the URL, since two GETs that differ in ``Range``, ``Accept`` or a credential ask for different
-    responses.
+    responses. The ``timeout`` and ``retry`` extensions too, since a request willing to wait longer, or to try more
+    often, must not inherit the ``ReadTimeout`` of one that was not.
     """
-    return str(request.url), tuple(sorted(request.headers.multi_items()))
+    timeout = request.extensions.get("timeout")
+    named: list[tuple[str, object]] = [(str(name), value) for name, value in timeout.items()] if timeout else []
+    timeouts = tuple(sorted(named, key=itemgetter(0)))
+    return str(request.url), tuple(sorted(request.headers.multi_items())), timeouts, request.extensions.get("retry")
 
 
 class ResilientCacheTransport(AsyncCacheTransport):
@@ -424,8 +501,10 @@ class ResilientCacheTransport(AsyncCacheTransport):
     **Simultaneous identical GETs share one download.** hishel has no request coalescing, so an identical GET that
     arrives while the first is still fetching would find nothing in storage and go to the network too. Instead it waits
     and gets its own copy of the first one's response, whether a hit, a miss or degraded, since the body is held whole
-    here anyway. A network failure fails every waiting request from the one attempt; each caller's retry layer then
-    retries, and those retries share again. If the first request is cancelled or fails outside the network, the next
+    here anyway. A network failure (one of :data:`~headgate._retry.NETWORK_ERRORS`) fails every waiting request from
+    the one attempt, each with its own copy chained to the original; each caller's retry layer then retries, and those
+    retries share again. What a waiting request receives is marked :data:`HOST_UNTESTED`, so only the request that
+    fetched counts toward the circuit breaker. If the first request is cancelled or fails outside the network, the next
     waiting request fetches for the rest. A body past the cap is not held, so each waiting request fetches its own.
     POSTs are never shared, since a POST's body is part of what it asks for.
     """
@@ -457,8 +536,8 @@ class ResilientCacheTransport(AsyncCacheTransport):
         while (in_flight := self._in_flight.get(key)) is not None:
             await in_flight.finished.wait()
             outcome = in_flight.outcome
-            if isinstance(outcome, httpx2.HTTPError):
-                raise outcome
+            if isinstance(outcome, NETWORK_ERRORS):
+                raise _shared_failure(outcome)
             if isinstance(outcome, _Download):
                 return outcome.response()
             if outcome is _Unshared.FETCH_OWN:
@@ -478,7 +557,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
         try:
             response, body = await self._fetch(request)
             in_flight.outcome = _Unshared.FETCH_OWN if body is None else _Download.of(response, body)
-        except httpx2.HTTPError as exc:
+        except NETWORK_ERRORS as exc:
             in_flight.outcome = exc
             raise
         finally:

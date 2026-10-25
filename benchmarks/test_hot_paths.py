@@ -76,7 +76,7 @@ def test_redact_secrets(benchmark: BenchmarkFixture) -> None:
 def test_status_error(benchmark: BenchmarkFixture) -> None:
     """Measure building the ``ClientError`` for an undeclared 4xx, including its body snippet."""
     response = httpx2.Response(httpx2.codes.BAD_REQUEST, text="field 'limit' must be <= 1000 " * 40)
-    benchmark(status_error, response, "https://api.example.test/v1/series", source="ExampleClient")
+    benchmark(status_error, response, "GET", "https://api.example.test/v1/series", source="ExampleClient")
 
 
 def test_msgspec_decode_rows(benchmark: BenchmarkFixture) -> None:

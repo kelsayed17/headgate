@@ -32,9 +32,14 @@ import httpx2
 from headgate._auth import failed_on_auth_hop
 from headgate._body import read_capped, read_head
 from headgate._breaker import HOST_BREAKERS, NO_BREAKERS, CircuitOpenError
+from headgate._cache import host_untested
 from headgate._failures import (
+    SHAPE_ERRORS,
     is_transient_status,
+    loggable_url,
+    parse_error,
     refusal_error,
+    shorten,
     status_error,
     transient_status_error,
     transport_error,
@@ -42,10 +47,10 @@ from headgate._failures import (
 from headgate._options import HttpOptions, TransportPolicy
 from headgate._redirects import FOLLOW_REDIRECTS_EXT
 from headgate._responses import Expect, Reader, RefusedError
-from headgate._retry import ZERO_RETRY
+from headgate._retry import NETWORK_ERRORS, ZERO_RETRY
 from headgate._stack import build_http_client
-from headgate._url import render_path, sanitize_url
-from headgate.errors import ClientError, DecodeError, ResponseParseError, TransportError
+from headgate._url import render_path
+from headgate.errors import ClientError, TransportError
 from headgate.policy import policy_is_disabled
 
 if TYPE_CHECKING:
@@ -54,6 +59,7 @@ if TYPE_CHECKING:
 
     from headgate._breaker import Breakers, Verdict
     from headgate._rate_limit import Rate
+    from headgate._responses import RefusalCheck
 
 __all__ = ["AsyncBaseClient", "RequestOptions"]
 
@@ -131,7 +137,7 @@ class AsyncBaseClient:
     * ``RateLimitError``: a 429 that survived retries, or a quota refusal a reader found inside a 2xx;
     * ``UpstreamStatusError``: a 5xx that survived retries, a status the call did not declare, or a refusal carrying
       the status it arrived with (401/403 become ``AuthError``);
-    * ``ResponseParseError``: a 2xx body the reader could not decode;
+    * ``ResponseParseError``: a 2xx body the reader could not read;
     * ``ResponseTooLargeError``: a body past ``HttpOptions.max_response_bytes``.
 
     There is no ``None`` return except from a reader that returns it (:func:`~headgate._responses.nothing`): every
@@ -143,8 +149,11 @@ class AsyncBaseClient:
     ``follow_redirects=False`` makes a redirect raise as its 3xx. ``cache_ttl=`` sets this request's cache lifetime.
 
     **URLs.** A t-string URL (``t"series/{series_id}"``) is rendered by :func:`headgate._url.render_path`, which
-    escapes every interpolation as one path segment. A ``str`` URL is passed through verbatim, so a paginator can
-    forward an absolute cursor URL from a response body.
+    escapes every interpolation as one path segment and raises ``ValueError`` for a value no segment can hold (as
+    :func:`~headgate._url.escape_segment` does): that is a programming error at the call site. A ``str`` URL is passed
+    through verbatim, so a paginator can forward an absolute cursor URL from a response body; one httpx2 cannot parse,
+    or a redirect joined past its length limit, raises the root ``ClientError``, since such a URL often comes from the
+    wire rather than the code. Every message names a URL redacted and cut to a few hundred characters.
 
     **The connection pool** is the same for every client (10 connections, 5 keep-alive). The rate limiter is the
     throttle; the pool only has to be wide enough never to bind first, and at 300 ms per request 10 connections
@@ -293,12 +302,12 @@ class AsyncBaseClient:
         """
         prepared = self._prepare(_Call("GET", url, {}, follow_redirects=follow_redirects))
         async with self._exchange(prepared) as streamed:
-            if self._refusal_check is not None and (refused := self._refusal_check(streamed)) is not None:
+            if (refused := _refusal(self._refusal_check, streamed)) is not None:
                 head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
-                raise refusal_error(refused, head, prepared.log_url, source=self._source)
+                raise refusal_error(refused, head, prepared.log_url, source=self._source) from refused
             if not streamed.is_success:
                 head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
-                raise status_error(head, prepared.log_url, source=self._source)
+                raise status_error(head, prepared.request.method, prepared.log_url, source=self._source)
             async for chunk in streamed.aiter_bytes():
                 yield chunk
 
@@ -307,11 +316,11 @@ class AsyncBaseClient:
     def _prepare(self, call: _Call) -> _Prepared:
         """Build *call*'s request, stamped with its per-call extensions.
 
-        Raises ``ValueError`` for a call that would follow redirects on a client with a ``refusal_check``, and
-        ``ClientError`` for a URL httpx2 cannot parse.
+        Raises ``ValueError`` for a t-string value no path segment can hold, or for a call that would follow redirects
+        on a client with a ``refusal_check``, and ``ClientError`` for a URL httpx2 cannot parse.
         """
         url = render_path(call.url) if isinstance(call.url, Template) else call.url
-        log_url = sanitize_url(url)
+        log_url = loggable_url(url)
         follow = self._http_client.follow_redirects if call.follow_redirects is None else call.follow_redirects
         # The per-call half of the constructor's check: the client itself never follows with a refusal_check.
         if self._refusal_check is not None and follow:
@@ -330,8 +339,7 @@ class AsyncBaseClient:
                 timeout=options.get("timeout", httpx2.USE_CLIENT_DEFAULT),
             )
         except httpx2.InvalidURL as exc:
-            msg = f"invalid URL {log_url}: {exc}"
-            raise ClientError(msg, source=self._source) from exc
+            raise _invalid_url(exc, log_url, source=self._source) from exc
         if not call.retry:
             request.extensions["retry"] = ZERO_RETRY
         # The cache transport only setdefaults the client's own TTL, so a per-call TTL stamped here wins.
@@ -351,9 +359,10 @@ class AsyncBaseClient:
 
         The breaker is driven here rather than by a transport layer because this is the only scope that spans both the
         send and the body read. It is keyed on the host the request is addressed to, so a followed redirect's hops are
-        charged to that host. A transport failure and a surviving 429/5xx are host failures; a cache hit tested
-        nothing; anything else that escapes (an auth flow failing to mint, a body over the cap, a cancellation)
-        records nothing (see ``CircuitBreaker.track``).
+        charged to that host. A transport failure and a surviving 429/5xx are host failures. A cache hit, and an
+        outcome the cache marked :data:`~headgate._cache.HOST_UNTESTED` (one another identical GET fetched), tested
+        nothing, so only the request that fetched counts. Anything else that escapes (an auth flow failing to mint, a
+        body over the cap, a cancellation) records nothing (see ``CircuitBreaker.track``).
         """
         try:
             with self._breakers[prepared.request.url.host].track() as verdict:
@@ -363,32 +372,41 @@ class AsyncBaseClient:
             raise TransportError(str(exc), source=self._source) from None
         except httpx2.InvalidURL as exc:
             # A redirect joined past httpx2's length limit. Not an HTTPError, and not a host failure.
-            msg = f"invalid URL {prepared.log_url}: {exc}"
-            raise ClientError(msg, source=self._source) from exc
+            raise _invalid_url(exc, prepared.log_url, source=self._source) from exc
 
     @contextlib.asynccontextmanager
     async def _sent(self, prepared: _Prepared, verdict: Verdict) -> AsyncGenerator[httpx2.Response]:
-        """Send the request and yield its streamed response, marking *verdict* with what the exchange showed."""
+        """Send the request and yield its streamed response, marking *verdict* with what the exchange showed.
+
+        A surviving 429/5xx is raised with a bounded head of its body, read here while the response is still a stream.
+        """
         request = prepared.request
         try:
             streamed = await self._http_client.send(request, stream=True, follow_redirects=prepared.follow_redirects)
             try:
-                if streamed.extensions.get("hishel_from_cache"):
+                shared = host_untested(streamed)
+                if shared or streamed.extensions.get("hishel_from_cache"):
                     verdict.mark_untested()
                 if is_transient_status(streamed.status_code):
-                    verdict.mark_failed()
-                    raise transient_status_error(streamed, source=self._source)
+                    if not shared:
+                        verdict.mark_failed()
+                    head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
+                    raise transient_status_error(head, request.method, prepared.log_url, source=self._source)
                 yield streamed
             finally:
                 # Closing a partly read compressed stream can raise DecodingError; it must not mask the error in flight.
                 with contextlib.suppress(httpx2.HTTPError):
                     await streamed.aclose()
-        except (httpx2.HTTPError, OSError) as exc:
+        except NETWORK_ERRORS as exc:
             # A hop an auth flow yielded to mint a credential failed: that is the credential host's failure, not this
-            # host's.
-            if not failed_on_auth_hop(exc):
+            # host's. A failure the cache shared from another request's attempt was counted by that request.
+            if not (failed_on_auth_hop(exc) or host_untested(exc)):
                 verdict.mark_failed()
-            raise transport_error(exc, request.method, prepared.log_url, source=self._source) from exc
+            error = transport_error(exc, request.method, prepared.log_url, source=self._source)
+            if isinstance(exc, httpx2.LocalProtocolError):
+                # Its message, and so its traceback, quotes the header value it refused, usually the credential.
+                raise error from None
+            raise error from exc
 
     async def _request[T](self, call: _Call, expect: Reader[T] | Expect[T]) -> T:
         """Send *call* and read the reply through its declared responses.
@@ -400,29 +418,46 @@ class AsyncBaseClient:
         3. **endpoint**: a status the call declared exactly goes to its reader; any other 2xx to the success reader;
         4. **default**: any other non-2xx raises through :func:`~headgate._failures.status_error`.
 
-        A reader's ``RefusedError`` becomes the ``ClientError`` its kind names, with the real status. A reader's
-        ``DecodeError`` on a 2xx becomes ``ResponseParseError``; on a declared non-2xx it falls through to the status
-        ladder, because a declaration covers only the body shape it names.
+        A ``RefusedError`` from a reader, or raised or returned by the ``refusal_check``, becomes the ``ClientError``
+        its kind names, with the real status. A reader that finds the body is not the shape it expected (a codec's
+        ``DecodeError``, or the ``ValueError``, ``LookupError`` or ``TypeError`` hand-written code over
+        ``response.json()`` raises) on a 2xx raises ``ResponseParseError`` naming the status and request line; on a
+        declared non-2xx it falls through to the status ladder, because a declaration covers only the body shape it
+        names.
         """
         spec: Expect[T] = expect if isinstance(expect, Expect) else Expect(expect)
         prepared = self._prepare(call)
-        log_url = prepared.log_url
+        method, log_url = prepared.request.method, prepared.log_url
         async with self._exchange(prepared) as streamed:
             resp = await read_capped(streamed, self._max_response_bytes, source=self._source, url=log_url)
-        if self._refusal_check is not None and (refused := self._refusal_check(resp)) is not None:
-            raise refusal_error(refused, resp, log_url, source=self._source)
+        if (refused := _refusal(self._refusal_check, resp)) is not None:
+            raise refusal_error(refused, resp, log_url, source=self._source) from refused
         read = spec.answers.get(resp.status_code)
         if read is None:
             if not resp.is_success:
-                raise status_error(resp, log_url, source=self._source)
+                raise status_error(resp, method, log_url, source=self._source)
             read = spec.ok
         try:
             return read(resp)
         # The one place a reader's RefusedError is caught: it becomes the ClientError carrying the status the wire sent.
         except RefusedError as refused:
-            raise refusal_error(refused, resp, log_url, source=self._source) from None
-        except DecodeError as exc:
+            raise refusal_error(refused, resp, log_url, source=self._source) from refused
+        except SHAPE_ERRORS as exc:
             if resp.is_success:
-                msg = f"{log_url}: {exc}"
-                raise ResponseParseError(msg, source=self._source) from exc
-            raise status_error(resp, log_url, source=self._source) from exc
+                raise parse_error(exc, resp, method, log_url, source=self._source) from exc
+            raise status_error(resp, method, log_url, source=self._source) from exc
+
+
+def _refusal(check: RefusalCheck | None, resp: httpx2.Response) -> RefusedError | None:
+    """Run the client's *check* on *resp*, treating a ``RefusedError`` it raises like one it returns."""
+    if check is None:
+        return None
+    try:
+        return check(resp)
+    except RefusedError as refused:
+        return refused
+
+
+def _invalid_url(exc: httpx2.InvalidURL, log_url: str, *, source: str) -> ClientError:
+    """Build the ``ClientError`` for a URL httpx2 rejected, naming it and httpx2's reason, both bounded."""
+    return ClientError(f"invalid URL {log_url}: {shorten(str(exc))}", source=source)
