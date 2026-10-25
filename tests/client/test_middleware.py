@@ -90,9 +90,13 @@ class _VerifyingServer(Script):
 
 
 async def test_every_attempt_is_signed_afresh() -> None:
-    """Sign each retry with a new nonce and a signature that verifies, not a replay of the first."""
+    """Sign each retry with a new nonce and a signature that verifies, not a replay of the first.
+
+    The POST carries an idempotency key, which is what makes re-sending it safe.
+    """
     server = _VerifyingServer(503, 503, 200)
-    await _client(server, HmacSigner(_SECRET)).post("orders", expect=nothing, json={"qty": 1})
+    client = _client(server, HmacSigner(_SECRET))
+    await client.post("orders", expect=nothing, json={"qty": 1}, idempotency_key="order-1")
 
     assert server.received == [("1", True), ("2", True), ("3", True)]
 

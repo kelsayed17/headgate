@@ -33,7 +33,7 @@ from headgate.errors import (
     UpstreamStatusError,
 )
 from headgate.ratelimit import Rate, RateRule
-from headgate.retry import NO_RETRY, Backoff, RetryPolicy
+from headgate.retry import NO_RETRY, Backoff, Hedge, RetryBudget, RetryPolicy
 
 __all__ = [
     "NO_RETRY",
@@ -49,6 +49,7 @@ __all__ = [
     "ClientTimeoutError",
     "DecodeError",
     "Expect",
+    "Hedge",
     "HttpCache",
     "HttpOptions",
     "IdempotencyKeys",
@@ -68,6 +69,7 @@ __all__ = [
     "RequestOptions",
     "ResponseParseError",
     "ResponseTooLargeError",
+    "RetryBudget",
     "RetryPolicy",
     "Route",
     "StaticHeaderAuth",

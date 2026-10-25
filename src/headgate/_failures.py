@@ -44,6 +44,7 @@ from headgate.retry._policy import parse_retry_after
 
 if TYPE_CHECKING:
     from headgate._responses import RefusedError
+    from headgate.retry._policy import RetryOutcome
 
 __all__ = [
     "DEFAULT_REQUEST_ID_HEADERS",
@@ -120,7 +121,9 @@ _LOCAL_FAILURES = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol)
 class CallSite:
     """Where a failure happened: the client, the request line, how many sends the call made, and its request-id headers.
 
-    ``url`` is already sanitized and bounded (:func:`loggable_url`).
+    ``url`` is already sanitized and bounded (:func:`loggable_url`). ``retry`` is the retry layer's verdict on the
+    call's last attempt, if it made one: it marks the error retryable, and supplies the delay the upstream asked for
+    when the builder has none of its own.
     """
 
     source: str
@@ -128,11 +131,15 @@ class CallSite:
     url: str
     attempts: int | None = None
     request_id_headers: tuple[str, ...] = DEFAULT_REQUEST_ID_HEADERS
+    retry: RetryOutcome | None = None
 
     def details(
         self, resp: httpx2.Response | None = None, *, retryable: bool = False, retry_after: float | None = None
     ) -> ErrorDetails:
         """Return the :class:`~headgate.errors.ErrorDetails` of an error raised here, about *resp* if there is one."""
+        if self.retry is not None:
+            retryable = retryable or self.retry.retryable
+            retry_after = self.retry.retry_after if retry_after is None else retry_after
         return ErrorDetails(
             source=self.source,
             method=self.method,

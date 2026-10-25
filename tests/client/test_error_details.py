@@ -191,7 +191,7 @@ async def test_notes_a_layer_added_reach_the_error() -> None:
     )
     error = await _raised(client)
 
-    assert error.__notes__ == ["attempt 1: sent"]
+    assert error.__notes__[0] == "attempt 1: sent", "the layer's note comes first, then the retry layer's history"
 
 
 async def test_a_body_over_the_cap_records_its_call() -> None:
