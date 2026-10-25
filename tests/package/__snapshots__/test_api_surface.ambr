@@ -306,7 +306,7 @@
       property in_flight
       property max_in_flight
       def now(self) -> 'float'
-      def observe(self, response: 'httpx2.Response', *, sent_at: 'float') -> 'None'
+      def observe(self, response: 'httpx2.Response', *, sent_at: 'float') -> 'float | None'
       def occupy(self) -> 'Callable[[], None]'
       def pause_remaining(self) -> 'float'
       property rate
@@ -454,7 +454,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['NO_RETRY', 'Adaptive', 'AsyncBaseClient', 'AuthError', 'Backoff', 'BreakerPolicy', 'BreakerRegistry', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Cursor', 'DecodeError', 'Expect', 'ForbiddenDestinationError', 'Fresh', 'Hedge', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'LinkHeader', 'MethodFilter', 'Middleware', 'Minted', 'NextUrl', 'NotModified', 'Observer', 'Offset', 'PageRequest', 'Pager', 'Paginated', 'Partition', 'PathFragmentFilter', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryBudget', 'RetryPolicy', 'Route', 'StaticHeaderAuth', 'StatusCodeFilter', 'Stream', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'Validator', 'as_bytes', 'conditional', 'event_stream', 'json_reader', 'nothing']
+  __all__ = ['NO_RETRY', 'Adaptive', 'AsyncBaseClient', 'AuthError', 'Backoff', 'BreakerPolicy', 'BreakerRegistry', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Cursor', 'DecodeError', 'Expect', 'ForbiddenDestinationError', 'Fresh', 'Hedge', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'LinkHeader', 'Method', 'MethodFilter', 'Middleware', 'Minted', 'NextUrl', 'NotModified', 'Observer', 'Offset', 'PageRequest', 'Pager', 'Paginated', 'Partition', 'PathFragmentFilter', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryBudget', 'RetryPolicy', 'Route', 'StaticHeaderAuth', 'StatusCodeFilter', 'Stream', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'Validator', 'as_bytes', 'conditional', 'event_stream', 'json_reader', 'nothing']
   NO_RETRY = RetryPolicy(attempts=1, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryBudget(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05)
   class Adaptive(object)(*, decrease: 'float' = 0.5, increase: 'float' = 0.1, min_rate: 'float' = 0.1) -> 'None'
       field decrease: float = 0.5
@@ -469,7 +469,7 @@
       def patch(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
       def post(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
       def put(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
-      def stream(self, method: '_Method', url: 'str | Template', *, retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, last_event_id: 'str | None' = None, **options: 'Unpack[RequestOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
+      def stream(self, method: 'Method', url: 'str | Template', *, retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, last_event_id: 'str | None' = None, **options: 'Unpack[RequestOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
       def with_options(self, *, headers: 'Mapping[str, str] | None' = None, timeout: 'Timeouts | float | None' = None, deadline: 'float | Literal[Keep.KEEP] | None' = <Keep.KEEP: 'keep'>, retry: 'bool | RetryPolicy | None' = None) -> 'Self'
   class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
   class Backoff(object)(*, factor: 'float' = 0.5, max_wait: 'float' = 5.0, jitter: 'RandomSource' = <bound method SystemRandom.random of <random.SystemRandom object at 0x…>>) -> 'None'
@@ -557,6 +557,7 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
+  type Method = Literal['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']
   class MethodFilter(BaseFilter)(methods: 'frozenset[str]') -> 'None'
       def apply(self, item: 'Request', body: 'bytes | None') -> 'bool'
       def needs_body(self) -> 'bool'
@@ -624,7 +625,7 @@
       property in_flight
       property max_in_flight
       def now(self) -> 'float'
-      def observe(self, response: 'httpx2.Response', *, sent_at: 'float') -> 'None'
+      def observe(self, response: 'httpx2.Response', *, sent_at: 'float') -> 'float | None'
       def occupy(self) -> 'Callable[[], None]'
       def pause_remaining(self) -> 'float'
       property rate

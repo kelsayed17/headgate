@@ -41,17 +41,19 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from headgate._core import CallContext, Clock, Timing
+    from headgate.ratelimit._feedback import Feedback
 
-__all__ = ["DEFAULT_ADAPTIVE", "BudgetPausedError", "RateBudget"]
+__all__ = ["DEFAULT_ADAPTIVE", "PACED", "PAUSED", "PUSHBACK", "THROTTLED", "BudgetPausedError", "RateBudget"]
 
 #: Adaptive throttling with its default factors: what a budget gets unless it is given ``adaptive=None``.
 DEFAULT_ADAPTIVE: Final = Adaptive()
 
 #: The ``reason`` of a :class:`~headgate._core.RateLimited` event: pacing at the configured rate, pacing at a rate
-#: adaptive throttling lowered, and waiting out a pause the server asked for.
+#: adaptive throttling lowered, waiting out a pause the server asked for, and a response asking for that pause.
 PACED: Final = "paced"
 THROTTLED: Final = "throttled"
 PAUSED: Final = "paused"
+PUSHBACK: Final = "pushback"
 
 
 class BudgetPausedError(Exception):
@@ -218,11 +220,12 @@ class RateBudget:
 
         return release
 
-    def observe(self, response: httpx2.Response, *, sent_at: float) -> None:
+    def observe(self, response: httpx2.Response, *, sent_at: float) -> float | None:
         """Apply what *response* says: pause for the reset it names, and throttle on pushback or recover on success.
 
         *sent_at* is the budget's clock when the request was sent: a response to a request sent before the last
-        decrease does not change the rate again.
+        decrease does not change the rate again. Returns the pause *response* asked for, in seconds, or ``None``
+        when it asked for none; a shorter pause than one already running does not shorten it.
         """
         feedback = read_feedback(response, now=self._wall_clock())
         with self._lock:
@@ -230,18 +233,23 @@ class RateBudget:
             if feedback.pause is not None and now + feedback.pause > self._paused_until:
                 self._paused_until = now + feedback.pause
                 self._pause_status = response.status_code
-            adaptive = self._adaptive
-            if adaptive is None or sent_at < self._decreased_at:
-                return
-            if feedback.pushback:
-                self._factor = max(adaptive.min_rate, self._factor * adaptive.decrease)
-                self._decreased_at = self._adjusted_at = now
-            elif response.status_code < httpx2.codes.INTERNAL_SERVER_ERROR:
-                restored = adaptive.increase * (now - self._adjusted_at)
-                self._factor = min(1.0, self._factor + restored)
-                self._adjusted_at = now
+            self._adapt(response, feedback, now=now, sent_at=sent_at)
+        return feedback.pause
 
     # Internals, called with the lock held.
+
+    def _adapt(self, response: httpx2.Response, feedback: Feedback, *, now: float, sent_at: float) -> None:
+        """Throttle on pushback, or recover toward the configured rate on a success, under adaptive throttling."""
+        adaptive = self._adaptive
+        if adaptive is None or sent_at < self._decreased_at:
+            return
+        if feedback.pushback:
+            self._factor = max(adaptive.min_rate, self._factor * adaptive.decrease)
+            self._decreased_at = self._adjusted_at = now
+        elif response.status_code < httpx2.codes.INTERNAL_SERVER_ERROR:
+            restored = adaptive.increase * (now - self._adjusted_at)
+            self._factor = min(1.0, self._factor + restored)
+            self._adjusted_at = now
 
     def _current_rate(self) -> Rate:
         """Return the rate pacing runs at now."""

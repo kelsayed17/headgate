@@ -12,11 +12,11 @@ For each request :class:`RetryTransport` runs a sequence of attempts under the c
 2. **Classify** the result (:mod:`headgate.retry._classify`): an answer is returned; a failure is retryable or not.
    The verdict is put on the context (``RETRY_OUTCOME``) for the error the client raises.
 3. **Stop** with the last failure (re-raise the exception, or return the response for the client to raise) when it is
-   not retryable, the body cannot be replayed, the attempts are spent, the ``Retry-After`` is past
-   ``max_retry_after``, the wait would leave less than ``min_attempt_time`` before the deadline, the host's breaker
-   is refusing (``BREAKER_GATE``), or the retry budget is spent. Each stop that is not plain exhaustion adds a note:
-   ``"Retry-After 60.0s exceeds max_retry_after 30.0s"``, ``"deadline exhausted"``, ``"circuit opened"`` or
-   ``"retry budget exhausted"``.
+   not retryable, the attempts are spent, the body cannot be sent again (``REPLAYABLE_BODY``), the ``Retry-After``
+   is past ``max_retry_after``, the wait would leave less than ``min_attempt_time`` before the deadline, the origin's
+   breaker is refusing (``BREAKER_GATE``), or the retry budget is spent. Each stop that is not plain exhaustion adds a
+   note: ``"the request body is a one-shot stream, so it is not sent again"``, ``"Retry-After 60.0s exceeds
+   max_retry_after 30.0s"``, ``"deadline exhausted"``, ``"circuit opened"`` or ``"retry budget exhausted"``.
 4. **Wait**: a ``Retry-After`` exactly, else the backoff; a failed response is first read (a bounded head of its body)
    and closed, so no connection is held through the wait. ``RetryScheduled`` is emitted for every retry and hedge.
    The deadline and the breaker are checked again after the wait, before the next attempt starts.
@@ -183,14 +183,10 @@ class _Sequence:
     # Attempts.
 
     def _fit_timeout(self, request: httpx2.Request) -> None:
-        """Cut *request*'s timeouts to the time left before the deadline, never below ``min_attempt_time``."""
-        remaining = self._context.remaining()
-        if remaining is None or not isinstance(self._timeout, dict):
-            return
-        left = max(remaining, self._policy.min_attempt_time)
-        request.extensions["timeout"] = {
-            phase: left if limit is None else min(limit, left) for phase, limit in self._timeout.items()
-        }
+        """Cut the request's own timeouts to the time left before the deadline, never below ``min_attempt_time``."""
+        if self._timeout is not None:
+            request.extensions["timeout"] = self._timeout
+        self._context.fit_timeouts(request, floor=self._policy.min_attempt_time)
 
     def _attempted(self, progress: SendProgress) -> Attempted:
         """Return what classification needs to know about this request and one attempt's *progress*."""
@@ -293,22 +289,34 @@ class _Sequence:
 
     def _decide(self, attempt: _Attempt) -> _Decision:
         """Return what follows *attempt*: the wait before retrying it, or a stop with the reason it is noted for."""
-        policy = self._policy
-        if not (attempt.retryable_failure and self._replayable) or self._sent >= policy.attempts:
+        if not attempt.retryable_failure or self._sent >= self._policy.attempts:
             return _STOP
-        asked = attempt.verdict.retry_after
-        if asked is not None and asked > policy.max_retry_after:
-            note = f"Retry-After {_rounded(asked)} exceeds max_retry_after {_rounded(policy.max_retry_after)}"
+        if (note := self._unsendable(attempt)) is not None:
             return _Decision(note=note)
-        delay = policy.wait_after(attempt.result, self._sent)
-        remaining = self._context.remaining()
-        if remaining is not None and remaining - delay < policy.min_attempt_time:
-            return _Decision(note="deadline exhausted")
-        if (reason := self._stop_reason()) is not None:
-            return _Decision(note=reason)
-        if self._ledger is not None and not self._ledger.try_spend():
-            return _Decision(note="retry budget exhausted")
+        delay = self._policy.wait_after(attempt.result, self._sent)
+        if (note := self._unaffordable(delay)) is not None:
+            return _Decision(note=note)
         return _Decision(delay=delay)
+
+    def _unsendable(self, attempt: _Attempt) -> str | None:
+        """Return why the request may not be sent again at any time: its body, or a ``Retry-After`` past the cap."""
+        if not self._replayable:
+            return "the request body is a one-shot stream, so it is not sent again"
+        asked = attempt.verdict.retry_after
+        if asked is not None and asked > self._policy.max_retry_after:
+            return f"Retry-After {_rounded(asked)} exceeds max_retry_after {_rounded(self._policy.max_retry_after)}"
+        return None
+
+    def _unaffordable(self, delay: float) -> str | None:
+        """Return why a retry after *delay* seconds may not be scheduled: the deadline, the breaker, the budget."""
+        remaining = self._context.remaining()
+        if remaining is not None and remaining - delay < self._policy.min_attempt_time:
+            return "deadline exhausted"
+        if (reason := self._stop_reason()) is not None:
+            return reason
+        if self._ledger is not None and not self._ledger.try_spend():
+            return "retry budget exhausted"
+        return None
 
     def _scheduled(self, delay: float, reason: str) -> None:
         """Emit ``RetryScheduled`` for the attempt about to be scheduled, when anyone is listening."""

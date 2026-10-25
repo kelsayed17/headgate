@@ -45,7 +45,7 @@
       }),
       'error': 'UpstreamStatusError',
       'event': 'CallFinished',
-      'status_code': None,
+      'status_code': 503,
     }),
     dict({
       'call': dict({
@@ -258,6 +258,67 @@
     }),
   ])
 # ---
+# name: test_the_event_sequence_matches_the_snapshot[hedged]
+  list([
+    dict({
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'event': 'CallStarted',
+    }),
+    dict({
+      'attempt': 2,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'delay': 0.5,
+      'event': 'RetryScheduled',
+      'reason': 'hedge',
+    }),
+    dict({
+      'attempt': 2,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'AttemptFinished',
+      'status_code': 200,
+    }),
+    dict({
+      'attempt': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': 'CancelledError',
+      'event': 'AttemptFinished',
+      'status_code': None,
+    }),
+    dict({
+      'attempts': 2,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'CallFinished',
+      'status_code': 200,
+    }),
+  ])
+# ---
 # name: test_the_event_sequence_matches_the_snapshot[plain]
   list([
     dict({
@@ -307,6 +368,17 @@
       'event': 'CallStarted',
     }),
     dict({
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'delay': 1.0,
+      'event': 'RateLimited',
+      'reason': 'pushback',
+    }),
+    dict({
       'attempt': 1,
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
@@ -319,7 +391,27 @@
       'status_code': 429,
     }),
     dict({
-      'attempt': 2,
+      'attempts': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': 'RateLimitError',
+      'event': 'CallFinished',
+      'status_code': 429,
+    }),
+    dict({
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'event': 'CallStarted',
+    }),
+    dict({
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
@@ -327,11 +419,11 @@
         'url': 'x',
       }),
       'delay': 1.0,
-      'event': 'RetryScheduled',
-      'reason': '429',
+      'event': 'RateLimited',
+      'reason': 'paused',
     }),
     dict({
-      'attempt': 2,
+      'attempt': 1,
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
@@ -343,7 +435,7 @@
       'status_code': 200,
     }),
     dict({
-      'attempts': 2,
+      'attempts': 1,
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
@@ -530,6 +622,23 @@
     }),
   ])
 # ---
+# name: test_the_spans_match_the_snapshot[hedged]
+  list([
+    dict({
+      'attributes': dict({
+        'http.request.method': 'GET',
+        'http.request.resend_count': 1,
+        'http.response.status_code': 200,
+        'server.address': 'api.example.test',
+        'server.port': 443,
+        'url.full': 'https://api.example.test/v1/x',
+      }),
+      'kind': 'CLIENT',
+      'name': 'GET',
+      'status': 'UNSET',
+    }),
+  ])
+# ---
 # name: test_the_spans_match_the_snapshot[plain]
   list([
     dict({
@@ -550,8 +659,20 @@
   list([
     dict({
       'attributes': dict({
+        'error.type': '429',
         'http.request.method': 'GET',
-        'http.request.resend_count': 1,
+        'http.response.status_code': 429,
+        'server.address': 'api.example.test',
+        'server.port': 443,
+        'url.full': 'https://api.example.test/v1/x',
+      }),
+      'kind': 'CLIENT',
+      'name': 'GET',
+      'status': 'ERROR',
+    }),
+    dict({
+      'attributes': dict({
+        'http.request.method': 'GET',
         'http.response.status_code': 200,
         'server.address': 'api.example.test',
         'server.port': 443,

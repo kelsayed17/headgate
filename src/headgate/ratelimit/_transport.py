@@ -12,6 +12,10 @@ response head arrives: the server is still busy with a request whose body is str
 response, in a stream wrapper whose ``aclose`` gives it back. Every path that drops a response closes it (the client
 after reading the body or on error, the retry layer before re-sending, ``stream()`` on exit), and a send that raises
 or is cancelled gives the slot back at once.
+
+**Events.** The budget emits :class:`~headgate._core.RateLimited` for every wait it makes a call take; this layer emits
+one more, with the reason ``"pushback"``, for a response that asks the budget to pause, so the call that caused a pause
+reports it as well as every call that then waits it out.
 """
 
 from __future__ import annotations
@@ -20,7 +24,8 @@ from typing import TYPE_CHECKING, override
 
 import httpx2
 
-from headgate._core import CallContext
+from headgate._core import CallContext, RateLimited
+from headgate.ratelimit._budget import PUSHBACK
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -72,15 +77,20 @@ class RateLimitTransport(httpx2.AsyncBaseTransport):
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         budget = self._budgets.for_request(request)
-        await budget.wait(CallContext.of(request))
+        context = CallContext.of(request)
+        await budget.wait(context)
         release = await budget.occupy()
+        # The waits took some of the call's time: the send that follows gets only what is left.
+        context.fit_timeouts(request)
         sent_at = budget.now()
         try:
             response = await self._transport.handle_async_request(request)
         except BaseException:
             release()
             raise
-        budget.observe(response, sent_at=sent_at)
+        pause = budget.observe(response, sent_at=sent_at)
+        if pause is not None and pause > 0 and context.observed:
+            context.emit(RateLimited(call=context.info, delay=pause, reason=PUSHBACK))
         if budget.max_in_flight is not None:
             stream = response.stream
             if isinstance(stream, httpx2.AsyncByteStream):

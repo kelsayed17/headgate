@@ -9,7 +9,8 @@ layer from the auth flow down to the network transport finds the same object wit
 read and write it through its methods, never through extension keys of their own:
 
 * what the call is: :attr:`~CallContext.info` (method, sanitized URL, route template, call id);
-* when it must end: :attr:`~CallContext.deadline`, absolute on the client's clock, and :meth:`~CallContext.remaining`;
+* when it must end: :attr:`~CallContext.deadline`, absolute on the client's clock, :meth:`~CallContext.remaining`,
+  and :meth:`~CallContext.fit_timeouts`, which cuts a request's timeouts to it;
 * its sends: :meth:`~CallContext.begin_attempt`, :attr:`~CallContext.attempt` and the current attempt's
   :attr:`~CallContext.progress` (whether a connection was obtained and how many request bytes were written);
 * what it carries: :attr:`~CallContext.idempotency_key` and whether its redirects are followed;
@@ -160,6 +161,22 @@ class CallContext:
     def elapsed(self) -> float:
         """Return the seconds since the call started."""
         return self._clock() - self.started_at
+
+    def fit_timeouts(self, request: httpx2.Request, *, floor: float = 0.0) -> None:
+        """Cut *request*'s httpx2 timeouts to the time left before the deadline, never below *floor* seconds.
+
+        Each phase keeps its own limit when that is shorter; a phase with no limit gets the time left. A call without a
+        deadline, or a request without a ``timeout`` extension, is left as it is. Every layer that waits before a send
+        calls it, so the send that follows cannot outlast the call.
+        """
+        remaining = self.remaining()
+        timeout = request.extensions.get("timeout")
+        if remaining is None or not isinstance(timeout, dict):
+            return
+        left = max(remaining, floor)
+        request.extensions["timeout"] = {
+            phase: left if limit is None else min(limit, left) for phase, limit in timeout.items()
+        }
 
     # Attempts.
 

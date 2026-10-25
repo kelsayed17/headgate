@@ -46,7 +46,7 @@ Requires the ``otel`` extra: ``pip install headgate[otel]`` (``opentelemetry-api
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
 
@@ -59,7 +59,7 @@ except ImportError as exc:
     msg = "headgate.otel needs opentelemetry-api: pip install headgate[otel]"
     raise ImportError(msg) from exc
 
-from headgate._core import AttemptFinished, CallContext, CallFinished, CallInfo, CallStarted
+from headgate._core import CallContext, CallFinished, CallInfo, CallStarted
 from headgate._user_agent import headgate_version
 
 if TYPE_CHECKING:
@@ -107,18 +107,12 @@ _ERROR_TYPE: Final = "error.type"
 type _Attributes = dict[str, AttributeValue]
 
 
+@dataclass(frozen=True, slots=True)
 class _LiveCall:
-    """A call whose span is open: the span, the attributes its measurement will carry, and its last status."""
+    """A call whose span is open: the span, and the attributes its measurement will carry."""
 
-    __slots__ = ("last_status", "metric_attributes", "span")
-
-    def __init__(self, span: Span, metric_attributes: _Attributes) -> None:
-        """Hold *span* and the measurement's *metric_attributes*."""
-        self.span = span
-        self.metric_attributes = metric_attributes
-        #: The status of the call's latest attempt, which a call that raised on it (a 503 that outlasted its
-        #: retries) does not report in its ``CallFinished``.
-        self.last_status: int | None = None
+    span: Span
+    metric_attributes: _Attributes
 
 
 def _request_attributes(info: CallInfo) -> tuple[str, _Attributes]:
@@ -192,9 +186,6 @@ class OpenTelemetryObserver:
         """Open a span on ``CallStarted``; close it and record the duration on ``CallFinished``."""
         if isinstance(event, CallStarted):
             self._start(event.call)
-        elif isinstance(event, AttemptFinished):
-            if (live := self._live.get(event.call.call_id)) is not None:
-                live.last_status = event.status_code
         elif isinstance(event, CallFinished):
             self._finish(event)
 
@@ -210,7 +201,7 @@ class OpenTelemetryObserver:
         live = self._live.pop(event.call.call_id, None)
         if live is None:
             return
-        status = live.last_status if event.status_code is None else event.status_code
+        status = event.status_code
         outcome: _Attributes = {}
         if status is not None:
             outcome[_STATUS_CODE] = status

@@ -13,6 +13,7 @@ from tests.support.clients import StubClient
 if TYPE_CHECKING:
     import httpx2
 
+    from headgate import RateBudget
     from headgate.events import Event, Observer
     from headgate.testing import FakeTransport
 
@@ -42,12 +43,13 @@ def client(
     policy: TransportPolicy | None = None,
     http: HttpOptions | None = None,
     auth: httpx2.Auth | None = None,
+    rate: Rate | RateBudget = RATE,
 ) -> StubClient:
-    """Build a client for :data:`BASE` over *fake*, reporting to *observers*, with *http*'s other options."""
+    """Build a client for :data:`BASE` over *fake*, spending *rate*, reporting to *observers*, with *http*'s options."""
     options = http or HttpOptions()
     return StubClient(
         base_url=BASE,
-        rate=RATE,
+        rate=rate,
         auth=auth,
         policy=policy or TransportPolicy(),
         http=HttpOptions(

@@ -40,7 +40,7 @@ import httpx2
 from headgate._attempts import AttemptTransport
 from headgate._middleware import MiddlewareTransport
 from headgate._options import httpx_timeout
-from headgate._redirects import drop_followed_redirect_body
+from headgate._redirects import drop_followed_redirect_body, refuse_unreplayable_redirect
 from headgate._user_agent import user_agent
 from headgate.cache._credentials import credential_scope
 from headgate.cache._transport import ResilientCacheTransport
@@ -74,7 +74,7 @@ def build_http_client(
         max_redirects=http.max_redirects,
         event_hooks={
             "request": _request_hooks(auth, httpx2.URL(base_url), http),
-            "response": [refuse_https_downgrade, drop_followed_redirect_body],
+            "response": [refuse_https_downgrade, refuse_unreplayable_redirect, drop_followed_redirect_body],
         },
         timeout=httpx_timeout(http.timeout),
         trust_env=False,

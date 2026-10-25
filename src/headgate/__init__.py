@@ -12,7 +12,7 @@ configuration values are re-exported here.
 """
 
 from headgate._auth import CachedTokenAuth, Minted, QueryParamAuth, StaticHeaderAuth
-from headgate._client import AsyncBaseClient, RequestOptions
+from headgate._client import AsyncBaseClient, Method, RequestOptions
 from headgate._core import Observer
 from headgate._middleware import Middleware
 from headgate._options import HttpOptions, IdempotencyKeys, Route, Timeouts, TransportPolicy
@@ -72,6 +72,7 @@ __all__ = [
     "HttpOptions",
     "IdempotencyKeys",
     "LinkHeader",
+    "Method",
     "MethodFilter",
     "Middleware",
     "Minted",

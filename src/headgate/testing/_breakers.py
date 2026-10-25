@@ -8,9 +8,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
-from headgate._breaker_scope import registry_override
 from headgate._core import current_timing
 from headgate.breaker import BreakerRegistry
+from headgate.breaker._scope import registry_override
 
 if TYPE_CHECKING:
     from collections.abc import Generator

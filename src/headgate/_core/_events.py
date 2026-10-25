@@ -124,7 +124,12 @@ class RetryScheduled(CallEvent):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RateLimited(CallEvent):
-    """The call waited ``delay`` seconds for its rate budget, because of ``reason``."""
+    """The call's rate budget held it back, or its response paused the budget, for ``delay`` seconds.
+
+    ``reason`` says which: ``"paced"`` or ``"throttled"``, the call waited for its turn at the configured rate or at
+    the rate adaptive throttling lowered it to; ``"paused"``, it waited out a pause the server asked for; and
+    ``"pushback"``, its own response asked for that pause, which every call sharing the budget then waits out.
+    """
 
     delay: float
     reason: str

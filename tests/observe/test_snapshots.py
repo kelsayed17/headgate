@@ -9,6 +9,7 @@ Both are contracts an observer or a dashboard is built on, so a change to either
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
 from typing import TYPE_CHECKING
@@ -23,10 +24,12 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from syrupy.filters import props
 
-from headgate import Backoff, BreakerPolicy, HttpCache, RetryPolicy, TransportPolicy, nothing
+from headgate import Backoff, BreakerPolicy, Hedge, HttpCache, RateBudget, RetryPolicy, TransportPolicy, nothing
 from headgate.errors import ClientError
 from headgate.otel import OpenTelemetryObserver
-from headgate.testing import FakeTransport, isolated_breakers
+from headgate.ratelimit import Rate
+from headgate.retry import NO_RETRY
+from headgate.testing import FakeTransport, TestClock, isolated_breakers
 from tests.cache._helpers import FaultyStorage, every_get_policy
 from tests.observe._support import Recorder, client
 
@@ -45,6 +48,9 @@ def _half_jitter() -> float:
     """Return the middle of the jitter range, so each backoff wait is half its nominal value."""
     return 0.5
 
+
+#: Send each call once, so a scenario's second call shows what the first left behind.
+_ONCE = TransportPolicy(retry=NO_RETRY)
 
 _DEPRECATED = {"Deprecation": "@1688169599", "Sunset": "Sun, 30 Jun 2024 23:59:59 GMT"}
 
@@ -78,9 +84,31 @@ async def _retried(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage
 
 
 async def _rate_limited(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) -> None:
-    """Make one call the server rate-limits, then answers."""
+    """Make one call the server rate-limits, then a second call that waits out the pause it put on the budget.
+
+    The budget is real and runs on a test clock (the scenario is marked ``transport_policy``), so the pause shows as
+    the first call's ``pushback`` and the second call's ``paused`` wait.
+    """
+    clock = TestClock()
     limited = httpx2.Response(429, headers={"Retry-After": "1"})
-    await _call(client(FakeTransport().route("GET", "/v1/x", limited, 200), *observers))
+    budget = RateBudget(Rate.per_second(1000), timing=clock.timing, wall_clock=clock)
+    with clock.install():
+        built = client(FakeTransport().route("GET", "/v1/x", limited, 200), *observers, rate=budget, policy=_ONCE)
+    await _call(built, times=2)
+
+
+async def _hedged(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) -> None:
+    """Make one call whose first send hangs, so a hedge goes out after ``after`` seconds and answers."""
+
+    async def hangs(_request: httpx2.Request) -> httpx2.Response:
+        await asyncio.Event().wait()
+        raise AssertionError
+
+    clock = TestClock()
+    policy = TransportPolicy(retry=RetryPolicy(hedge=Hedge(after=0.5)))
+    with clock.install():
+        built = client(FakeTransport().route("GET", "/v1/x", hangs, 200), *observers, policy=policy)
+    await _call(built)
 
 
 async def _cache_hit(observers: tuple[Observer, ...], storage: AsyncSqliteStorage) -> None:
@@ -114,6 +142,7 @@ _SCENARIOS: dict[str, _Scenario] = {
     "plain": _plain,
     "retried": _retried,
     "rate_limited": _rate_limited,
+    "hedged": _hedged,
     "cache_hit": _cache_hit,
     "cache_degraded": _cache_degraded,
     "breaker_opening": _breaker_opening,
@@ -121,7 +150,16 @@ _SCENARIOS: dict[str, _Scenario] = {
 }
 
 
-@pytest.mark.parametrize("scenario", sorted(_SCENARIOS))
+#: The scenarios whose subject is the rate budget's own wait, which the suite otherwise makes a no-op.
+_REAL_BUDGET = frozenset({"rate_limited"})
+
+_PARAMS = [
+    pytest.param(name, marks=pytest.mark.transport_policy) if name in _REAL_BUDGET else pytest.param(name)
+    for name in sorted(_SCENARIOS)
+]
+
+
+@pytest.mark.parametrize("scenario", _PARAMS)
 async def test_the_event_sequence_matches_the_snapshot(
     scenario: str, storage: AsyncSqliteStorage, snapshot: SnapshotAssertion
 ) -> None:
@@ -132,7 +170,7 @@ async def test_the_event_sequence_matches_the_snapshot(
     assert sequence == snapshot(exclude=props("call_id", "elapsed"))
 
 
-@pytest.mark.parametrize("scenario", sorted(_SCENARIOS))
+@pytest.mark.parametrize("scenario", _PARAMS)
 async def test_the_spans_match_the_snapshot(
     scenario: str, storage: AsyncSqliteStorage, snapshot: SnapshotAssertion
 ) -> None:
