@@ -332,6 +332,12 @@ def test_a_refusal_says_how_long_the_cooldown_has_left() -> None:
         pass
     assert refused.value.retry_after == _LONG_COOLDOWN - elapsed
 
+    nearly = _LONG_COOLDOWN - 0.25
+    clock.now = nearly
+    with pytest.raises(BreakerOpenError) as almost, cb.track():
+        pass
+    assert almost.value.retry_after == _LONG_COOLDOWN - nearly, "under a second left is said exactly"
+
     clock.now = _LONG_COOLDOWN
     with cb.track(), pytest.raises(BreakerOpenError) as during_probe, cb.track():
         pass

@@ -435,3 +435,102 @@ async def test_a_slot_given_back_twice_is_freed_once() -> None:
     first()
     first()
     assert budget.in_flight == 1
+
+
+# --- Exact edges ---
+
+
+async def test_a_longer_pause_extends_a_running_one() -> None:
+    """Move the end of a running pause later when a later response asks for longer."""
+    clock = TestClock()
+    budget = _budget(clock)
+    budget.observe(_response(429, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
+    clock.advance(1.0)
+    budget.observe(_response(429, {"Retry-After": str(int(_LONG_DEADLINE))}), sent_at=clock())
+
+    assert budget.pause_remaining() == _LONG_DEADLINE
+
+
+async def test_a_pause_ending_at_the_same_instant_keeps_the_status_that_asked_first() -> None:
+    """Keep the first status when a second pause would end at exactly the same instant."""
+    clock = TestClock()
+    budget = _budget(clock)
+    budget.observe(_response(429, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
+    budget.observe(_response(503, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
+
+    with pytest.raises(BudgetPausedError) as raised:
+        await budget.wait(_context(clock, deadline=_SHORT_DEADLINE))
+
+    assert raised.value.status_code == httpx2.codes.TOO_MANY_REQUESTS
+
+
+async def test_a_pause_exactly_as_long_as_the_time_left_is_waited() -> None:
+    """Wait a pause that ends exactly at the call's deadline; only a longer one is refused."""
+    clock = TestClock()
+    budget = _budget(clock, adaptive=None)
+    budget.observe(_response(429, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
+
+    await budget.wait(_context(clock, deadline=_PAUSE))
+
+    assert clock.sleeps == [_PAUSE]
+
+
+async def test_a_refused_call_gives_back_the_turn_it_reserved() -> None:
+    """Hand the turn of a call refused after its paced wait to the next call, which then waits only for the pause."""
+    clock = TestClock()
+    interval = 4.0
+    observed = False
+
+    async def sleep(seconds: float, /) -> None:
+        nonlocal observed
+        if not observed:
+            observed = True
+            budget.observe(_response(429, {"Retry-After": "5"}), sent_at=clock())
+        await clock.sleep(seconds)
+
+    rate = Rate(requests=1, period=interval)
+    budget = RateBudget(rate, adaptive=None, timing=Timing(clock=clock, sleep=sleep), wall_clock=clock)
+    await budget.wait(_context(clock))
+    with pytest.raises(BudgetPausedError):
+        await budget.wait(_context(clock, deadline=interval + 0.5))
+    await budget.wait(_context(clock))
+
+    assert clock.sleeps == [interval, 1.0], "the refused call's turn went back, so only the pause is waited"
+
+
+async def test_an_absolute_reset_is_measured_from_the_wall_clock() -> None:
+    """Pause until an ``X-RateLimit-Reset`` given as a Unix time, measured on the budget's wall clock."""
+    clock = TestClock()
+    wall = 1_700_000_000.0
+    reset_in = 42.0
+    budget = RateBudget(_RATE, timing=Timing(clock=clock, sleep=clock.sleep), wall_clock=lambda: wall)
+    headers = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": f"{wall + reset_in:.0f}"}
+
+    budget.observe(_response(200, headers), sent_at=clock())
+
+    assert budget.pause_remaining() == reset_in
+
+
+async def test_pushback_to_a_request_sent_at_the_decrease_decreases_again() -> None:
+    """Decrease again for pushback to a request sent at the very instant of the last decrease, not before it."""
+    clock = TestClock()
+    budget = _budget(clock, adaptive=Adaptive(decrease=0.5, min_rate=0.1))
+
+    budget.observe(_response(429), sent_at=clock())
+    budget.observe(_response(429), sent_at=clock())
+
+    assert budget.effective_rate == Rate(requests=_BURST * 0.25, period=1.0)
+
+
+async def test_recovery_never_lifts_the_rate_past_the_configured_one() -> None:
+    """Cap recovery at the configured rate, so a later pushback halves that rate and not more."""
+    clock = TestClock()
+    budget = _budget(clock, adaptive=Adaptive(decrease=0.5, increase=0.1))
+    budget.observe(_response(429), sent_at=clock())
+    clock.advance(1000.0)
+    budget.observe(_response(200), sent_at=clock())
+    assert budget.effective_rate == _RATE
+
+    budget.observe(_response(429), sent_at=clock())
+
+    assert budget.effective_rate == Rate(requests=_BURST * 0.5, period=1.0)

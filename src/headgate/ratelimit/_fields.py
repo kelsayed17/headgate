@@ -171,7 +171,7 @@ def _bytes(reader: _Reader) -> bytes:
 def _number(reader: _Reader) -> int | float:
     """Read an Integer or a Decimal, within RFC 9651's digit limits."""
     sign = -1 if reader.peek() == "-" else 1
-    if sign < 0:
+    if sign == -1:
         reader.take()
     whole = reader.take_while(_DIGITS)
     if not whole:

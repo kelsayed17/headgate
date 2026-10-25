@@ -68,7 +68,8 @@ def read_feedback(response: httpx2.Response, *, now: float) -> Feedback:
         exhausted, reset = _de_facto_quota(headers, now=now)
     if not (refused or exhausted):
         return _NOTHING
-    pause = retry_after if retry_after is not None else reset if exhausted else None
+    # A quota's reset is read only for a spent quota, so it is None whenever the quota is not exhausted.
+    pause = retry_after if retry_after is not None else reset
     return Feedback(pushback=True, pause=pause)
 
 

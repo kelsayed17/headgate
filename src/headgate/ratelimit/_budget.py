@@ -252,9 +252,7 @@ class RateBudget:
             self._adjusted_at = now
 
     def _current_rate(self) -> Rate:
-        """Return the rate pacing runs at now."""
-        if self._factor >= 1:
-            return self._rate
+        """Return the rate pacing runs at now: the configured one scaled by the adaptive factor (1 when unthrottled)."""
         return Rate(requests=self._rate.requests * self._factor, period=self._rate.period)
 
     def _reserve(self, now: float) -> tuple[tuple[float, float], float]:

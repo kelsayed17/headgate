@@ -174,6 +174,28 @@ def test_a_slot_freed_for_a_waiter_on_a_closed_loop_goes_to_the_pool() -> None:
     assert limit.in_flight == 0
 
 
+def test_a_slot_skips_a_waiter_on_a_closed_loop_for_the_next_live_one() -> None:
+    """Hand the slot past a waiter whose loop has closed to the live waiter queued behind it."""
+    limit = InFlightLimit(1)
+    asyncio.run(limit.acquire())
+    orphaned = asyncio.new_event_loop()
+    try:
+        parked = orphaned.create_task(limit.acquire())
+        orphaned.run_until_complete(asyncio.sleep(0))
+    finally:
+        orphaned.close()
+    assert not parked.done()
+    live = asyncio.new_event_loop()
+    try:
+        waiter = live.create_task(limit.acquire())
+        live.run_until_complete(asyncio.sleep(0))
+        limit.release()
+        live.run_until_complete(asyncio.wait_for(waiter, _THREAD_TIMEOUT))
+    finally:
+        live.close()
+    assert limit.in_flight == 1
+
+
 def test_a_slot_is_handed_across_threads_and_loops() -> None:
     """Wake a waiter on another thread's loop when this thread frees the slot."""
     limit = InFlightLimit(1)

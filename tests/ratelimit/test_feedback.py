@@ -10,6 +10,8 @@ a Unix time.
 
 from __future__ import annotations
 
+import email.utils
+
 import httpx2
 import pytest
 
@@ -142,6 +144,12 @@ def test_a_list_of_items_with_parameters_parses() -> None:
     ]
 
 
+def test_the_limits_of_each_bare_item_are_inclusive() -> None:
+    """Accept a 15-digit Integer, a Decimal of 12 and 3 digits, and every printable character in a String."""
+    field = ' Xa;i=123456789012345;d=123456789012.123;s="a b~" '
+    assert parse_list(field) == [Item("Xa", {"i": 123456789012345, "d": 123456789012.123, "s": "a b~"})]
+
+
 def test_an_empty_field_is_an_empty_list() -> None:
     """Parse an absent field (an empty value) as no items."""
     assert parse_list("") == []
@@ -167,9 +175,56 @@ def test_an_empty_field_is_an_empty_list() -> None:
         '"a";pk=:not base64!:',
         '"a";pk=:aGk',  # an unterminated Byte Sequence
         '"a";pk=:a:',  # base64 with bad padding
+        '"a";pk=:YQ==YQ==:',  # base64 with data after its padding
+        '\t"a"',  # a leading tab: only spaces surround a field
+        '"a";Xb=1',  # a parameter key after a stray character
         "@",
     ],
 )
 def test_a_malformed_list_is_refused_whole(field: str) -> None:
     """Refuse a field that breaks the grammar anywhere, so a half-read field is never acted on."""
     assert parse_list(field) is None
+
+
+# --- Edges ---
+
+
+def test_an_http_date_retry_after_is_measured_from_the_wall_clock_given() -> None:
+    """Measure an HTTP-date ``Retry-After`` from the *now* the budget passes, not the machine's clock."""
+    later = email.utils.formatdate(_NOW + _RESET_IN, usegmt=True)
+
+    assert _feedback(429, Retry_After=later) == Feedback(pushback=True, pause=_RESET_IN)
+
+
+def test_a_readable_ratelimit_field_with_quota_left_settles_it_without_the_de_facto_pair() -> None:
+    """Take a readable ``RateLimit`` with quota left as the answer, ignoring an ``X-RateLimit-Remaining: 0``."""
+    assert _feedback(RateLimit='"p";r=5;t=1', X_RateLimit_Remaining="0") == Feedback()
+
+
+def test_every_ratelimit_item_is_read_and_the_longest_wait_wins() -> None:
+    """Read past an item with quota left, and wait for the exhausted item that returns last."""
+    field = '"a";r=5;t=1, "b";r=0;t=9, "c";r=0;t=3'
+
+    assert _feedback(RateLimit=field) == Feedback(pushback=True, pause=9.0)
+
+
+def test_a_policy_without_a_unit_limits_requests() -> None:
+    """Read a ``RateLimit-Policy`` naming no ``qu`` as limiting requests, the draft's default."""
+    assert _feedback(RateLimit='"p";r=0;t=5', RateLimit_Policy='"p";q=100') == Feedback(pushback=True, pause=5.0)
+
+
+@pytest.mark.parametrize(("remaining", "spent"), [("1", False), ("0", True), ("-1", False), ("x, 0", True)])
+def test_the_de_facto_remaining_count_is_spent_only_at_zero(remaining: str, *, spent: bool) -> None:
+    """Count the quota spent at zero only, skipping a part that is not a non-negative number."""
+    assert _feedback(X_RateLimit_Remaining=remaining).pushback is spent
+
+
+@pytest.mark.parametrize("reset", ["1000000000", "1000000000000"], ids=["seconds", "milliseconds"])
+def test_a_reset_exactly_at_the_epoch_floor_is_a_unix_time(reset: str) -> None:
+    """Read a reset exactly at the floor as a Unix time (seconds, or milliseconds), not a delay."""
+    now = 999_999_990.0
+    feedback = read_feedback(
+        httpx2.Response(200, headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset}), now=now
+    )
+
+    assert feedback == Feedback(pushback=True, pause=10.0)

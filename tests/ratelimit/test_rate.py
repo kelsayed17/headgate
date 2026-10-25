@@ -68,3 +68,8 @@ def test_a_rule_takes_a_rate_or_a_shared_budget() -> None:
     shared = RateBudget(Rate.per_second(1))
     assert RateRule("/a", shared).rate is shared
     assert RateRule("/b", Rate.per_second(1)).rate == Rate.per_second(1)
+
+
+def test_a_min_rate_of_the_whole_configured_rate_is_allowed() -> None:
+    """Accept ``min_rate=1``, an adaptive throttle that never slows below the configured rate."""
+    assert Adaptive(min_rate=1.0).min_rate == 1.0
