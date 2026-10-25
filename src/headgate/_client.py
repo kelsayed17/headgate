@@ -703,7 +703,9 @@ class AsyncBaseClient:
             details = self._site(prepared).details(retry_after=exc.retry_after)
             raise CircuitOpenError(str(exc), **details) from None
         except BudgetPausedError as exc:
-            details = self._site(prepared).details(retryable=True, retry_after=exc.retry_after)
+            # Not the retry policy's call: the budget says when sending again will be admitted.
+            details = self._site(prepared).details(retry_after=exc.retry_after)
+            details["retryable"] = True
             raise RateLimitError(str(exc), status_code=exc.status_code, **details) from None
         except httpx2.InvalidURL as exc:
             # A redirect joined past httpx2's length limit. Not an HTTPError, and not an origin failure.
@@ -722,7 +724,8 @@ class AsyncBaseClient:
         with a bounded head of its body, read here while the response is still a stream. What the origin's breaker is
         charged with:
 
-        * **a failure**: a 5xx that survived retries, and a network failure or timeout;
+        * **a failure**: a 5xx this request fetched, whether or not the retry policy re-sends it (a 501 is the origin
+          failing to serve the request as surely as a 503), and a network failure or timeout;
         * **nothing**: a 429 (the origin is up and asked us to slow down, which the rate budget handles); a network
           error of our own side's making (:data:`_LOCAL_FAILURES`, and an invalid URL); a failure on a hop an auth flow
           made to mint a credential (that is the credential host's failure); and an outcome another request's attempt

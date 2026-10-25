@@ -123,6 +123,9 @@ layer. Code written against the 0.1.0 source needs the migrations below; there a
 - Auth: a token mint's hops are marked, so their failures are no longer charged to the API host's breaker; a mint flow
   that ends without a token raises a clear error; mint failures map onto the `ClientError` tree, naming the token
   endpoint.
+- `ClientError.retryable` is the retry policy's verdict on the outcome: a surviving 501 or 505, a 503 marked
+  `x-should-retry: false`, a 503 on a POST without an idempotency key, and a body-read failure on such a POST are no
+  longer reported retryable.
 - A non-ASCII `Content-Length` no longer crashes; error snippets no longer decode a whole 32 MiB body.
 - Backoff no longer overflows past 1023 retries or produces a NaN wait; `Rate` refuses NaN and infinite values.
 - `sanitize_url` no longer rewrites untouched parts of a URL and never raises; `event_stream` skips data-less blocks;

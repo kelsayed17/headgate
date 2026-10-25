@@ -27,7 +27,7 @@ Only what the origin itself showed:
 
 | Counts as a failure | Records nothing |
 | --- | --- |
-| a 5xx that survived the retries | a 429: the origin is up and asked us to slow down, which the rate budget handles |
+| a 5xx the call fetched itself, retryable or not: a 501 or 505, which the retry policy does not re-send, still means the origin could not serve the request | a 429: the origin is up and asked us to slow down, which the rate budget handles |
 | a network failure or timeout, in the send or the body read | our own side's failures: an unencodable header, an unsupported scheme, an invalid URL, our pool running out of connections |
 | | a failure on a hop an auth flow made to mint a credential (that is the token host's failure) |
 | | a cache hit, a stored 5xx, or an outcome shared from another identical request's fetch |

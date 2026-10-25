@@ -71,8 +71,9 @@ class ErrorDetails(TypedDict, total=False):
     """What a ``ClientError`` records about the call that raised it, beyond its message; every key is optional.
 
     ``source`` names the client that raised it. ``url`` is sanitized and bounded. ``attempts`` counts the call's sends;
-    ``retryable`` says whether sending the call again could succeed (a network failure or a 429/5xx, not a 4xx or a
-    local mistake); ``retry_after`` is the delay the upstream asked for, in seconds.
+    ``retryable`` says whether the call's retry policy would re-send after the outcome that raised the error (a status
+    in its ``statuses`` or a network failure, and only when sending again is safe for the method); ``retry_after`` is
+    the delay the upstream asked for, in seconds.
     """
 
     source: str | None

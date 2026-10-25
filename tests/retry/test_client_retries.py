@@ -195,10 +195,11 @@ async def test_retries_are_announced_to_the_clients_observers() -> None:
 
 
 async def test_x_should_retry_false_stops_a_retryable_status() -> None:
-    """Send once when the server answers ``x-should-retry: false``, and mark the error retryable as a 503."""
+    """Send once when the server answers ``x-should-retry: false``, and mark the error not retryable, as it said."""
     network = FaultyTransport(schedule=[Respond(503, headers={"x-should-retry": "false"}), Respond(200)])
 
-    with pytest.raises(UpstreamStatusError):
+    with pytest.raises(UpstreamStatusError) as raised:
         await _client(network).get("series", expect=nothing)
 
     assert len(network.calls) == 1
+    assert raised.value.retryable is False

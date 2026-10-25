@@ -192,6 +192,11 @@ class _Sequence:
         """Return what classification needs to know about this request and one attempt's *progress*."""
         return Attempted(method=self._method, keyed=self._keyed, progress=progress)
 
+    def _judge(self, result: httpx2.Response | Exception) -> RetryOutcome:
+        """Return this policy's verdict on *result*, another result of the call, as the current attempt produced it."""
+        verdict = classify(result, self._attempted(self._context.progress), self._policy)
+        return RetryOutcome(verdict.retryable, verdict.retry_after)
+
     async def _send(self, request: httpx2.Request, *, hedge: bool = False) -> _Attempt:
         """Send *request* once, as a new attempt, and return its classified result with its history line added."""
         context = self._context
@@ -334,7 +339,7 @@ class _Sequence:
             attempt = await self._round()
             while True:
                 verdict = attempt.verdict
-                self._context.put(RETRY_OUTCOME, RetryOutcome(verdict.retryable, verdict.retry_after))
+                self._context.put(RETRY_OUTCOME, RetryOutcome(verdict.retryable, verdict.retry_after, self._judge))
                 decision = self._decide(attempt)
                 if decision.delay is None:
                     if decision.note is not None:

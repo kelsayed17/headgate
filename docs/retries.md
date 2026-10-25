@@ -112,6 +112,19 @@ factory=...)` changes either). A call can pass its own with `idempotency_key=`, 
 The key is stamped once per call, before the retry layer, so every attempt carries the same one, and a keyed request is
 retried like an idempotent one.
 
+## What `retryable` means
+
+`ClientError.retryable` is the retry policy's own verdict on the outcome that ended the call, by the rules above: it is
+`True` exactly when the call's `RetryPolicy` would re-send after it. So a surviving 503 on a GET is retryable, while a
+501 or 505 (outside `statuses`), a 503 the server marked `x-should-retry: false`, and a 503 on a POST without an
+idempotency key are not. A network failure while reading the body is judged as one in the send would be: retryable for
+an idempotent or keyed request, not for a POST that was written in full. The flag ignores what stopped the sequence
+(spent attempts, the budget, the deadline), since it answers whether sending again later could help.
+
+Two errors set it otherwise: a `RateLimitError` from a [rate budget](rate-budgets.md) paused past the deadline is
+retryable after its `retry_after`, and a token mint on a client of its own, which no retry layer judged, is retryable for
+any network failure that is not a local mistake.
+
 ## Attempt history
 
 The error a call raises carries `attempts`, `retryable`, `retry_after`, and a note per attempt:

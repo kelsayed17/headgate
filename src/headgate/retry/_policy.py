@@ -19,11 +19,14 @@ from __future__ import annotations
 import math
 import sys
 from dataclasses import dataclass, field
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx2
 
 from headgate._core import Clock, RandomSource, Slot, retry_after_of, system_random
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 __all__ = [
     "IDEMPOTENT_METHODS",
@@ -211,10 +214,21 @@ class RetryPolicy:
 
 @dataclass(frozen=True, slots=True)
 class RetryOutcome:
-    """What the retry layer concluded about a call's last attempt: whether it was retryable, and any delay asked."""
+    """What the retry layer concluded about a call's last attempt: whether it was retryable, and any delay asked.
+
+    ``retryable`` is the policy's verdict: the failure is one of its retryable kinds (a status in ``statuses``, the
+    server's ``x-should-retry: true``, or a network failure that is not a local mistake), and sending the request again
+    is safe for its method. *judge*, when the retry layer supplies it, applies the same rules to another result of the
+    call (a failure reading the body, which happens after the retry layer has returned): see :meth:`about`.
+    """
 
     retryable: bool
     retry_after: float | None = None
+    judge: Callable[[httpx2.Response | Exception], RetryOutcome] | None = field(default=None, compare=False, repr=False)
+
+    def about(self, result: httpx2.Response | Exception) -> RetryOutcome:
+        """Return the policy's verdict on *result*: judged by :attr:`judge` when there is one, else this verdict."""
+        return self if self.judge is None else self.judge(result)
 
 
 #: The policy that sends once and never re-sends: what ``retry=False`` installs for a call.

@@ -41,6 +41,7 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
+from headgate.retry._policy import RETRY_STATUSES
 
 if TYPE_CHECKING:
     from headgate._responses import RefusedError
@@ -119,8 +120,8 @@ class CallSite:
     """Where a failure happened: the client, the request line, how many sends the call made, and its request-id headers.
 
     ``url`` is already sanitized and bounded (:func:`loggable_url`). ``retry`` is the retry layer's verdict on the
-    call's last attempt, if it made one: it marks the error retryable, and supplies the delay the upstream asked for
-    when the builder has none of its own.
+    call's last attempt, if it made one. It decides whether the error is retryable (see :meth:`details`), and supplies
+    the delay the upstream asked for when the builder has none of its own.
     """
 
     source: str
@@ -131,12 +132,26 @@ class CallSite:
     retry: RetryOutcome | None = None
 
     def details(
-        self, resp: httpx2.Response | None = None, *, retryable: bool = False, retry_after: float | None = None
+        self,
+        resp: httpx2.Response | None = None,
+        *,
+        failure: Exception | None = None,
+        retryable: bool = False,
+        retry_after: float | None = None,
     ) -> ErrorDetails:
-        """Return the :class:`~headgate.errors.ErrorDetails` of an error raised here, about *resp* if there is one."""
+        """Return the :class:`~headgate.errors.ErrorDetails` of an error raised here, about *resp* if there is one.
+
+        ``retryable`` is the retry policy's verdict on what failed: *failure* if given, else *resp*, else the call's
+        last attempt. So it is ``True`` exactly when the active :class:`~headgate.RetryPolicy` would re-send after this
+        outcome: a status in its ``statuses`` or a network failure, and only when sending the request again is safe for
+        its method. The *retryable* argument is the fallback for a call no retry layer judged (a token mint on a client
+        of its own).
+        """
         if self.retry is not None:
-            retryable = retryable or self.retry.retryable
-            retry_after = self.retry.retry_after if retry_after is None else retry_after
+            result = failure if failure is not None else resp
+            judged = self.retry if result is None else self.retry.about(result)
+            retryable = judged.retryable
+            retry_after = judged.retry_after if retry_after is None else retry_after
         return ErrorDetails(
             source=self.source,
             method=self.method,
@@ -182,7 +197,10 @@ def body_snippet(resp: httpx2.Response) -> str | None:
 
 
 def is_transient_status(status: int) -> bool:
-    """Return whether *status* is one the retry transport re-sends and the breaker counts: 429 or any 5xx."""
+    """Return whether *status* is raised by :func:`transient_status_error`, not the status ladder: 429 or any 5xx.
+
+    Whether it is retryable is the retry policy's call (``RetryPolicy.statuses``), not this function's.
+    """
     return status == httpx2.codes.TOO_MANY_REQUESTS or status >= httpx2.codes.INTERNAL_SERVER_ERROR
 
 
@@ -297,7 +315,7 @@ def transport_error(exc: httpx2.HTTPError | OSError, site: CallSite) -> Transpor
     else:
         detail = shorten(redact_secrets(str(exc))) or type(exc).__name__
     message = f"{site.method} {site.url}: {detail}"
-    details = site.details(retryable=not isinstance(exc, _LOCAL_FAILURES))
+    details = site.details(failure=exc, retryable=not isinstance(exc, _LOCAL_FAILURES))
     if isinstance(exc, httpx2.TimeoutException):
         return ClientTimeoutError(message, **details)
     return TransportError(message, **details)
@@ -326,8 +344,9 @@ def transient_status_error(resp: httpx2.Response, site: CallSite) -> UpstreamSta
 
     A 429 becomes :class:`~headgate.errors.RateLimitError`, anything else
     :class:`~headgate.errors.UpstreamStatusError`. *resp* carries a bounded head of the body, which becomes the
-    summary, as it does for :func:`status_error`. The error is retryable, and a 429's or 503's ``retry-after-ms`` or
-    ``Retry-After`` is its ``retry_after``.
+    summary, as it does for :func:`status_error`. The error is retryable when the retry policy would re-send after
+    *resp* (see :meth:`CallSite.details`): a 5xx outside its ``statuses`` (a 501, a 505) is not, nor is a 503 on a POST
+    without an idempotency key. A 429's or 503's ``retry-after-ms`` or ``Retry-After`` is its ``retry_after``.
     """
     code = resp.status_code
     kind = RateLimitError if code == httpx2.codes.TOO_MANY_REQUESTS else UpstreamStatusError
@@ -337,7 +356,7 @@ def transient_status_error(resp: httpx2.Response, site: CallSite) -> UpstreamSta
         status_code=code,
         body=_summary(resp, problem),
         problem=problem,
-        **site.details(resp, retryable=True, retry_after=retry_after_of(resp)),
+        **site.details(resp, retryable=code in RETRY_STATUSES, retry_after=retry_after_of(resp)),
     )
 
 

@@ -14,7 +14,7 @@ import copy
 import json
 import pickle
 from types import MappingProxyType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
 import httpx2
 import pytest
@@ -38,10 +38,13 @@ from headgate import (
 )
 from headgate._core import CallContext
 from headgate.retry import NO_RETRY
+from tests.support.breakers import failures
 from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Awaitable, Callable
+
     from headgate._middleware import Next
 
 _BASE = "https://api.example.test"
@@ -140,6 +143,75 @@ async def test_a_request_the_library_could_not_encode_is_not_retryable() -> None
     error = await _raised(_client(httpx2.MockTransport(_unencodable)))
     assert isinstance(error, TransportError)
     assert error.retryable is False
+
+
+@pytest.mark.parametrize("status", [501, 505, 507])
+async def test_a_surviving_status_the_policy_does_not_retry_is_not_retryable(status: int) -> None:
+    """Mark a 5xx outside ``RetryPolicy.statuses`` not retryable, and still charge it to the origin's breaker."""
+    error = await _raised(_client(Script(status)))
+
+    assert isinstance(error, UpstreamStatusError)
+    assert (error.status_code, error.retryable) == (status, False)
+    assert failures("api.example.test") == 1
+
+
+async def test_a_post_without_a_key_that_survived_a_503_is_not_retryable() -> None:
+    """Mark a surviving 503 on a POST without an idempotency key not retryable: sending it again is not safe."""
+    with pytest.raises(UpstreamStatusError) as raised:
+        await _client(Script(503)).post("orders", expect=nothing, json={"sku": "a"})
+
+    assert raised.value.retryable is False
+
+
+async def test_a_503_the_server_says_not_to_retry_is_not_retryable() -> None:
+    """Follow the server's ``x-should-retry: false``, as the retry policy does."""
+    error = await _raised(_client(Script(httpx2.Response(503, headers={"x-should-retry": "false"}))))
+
+    assert error.retryable is False
+
+
+class _BrokenBody(httpx2.AsyncByteStream):
+    """A response body the connection drops after its first chunk."""
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"{"
+        msg = "connection dropped mid-body"
+        raise httpx2.ReadError(msg)
+
+
+def _dropped_mid_body(_request: httpx2.Request) -> httpx2.Response:
+    """Answer 200 with a body whose connection drops."""
+    return httpx2.Response(200, stream=_BrokenBody())
+
+
+async def _get(client: StubClient) -> None:
+    """Make a GET."""
+    await client.get("orders", expect=nothing)
+
+
+async def _put(client: StubClient) -> None:
+    """Make a PUT with a JSON body."""
+    await client.put("orders/1", expect=nothing, json={"sku": "a"})
+
+
+async def _post(client: StubClient) -> None:
+    """Make a POST with a JSON body and no idempotency key."""
+    await client.post("orders", expect=nothing, json={"sku": "a"})
+
+
+@pytest.mark.parametrize(
+    ("call", "retryable"),
+    [pytest.param(_get, True, id="GET"), pytest.param(_put, True, id="PUT"), pytest.param(_post, False, id="POST")],
+)
+async def test_a_body_read_failure_is_retryable_only_for_a_method_safe_to_resend(
+    call: Callable[[StubClient], Awaitable[None]], *, retryable: bool
+) -> None:
+    """Judge a failure reading the body as the retry policy judges a network failure: by the method's safety."""
+    with pytest.raises(TransportError) as raised:
+        await call(_client(httpx2.MockTransport(_dropped_mid_body)))
+
+    assert raised.value.retryable is retryable
 
 
 async def test_an_open_breaker_raises_circuit_open_error_with_its_cooldown() -> None:
