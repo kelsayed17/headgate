@@ -37,7 +37,17 @@ import httpx2
 from headgate._auth import failed_on_auth_hop
 from headgate._body import read_capped, read_head
 from headgate._cache import host_untested
-from headgate._core import SILENT, CallContext, CallFinished, CallInfo, CallStarted, Emitter, current_timing
+from headgate._core import (
+    BREAKER_GATE,
+    SILENT,
+    BreakerChanged,
+    CallContext,
+    CallFinished,
+    CallInfo,
+    CallStarted,
+    Emitter,
+    current_timing,
+)
 from headgate._core import policy_is_disabled as _policy_is_disabled
 from headgate._failures import (
     SHAPE_ERRORS,
@@ -63,26 +73,31 @@ from headgate._options import (
 from headgate._responses import Expect, Reader, RefusedError
 from headgate._stack import build_http_client, build_transport_stack
 from headgate._url import render_path, route_template
-from headgate.breaker import BreakerOpenError
+from headgate.breaker import BreakerOpenError, CircuitBreaker
 from headgate.breaker._registry import NO_BREAKER
-from headgate.errors import CircuitOpenError, ClientError, ClientTimeoutError
+from headgate.errors import CircuitOpenError, ClientError, ClientTimeoutError, RateLimitError
+from headgate.ratelimit import BudgetPausedError
 from headgate.retry import NO_RETRY, RetryPolicy
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
     from types import TracebackType
 
     from headgate._options import Route
     from headgate._responses import RefusalCheck
-    from headgate.breaker import Verdict
+    from headgate.breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
-    from headgate.ratelimit import Rate
+    from headgate.ratelimit import Rate, RateBudget
 
 __all__ = ["AsyncBaseClient", "RequestOptions"]
 
 #: How much of a refused or failed streamed response is read, for the ``ClientError``'s body snippet.
 _STREAM_ERROR_HEAD_BYTES = 4096
+
+#: Network errors that are our own side's doing, so the origin's breaker is not charged with them: a request httpx2
+#: refused to write, a scheme it cannot speak, and our own connection pool running out of connections.
+_LOCAL_FAILURES = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2.PoolTimeout)
 
 type _Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]
 
@@ -201,12 +216,15 @@ class AsyncBaseClient:
         self,
         *,
         base_url: str,
-        rate: Rate,
+        rate: Rate | RateBudget,
         auth: httpx2.Auth | None = None,
         policy: TransportPolicy = _DEFAULT_POLICY,
         http: HttpOptions = _DEFAULT_HTTP,
     ) -> None:
-        """Build the transport stack for *base_url*, paced at *rate*, signing requests with *auth*.
+        """Build the transport stack for *base_url*, spending from *rate*, signing requests with *auth*.
+
+        *rate* is a :class:`~headgate.Rate`, from which the client builds a budget of its own, or a
+        :class:`~headgate.RateBudget` it shares with every other client given the same one.
 
         *policy* configures retries, the deadline, the breaker, per-path rates, the cache, idempotency keys and
         per-route overrides (:class:`~headgate.TransportPolicy`); *http* the network transport, headers, timeouts,
@@ -493,58 +511,87 @@ class AsyncBaseClient:
             msg = f"{site.method} {site.url}: deadline exceeded after {budget:.3g}s"
             raise ClientTimeoutError(msg, **site.details()) from None
 
-    def _breaker_for(self, host: str) -> Breaker:
-        """Return *host*'s breaker from the policy's registry, or a no-op one when the client has no breaker."""
+    def _breaker_for(self, url: httpx2.URL) -> Breaker:
+        """Return *url*'s origin's breaker from the policy's registry, or a no-op one when the client has no breaker."""
         policy = self._policy.breaker
         if policy is None:
             return NO_BREAKER
         return policy.registry.breaker_for(
-            host, failure_threshold=policy.failure_threshold, recovery_timeout=policy.recovery_timeout
+            url, failure_threshold=policy.failure_threshold, recovery_timeout=policy.recovery_timeout
         )
 
     @contextlib.asynccontextmanager
     async def _exchange(self, prepared: _Prepared) -> AsyncGenerator[httpx2.Response]:
-        """Send the request under its host's circuit breaker and yield the streamed response, closing it afterwards.
+        """Send the request under its origin's circuit breaker and yield the streamed response, closing it afterwards.
 
         The response yielded is anything but a 429 or 5xx: one of those means the retry transport ran out of
         attempts, and it is raised here, so no call can declare either as an answer. A network failure or timeout,
         in the send or in the caller's body read inside the block, becomes ``TransportError`` /
-        ``ClientTimeoutError``, and an open breaker ``CircuitOpenError``.
+        ``ClientTimeoutError``; an open breaker ``CircuitOpenError``; and a rate budget the server paused past the
+        call's deadline ``RateLimitError``.
 
         The breaker is driven here rather than by a transport layer because this is the only scope that spans both the
-        send and the body read. It is keyed on the host the request is addressed to, so a followed redirect's hops are
-        charged to that host. A transport failure and a surviving 429/5xx are host failures. A cache hit, and an
-        outcome the cache marked :data:`~headgate._cache.HOST_UNTESTED` (one another identical GET fetched), tested
-        nothing, so only the request that fetched counts. Anything else that escapes (an auth flow failing to mint, a
-        body over the cap, a cancellation, the deadline) records nothing (see ``CircuitBreaker.track``).
+        send and the body read. It is keyed on the origin the request is addressed to, so a followed redirect's hops
+        are charged to that origin. What the exchange charges it with is decided in :meth:`_sent`. Every transition
+        the call causes is emitted as ``BreakerChanged``, and the call's context carries
+        :data:`~headgate._core.BREAKER_GATE`, so the retry layer stops re-sending once the breaker refuses.
         """
+        context = prepared.context
+        breaker = self._breaker_for(prepared.request.url)
         try:
-            with self._breaker_for(prepared.request.url.host).track() as verdict:
+            with breaker.track(self._breaker_listener(breaker, context)) as verdict:
+                context.put(BREAKER_GATE, _breaker_gate(breaker, verdict))
                 async with self._sent(prepared, verdict) as streamed:
                     yield streamed
         except BreakerOpenError as exc:
             details = self._site(prepared).details(retry_after=exc.retry_after)
             raise CircuitOpenError(str(exc), **details) from None
+        except BudgetPausedError as exc:
+            details = self._site(prepared).details(retryable=True, retry_after=exc.retry_after)
+            raise RateLimitError(str(exc), status_code=exc.status_code, **details) from None
         except httpx2.InvalidURL as exc:
-            # A redirect joined past httpx2's length limit. Not an HTTPError, and not a host failure.
+            # A redirect joined past httpx2's length limit. Not an HTTPError, and not an origin failure.
             raise _invalid_url(exc, self._site(prepared)) from exc
+
+    @staticmethod
+    def _breaker_listener(breaker: Breaker, context: CallContext) -> Callable[[Transition], None] | None:
+        """Return what emits *breaker*'s transitions as ``BreakerChanged`` events, or ``None`` when nobody listens."""
+        if not context.observed or not isinstance(breaker, CircuitBreaker):
+            return None
+
+        def emit(transition: Transition) -> None:
+            context.emit(
+                BreakerChanged(
+                    origin=breaker.name,
+                    previous=transition.previous,
+                    state=transition.state,
+                    failures=transition.failures,
+                    call=context.info,
+                )
+            )
+
+        return emit
 
     @contextlib.asynccontextmanager
     async def _sent(self, prepared: _Prepared, verdict: Verdict) -> AsyncGenerator[httpx2.Response]:
         """Send the request and yield its streamed response, marking *verdict* with what the exchange showed.
 
         A surviving 429/5xx is raised with a bounded head of its body, read here while the response is still a stream.
+        What the origin's breaker is charged with:
+
+        * **a failure**: a 5xx that survived retries, and a network failure or timeout;
+        * **nothing**: a 429 (the origin is up and asked us to slow down, which the rate budget handles); a network
+          error of our own side's making (:data:`_LOCAL_FAILURES`, and an invalid URL); a failure on a hop an auth flow
+          made to mint a credential (that is the credential host's failure); and an outcome another request's attempt
+          produced (a cache hit, a stored 5xx served from the cache, or a download or failure the cache shared from an
+          identical GET, :data:`~headgate._cache.HOST_UNTESTED`), since only the request that fetched tested the origin.
         """
         request = prepared.request
         try:
             streamed = await self._http_client.send(request, stream=True, follow_redirects=prepared.follow_redirects)
             try:
-                shared = host_untested(streamed)
-                if shared or streamed.extensions.get("hishel_from_cache"):
-                    verdict.mark_untested()
+                _charge_response(streamed, verdict)
                 if is_transient_status(streamed.status_code):
-                    if not shared:
-                        verdict.mark_failed()
                     head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
                     raise transient_status_error(head, self._site(prepared))
                 yield streamed
@@ -553,9 +600,7 @@ class AsyncBaseClient:
                 with contextlib.suppress(httpx2.HTTPError):
                     await streamed.aclose()
         except NETWORK_ERRORS as exc:
-            # A hop an auth flow yielded to mint a credential failed: that is the credential host's failure, not this
-            # host's. A failure the cache shared from another request's attempt was counted by that request.
-            if not (failed_on_auth_hop(exc) or host_untested(exc)):
+            if _network_failure_charges_origin(exc):
                 verdict.mark_failed()
             error = transport_error(exc, self._site(prepared))
             if isinstance(exc, httpx2.LocalProtocolError):
@@ -606,6 +651,40 @@ class AsyncBaseClient:
             if resp.is_success:
                 raise parse_error(exc, resp, site) from exc
             raise status_error(resp, site) from exc
+
+
+def _charge_response(response: httpx2.Response, verdict: Verdict) -> None:
+    """Mark *verdict* with what *response* says about its origin (see :meth:`AsyncBaseClient._sent`).
+
+    A response another request's attempt produced (a cache hit, a stored response, a shared download) is untested; a
+    5xx this request fetched itself is a failure; a 429 is neither, since the origin is up and asked us to slow down.
+    """
+    if host_untested(response) or response.extensions.get("hishel_from_cache"):
+        verdict.mark_untested()
+    elif response.status_code >= httpx2.codes.INTERNAL_SERVER_ERROR:
+        verdict.mark_failed()
+
+
+def _network_failure_charges_origin(exc: Exception) -> bool:
+    """Return whether a network failure is the origin's, to charge its breaker with (see :meth:`AsyncBaseClient._sent`).
+
+    Not when it is of our own side's making (:data:`_LOCAL_FAILURES`), happened on a hop an auth flow made to mint a
+    credential, or was shared by the cache from another request's attempt.
+    """
+    return not (isinstance(exc, _LOCAL_FAILURES) or failed_on_auth_hop(exc) or host_untested(exc))
+
+
+def _breaker_gate(breaker: Breaker, verdict: Verdict) -> Callable[[], bool]:
+    """Return the call's :data:`~headgate._core.BREAKER_GATE`: whether its origin's breaker refuses now.
+
+    The half-open breaker's probe is never refused by its own probe slot, so the probe keeps its retries and its whole
+    retry sequence is the one recovery test.
+    """
+
+    def refusing() -> bool:
+        return not verdict.probe and breaker.refusing
+
+    return refusing
 
 
 def _refusal(check: RefusalCheck | None, resp: httpx2.Response) -> RefusedError | None:

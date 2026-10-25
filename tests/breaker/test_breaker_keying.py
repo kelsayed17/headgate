@@ -10,13 +10,13 @@ import contextlib
 import httpx2
 import pytest
 
-from headgate import HttpOptions, TransportPolicy
+from headgate import BreakerPolicy, HttpOptions, TransportPolicy
 from headgate._responses import nothing
 from headgate.breaker import DEFAULT_REGISTRY, BreakerState
 from headgate.errors import ClientError, TransportError
 from headgate.ratelimit import Rate
 from headgate.retry import RetryPolicy
-from tests.support.breakers import failures
+from tests.support.breakers import failures, has_breaker
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
@@ -35,11 +35,15 @@ def _redirecting_to(location: str) -> httpx2.MockTransport:
 
 
 def _open_breaker() -> None:
-    """Trip the test host's breaker: one recorded failure against a threshold of one."""
-    breaker = DEFAULT_REGISTRY.breaker_for(_HOST, failure_threshold=1, recovery_timeout=3600)
-    with contextlib.suppress(RuntimeError), breaker.track() as verdict:
-        verdict.mark_failed()
-        raise RuntimeError
+    """Trip the test host's breaker for the default policy: its threshold's worth of recorded failures."""
+    policy = BreakerPolicy()
+    breaker = DEFAULT_REGISTRY.breaker_for(
+        f"https://{_HOST}", failure_threshold=policy.failure_threshold, recovery_timeout=policy.recovery_timeout
+    )
+    for _ in range(policy.failure_threshold):
+        with contextlib.suppress(RuntimeError), breaker.track() as verdict:
+            verdict.mark_failed()
+            raise RuntimeError
     assert breaker.state is BreakerState.OPEN
 
 
@@ -57,7 +61,7 @@ async def test_an_absolute_url_keys_the_breaker_on_its_own_host() -> None:
     with pytest.raises(ClientError):
         await client.get("https://other.example/x", expect=RESPONSE)
     assert failures("other.example") == 1
-    assert _HOST not in DEFAULT_REGISTRY
+    assert not has_breaker(_HOST)
 
 
 async def test_a_protocol_relative_path_keys_the_breaker_on_the_host_it_reaches() -> None:
@@ -84,7 +88,7 @@ async def test_a_protocol_relative_path_keys_the_breaker_on_the_host_it_reaches(
         await client.get("//other.example/x", expect=RESPONSE)
     assert reached == [_HOST]
     assert failures(_HOST) == 1
-    assert "other.example" not in DEFAULT_REGISTRY
+    assert not has_breaker("other.example")
 
 
 # --- A redirect to a bad URL ---

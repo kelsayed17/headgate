@@ -5,7 +5,7 @@
 
 The tests pin each of the three behaviours switched off, plus the properties that make it a construction-time switch
 rather than a global one. They observe what a client does (how many sends a 503 gets, whether an open breaker refuses
-it, the rate each limiter is built at) rather than timing, so they cannot flake on a slow machine.
+it, the rate each budget is built at) rather than timing, so they cannot flake on a slow machine.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 
 import httpx2
 import pytest
-from aiolimiter import AsyncLimiter
 
 from headgate import HttpOptions, TransportPolicy
 from headgate._client import AsyncBaseClient
@@ -23,11 +22,13 @@ from headgate._responses import nothing
 from headgate.breaker import DEFAULT_REGISTRY
 from headgate.errors import TransportError, UpstreamStatusError
 from headgate.policy import policy_disabled, policy_is_disabled
-from headgate.ratelimit import UNLIMITED, Rate, RateRule
+from headgate.ratelimit import UNLIMITED, Rate, RateBudget, RateRule
 from headgate.retry import RetryPolicy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from headgate._core import CallContext
 
 _HOST = "example.test"
 _RATE = Rate.per_second(2.0)
@@ -56,10 +57,10 @@ class _Client(AsyncBaseClient):
     """A typical subclass: it fixes its own policy in ``super().__init__()`` and exposes none of it."""
 
     def __init__(self, wire: Callable[[httpx2.Request], httpx2.Response]) -> None:
-        """Build over *wire*, with a secondary limiter for ``/r``.
+        """Build over *wire*, with a secondary budget for ``/r``.
 
-        The ``rate_limits`` rule is why the switch is enforced inside the rate limiter rather than by overriding the
-        client's ``rate=``, which would leave the secondary limiter throttled.
+        The ``rate_limits`` rule is why the switch is enforced where budgets are built rather than by overriding the
+        client's ``rate=``, which would leave the secondary budget throttled.
         """
         super().__init__(
             base_url=f"https://{_HOST}",
@@ -83,7 +84,7 @@ async def _open_the_breaker() -> None:
     """Fail a normally built client against the host until the shared breaker refuses it."""
     failing = _Client(_Wire(httpx2.codes.SERVICE_UNAVAILABLE))
     for _ in range(_ENOUGH_FAILURES):
-        if _HOST in DEFAULT_REGISTRY and DEFAULT_REGISTRY[_HOST].refusing:
+        if any(breaker.refusing for breaker in DEFAULT_REGISTRY):
             return
         with pytest.raises(UpstreamStatusError):
             await failing.get("x", expect=nothing)
@@ -116,17 +117,14 @@ class TestPolicyOff:
         assert await _sends_for_a_503(_Client) == _MAX_ATTEMPTS, "control: a normally built client retries"
         assert await _sends_for_a_503(_built_off) == 1
 
-    @pytest.mark.transport_policy
-    async def test_primary_and_secondary_limiters_are_both_unthrottled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Check that both the default limiter and a rule's limiter are built unlimited, not at the client's rates."""
+    async def test_primary_and_secondary_budgets_are_both_unthrottled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Check that both the default budget and a rule's budget are built unlimited, not at the client's rates."""
         built: list[tuple[float, float]] = []
-        real_init = AsyncLimiter.__init__
 
-        def recording_init(limiter: AsyncLimiter, max_rate: float, time_period: float = 60) -> None:
-            real_init(limiter, max_rate, time_period)
-            built.append((max_rate, time_period))
+        async def recording_wait(budget: RateBudget, _context: CallContext) -> None:
+            built.append((budget.rate.requests, budget.rate.period))
 
-        monkeypatch.setattr(AsyncLimiter, "__init__", recording_init)
+        monkeypatch.setattr(RateBudget, "wait", recording_wait)
 
         async def rates(client: _Client) -> list[tuple[float, float]]:
             built.clear()

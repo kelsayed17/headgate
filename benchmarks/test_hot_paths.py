@@ -20,7 +20,7 @@ from headgate import pydantic as pydantic_flavor
 from headgate._failures import CallSite, status_error
 from headgate._url import escape_segment, redact_secrets, render_path, sanitize_url
 from headgate.breaker import CircuitBreaker
-from headgate.ratelimit import PathLimiters, Rate, RateRule
+from headgate.ratelimit import PathBudgets, Rate, RateBudget, RateRule
 from headgate.retry import RetryPolicy
 
 if TYPE_CHECKING:
@@ -109,9 +109,18 @@ def test_retry_backoff(benchmark: BenchmarkFixture) -> None:
     benchmark(policy.wait_after, failure, 1)
 
 
-def test_path_limiter_lookup(benchmark: BenchmarkFixture) -> None:
-    """Measure choosing a limiter by URL path among ten rules, where the last rule matches."""
+def test_path_budget_lookup(benchmark: BenchmarkFixture) -> None:
+    """Measure choosing a budget by URL path among ten rules, where the last rule matches."""
     rules = [RateRule(f"/endpoint-{i}", Rate.per_second(10)) for i in range(10)]
-    limiters = PathLimiters(default=Rate.per_second(100), rules=rules)
+    budgets = PathBudgets(default=Rate.per_second(100), rules=rules)
     request = httpx2.Request("GET", "https://api.example.test/v1/endpoint-9/items")
-    benchmark(limiters.for_request, request)
+    benchmark(budgets.for_request, request)
+
+
+def test_rate_feedback(benchmark: BenchmarkFixture) -> None:
+    """Measure feeding a budget a response that carries the IETF rate-limit fields, as every response does."""
+    budget = RateBudget(Rate.per_second(100))
+    response = httpx2.Response(
+        httpx2.codes.OK, headers={"RateLimit-Policy": '"default";q=100;w=60', "RateLimit": '"default";r=50;t=30'}
+    )
+    benchmark(budget.observe, response, sent_at=budget.now())

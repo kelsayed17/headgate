@@ -27,7 +27,7 @@ from headgate._core import Timing, timing_override
 from headgate._responses import Expect, RefusalCheck, RefusedError, as_bytes, nothing
 from headgate.errors import AuthError, RateLimitError, ResponseParseError, TransportError, UpstreamStatusError
 from headgate.msgspec import decoder
-from headgate.ratelimit import AsyncRateLimiter, Rate
+from headgate.ratelimit import Rate, RateBudget
 from headgate.retry import Backoff, RetryPolicy
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
@@ -38,6 +38,8 @@ if TYPE_CHECKING:
 
     from pytest_httpx2 import HTTPXMock
 
+    from headgate._core import CallContext
+
 _RATE = Rate.per_second(2)
 
 #: A 4xx error message is a bounded snippet plus a short prefix; a 5000-byte page must come out well under this.
@@ -47,14 +49,14 @@ _MESSAGE_BOUND = 500
 # --- The transport stack ---
 
 
-async def test_every_retry_is_paced_by_the_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Check that retry wraps the rate limiter: each of the three attempts takes its own token."""
+async def test_every_retry_is_paced_by_the_rate_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check that retry wraps the rate budget: each of the three attempts waits its own turn."""
     waits: list[None] = []
 
-    async def counting_wait(_limiter: AsyncRateLimiter) -> None:
+    async def counting_wait(_budget: RateBudget, _context: CallContext) -> None:
         waits.append(None)
 
-    monkeypatch.setattr(AsyncRateLimiter, "wait", counting_wait)
+    monkeypatch.setattr(RateBudget, "wait", counting_wait)
     statuses = iter([httpx2.codes.SERVICE_UNAVAILABLE, httpx2.codes.SERVICE_UNAVAILABLE, httpx2.codes.OK])
     sent: list[httpx2.Request] = []
 

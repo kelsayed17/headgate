@@ -3,11 +3,10 @@
 
 """The import boundaries that keep the policy subpackages self-contained, checked by parsing every import.
 
-``headgate.retry``, ``headgate.breaker`` and ``headgate.ratelimit`` may import only the standard library, ``httpx2``
-(``ratelimit`` also ``aiolimiter``, the dependency it wraps), their own subpackage and ``headgate._core``; never the
-client, the stack, the cache or each other. ``headgate._core`` may import only the standard library, ``httpx2`` and
-itself. So any of them could ship as a distribution of its own, and coordination between them has to go through the
-core's protocols, wired together in ``headgate._stack``.
+``headgate.retry``, ``headgate.breaker`` and ``headgate.ratelimit`` may import only the standard library, ``httpx2``,
+their own subpackage and ``headgate._core``; never the client, the stack, the cache or each other. ``headgate._core``
+may import only the standard library, ``httpx2`` and itself. So any of them could ship as a distribution of its own,
+and coordination between them has to go through the core's protocols, wired together in ``headgate._stack``.
 
 Every import counts, those under ``if TYPE_CHECKING:`` included, and a relative import is resolved first.
 """
@@ -26,7 +25,7 @@ _SRC = Path(__file__).parents[2] / "src"
 _BOUNDED: dict[str, frozenset[str]] = {
     "headgate._core": frozenset({"httpx2"}),
     "headgate.breaker": frozenset({"httpx2"}),
-    "headgate.ratelimit": frozenset({"httpx2", "aiolimiter"}),
+    "headgate.ratelimit": frozenset({"httpx2"}),
     "headgate.retry": frozenset({"httpx2"}),
 }
 

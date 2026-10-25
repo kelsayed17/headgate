@@ -11,7 +11,7 @@ place, so the client methods themselves stay one line each.
 ## Install
 
 ```bash
-pip install headgate               # core: httpx2, hishel, aiolimiter, msgspec
+pip install headgate               # core: httpx2, hishel, msgspec
 pip install 'headgate[pydantic]'   # + the pydantic codec flavor
 pip install 'headgate[curl]'       # + AsyncCurlTransport (browser TLS impersonation via curl_cffi)
 ```

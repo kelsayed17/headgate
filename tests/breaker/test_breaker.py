@@ -306,7 +306,7 @@ def test_no_breakers_admits_every_call_and_never_reads_the_shared_registry() -> 
             raise RuntimeError
     with breaker.track():
         pass  # still admitted after ten marked failures
-    assert "api.example" not in DEFAULT_REGISTRY
+    assert len(DEFAULT_REGISTRY) == 0
 
 
 class _Clock:
@@ -338,22 +338,23 @@ def test_a_refusal_says_how_long_the_cooldown_has_left() -> None:
     assert during_probe.value.retry_after is None
 
 
-def test_a_registry_builds_a_hosts_breaker_once_with_the_first_callers_settings() -> None:
-    """Build on first use only, keep the first caller's threshold, and never build on a read."""
+def test_a_registry_keys_a_breaker_by_origin_and_thresholds() -> None:
+    """Share one breaker per origin and thresholds; give other thresholds their own; never build on a read."""
     registry = BreakerRegistry()
-    first = registry.breaker_for("a.example", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
-    again = registry.breaker_for("a.example", failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
-    assert first is again
+    first = registry.breaker_for("https://a.example/x", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
+    again = registry.breaker_for("HTTPS://A.example:443/y?q", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
+    other = registry.breaker_for("https://a.example", failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
+    assert first is again, "the same origin, however the URL spells it, with the same thresholds"
+    assert other is not first, "other thresholds get a breaker of their own, built with them"
+    assert (other.failure_threshold, other.recovery_timeout) == (_THRESHOLD, _COOLDOWN)
+    assert first.name == "https://a.example"
     _fail(first)
-    assert first.state is BreakerState.OPEN, "the first caller's threshold of one applies"
+    assert (first.state, other.state) == (BreakerState.OPEN, BreakerState.CLOSED)
 
-    with pytest.raises(KeyError):
-        registry["b.example"]
-    assert "b.example" not in registry
-    assert registry["a.example"] is first
-    assert list(registry) == ["a.example"]
-    assert len(registry) == 1
-    assert registry.items() == (("a.example", first),)
+    assert registry.breakers("http://a.example") == ()
+    assert registry.breakers("https://a.example") == (first, other)
+    assert list(registry) == [first, other]
+    assert len(registry) == len((first, other))
 
     registry.clear()
     assert len(registry) == 0
@@ -363,7 +364,7 @@ def test_a_registrys_breakers_read_its_clock() -> None:
     """Hand the registry's clock to every breaker it builds, so a test can drive their cooldowns."""
     clock = _Clock()
     registry = BreakerRegistry(clock=clock)
-    cb = registry.breaker_for("a.example", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
+    cb = registry.breaker_for("https://a.example", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
     _fail(cb)
     assert cb.refusing
     clock.now = _LONG_COOLDOWN
@@ -388,3 +389,26 @@ def test_a_breaker_policy_refuses_a_nonsense_value(threshold: int, cooldown: flo
 def test_a_breaker_policy_shares_the_default_registry_by_default() -> None:
     """Use the process-wide registry unless the policy names another."""
     assert BreakerPolicy().registry is DEFAULT_REGISTRY
+
+
+def test_a_marked_failure_counts_even_when_the_block_exits_cleanly() -> None:
+    """Record a failure the caller caught inside the tracked block: the wire failed, however the block was left.
+
+    A caller reading a stream itself can catch the ``TransportError`` a dropped body raises and leave the block
+    normally; settling that as a success would record a failing host as healthy.
+    """
+    cb = _breaker(threshold=1)
+    with cb.track() as verdict:
+        verdict.mark_failed()
+    assert cb.state is BreakerState.OPEN
+
+
+def test_a_probe_whose_failure_was_caught_reopens_the_breaker() -> None:
+    """Re-open on a probe that marked a failure and exited cleanly, rather than closing on it."""
+    clock = _Clock()
+    cb = CircuitBreaker(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN, clock=clock)
+    _fail(cb)
+    clock.now = _LONG_COOLDOWN
+    with cb.track() as verdict:
+        verdict.mark_failed()
+    assert cb.state is BreakerState.OPEN
