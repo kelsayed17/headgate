@@ -127,6 +127,11 @@ def test_an_unencodable_request_without_a_request_attached_gets_the_fixed_messag
     [
         pytest.param([(b"X-Ok", b"fine")], "(LocalProtocolError)", id="no-header-is-at-fault"),
         pytest.param([(b"X Bad", b"a\r\nb")], "illegal value in header <invalid name>", id="an-illegal-name-too"),
+        pytest.param(
+            [(b"X-One", b"a\r\nb"), (b"X-Ok", b"fine"), (b"X-Two", b"c\nd")],
+            "illegal value in header X-One, X-Two",
+            id="two-headers-at-fault",
+        ),
     ],
 )
 def test_an_unencodable_request_names_only_legal_header_names(

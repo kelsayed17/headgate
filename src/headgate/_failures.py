@@ -77,6 +77,9 @@ _SNIPPET_SCAN_BYTES = 16 * 1024
 #: repeats it whole is a log line nobody can read.
 _URL_LIMIT = 300
 
+#: The control characters (C0 and DEL) a URL named in a message may not carry as they are.
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
 #: Cap on any other outside text folded into a message: an exception's own message, a decoder's diagnosis.
 MESSAGE_TEXT_LIMIT = 1000
 
@@ -186,8 +189,17 @@ def shorten(text: str, limit: int = MESSAGE_TEXT_LIMIT) -> str:
 
 
 def loggable_url(url: str) -> str:
-    """Return *url* as every message names it: credentials redacted (:func:`sanitize_url`), then shortened."""
-    return shorten(sanitize_url(url), _URL_LIMIT)
+    """Return *url* as every message names it: credentials redacted (:func:`sanitize_url`), then shortened.
+
+    A control character is percent-encoded, so a URL httpx2 refused (one taken from a response, say) cannot start a
+    forged line in a log that records the message.
+    """
+    return shorten(_CONTROL.sub(_percent_encoded, sanitize_url(url)), _URL_LIMIT)
+
+
+def _percent_encoded(match: re.Match[str]) -> str:
+    """Return the matched character as ``%XX``."""
+    return f"%{ord(match[0]):02X}"
 
 
 def body_snippet(resp: httpx2.Response) -> str | None:

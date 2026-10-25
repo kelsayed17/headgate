@@ -167,13 +167,18 @@ async def _surviving_503() -> None:
     policy = TransportPolicy(
         retry=RetryPolicy(attempts=3, backoff=Backoff(jitter=lambda: 0.0), budget=None), breaker=None
     )
-    await _get(_client(httpx2.Response(503, text="maintenance"), policy=policy))
+    await _get(_client(httpx2.Response(503, text="maintenance", headers={"request-id": "req-503"}), policy=policy))
 
 
 async def _surviving_429_past_max_retry_after() -> None:
     """Answer 429 asking for longer than ``max_retry_after``: the retry layer stops and the note says why."""
     policy = TransportPolicy(retry=RetryPolicy(attempts=3, max_retry_after=1.0, budget=None), breaker=None)
     await _get(_client(httpx2.Response(429, headers={"retry-after": _RETRY_AFTER}), policy=policy))
+
+
+async def _surviving_500() -> None:
+    """Answer 500 to a call that sends once: transient, and retryable."""
+    await _get(_client(500))
 
 
 async def _surviving_503_on_a_post() -> None:
@@ -340,6 +345,7 @@ _SCENARIOS: Final[dict[str, Scenario]] = {
     "surviving_429_retry_after": _surviving_429,
     "surviving_429_past_max_retry_after": _surviving_429_past_max_retry_after,
     "surviving_503_with_history": _surviving_503,
+    "surviving_500": _surviving_500,
     "surviving_503_on_a_post": _surviving_503_on_a_post,
     "surviving_501": _surviving_501,
     "surviving_505": _surviving_505,

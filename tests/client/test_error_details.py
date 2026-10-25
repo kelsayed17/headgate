@@ -28,8 +28,10 @@ from headgate import (
     Problem,
     Rate,
     RateLimitError,
+    RefusedError,
     ResponseParseError,
     ResponseTooLargeError,
+    RetryPolicy,
     TransportError,
     TransportPolicy,
     UpstreamStatusError,
@@ -51,6 +53,7 @@ _BASE = "https://api.example.test"
 _REQUEST_ID = "req-123"
 _RETRY_AFTER = 2.0
 _PROBLEM = "application/problem+json"
+_LATIN_1 = "text/plain; charset=latin-1"
 #: The longest request id an error keeps.
 _REQUEST_ID_LIMIT = 200
 
@@ -410,10 +413,129 @@ async def test_a_body_that_is_not_a_problem_detail_has_none(script: Script) -> N
 
 
 async def test_a_surviving_503_parses_its_problem_detail_too() -> None:
-    """Parse a problem detail on a retried-out 503 as on any status error."""
+    """Parse a problem detail on a retried-out 503 as on any status error, and name its title in the message."""
     error = await _raised(_client(_problem_response({"title": "Down for maintenance"}, status=503)))
     assert isinstance(error, UpstreamStatusError)
     assert error.problem == Problem(title="Down for maintenance")
+    assert str(error).endswith("(status=503) — Down for maintenance")
+
+
+async def test_a_problem_with_no_title_member_is_read() -> None:
+    """Read a problem that names only a detail, the title absent rather than null."""
+    error = await _raised(_client(_problem_response({"detail": "sku a is out of stock"})))
+
+    assert isinstance(error, UpstreamStatusError)
+    assert error.problem == Problem(detail="sku a is out of stock")
+
+
+#: The longest summary of a body a message carries, before the ``…`` that marks it cut.
+_SUMMARY_LIMIT = 300
+
+
+@pytest.mark.parametrize(("length", "expected_tail"), [(_SUMMARY_LIMIT, "x"), (_SUMMARY_LIMIT + 1, "…")])
+async def test_a_problems_summary_is_cut_past_the_limit(length: int, expected_tail: str) -> None:
+    """Keep a problem's title and detail whole up to the limit, and cut them to it with ``…`` past it."""
+    error = await _raised(_client(_problem_response({"detail": "x" * length})))
+
+    summary = str(error).rpartition(" — ")[2]
+    assert summary.endswith(expected_tail)
+    assert len(summary) == min(length, _SUMMARY_LIMIT + 1)
+
+
+@pytest.mark.parametrize(("length", "expected_tail"), [(_SUMMARY_LIMIT, "x"), (_SUMMARY_LIMIT + 1, "…")])
+async def test_a_body_snippet_is_cut_past_the_limit(length: int, expected_tail: str) -> None:
+    """Keep a body whole up to the limit, and cut it to it with ``…`` past it."""
+    error = await _raised(_client(Script(httpx2.Response(400, text="x" * length))))
+
+    snippet = str(error).rpartition(" — ")[2]
+    assert snippet.endswith(expected_tail)
+    assert len(snippet) == min(length, _SUMMARY_LIMIT + 1)
+
+
+async def test_a_body_snippet_is_decoded_in_the_charset_it_declares() -> None:
+    """Decode the snippet in the response's declared charset, not UTF-8 regardless."""
+    body = "café fermé".encode("latin-1")
+    error = await _raised(_client(Script(httpx2.Response(400, content=body, headers={"Content-Type": _LATIN_1}))))
+
+    assert str(error).endswith("— café fermé")
+
+
+async def test_a_body_snippet_replaces_bytes_its_charset_cannot_decode() -> None:
+    """Replace undecodable bytes in the snippet rather than fail to build the error."""
+    error = await _raised(_client(Script(httpx2.Response(400, content=b"bad \xff byte"))))
+
+    assert str(error).endswith("— bad \ufffd byte")
+
+
+#: The largest problem document read.
+_PROBLEM_SCAN_BYTES = 64 * 1024
+
+
+async def test_a_problem_document_of_exactly_the_scan_limit_is_read() -> None:
+    """Read a problem document of exactly the largest size parsed."""
+    padding = _PROBLEM_SCAN_BYTES - len(json.dumps({"title": "t", "pad": ""}))
+    body = json.dumps({"title": "t", "pad": " " * padding}).encode()
+    error = await _raised(_client(Script(httpx2.Response(400, content=body, headers={"Content-Type": _PROBLEM}))))
+
+    assert len(body) == _PROBLEM_SCAN_BYTES
+    assert isinstance(error, UpstreamStatusError)
+    assert error.problem is not None
+    assert error.problem.title == "t"
+
+
+async def test_a_surviving_status_outside_the_policy_still_carries_its_retry_after() -> None:
+    """Report a 503's ``Retry-After`` though the call's policy does not retry 503s."""
+    client = StubClient(
+        base_url=_BASE,
+        rate=Rate.per_second(1000),
+        policy=TransportPolicy(retry=RetryPolicy(statuses=frozenset({500}))),
+        http=HttpOptions(transport=Script(httpx2.Response(503, headers={"Retry-After": "2"})).transport()),
+    )
+
+    error = await _raised(client)
+
+    assert (error.retryable, error.retry_after) == (False, _RETRY_AFTER)
+    assert str(error).startswith("[StubClient] upstream 503")
+
+
+async def test_a_surviving_500_is_transient_and_charged_to_the_breaker() -> None:
+    """Raise a surviving 500 as a transient status, and charge it to the origin, as every 5xx is."""
+    error = await _raised(_client(Script(500)))
+
+    assert str(error).startswith("[StubClient] transient 500 for GET orders")
+    assert failures("api.example.test") == 1
+
+
+async def test_a_refusal_and_a_parse_error_carry_the_request_id() -> None:
+    """Read the request id of the response a refusal or an unreadable body came on."""
+    answer = httpx2.Response(200, text="<html>", headers={"x-request-id": _REQUEST_ID})
+
+    def refuse(_resp: httpx2.Response) -> bytes:
+        """Refuse the body."""
+        msg = "refused"
+        raise RefusedError(msg, code="R")
+
+    async with _client(Script(answer)) as client:
+        with pytest.raises(UpstreamStatusError) as refused:
+            await client.get("orders", expect=refuse)
+        with pytest.raises(ResponseParseError) as unreadable:
+            await client.get("orders", expect=json_reader(json.loads))
+
+    assert (refused.value.request_id, unreadable.value.request_id) == (_REQUEST_ID, _REQUEST_ID)
+
+
+def _empty_value_error(_resp: httpx2.Response) -> bytes:
+    """Fail as a reader whose error has no message."""
+    raise ValueError
+
+
+async def test_a_parse_error_without_a_message_names_the_error_type() -> None:
+    """Name the reader's exception type when its message is empty."""
+    async with _client(Script(200)) as client:
+        with pytest.raises(ResponseParseError) as raised:
+            await client.get("orders", expect=_empty_value_error)
+
+    assert str(raised.value) == "[StubClient] unreadable 200 body for GET orders: ValueError"
 
 
 # --- Pickling ---

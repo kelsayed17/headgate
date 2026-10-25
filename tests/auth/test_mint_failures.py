@@ -189,6 +189,14 @@ async def test_an_unreadable_token_response_is_a_parse_error(auth: CachedTokenAu
     assert raised.value.__cause__ is not None
 
 
+async def test_an_unreadable_token_response_without_a_message_names_the_error_type() -> None:
+    """Name the exception type when the mint's failure has no message of its own."""
+    with pytest.raises(ResponseParseError) as raised:
+        await _call(_Raises(ValueError()))
+
+    assert str(raised.value) == "[_Raises] unreadable token response: ValueError"
+
+
 async def test_an_unreadable_token_response_from_a_mint_flow_is_a_parse_error() -> None:
     """Map a mint flow's ``response.json()`` failure on its hop the same way."""
     hop_body = b"not json"

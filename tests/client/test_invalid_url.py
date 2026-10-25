@@ -31,8 +31,22 @@ async def test_a_malformed_url_is_a_client_error_and_not_a_host_failure() -> Non
     """Check that a URL httpx2 cannot parse raises ``ClientError`` and charges no breaker."""
     client = _Client()
     try:
-        with pytest.raises(ClientError, match="invalid URL"):
+        with pytest.raises(ClientError, match="invalid URL") as raised:
             await client.get("a\x00b", expect=as_bytes)
     finally:
         await client.aclose()
     assert failures("example.test") == 0, "a malformed URL is not a host failure"
+    assert str(raised.value).startswith("[_Client] invalid URL a%00b: Invalid non-printable ASCII character in URL")
+    assert (raised.value.method, raised.value.url, raised.value.source) == ("GET", "a%00b", "_Client")
+
+
+async def test_a_control_character_in_a_url_cannot_forge_a_log_line() -> None:
+    """Percent-encode a line break in a URL a message names, so the message stays one line."""
+    client = _Client()
+    try:
+        with pytest.raises(ClientError) as raised:
+            await client.get("a\nERROR forged\r\x7f", expect=as_bytes)
+    finally:
+        await client.aclose()
+    assert raised.value.url == "a%0AERROR forged%0D%7F"
+    assert "\n" not in str(raised.value)

@@ -281,6 +281,25 @@
     'url': 'orders?api_key=%2A%2A%2A',
   })
 # ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[surviving_500]
+  dict({
+    'attempts': 1,
+    'code': None,
+    'message': '[StubClient] transient 500 for GET orders?api_key=%2A%2A%2A (status=500)',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: 500 Internal Server Error after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': True,
+    'source': 'StubClient',
+    'status_code': 500,
+    'type': 'UpstreamStatusError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
 # name: test_the_error_a_failure_raises_matches_the_snapshot[surviving_501]
   dict({
     'attempts': 1,
@@ -331,7 +350,7 @@
       'attempt 3/3: 503 Service Unavailable after 0.0s',
     ]),
     'problem': None,
-    'request_id': None,
+    'request_id': 'req-503',
     'retry_after': None,
     'retryable': True,
     'source': 'StubClient',
