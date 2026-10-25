@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 import httpx2
 
 from headgate._auth import StaticHeaderAuth
-from headgate._cache import NoCloseStorage, ResilientCacheTransport
+from headgate._cache import ResilientCacheTransport
 from headgate._rate_limit import PathLimiters, RateLimitTransport
 from headgate._redirects import credential_header_guard, drop_followed_redirect_body
 from headgate._retry import RetryTransport, build_retry
@@ -68,12 +68,11 @@ def build_http_client(
     inner: httpx2.AsyncBaseTransport = RateLimitTransport(
         limiters=PathLimiters(default=rate, rules=rate_limits), transport=base_transport
     )
-    # The cache is engaged only when an HttpCache with a storage is passed. Its storage is wrapped so this client's
-    # teardown never closes a storage other clients share.
+    # The cache is engaged only when an HttpCache with a storage is passed.
     if cache is not None and cache.storage is not None:
         inner = ResilientCacheTransport(
             next_transport=inner,
-            storage=NoCloseStorage(cache.storage),
+            storage=cache.storage,
             policy=cache.policy,
             max_body_bytes=max_response_bytes,
             ttl=cache.ttl,

@@ -19,14 +19,13 @@ from headgate._cache import (
     CACHE_DEGRADATIONS,
     CACHE_DEGRADED_EXT,
     MethodFilter,
-    NoCloseStorage,
     ResilientCacheTransport,
     StatusCodeFilter,
 )
 from headgate.health import BreakerState, breaker_states, cache_degradations
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import Iterator
 
 _HOST = "health.example.test"
 
@@ -73,17 +72,9 @@ def test_breaker_states_is_a_copy() -> None:
     assert _HOST in breaker_states()
 
 
-@pytest.fixture
-async def storage() -> AsyncIterator[AsyncSqliteStorage]:
-    conn = await anysqlite.connect(":memory:")
-    store = AsyncSqliteStorage(connection=conn)
-    try:
-        yield store
-    finally:
-        await store.close()
+class _LookupFails(AsyncSqliteStorage):
+    """A storage whose every lookup fails."""
 
-
-class _LookupFails(NoCloseStorage):
     @override
     async def get_entries(self, key: str) -> list[Entry]:
         raise ValueError("corrupt cache entry")
@@ -95,10 +86,11 @@ class _Network(httpx2.AsyncBaseTransport):
         return httpx2.Response(200, text="from-network")
 
 
-async def test_a_cache_fault_counts_one_degradation_for_its_host(storage: AsyncSqliteStorage) -> None:
+async def test_a_cache_fault_counts_one_degradation_for_its_host() -> None:
+    storage = _LookupFails(connection=await anysqlite.connect(":memory:"))
     transport = ResilientCacheTransport(
         next_transport=_Network(),
-        storage=_LookupFails(storage),
+        storage=storage,
         policy=FilterPolicy(
             request_filters=[MethodFilter(frozenset({"GET"}))],
             response_filters=[StatusCodeFilter(frozenset({200}))],

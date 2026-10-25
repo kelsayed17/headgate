@@ -21,7 +21,7 @@ import time_machine
 from hishel import AsyncSqliteStorage
 from hishel.httpx2 import AsyncCacheTransport
 
-from headgate._cache import HttpCache, NoCloseStorage, _RestoreRequestExtensions
+from headgate._cache import HttpCache, _RestoreRequestExtensions
 from headgate._client import AsyncBaseClient
 from headgate._rate_limit import UNLIMITED, Rate, RateLimitTransport
 from headgate._retry import RetryTransport
@@ -91,9 +91,7 @@ def test_cache_with_storage_inserts_cache_transport_above_the_limiter() -> None:
     cache_transport = _base_of(client)
     assert isinstance(cache_transport, AsyncCacheTransport)
     assert _network_of(client) is base
-    # Wrapped, so closing this client cannot close a storage it shares.
-    assert isinstance(cache_transport.storage, NoCloseStorage)
-    assert cache_transport.storage._inner is storage
+    assert cache_transport.storage is storage
 
 
 # --- HIT / MISS behaviour and hishel_ttl threading, over real SQLite storage ---
@@ -280,8 +278,8 @@ async def test_never_cache_client_has_no_cache_transport() -> None:
 async def test_closing_clients_never_closes_their_shared_storage() -> None:
     """Closing every client that shares one storage leaves it open, for whoever created it to close.
 
-    hishel's ``AsyncCacheTransport.aclose()`` closes its storage, so without the ``NoCloseStorage`` wrapper the first
-    client's ``aclose()`` would close the storage under the rest.
+    hishel's ``AsyncCacheTransport.aclose()`` closes its storage; ``ResilientCacheTransport.aclose()`` does not, or the
+    first client's ``aclose()`` would close the storage under the rest.
     """
     conn = await anysqlite.connect(":memory:")
     shared = AsyncSqliteStorage(connection=conn)
@@ -303,12 +301,10 @@ async def test_closing_clients_never_closes_their_shared_storage() -> None:
             )
             for _ in range(3)
         ]
-        # Each client has its own cache transport over the same storage, each wrapped so its close() is a no-op.
         for c in clients:
             ct = _base_of(c)
             assert isinstance(ct, AsyncCacheTransport)
-            assert isinstance(ct.storage, NoCloseStorage)
-            assert ct.storage._inner is shared
+            assert ct.storage is shared
 
         for c in clients:
             await c.aclose()

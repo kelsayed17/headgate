@@ -32,18 +32,36 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
 #: stored request URL. A ``QueryParamAuth`` adds the names it injects through :func:`register_secret_params`.
 SECRET_QUERY_PARAMS: frozenset[str] = frozenset(
     {
+        # API keys and generic secrets
         "apikey",
-        "token",
-        "accesstoken",
-        "authtoken",
         "key",
+        "accesskey",
+        "privatekey",
         "secret",
         "clientsecret",
         "auth",
         "password",
+        "passwd",
+        "pwd",
+        # tokens (OAuth 2.0, OpenID Connect, sessions)
+        "token",
+        "accesstoken",
+        "authtoken",
+        "refreshtoken",
+        "idtoken",
+        "clientassertion",
+        "jwt",
+        "session",
+        "sessionid",
+        "crumb",
+        # signatures, including AWS SigV4 and Google Cloud Storage signed URLs
         "sig",
         "signature",
-        "crumb",
+        "xamzsignature",
+        "xamzcredential",
+        "xamzsecuritytoken",
+        "xgoogsignature",
+        "xgoogcredential",
     }
 )
 _registered: set[str] = set()
@@ -182,15 +200,22 @@ def render_path(template: Template) -> str:
 
 
 def sanitize_url(url: str) -> str:
-    """*url* with the value of every :data:`SECRET_QUERY_PARAMS` parameter replaced by ``***``.
+    """*url* with its credentials replaced by ``***``: secret query parameters, a userinfo password, and secret
+    ``name=value`` pairs in the fragment (an OAuth implicit-flow ``#access_token=``).
 
-    Every URL a ``ClientError`` message names goes through here first, because those messages reach the API
-    boundary's 502 detail and some providers authenticate by query parameter. A URL with no query is
-    returned unchanged.
+    Every URL a ``ClientError`` message names goes through here first, because those messages may reach an API
+    response or a log, and some providers authenticate by query parameter. A URL with none of these is returned
+    unchanged.
     """
-    if "?" not in url:
+    if not any(marker in url for marker in ("?", "#", "@")):
         return url
     parsed = urlparse(url)
-    qs = parse_qs(parsed.query, keep_blank_values=True)
-    redacted = {k: (["***"] if is_secret_param(k) else v) for k, v in qs.items()}
-    return urlunparse(parsed._replace(query=urlencode(redacted, doseq=True)))
+    if parsed.query:
+        qs = parse_qs(parsed.query, keep_blank_values=True)
+        redacted = {k: (["***"] if is_secret_param(k) else v) for k, v in qs.items()}
+        parsed = parsed._replace(query=urlencode(redacted, doseq=True))
+    if parsed.password:
+        parsed = parsed._replace(netloc=parsed.netloc.replace(f":{parsed.password}@", ":***@", 1))
+    if parsed.fragment:
+        parsed = parsed._replace(fragment=redact_secrets(parsed.fragment))
+    return urlunparse(parsed)

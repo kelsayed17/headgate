@@ -51,20 +51,11 @@ def credential_header_guard(
     stays behind.
     """
     names = auth.header_names
-    home = _origin(base_url)
+    home = base_url.origin
 
     async def guard(request: httpx2.Request) -> None:
-        if _origin(request.url) != home:
+        if request.url.origin != home:
             for name in names:
                 request.headers.pop(name, None)
 
     return guard
-
-
-def _origin(url: httpx2.URL) -> tuple[str, str, int | None]:
-    """Scheme, host and port: the origin, spelled out because httpx2's ``URL`` has no ``origin`` attribute.
-
-    No default-port handling is needed: httpx2 drops a default port while parsing, so ``https://host:443`` (and
-    ``:0443``) already carries ``port=None``, the same as ``https://host``.
-    """
-    return url.scheme, url.host, url.port

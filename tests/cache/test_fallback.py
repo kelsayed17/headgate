@@ -20,7 +20,7 @@ import httpx2
 import pytest
 from hishel import AsyncBaseStorage, Entry, Request, Response
 
-from headgate._cache import CACHE_DEGRADED_EXT, NoCloseStorage, ResilientCacheTransport
+from headgate._cache import CACHE_DEGRADED_EXT, ResilientCacheTransport
 from tests.cache._helpers import every_get_policy
 
 if TYPE_CHECKING:
@@ -125,7 +125,7 @@ class _Faulty(AsyncBaseStorage):
 def _transport(inner: AsyncBaseStorage, network: httpx2.AsyncBaseTransport) -> ResilientCacheTransport:
     return ResilientCacheTransport(
         next_transport=network,
-        storage=NoCloseStorage(inner),
+        storage=inner,
         policy=every_get_policy(),
         max_body_bytes=1024 * 1024,
     )

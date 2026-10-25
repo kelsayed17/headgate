@@ -38,17 +38,14 @@ from hishel.httpx2 import AsyncCacheTransport
 from headgate._url import is_secret_param
 
 if TYPE_CHECKING:
-    import uuid
-    from collections.abc import AsyncIterator, Callable, Mapping
+    from collections.abc import AsyncIterator, Mapping
 
-    from hishel import Entry
 
 __all__ = [
     "CACHE_DEGRADATIONS",
     "CACHE_DEGRADED_EXT",
     "HttpCache",
     "MethodFilter",
-    "NoCloseStorage",
     "PathFragmentFilter",
     "ResilientCacheTransport",
     "StatusCodeFilter",
@@ -120,62 +117,6 @@ class StatusCodeFilter(BaseFilter[Response]):
     @override
     def apply(self, item: Response, body: bytes | None) -> bool:
         return item.status_code in self._codes
-
-
-# The no-close storage wrapper (load-bearing for a shared storage).
-
-
-class NoCloseStorage(AsyncBaseStorage):
-    """Delegate every storage method to a shared inner storage EXCEPT ``close``.
-
-    ``AsyncCacheTransport.aclose()`` closes its ``storage``; with ONE storage shared across clients, the FIRST adapter
-    teardown would otherwise close the shared storage and break the rest. Wrapping the shared storage per client
-    makes each client-side ``close()`` a no-op; whoever created the real storage closes it on its own teardown.
-    """
-
-    def __init__(self, inner: AsyncBaseStorage) -> None:
-        self._inner = inner
-
-    @override
-    async def create_entry(self, request: Request, response: Response, key: str, id_: uuid.UUID | None = None) -> Entry:
-        return await self._inner.create_entry(request, response, key, id_)
-
-    @override
-    async def get_entries(self, key: str) -> list[Entry]:
-        return await self._inner.get_entries(key)
-
-    @override
-    async def update_entry(
-        self,
-        id: uuid.UUID,
-        new_entry: Entry | Callable[[Entry], Entry],
-    ) -> Entry | None:
-        return await self._inner.update_entry(id, new_entry)
-
-    @override
-    async def remove_entry(self, id: uuid.UUID) -> None:
-        await self._inner.remove_entry(id)
-
-    @override
-    async def refresh_entry_ttl(self, id: uuid.UUID) -> None:
-        await self._inner.refresh_entry_ttl(id)
-
-    @override
-    def is_soft_deleted(self, pair: Entry) -> bool:
-        return self._inner.is_soft_deleted(pair)
-
-    @override
-    def is_safe_to_hard_delete(self, pair: Entry) -> bool:
-        return self._inner.is_safe_to_hard_delete(pair)
-
-    @override
-    def mark_pair_as_deleted(self, pair: Entry) -> Entry:
-        return self._inner.mark_pair_as_deleted(pair)
-
-    @override
-    async def close(self) -> None:
-        # No-op: the shared storage is owned and closed by whoever created it.
-        return
 
 
 # Carrying the caller's request extensions PAST hishel.
@@ -360,6 +301,15 @@ class _Unshared(enum.Enum):
     """It was cancelled: the first waiting request to go again fetches for the rest."""
 
 
+def _sharing_key(request: httpx2.Request) -> str:
+    """What two in-flight GETs must agree on to share one download: the URL and every request header.
+
+    Headers, not just the URL: two GETs that differ in ``Range``, ``Accept`` or a credential ask for different
+    responses.
+    """
+    return "\n".join([str(request.url), *(f"{k}: {v}" for k, v in sorted(request.headers.multi_items()))])
+
+
 def _mark_retrieved(download: asyncio.Future[Any]) -> None:
     """Retrieve a failed download's exception, so one that no request waited on is not reported as never retrieved."""
     if not download.cancelled():
@@ -385,7 +335,8 @@ class ResilientCacheTransport(AsyncCacheTransport):
     that fault inside the fallback. Every response abandoned on the way (hishel's, and the network response it had not
     closed) is closed before the request is redone.
 
-    A subclass rather than a wrapping transport, so ``aclose()`` keeps hishel's own semantics.
+    **It never closes the storage.** One storage is meant to be shared by many clients, so whoever created it closes
+    it; ``aclose()`` closes only the transport below.
 
     **It stamps the client's default TTL**: a client whose :class:`HttpCache` carries a ``ttl`` has it
     set as the request's ``hishel_ttl`` on every request that enters this layer, unless the request already carries
@@ -428,7 +379,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
         if request.method != "GET":
             response, _ = await self._fetch(request)
             return response
-        key = str(request.url)
+        key = _sharing_key(request)
         while (in_flight := self._in_flight.get(key)) is not None:
             # Shielded: a waiting request that is cancelled must not cancel the fetch the others wait on.
             outcome = await asyncio.shield(in_flight)
@@ -457,6 +408,11 @@ class ResilientCacheTransport(AsyncCacheTransport):
                 key, _Download(response.status_code, httpx2.Headers(response.headers), body, dict(response.extensions))
             )
         return response
+
+    @override
+    async def aclose(self) -> None:
+        # Not super().aclose(): hishel's also closes the storage, which other clients may share.
+        await self.next_transport.aclose()
 
     def _finish(self, key: str, outcome: _Download | _Unshared | httpx2.HTTPError) -> None:
         """Hand the requests waiting on *key* what they get, freeing *key* first so none of them finds it again."""

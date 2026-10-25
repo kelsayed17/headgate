@@ -280,3 +280,17 @@ async def test_a_failure_no_request_waited_on_is_not_reported_as_never_retrieved
         gc.collect()
 
     assert "never retrieved" not in caplog.text
+
+
+async def test_gets_for_one_url_with_different_headers_do_not_share(storage: AsyncSqliteStorage) -> None:
+    """A ``Range``, an ``Accept`` or a credential changes what a GET asks for, so it gets its own download."""
+    network = _GatedNetwork()
+    transport = _transport(storage, network, policy=_cache_no_get())
+
+    requests = [httpx2.Request("GET", _URL, headers={"Range": f"bytes={start}-"}) for start in (0, 100)]
+    tasks = [asyncio.create_task(transport.handle_async_request(request)) for request in requests]
+    await _eventually(lambda: network.calls == 2)
+    network.gate.set()
+    await asyncio.gather(*tasks)
+
+    assert network.calls == 2
