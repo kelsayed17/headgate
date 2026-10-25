@@ -13,7 +13,7 @@ from __future__ import annotations
 import httpx2
 from hishel import Request, Response
 
-from headgate._cache import MethodFilter, PathFragmentFilter, StatusCodeFilter
+from headgate.cache import MethodFilter, PathFragmentFilter, StatusCodeFilter
 
 
 def test_path_fragment_filter_matches_any_fragment() -> None:

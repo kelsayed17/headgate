@@ -3,10 +3,10 @@
 
 """``AsyncBaseClient``'s cache: when it is engaged, hit and miss behaviour, TTL threading, and a shared storage.
 
-The cache is opt-in per client (``cache=HttpCache(policy=, storage=, ttl=)``). A client with no ``cache``, or an
-``HttpCache`` with no ``storage``, never caches. The ``HttpCache``'s ``ttl`` is stamped on every request as the
-``hishel_ttl`` extension by the cache transport (the ``FilterPolicy``, not the TTL, decides what is stored), and a
-per-call ``cache_ttl=`` wins over it. Everything here is observed from the network leg, not the stack's internals.
+The cache is opt-in per client (``cache=HttpCache(policy=, storage=, ttl=)``). A client with no ``cache`` never
+caches. The ``HttpCache``'s ``ttl`` is stamped on every request as the ``hishel_ttl`` extension by the cache transport
+(the ``FilterPolicy``, not the TTL, decides what is stored), and a per-call ``cache_ttl=`` wins over it. Everything
+here is observed from the network leg, not the stack's internals.
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ import httpx2
 import pytest
 import time_machine
 
-from headgate._cache import HttpCache
 from headgate._client import AsyncBaseClient
+from headgate.cache import HttpCache
 from headgate.ratelimit import Rate
 from tests.cache._helpers import CloseCountingStorage, series_policy, stub_client
 from tests.support.responses import RESPONSE
@@ -65,17 +65,6 @@ async def test_a_client_without_a_cache_never_caches() -> None:
     for _ in range(_REPEATS):
         await client.post("/series", expect=RESPONSE)
     assert base.count == 2 * _REPEATS
-
-
-async def test_a_cache_without_storage_never_caches() -> None:
-    """An ``HttpCache`` whose storage is ``None`` turns caching off: a cacheable GET reaches the network each time."""
-    base = _CountingTransport()
-    client = stub_client(transport=base, cache=HttpCache(policy=series_policy(), storage=None))
-
-    for _ in range(_REPEATS):
-        await client.get("/series?id=A", expect=RESPONSE)
-
-    assert base.count == _REPEATS
 
 
 # Hit and miss behaviour and hishel_ttl threading, over real SQLite storage.

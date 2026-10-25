@@ -33,6 +33,40 @@
       def mark_untested(self) -> 'None'
   '''
 # ---
+# name: test_the_public_surface_matches_the_snapshot[headgate.cache]
+  '''
+  module headgate.cache
+  __all__ = ['Fresh', 'HttpCache', 'MethodFilter', 'NotModified', 'Partition', 'PathFragmentFilter', 'StatusCodeFilter', 'Validator', 'conditional']
+  class Fresh(Generic)(value: 'T', validator: 'Validator') -> 'None'
+      field value: T
+      field validator: Validator
+  class HttpCache(object)(*, policy: 'FilterPolicy', storage: 'AsyncBaseStorage', ttl: 'float | None' = None, partition: 'Partition' = <Partition.CREDENTIAL: 'credential'>) -> 'None'
+      field policy: FilterPolicy
+      field storage: AsyncBaseStorage
+      field ttl: float | None = None
+      field partition: Partition = <Partition.CREDENTIAL: 'credential'>
+  class MethodFilter(BaseFilter)(methods: 'frozenset[str]') -> 'None'
+      def apply(self, item: 'Request', body: 'bytes | None') -> 'bool'
+      def needs_body(self) -> 'bool'
+  class NotModified(object)(validator: 'Validator') -> 'None'
+      field validator: Validator
+  class Partition(Enum)(*values)
+      CREDENTIAL = 'credential'
+      SHARED = 'shared'
+  class PathFragmentFilter(BaseFilter)(fragments: 'tuple[str, ...]') -> 'None'
+      def apply(self, item: 'Request', body: 'bytes | None') -> 'bool'
+      def needs_body(self) -> 'bool'
+  class StatusCodeFilter(BaseFilter)(codes: 'frozenset[int]') -> 'None'
+      def apply(self, item: 'Response', body: 'bytes | None') -> 'bool'
+      def needs_body(self) -> 'bool'
+  class Validator(object)(*, etag: 'str | None' = None, last_modified: 'str | None' = None) -> 'None'
+      field etag: str | None = None
+      field last_modified: str | None = None
+      def headers(self) -> 'dict[str, str]'
+      classmethod of(cls, response: 'httpx2.Response', *, held: 'Validator | None' = None) -> 'Validator'
+  def conditional(reader: 'Reader[T]', *, validator: 'Validator | None' = None) -> 'Expect[Fresh[T] | NotModified]'
+  '''
+# ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.curl]
   '''
   module headgate.curl
@@ -247,7 +281,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['NO_RETRY', 'Adaptive', 'AsyncBaseClient', 'AuthError', 'Backoff', 'BreakerPolicy', 'BreakerRegistry', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'DecodeError', 'Expect', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'MethodFilter', 'Middleware', 'Minted', 'Observer', 'PathFragmentFilter', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'StaticHeaderAuth', 'StatusCodeFilter', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'as_bytes', 'event_stream', 'json_reader', 'nothing']
+  __all__ = ['NO_RETRY', 'Adaptive', 'AsyncBaseClient', 'AuthError', 'Backoff', 'BreakerPolicy', 'BreakerRegistry', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'DecodeError', 'Expect', 'Fresh', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'MethodFilter', 'Middleware', 'Minted', 'NotModified', 'Observer', 'Partition', 'PathFragmentFilter', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'StaticHeaderAuth', 'StatusCodeFilter', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'Validator', 'as_bytes', 'conditional', 'event_stream', 'json_reader', 'nothing']
   NO_RETRY = RetryPolicy(attempts=1, backoff=Backoff(factor=0.5, max_wait=5.0))
   class Adaptive(object)(*, decrease: 'float' = 0.5, increase: 'float' = 0.1, min_rate: 'float' = 0.1) -> 'None'
       field decrease: float = 0.5
@@ -292,14 +326,19 @@
       property url
   class ClientTimeoutError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class DecodeError(Exception)(no signature)
-  class Expect(Generic)(ok: 'Reader[T]', answers: 'Mapping[int, Reader[T]]' = <factory>) -> 'None'
+  class Expect(Generic)(ok: 'Reader[T]', answers: 'Mapping[int, Reader[T]]' = <factory>, *, headers: 'Mapping[str, str]' = <factory>) -> 'None'
       field ok: Reader[T]
       field answers: Mapping[int, Reader[T]] = <factory>
+      field headers: Mapping[str, str] = <factory>
       def on(self, status: 'int', read: 'Reader[E]') -> 'Expect[T | E]'
-  class HttpCache(object)(policy: 'FilterPolicy', storage: 'AsyncBaseStorage | None', ttl: 'float | None' = None) -> 'None'
+  class Fresh(Generic)(value: 'T', validator: 'Validator') -> 'None'
+      field value: T
+      field validator: Validator
+  class HttpCache(object)(*, policy: 'FilterPolicy', storage: 'AsyncBaseStorage', ttl: 'float | None' = None, partition: 'Partition' = <Partition.CREDENTIAL: 'credential'>) -> 'None'
       field policy: FilterPolicy
-      field storage: AsyncBaseStorage | None
+      field storage: AsyncBaseStorage
       field ttl: float | None = None
+      field partition: Partition = <Partition.CREDENTIAL: 'credential'>
   class HttpOptions(object)(*, transport: 'httpx2.AsyncBaseTransport | None' = None, headers: 'Mapping[str, str]' = <factory>, timeout: 'Timeouts | float' = <factory>, follow_redirects: 'bool' = True, max_redirects: 'int' = 5, max_response_bytes: 'int' = 33554432, refusal_check: 'RefusalCheck | None' = None, trusted_origins: 'frozenset[str]' = frozenset(), allow_private_hosts: 'bool' = True, ssl_context: 'ssl.SSLContext | None' = None, limits: 'httpx2.Limits' = <factory>, proxy: 'str | None' = None, user_agent: 'str | None' = None, cookies: 'bool' = False, request_id_headers: 'tuple[str, ...]' = ('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray'), observers: 'tuple[Observer, ...]' = (), middleware: 'tuple[Middleware, ...]' = ()) -> 'None'
       field transport: httpx2.AsyncBaseTransport | None = None
       field headers: Mapping[str, str] = <factory>
@@ -329,8 +368,13 @@
   class Minted(Generic)(token: 'TokenT', lifetime: 'float') -> 'None'
       field token: TokenT
       field lifetime: float
+  class NotModified(object)(validator: 'Validator') -> 'None'
+      field validator: Validator
   class Observer(Protocol)(*args, **kwargs)
       def notify(self, event: 'Event') -> 'None'
+  class Partition(Enum)(*values)
+      CREDENTIAL = 'credential'
+      SHARED = 'shared'
   class PathFragmentFilter(BaseFilter)(fragments: 'tuple[str, ...]') -> 'None'
       def apply(self, item: 'Request', body: 'bytes | None') -> 'bool'
       def needs_body(self) -> 'bool'
@@ -410,7 +454,13 @@
       field routes: tuple[Route, ...] = ()
   class UpstreamStatusError(ClientError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
       property problem
+  class Validator(object)(*, etag: 'str | None' = None, last_modified: 'str | None' = None) -> 'None'
+      field etag: str | None = None
+      field last_modified: str | None = None
+      def headers(self) -> 'dict[str, str]'
+      classmethod of(cls, response: 'httpx2.Response', *, held: 'Validator | None' = None) -> 'Validator'
   def as_bytes(resp: 'httpx2.Response', /) -> 'bytes'
+  def conditional(reader: 'Reader[T]', *, validator: 'Validator | None' = None) -> 'Expect[Fresh[T] | NotModified]'
   def event_stream(resp: 'httpx2.Response', /) -> 'list[bytes]'
   def json_reader(decode: 'Callable[[bytes], T]', *, allow_empty_body: 'bool' = False, check: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
   def nothing(resp: 'httpx2.Response', /) -> 'None'

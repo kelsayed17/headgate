@@ -17,8 +17,9 @@ import pytest
 from hishel import AsyncSqliteStorage, FilterPolicy
 
 from headgate import HttpCache, HttpOptions, RateLimitError, TransportPolicy
-from headgate._cache import CACHE_DEGRADATIONS, MethodFilter, StatusCodeFilter
 from headgate._core import Event, RateLimited, Timing
+from headgate.cache import MethodFilter, StatusCodeFilter
+from headgate.cache._transport import CACHE_DEGRADATIONS
 from headgate.ratelimit import Rate, RateBudget
 from headgate.retry import NO_RETRY
 from tests.support.breakers import failures

@@ -24,7 +24,7 @@ import httpx2
 import pytest
 
 from headgate import HttpOptions, Timeouts, TransportPolicy
-from headgate._cache import HttpCache
+from headgate.cache import HttpCache
 from headgate.errors import ClientTimeoutError
 from headgate.ratelimit import UNLIMITED
 from headgate.retry import RetryPolicy

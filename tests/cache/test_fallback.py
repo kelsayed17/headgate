@@ -28,7 +28,13 @@ import pytest
 from hishel import AsyncBaseStorage, AsyncSqliteStorage, BaseFilter, Entry, FilterPolicy, Request, Response
 
 from headgate import HttpCache, HttpOptions, TransportError
-from headgate._cache import CACHE_DEGRADATIONS, CACHE_DEGRADED_EXT, HOST_UNTESTED, CacheStorageError, host_untested
+from headgate.cache._transport import (
+    CACHE_DEGRADATIONS,
+    CACHE_DEGRADED_EXT,
+    HOST_UNTESTED,
+    CacheStorageError,
+    host_untested,
+)
 from tests.cache._helpers import (
     NETWORK_BODY,
     FaultyStorage,

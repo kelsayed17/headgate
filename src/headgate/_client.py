@@ -36,7 +36,6 @@ import httpx2
 
 from headgate._auth import failed_on_auth_hop
 from headgate._body import read_capped, read_head
-from headgate._cache import host_untested
 from headgate._core import (
     BREAKER_GATE,
     SILENT,
@@ -75,6 +74,7 @@ from headgate._stack import build_http_client, build_transport_stack
 from headgate._url import render_path, route_template
 from headgate.breaker import BreakerOpenError, CircuitBreaker
 from headgate.breaker._registry import NO_BREAKER
+from headgate.cache._transport import host_untested
 from headgate.errors import CircuitOpenError, ClientError, ClientTimeoutError, RateLimitError
 from headgate.ratelimit import BudgetPausedError
 from headgate.retry import NO_RETRY, RetryPolicy
@@ -231,6 +231,8 @@ class AsyncBaseClient:
         redirects, the body cap, cookies, observers and middleware (:class:`~headgate.HttpOptions`).
 
         :raises TypeError: for an upstream ``httpx`` *auth*.
+        :raises ClientConfigurationError: for a cache partitioned by credential with an *auth* that does not declare
+            its credentials (see :class:`~headgate.cache.Partition`).
         """
         reject_upstream_httpx(auth, what="auth")
         # Transport policy off (headgate.policy): no retries and no breaker. The rate limiter checks for itself.
@@ -245,7 +247,7 @@ class AsyncBaseClient:
         self._request_id_headers = http.request_id_headers
         self._timeout = http.timeout
         self._emitter = Emitter(http.observers) if http.observers else SILENT
-        stack = build_transport_stack(rate, policy, http, self._timing)
+        stack = build_transport_stack(rate, policy, http, self._timing, auth)
         self._http_client = build_http_client(base_url=base_url, auth=auth, http=http, transport=stack)
 
     async def __aenter__(self) -> Self:
@@ -532,7 +534,8 @@ class AsyncBaseClient:
 
         The breaker is driven here rather than by a transport layer because this is the only scope that spans both the
         send and the body read. It is keyed on the origin the request is addressed to, so a followed redirect's hops
-        are charged to that origin. What the exchange charges it with is decided in :meth:`_sent`. Every transition
+        are charged to that origin. What the exchange charges it with is decided in :meth:`_sent`; a cache hit, and an
+        outcome the cache marked :data:`~headgate.cache._transport.HOST_UNTESTED`, tested nothing. Every transition
         the call causes is emitted as ``BreakerChanged``, and the call's context carries
         :data:`~headgate._core.BREAKER_GATE`, so the retry layer stops re-sending once the breaker refuses.
         """
@@ -584,7 +587,8 @@ class AsyncBaseClient:
           error of our own side's making (:data:`_LOCAL_FAILURES`, and an invalid URL); a failure on a hop an auth flow
           made to mint a credential (that is the credential host's failure); and an outcome another request's attempt
           produced (a cache hit, a stored 5xx served from the cache, or a download or failure the cache shared from an
-          identical GET, :data:`~headgate._cache.HOST_UNTESTED`), since only the request that fetched tested the origin.
+          identical GET, :data:`~headgate.cache._transport.HOST_UNTESTED`), since only the request that fetched tested
+          the origin.
         """
         request = prepared.request
         try:
@@ -627,6 +631,8 @@ class AsyncBaseClient:
         """
         spec: Expect[T] = expect if isinstance(expect, Expect) else Expect(expect)
         prepared = self._prepare(call)
+        for name, value in spec.headers.items():
+            prepared.request.headers.setdefault(name, value)
         async with self._reported(prepared.context) as report:
             async with self._deadline(prepared), self._exchange(prepared) as streamed:
                 resp = await read_capped(streamed, self._max_response_bytes, self._site(prepared))

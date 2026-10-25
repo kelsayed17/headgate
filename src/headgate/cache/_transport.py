@@ -1,23 +1,23 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The opt-in HTTP response cache: hishel's transport, made safe to share and to fail.
+"""The cache transport: hishel's, made safe to share between credentials and to fail.
 
 `hishel <https://hishel.com>`_'s :class:`hishel.httpx2.AsyncCacheTransport` sits below retry and above the rate
 limiter (see :mod:`headgate._stack`), so a cache hit short-circuits before the retry layer and spends no rate token.
 ``AsyncBaseClient`` marks a hit so the circuit breaker records neither a success nor a failure for it; admission is
 still decided before the fetch, so a hit is refused while the breaker is open.
 
-**Filters.** hishel ships no concrete filters; :class:`hishel.BaseFilter` is its extension point.
-:class:`PathFragmentFilter`, :class:`MethodFilter` and :class:`StatusCodeFilter` compose into a per-client
-:class:`hishel.FilterPolicy`, which **stores whenever a request filter matches and an allowed status comes back, even
-past an RFC 9111 ``no-store``**. That is the point for a provider that sends ``no-store`` or no cache headers at all,
-where :class:`hishel.SpecificationPolicy` (hishel's default) would cache nothing. Store only the 200s (a
-:class:`StatusCodeFilter`) so an error body never poisons the cache. Filters run inside hishel and see the full resolved
-URL, so no other layer evaluates a rule. Body-keyed POST caching is hishel's own ``FilterPolicy.use_body_key``.
+**Credentials.** hishel sees the request through the client's :class:`~headgate.cache._credentials.CredentialScope`:
+no credential header, parameter or userinfo, and a partition label in the URL fragment. The layer below hishel puts
+the real URL and headers back for the network, so what is sent is exactly what the caller built.
 
 **Lifetimes.** A client's constant TTL rides the ``hishel_ttl`` request extension: :class:`ResilientCacheTransport`
-stamps :class:`HttpCache`'s ``ttl``, and ``AsyncBaseClient`` stamps a per-call ``cache_ttl=``, which wins.
+stamps :class:`~headgate.cache.HttpCache`'s ``ttl``, and ``AsyncBaseClient`` stamps a per-call ``cache_ttl=``, which
+wins.
+
+**Events.** Each request this layer answers emits a :class:`~headgate._core.CacheResult` on its call's context: a hit,
+a miss (answered by the network, stored or not), a degraded fetch, or a download shared with an identical GET.
 
 **Faults.** A storage fault never fails a request that would otherwise succeed. Every call into the storage, and every
 body it streams, goes through a guard that raises any backend failure as :class:`CacheStorageError`; the transport
@@ -47,16 +47,18 @@ from operator import itemgetter
 from typing import TYPE_CHECKING, override
 
 import httpx2
-from hishel import AsyncBaseStorage, BaseFilter, CachePolicy, Entry, FilterPolicy, Request, Response
+from hishel import AsyncBaseStorage, Entry, Request, Response
 from hishel.httpx2 import AsyncCacheTransport
 
-from headgate._core import CallContext
-from headgate._url import is_secret_param
+from headgate._core import CacheOutcome, CacheResult, CallContext
+from headgate.cache._credentials import CredentialScope
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
 
 if TYPE_CHECKING:
     import uuid
     from collections.abc import AsyncIterator, Callable, Generator, Mapping
+
+    from headgate.cache._policy import HttpCache
 
 
 __all__ = [
@@ -64,76 +66,9 @@ __all__ = [
     "CACHE_DEGRADED_EXT",
     "HOST_UNTESTED",
     "CacheStorageError",
-    "HttpCache",
-    "MethodFilter",
-    "PathFragmentFilter",
     "ResilientCacheTransport",
-    "StatusCodeFilter",
     "host_untested",
 ]
-
-
-@dataclass(frozen=True, slots=True)
-class HttpCache:
-    """A client's opt-in HTTP response cache: which responses to keep, where, and for how long by default.
-
-    ``policy`` decides what is stored. ``storage`` is the hishel store, which many clients may share; ``None`` turns
-    caching off for the client. ``ttl`` is the client's default lifetime in seconds, which a per-call ``cache_ttl=``
-    overrides.
-    """
-
-    policy: FilterPolicy
-    storage: AsyncBaseStorage | None
-    ttl: float | None = None
-
-
-# Filters. Each decides from the request line or the response status alone, so none needs the body.
-
-
-class PathFragmentFilter(BaseFilter[Request]):
-    """Cache a request whose URL path contains any of *fragments*."""
-
-    def __init__(self, fragments: tuple[str, ...]) -> None:
-        self._fragments = fragments
-
-    @override
-    def needs_body(self) -> bool:
-        return False
-
-    @override
-    def apply(self, item: Request, body: bytes | None) -> bool:
-        path = httpx2.URL(item.url).path
-        return any(fragment in path for fragment in self._fragments)
-
-
-class MethodFilter(BaseFilter[Request]):
-    """Cache a request whose method is in *methods* (upper case, as httpx2 sends it)."""
-
-    def __init__(self, methods: frozenset[str]) -> None:
-        self._methods = methods
-
-    @override
-    def needs_body(self) -> bool:
-        return False
-
-    @override
-    def apply(self, item: Request, body: bytes | None) -> bool:
-        return item.method in self._methods
-
-
-class StatusCodeFilter(BaseFilter[Response]):
-    """Store a response whose status is in *codes*, so an error body never poisons the cache."""
-
-    def __init__(self, codes: frozenset[int]) -> None:
-        self._codes = codes
-
-    @override
-    def needs_body(self) -> bool:
-        return False
-
-    @override
-    def apply(self, item: Response, body: bytes | None) -> bool:
-        return item.status_code in self._codes
 
 
 # Storage faults.
@@ -238,7 +173,10 @@ class _CacheCall:
     """One request's trip through hishel: what the layer below puts back, and what it hands up."""
 
     url: httpx2.URL
-    """The request's own URL, credential query params included."""
+    """The request's own URL, credentials included."""
+
+    headers: httpx2.Headers
+    """The request's own headers, credentials included."""
 
     extensions: Mapping[str, object]
     """The request's own extensions, which hishel drops."""
@@ -281,15 +219,6 @@ def _mark_host_untested[E: BaseException](exc: E) -> E:
     return exc
 
 
-def _without_secret_params(url: httpx2.URL) -> httpx2.URL:
-    """Return *url* without its credential query params, or *url* itself when it has none."""
-    params = url.params.multi_items()
-    kept = tuple((name, value) for name, value in params if not is_secret_param(name))
-    if len(kept) == len(params):
-        return url
-    return url.copy_with(params=httpx2.QueryParams(kept))
-
-
 async def _close_quietly(*responses: httpx2.Response | None) -> None:
     """Close each response, suppressing a close failure so it cannot replace the error being handled."""
     for response in responses:
@@ -306,9 +235,10 @@ class _RestoreRequest(httpx2.AsyncBaseTransport):
     a timeout from, so without this layer a cache miss to a host that accepts and never answers waits forever. The
     extensions go back with ``setdefault``, so what hishel computed for itself (``hishel_ttl`` and friends) wins.
 
-    The URL goes back as the caller sent it. :class:`ResilientCacheTransport` hands hishel the URL without its
-    credential query params, because hishel persists the request URL with every entry and matches a hit by comparing
-    it; the network still needs them, in their original order and multiplicity.
+    The URL and headers go back as the caller sent them. :class:`ResilientCacheTransport` hands hishel a view without
+    credentials (:meth:`~headgate.cache._credentials.CredentialScope.view`), because hishel persists the request with
+    every entry and matches a hit by comparing its URL; the network still needs them, in their original order and
+    multiplicity. A ``FilterPolicy`` adds no request header of its own, so the caller's headers go back whole.
 
     Every response handed up is recorded, because hishel sends before it stores: when the store fails, the network
     response it holds is never read or closed, and its pooled connection stays checked out until the cache layer closes
@@ -324,6 +254,7 @@ class _RestoreRequest(httpx2.AsyncBaseTransport):
         for key, value in call.extensions.items():
             request.extensions.setdefault(key, value)
         request.url = call.url
+        request.headers = call.headers
         response = await self._inner.handle_async_request(request)
         call.handed_up.append(response)
         return response
@@ -466,6 +397,13 @@ class _InFlight:
     outcome: _Outcome = _Unshared.TRY_AGAIN
 
 
+def _report(request: httpx2.Request, outcome: CacheOutcome) -> None:
+    """Emit a :class:`~headgate._core.CacheResult` with *outcome* on *request*'s call, when anyone is listening."""
+    context = CallContext.find(request)
+    if context is not None and context.observed:
+        context.emit(CacheResult(call=context.info, outcome=outcome))
+
+
 def _sharing_key(request: httpx2.Request) -> _SharingKey:
     """Return what two in-flight GETs must agree on to share one download.
 
@@ -497,8 +435,13 @@ class ResilientCacheTransport(AsyncCacheTransport):
     **The storage is never closed here.** One storage may serve many clients, so whoever created it closes it;
     ``aclose()`` closes only the transport below.
 
-    **The client's default TTL** (:class:`HttpCache`'s ``ttl``) is stamped as ``hishel_ttl`` on each request that does
-    not already carry one from a per-call ``cache_ttl=``. The policy, not the TTL, decides what is stored.
+    **Credentials never reach the storage**, and each credential's entries stay its own: hishel sees *scope*'s view
+    of every request (:class:`~headgate.cache._credentials.CredentialScope`). A transport built without one caches as a
+    client without auth would.
+
+    **The client's default TTL** (:class:`~headgate.cache.HttpCache`'s ``ttl``) is stamped as ``hishel_ttl`` on each
+    request that does not already carry one from a per-call ``cache_ttl=``. The policy, not the TTL, decides what is
+    stored.
 
     **Simultaneous identical GETs share one download.** hishel has no request coalescing, so an identical GET that
     arrives while the first is still fetching would find nothing in storage and go to the network too. Instead it waits
@@ -514,16 +457,20 @@ class ResilientCacheTransport(AsyncCacheTransport):
     def __init__(
         self,
         next_transport: httpx2.AsyncBaseTransport,
-        storage: AsyncBaseStorage,
-        policy: CachePolicy | None = None,
+        cache: HttpCache,
         *,
         max_body_bytes: int,
-        ttl: float | None = None,
+        scope: CredentialScope | None = None,
     ) -> None:
-        super().__init__(_RestoreRequest(next_transport), storage=_GuardedStorage(storage), policy=policy)
+        """Cache per *cache* over *next_transport*, holding bodies up to *max_body_bytes*, viewing requests by *scope*.
+
+        Without a *scope*, requests are viewed as a client with no auth would send them.
+        """
+        super().__init__(_RestoreRequest(next_transport), storage=_GuardedStorage(cache.storage), policy=cache.policy)
+        self._scope = CredentialScope() if scope is None else scope
         self._live = next_transport
         self._max_body_bytes = max_body_bytes
-        self._ttl = ttl
+        self._ttl = cache.ttl
         self._in_flight: dict[_SharingKey, _InFlight] = {}
 
     @override
@@ -539,8 +486,10 @@ class ResilientCacheTransport(AsyncCacheTransport):
             await in_flight.finished.wait()
             outcome = in_flight.outcome
             if isinstance(outcome, NETWORK_ERRORS):
+                _report(request, CacheOutcome.SHARED)
                 raise _shared_failure(outcome)
             if isinstance(outcome, _Download):
+                _report(request, CacheOutcome.SHARED)
                 return outcome.response()
             if outcome is _Unshared.FETCH_OWN:
                 response, _ = await self._fetch(request)
@@ -571,10 +520,11 @@ class ResilientCacheTransport(AsyncCacheTransport):
     async def _fetch(self, request: httpx2.Request) -> tuple[httpx2.Response, bytes | None]:
         """Fetch *request* through the cache, or live when the storage fails: the response, and its body when held."""
         try:
-            return await self._fetch_cached(request)
+            fetched = await self._fetch_cached(request)
         except CacheStorageError as fault:
             # Counted before the live fetch, so a fallback that then fails on the network too cannot hide the outage.
             CACHE_DEGRADATIONS[request.url.host] += 1
+            _report(request, CacheOutcome.DEGRADED)
             live = await self._live.handle_async_request(request)
             # The query is dropped, since a key-in-the-URL provider carries its credential there.
             live.extensions[CACHE_DEGRADED_EXT] = f"{request.url.copy_with(query=None, userinfo=b'')}: {fault}"[:240]
@@ -583,13 +533,15 @@ class ResilientCacheTransport(AsyncCacheTransport):
             except BaseException:
                 await _close_quietly(live)
                 raise
+        _report(request, CacheOutcome.HIT if fetched[0].extensions.get("hishel_from_cache") else CacheOutcome.MISS)
+        return fetched
 
     async def _fetch_cached(self, request: httpx2.Request) -> tuple[httpx2.Response, bytes | None]:
         """Fetch *request* through hishel, closing every response it abandons when anything goes wrong."""
-        call = _CacheCall(url=request.url, extensions=request.extensions)
+        call = _CacheCall(url=request.url, headers=request.headers, extensions=request.extensions)
         token = _CALL.set(call)
-        # Restored in ``finally``: the retry layer above re-sends this same request object, and must send its key.
-        request.url = _without_secret_params(call.url)
+        # Restored in ``finally``: the retry layer above re-sends this same request object, credentials and all.
+        request.url, request.headers = self._scope.view(request)
         response: httpx2.Response | None = None
         try:
             response = await super().handle_async_request(request)
@@ -599,4 +551,5 @@ class ResilientCacheTransport(AsyncCacheTransport):
             raise
         finally:
             request.url = call.url
+            request.headers = call.headers
             _CALL.reset(token)

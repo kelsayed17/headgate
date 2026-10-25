@@ -12,7 +12,8 @@ import httpx2
 from hishel import AsyncBaseStorage, AsyncSqliteStorage, Entry, FilterPolicy, Request, Response
 
 from headgate import HttpOptions, TransportPolicy
-from headgate._cache import MethodFilter, PathFragmentFilter, ResilientCacheTransport, StatusCodeFilter
+from headgate.cache import HttpCache, MethodFilter, PathFragmentFilter, StatusCodeFilter
+from headgate.cache._transport import ResilientCacheTransport
 from headgate.ratelimit import UNLIMITED
 from tests.support.clients import StubClient
 
@@ -20,7 +21,8 @@ if TYPE_CHECKING:
     import uuid
     from collections.abc import AsyncIterator, Callable
 
-    from headgate import HttpCache, Rate
+    from headgate import Rate
+    from headgate.cache._credentials import CredentialScope
 
 #: A body cap no test body reaches.
 GENEROUS_CAP = 1024 * 1024
@@ -70,11 +72,14 @@ def cache_transport(
     *,
     policy: FilterPolicy | None = None,
     cap: int = GENEROUS_CAP,
+    scope: CredentialScope | None = None,
 ) -> ResilientCacheTransport:
-    """Build a cache transport over *network*, caching every GET's 200 into *storage* unless *policy* says otherwise."""
-    return ResilientCacheTransport(
-        next_transport=network, storage=storage, policy=policy or every_get_policy(), max_body_bytes=cap
-    )
+    """Build a cache transport over *network*, caching every GET's 200 into *storage* unless *policy* says otherwise.
+
+    *scope* views requests as a client with that auth would; without one, as a client with no auth.
+    """
+    cache = HttpCache(policy=policy or every_get_policy(), storage=storage)
+    return ResilientCacheTransport(network, cache, max_body_bytes=cap, scope=scope)
 
 
 class Network(httpx2.AsyncBaseTransport):

@@ -33,10 +33,10 @@ if TYPE_CHECKING:
     import ssl
     from collections.abc import Callable, Iterable, Mapping
 
-    from headgate._cache import HttpCache
     from headgate._core import Observer
     from headgate._middleware import Middleware
     from headgate._responses import RefusalCheck
+    from headgate.cache import HttpCache
     from headgate.ratelimit import RateRule
 
 __all__ = [
