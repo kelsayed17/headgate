@@ -184,6 +184,9 @@ class _CacheCall:
     handed_up: list[httpx2.Response] = field(default_factory=list)
     """Every network response the layer below returned, for the cache layer to close if hishel abandons one."""
 
+    set_cookies: list[str] = field(default_factory=list)
+    """The ``Set-Cookie`` values of the latest network response, kept from hishel and handed back to the caller."""
+
 
 #: The call in progress in this task. A ContextVar rather than instance state because one transport serves every
 #: concurrent request on a client. Set only around hishel, so the layer below never runs without it.
@@ -240,6 +243,10 @@ class _RestoreRequest(httpx2.AsyncBaseTransport):
     every entry and matches a hit by comparing its URL; the network still needs them, in their original order and
     multiplicity. A ``FilterPolicy`` adds no request header of its own, so the caller's headers go back whole.
 
+    A response's ``Set-Cookie`` is taken off before hishel sees it, so no stored entry carries one: a cookie is a
+    session, the caller's alone, and a hit would otherwise hand it to every client on the storage. The cache layer puts
+    it back on the response it hands up for this request.
+
     Every response handed up is recorded, because hishel sends before it stores: when the store fails, the network
     response it holds is never read or closed, and its pooled connection stays checked out until the cache layer closes
     it.
@@ -257,6 +264,9 @@ class _RestoreRequest(httpx2.AsyncBaseTransport):
         request.headers = call.headers
         response = await self._inner.handle_async_request(request)
         call.handed_up.append(response)
+        call.set_cookies = response.headers.get_list("set-cookie")
+        if call.set_cookies:
+            del response.headers["set-cookie"]
         return response
 
     @override
@@ -545,6 +555,9 @@ class ResilientCacheTransport(AsyncCacheTransport):
         response: httpx2.Response | None = None
         try:
             response = await super().handle_async_request(request)
+            if call.set_cookies and not response.extensions.get("hishel_from_cache"):
+                cookies = [("set-cookie", value) for value in call.set_cookies]
+                response.headers = httpx2.Headers([*response.headers.multi_items(), *cookies])
             return await _buffer_up_to(response, self._max_body_bytes, sources=(response, *call.handed_up))
         except BaseException:
             await _close_quietly(response, *call.handed_up)

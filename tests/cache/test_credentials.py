@@ -217,15 +217,11 @@ async def test_an_auth_that_declares_nothing_may_share_explicitly(storage: Async
     assert len(network.sent) == 1
 
 
-def test_a_built_in_auth_partitions_once_it_declares_its_credentials(storage: AsyncSqliteStorage) -> None:
-    """``StaticHeaderAuth`` gets a credential partition when it implements the protocol, and is refused otherwise."""
+def test_a_built_in_auth_gets_a_credential_partition(storage: AsyncSqliteStorage) -> None:
+    """``StaticHeaderAuth`` declares its credentials, so a credential-partitioned cache accepts it."""
     cache = HttpCache(policy=series_policy(), storage=storage)
-    auth = StaticHeaderAuth({"X-Api-Key": "k"})
-    if isinstance(auth, CredentialStamper):
-        assert isinstance(credential_scope(cache, auth), CredentialScope)
-    else:
-        with pytest.raises(ClientConfigurationError):
-            credential_scope(cache, auth)
+
+    assert isinstance(credential_scope(cache, StaticHeaderAuth({"X-Api-Key": "k"})), CredentialScope)
 
 
 # What the network gets, and what the storage keeps.
@@ -286,6 +282,49 @@ async def _store_and_inspect(secrets: _Secrets) -> tuple[int, bytes]:
         return len(network.sent), await _stored_bytes(connection)
     finally:
         await storage.close()
+
+
+class _SetsCookie(httpx2.AsyncBaseTransport):
+    """The network leg: answers every request 200 with a session cookie, and counts them."""
+
+    def __init__(self) -> None:
+        """Start with no requests."""
+        self.sent = 0
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        self.sent += 1
+        cookies = [("Set-Cookie", f"session={_SESSION}; Secure"), ("Set-Cookie", "theme=dark")]
+        return httpx2.Response(httpx2.codes.OK, headers=[*cookies, ("X-Kept", "1")], content=b"body")
+
+
+#: The session a response sets: it must reach the caller and never the storage.
+_SESSION = "s3ss10n-cookie-value"
+
+
+async def test_a_set_cookie_is_handed_to_the_caller_and_never_stored() -> None:
+    """Give the fetching request every ``Set-Cookie`` it got; store none, so a hit carries none."""
+    connection = await anysqlite.connect(":memory:")
+    storage = AsyncSqliteStorage(connection=connection)
+    network = _SetsCookie()
+    transport = cache_transport(storage, network, policy=series_policy())
+    try:
+        fetched = await transport.handle_async_request(httpx2.Request("GET", _URL))
+        await fetched.aread()
+        hit = await transport.handle_async_request(httpx2.Request("GET", _URL))
+        await hit.aread()
+        stored = await _stored_bytes(connection)
+    finally:
+        await storage.close()
+
+    assert network.sent == 1, "the second request hit the stored entry"
+    assert fetched.headers.get_list("set-cookie") == [f"session={_SESSION}; Secure", "theme=dark"]
+    assert (fetched.headers["x-kept"], hit.headers["x-kept"]) == ("1", "1")
+    assert hit.extensions.get("hishel_from_cache") is True
+    assert "set-cookie" not in hit.headers
+    assert b"body" in stored
+    assert _SESSION.encode() not in stored
+    assert b"theme" not in stored
 
 
 # The view hishel gets, request by request.

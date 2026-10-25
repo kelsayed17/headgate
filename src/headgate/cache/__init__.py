@@ -12,7 +12,8 @@ storage fault degrades to the network instead of failing the call.
   :attr:`Partition.SHARED`.
 * **Credentials are never stored.** ``Authorization``, ``Proxy-Authorization``, ``Cookie``, every header and query
   parameter the auth declares, every well-known secret query parameter and the URL's userinfo are removed from what is
-  stored, and restored, unchanged, for the network.
+  stored, and restored, unchanged, for the network. A response's ``Set-Cookie`` is never stored either; the request
+  that fetched it still receives it.
 * **TTL, not revalidation.** A ``FilterPolicy`` cache serves an entry until its TTL ends and never revalidates it.
   :func:`conditional` is the caller-driven alternative: it sends the caller's :class:`Validator` and reads a 304 as
   :class:`NotModified`.
