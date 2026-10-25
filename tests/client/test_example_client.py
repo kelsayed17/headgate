@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Mapping
-from pathlib import Path
 
 import httpx2
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "examples"))
 import series_client as example
 
 from headgate import ResponseParseError

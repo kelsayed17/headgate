@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-_ROOT = Path(__file__).parent.parent
+_ROOT = Path(__file__).parents[2]
 _APP = "pri" + "sm"  # the application this was extracted from, spelled so this file does not contain it
 _FORBIDDEN = re.compile(
     rf"{_APP}|^\s*(import|from)\s+httpx(?![\w-])|getenv|ibkr|\bCLAUDE\b|Example, Example|serde\.|\.ruff\.toml|brokerage/positions|\benviron\b",

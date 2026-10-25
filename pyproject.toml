@@ -48,6 +48,7 @@ asyncio_default_fixture_loop_scope = "session"
 addopts = "--import-mode=importlib"
 markers = ["transport_policy: the test's subject is the retry/breaker/throttle, so it keeps the real rate-limiter wait"]
 testpaths = ["tests"]
+pythonpath = ["examples"]
 
 [tool.ruff]
 line-length = 120
