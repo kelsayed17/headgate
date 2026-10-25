@@ -11,6 +11,8 @@ from headgate import HttpOptions, Rate, TransportPolicy
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
+    import httpx2
+
     from headgate.events import Event, Observer
     from headgate.testing import FakeTransport
 
@@ -35,13 +37,18 @@ class Recorder:
 
 
 def client(
-    fake: FakeTransport, *observers: Observer, policy: TransportPolicy | None = None, http: HttpOptions | None = None
+    fake: FakeTransport,
+    *observers: Observer,
+    policy: TransportPolicy | None = None,
+    http: HttpOptions | None = None,
+    auth: httpx2.Auth | None = None,
 ) -> StubClient:
-    """Build a client for :data:`BASE` over *fake*, reporting to *observers*."""
+    """Build a client for :data:`BASE` over *fake*, reporting to *observers*, with *http*'s other options."""
     options = http or HttpOptions()
     return StubClient(
         base_url=BASE,
         rate=RATE,
+        auth=auth,
         policy=policy or TransportPolicy(),
         http=HttpOptions(
             transport=fake,

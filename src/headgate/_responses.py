@@ -20,6 +20,7 @@ on :func:`json_reader`.
 
 from __future__ import annotations
 
+import functools
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -130,7 +131,6 @@ class Expect[T]:
     ok: Reader[T]
     answers: Mapping[int, Reader[T]] = field(default_factory=dict)
     accept: str | None = field(default=None, kw_only=True)
-    _ranges: tuple[tuple[str, str], ...] = field(default=(), init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Refuse every unclaimable status in ``answers`` and a malformed ``accept``, then freeze ``answers``."""
@@ -139,7 +139,7 @@ class Expect[T]:
         # A frozen, slotted dataclass refuses plain assignment even here; object.__setattr__ is the documented route.
         object.__setattr__(self, "answers", MappingProxyType(dict(self.answers)))
         if self.accept is not None:
-            object.__setattr__(self, "_ranges", _media_ranges(self.accept))
+            _media_ranges(self.accept)
 
     def accepts(self, resp: httpx2.Response) -> bool:
         """Return whether *resp*'s ``Content-Type`` is one ``accept`` names; always ``True`` without ``accept``.
@@ -149,7 +149,7 @@ class Expect[T]:
         (RFC 6839) matches its base type, so ``application/problem+json`` is an ``application/json``. An empty body
         (a 204, a HEAD) has nothing to check, and passes.
         """
-        if not self._ranges or not resp.content:
+        if self.accept is None or not resp.content:
             return True
         found = _media_type(resp.headers.get("content-type", ""))
         if found is None:
@@ -158,7 +158,7 @@ class Expect[T]:
         suffix = subtype.rpartition("+")[2]
         return any(
             want_kind in {"*", kind} and want_subtype in {"*", subtype, suffix}
-            for want_kind, want_subtype in self._ranges
+            for want_kind, want_subtype in _media_ranges(self.accept)
         )
 
     def on[E](self, status: int, read: Reader[E]) -> Expect[T | E]:
@@ -179,6 +179,9 @@ class Expect[T]:
         return Expect(self.ok, widened, accept=self.accept)
 
 
+#: How many distinct ``accept`` values keep their parsed form: far more than any client declares.
+_PARSED_ACCEPTS: Final = 256
+
 #: A media type's ``type/subtype``, each an RFC 9110 token, lower-cased.
 _MEDIA_TYPE: Final = re.compile(r"([!#$%&'*+\-.^_`|~0-9a-z]+)/([!#$%&'*+\-.^_`|~0-9a-z]+)")
 
@@ -189,8 +192,12 @@ def _media_type(text: str) -> tuple[str, str] | None:
     return None if match is None else (str(match[1]), str(match[2]))
 
 
+@functools.lru_cache(maxsize=_PARSED_ACCEPTS)
 def _media_ranges(accept: str) -> tuple[tuple[str, str], ...]:
-    """Return the media ranges a comma-separated *accept* names; ``ValueError`` for an empty or malformed one."""
+    """Return the media ranges a comma-separated *accept* names; ``ValueError`` for an empty or malformed one.
+
+    Cached, since an ``accept`` is a constant of the endpoint method, checked on every response it reads.
+    """
     ranges: list[tuple[str, str]] = []
     for item in accept.split(","):
         found = _media_type(item)

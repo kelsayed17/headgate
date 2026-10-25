@@ -35,10 +35,12 @@ _PUBLIC_MODULES = (
     "headgate.events",
     "headgate.health",
     "headgate.msgspec",
+    "headgate.otel",
     "headgate.policy",
     "headgate.pydantic",
     "headgate.ratelimit",
     "headgate.retry",
+    "headgate.testing",
 )
 
 #: An object's address in a default value's ``repr``, which differs between runs.

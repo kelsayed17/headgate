@@ -1,0 +1,503 @@
+# serializer version: 1
+# name: test_the_event_sequence_matches_the_snapshot[breaker_opening]
+  list([
+    dict({
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'event': 'CallStarted',
+    }),
+    dict({
+      'attempt': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'AttemptFinished',
+      'status_code': 503,
+    }),
+    dict({
+      'attempts': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': 'UpstreamStatusError',
+      'event': 'CallFinished',
+      'status_code': None,
+    }),
+    dict({
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'event': 'CallStarted',
+    }),
+    dict({
+      'attempts': 0,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': 'CircuitOpenError',
+      'event': 'CallFinished',
+      'status_code': None,
+    }),
+  ])
+# ---
+# name: test_the_event_sequence_matches_the_snapshot[cache_degraded]
+  list([
+    dict({
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'event': 'CallStarted',
+    }),
+    dict({
+      'attempt': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'AttemptFinished',
+      'status_code': 200,
+    }),
+    dict({
+      'attempts': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'CallFinished',
+      'status_code': 200,
+    }),
+  ])
+# ---
+# name: test_the_event_sequence_matches_the_snapshot[cache_hit]
+  list([
+    dict({
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'event': 'CallStarted',
+    }),
+    dict({
+      'attempt': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'AttemptFinished',
+      'status_code': 200,
+    }),
+    dict({
+      'attempts': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'CallFinished',
+      'status_code': 200,
+    }),
+    dict({
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'event': 'CallStarted',
+    }),
+    dict({
+      'attempt': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'AttemptFinished',
+      'status_code': 200,
+    }),
+    dict({
+      'attempts': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'CallFinished',
+      'status_code': 200,
+    }),
+  ])
+# ---
+# name: test_the_event_sequence_matches_the_snapshot[deprecated]
+  list([
+    dict({
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'event': 'CallStarted',
+    }),
+    dict({
+      'attempt': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'AttemptFinished',
+      'status_code': 200,
+    }),
+    dict({
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'deprecated': True,
+      'deprecated_at': datetime.datetime(2023, 6, 30, 23, 59, 59, tzinfo=datetime.timezone.utc),
+      'event': 'Deprecated',
+      'link': None,
+      'sunset_at': datetime.datetime(2024, 6, 30, 23, 59, 59, tzinfo=datetime.timezone.utc),
+      'sunset_link': None,
+    }),
+    dict({
+      'attempts': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'CallFinished',
+      'status_code': 200,
+    }),
+  ])
+# ---
+# name: test_the_event_sequence_matches_the_snapshot[plain]
+  list([
+    dict({
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'event': 'CallStarted',
+    }),
+    dict({
+      'attempt': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'AttemptFinished',
+      'status_code': 200,
+    }),
+    dict({
+      'attempts': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'CallFinished',
+      'status_code': 200,
+    }),
+  ])
+# ---
+# name: test_the_event_sequence_matches_the_snapshot[rate_limited]
+  list([
+    dict({
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'event': 'CallStarted',
+    }),
+    dict({
+      'attempt': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'AttemptFinished',
+      'status_code': 429,
+    }),
+    dict({
+      'attempt': 2,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'AttemptFinished',
+      'status_code': 200,
+    }),
+    dict({
+      'attempts': 2,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'CallFinished',
+      'status_code': 200,
+    }),
+  ])
+# ---
+# name: test_the_event_sequence_matches_the_snapshot[retried]
+  list([
+    dict({
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'event': 'CallStarted',
+    }),
+    dict({
+      'attempt': 1,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'AttemptFinished',
+      'status_code': 503,
+    }),
+    dict({
+      'attempt': 2,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'AttemptFinished',
+      'status_code': 502,
+    }),
+    dict({
+      'attempt': 3,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'AttemptFinished',
+      'status_code': 200,
+    }),
+    dict({
+      'attempts': 3,
+      'call': dict({
+        'full_url': 'https://api.example.test/v1/x',
+        'method': 'GET',
+        'route': None,
+        'url': 'x',
+      }),
+      'error': None,
+      'event': 'CallFinished',
+      'status_code': 200,
+    }),
+  ])
+# ---
+# name: test_the_spans_match_the_snapshot[breaker_opening]
+  list([
+    dict({
+      'attributes': dict({
+        'error.type': '503',
+        'http.request.method': 'GET',
+        'http.response.status_code': 503,
+        'server.address': 'api.example.test',
+        'server.port': 443,
+        'url.full': 'https://api.example.test/v1/x',
+      }),
+      'kind': 'CLIENT',
+      'name': 'GET',
+      'status': 'ERROR',
+    }),
+    dict({
+      'attributes': dict({
+        'error.type': 'CircuitOpenError',
+        'http.request.method': 'GET',
+        'server.address': 'api.example.test',
+        'server.port': 443,
+        'url.full': 'https://api.example.test/v1/x',
+      }),
+      'kind': 'CLIENT',
+      'name': 'GET',
+      'status': 'ERROR',
+    }),
+  ])
+# ---
+# name: test_the_spans_match_the_snapshot[cache_degraded]
+  list([
+    dict({
+      'attributes': dict({
+        'http.request.method': 'GET',
+        'http.response.status_code': 200,
+        'server.address': 'api.example.test',
+        'server.port': 443,
+        'url.full': 'https://api.example.test/v1/x',
+      }),
+      'kind': 'CLIENT',
+      'name': 'GET',
+      'status': 'UNSET',
+    }),
+  ])
+# ---
+# name: test_the_spans_match_the_snapshot[cache_hit]
+  list([
+    dict({
+      'attributes': dict({
+        'http.request.method': 'GET',
+        'http.response.status_code': 200,
+        'server.address': 'api.example.test',
+        'server.port': 443,
+        'url.full': 'https://api.example.test/v1/x',
+      }),
+      'kind': 'CLIENT',
+      'name': 'GET',
+      'status': 'UNSET',
+    }),
+    dict({
+      'attributes': dict({
+        'http.request.method': 'GET',
+        'http.response.status_code': 200,
+        'server.address': 'api.example.test',
+        'server.port': 443,
+        'url.full': 'https://api.example.test/v1/x',
+      }),
+      'kind': 'CLIENT',
+      'name': 'GET',
+      'status': 'UNSET',
+    }),
+  ])
+# ---
+# name: test_the_spans_match_the_snapshot[deprecated]
+  list([
+    dict({
+      'attributes': dict({
+        'http.request.method': 'GET',
+        'http.response.status_code': 200,
+        'server.address': 'api.example.test',
+        'server.port': 443,
+        'url.full': 'https://api.example.test/v1/x',
+      }),
+      'kind': 'CLIENT',
+      'name': 'GET',
+      'status': 'UNSET',
+    }),
+  ])
+# ---
+# name: test_the_spans_match_the_snapshot[plain]
+  list([
+    dict({
+      'attributes': dict({
+        'http.request.method': 'GET',
+        'http.response.status_code': 200,
+        'server.address': 'api.example.test',
+        'server.port': 443,
+        'url.full': 'https://api.example.test/v1/x',
+      }),
+      'kind': 'CLIENT',
+      'name': 'GET',
+      'status': 'UNSET',
+    }),
+  ])
+# ---
+# name: test_the_spans_match_the_snapshot[rate_limited]
+  list([
+    dict({
+      'attributes': dict({
+        'http.request.method': 'GET',
+        'http.request.resend_count': 1,
+        'http.response.status_code': 200,
+        'server.address': 'api.example.test',
+        'server.port': 443,
+        'url.full': 'https://api.example.test/v1/x',
+      }),
+      'kind': 'CLIENT',
+      'name': 'GET',
+      'status': 'UNSET',
+    }),
+  ])
+# ---
+# name: test_the_spans_match_the_snapshot[retried]
+  list([
+    dict({
+      'attributes': dict({
+        'http.request.method': 'GET',
+        'http.request.resend_count': 2,
+        'http.response.status_code': 200,
+        'server.address': 'api.example.test',
+        'server.port': 443,
+        'url.full': 'https://api.example.test/v1/x',
+      }),
+      'kind': 'CLIENT',
+      'name': 'GET',
+      'status': 'UNSET',
+    }),
+  ])
+# ---
