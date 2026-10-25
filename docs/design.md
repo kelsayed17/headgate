@@ -140,4 +140,5 @@ The suite runs at 100% line and branch coverage with no suppression comments. Be
   layer, pagination and streams under the credential and SSRF guards, the cache over the real auths;
 - **snapshots** (syrupy) pin the public API's signatures, error messages, event sequences and OpenTelemetry spans;
 - **benchmarks** (pytest-codspeed) and deterministic memory tests guard the hot paths, and mutation testing (mutmut)
-  checks that the tests notice a changed line.
+  checks that the tests notice a changed line (see [mutation testing](mutation-testing.md) for how to run it, the latest
+  score and the equivalent mutants).

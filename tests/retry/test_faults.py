@@ -301,3 +301,22 @@ def test_respond_declares_its_json_and_its_retry_after() -> None:
 
     assert headers == [("X-Id", "7"), ("Retry-After", "2"), ("Content-Type", "application/json")]
     assert body == b'{"a": 1}'
+
+
+async def test_a_response_is_built_on_the_request_it_answers() -> None:
+    """Build a plain step's response on the request it answers."""
+    network = FaultyTransport(schedule=[Respond(204)])
+    request, _ = _request()
+
+    response = await network.handle_async_request(request)
+
+    assert response.request is request
+    await response.aclose()
+
+
+async def test_a_drop_inside_the_head_of_a_bodyless_request_is_a_write_error() -> None:
+    """Fail a request with no body whose head was cut short as a write, not as a disconnect after it."""
+    network = FaultyTransport(schedule=[DropMidBody(after_bytes=3)])
+
+    with pytest.raises(httpx2.WriteError):
+        await network.handle_async_request(httpx2.Request("GET", "https://api.test/orders"))
