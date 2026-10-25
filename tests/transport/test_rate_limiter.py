@@ -1,17 +1,20 @@
-"""Tests for async rate limiter."""
+"""``AsyncRateLimiter``'s pacing, ``Rate``'s units, and the limiter a ``PathLimiters`` rule selects."""
+
+from __future__ import annotations
 
 import asyncio
 import time
 
+import httpx2
 import pytest
 
-from headgate._rate_limit import UNLIMITED, AsyncRateLimiter, Rate
+from headgate._rate_limit import UNLIMITED, AsyncRateLimiter, PathLimiters, Rate, RateRule
 
 
 @pytest.mark.transport_policy  # the subject is the throttle's timing: keep the real wait (see no_rate_limit)
 class TestAsyncRateLimiter:
     async def test_first_call_no_delay(self) -> None:
-        # First call always returns immediately regardless of rate
+        # The first call is admitted at once, whatever the rate.
         limiter = AsyncRateLimiter(Rate.per_second(2))
         start = time.monotonic()
         await limiter.wait()
@@ -19,7 +22,7 @@ class TestAsyncRateLimiter:
         assert elapsed < 0.1
 
     async def test_second_call_respects_rate(self) -> None:
-        # 1 req/s: the second immediate call must wait ~1s
+        # 1 req/s: the second immediate call waits ~1s.
         limiter = AsyncRateLimiter(Rate.per_second(1))
         await limiter.wait()
         start = time.monotonic()
@@ -28,7 +31,7 @@ class TestAsyncRateLimiter:
         assert elapsed >= 0.5  # at least half a second with 1 req/s
 
     async def test_high_rate_no_delay(self) -> None:
-        # 100 req/s: two consecutive calls should be near-instant
+        # 100 req/s: two consecutive calls are near-instant.
         limiter = AsyncRateLimiter(Rate.per_second(100))
         await limiter.wait()
         start = time.monotonic()
@@ -37,7 +40,7 @@ class TestAsyncRateLimiter:
         assert elapsed < 0.1
 
     async def test_concurrent_calls_serialized_by_rate(self) -> None:
-        # 5 req/s over 1s: burst of 5 but 6th waits
+        # 5 req/s: a burst of 5 is admitted at once, and the 6th waits.
         limiter = AsyncRateLimiter(Rate.per_second(5))
         start = time.monotonic()
         await asyncio.gather(
@@ -49,20 +52,16 @@ class TestAsyncRateLimiter:
             limiter.wait(),
         )
         elapsed = time.monotonic() - start
-        # 6 calls at 5/s: at least 1 must wait ~0.2s
+        # The 6th waits ~0.2s.
         assert elapsed >= 0.1
 
     async def test_sub_one_max_rate_preserved_not_clamped(self) -> None:
-        # a Rate of 0.5/s means "1 request per 2 seconds" — must not silently
-        # clamp up to 1 req/s. Two back-to-back calls should be spaced by
-        # ~period/requests seconds.
+        # 0.5 req/s means one request per 2s, not a silent clamp up to 1 req/s.
         limiter = AsyncRateLimiter(Rate.per_second(0.5))
         await limiter.wait()
         start = time.monotonic()
         await limiter.wait()
         elapsed = time.monotonic() - start
-        # 0.5 req/s = 1 req per 2s; second call must wait noticeably
-        # longer than the 1 req/s case (~1s).
         assert elapsed >= 1.5, f"expected ~2s gap for 0.5 req/s, got {elapsed:.2f}s"
 
 
@@ -85,3 +84,23 @@ def test_a_sub_one_rate_scales_its_period_rather_than_clamping() -> None:
 def test_unlimited_is_a_rate() -> None:
     assert isinstance(UNLIMITED, Rate)
     assert UNLIMITED.requests == 1_000_000.0
+
+
+def test_path_limiters_pick_the_first_matching_rule_and_default_otherwise() -> None:
+    # Two rules whose fragments BOTH occur in /api/candles: "first match wins" is only observable when more than one
+    # rule can match, and the second is declared after the first so a last-match scan picks the other limiter.
+    limiters = PathLimiters(
+        default=Rate.per_second(1000),
+        rules=[RateRule("/candles", Rate.per_second(1000)), RateRule("/api", Rate.per_second(1000))],
+    )
+    (_, candles), (_, api) = limiters._rules
+
+    both = httpx2.Request("GET", "https://x/api/candles?g=1")
+    assert limiters.for_request(both) is candles, "the first matching rule must win"
+    assert limiters.for_request(both) is not api
+    assert limiters.for_request(both) is not limiters.default
+
+    only_the_second = httpx2.Request("GET", "https://x/api/ticker")
+    assert limiters.for_request(only_the_second) is api, "a request only the later rule matches still reaches it"
+
+    assert limiters.for_request(httpx2.Request("GET", "https://x/ticker")) is limiters.default

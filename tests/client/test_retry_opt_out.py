@@ -1,17 +1,8 @@
-"""The non-idempotent-write escape hatch must disable retries entirely.
+"""``retry=False``, the escape hatch for non-idempotent writes, disables retries entirely.
 
-``retry=False`` on any verb installs a zero-retry policy (one send, no re-send) for that one request. It
-replaced ``extensions=NO_RETRY`` (a ``MappingProxyType`` over
-``headgate._no_retry``) in the clients audit: a flag is visible in the
-verb's signature and greppable at the call site, where the transport extension was
-neither. The module is deleted; the four unit tests that pinned the mapping's own shape
-(zero attempts, single key, read-only, splattable) went with it, because the behaviour
-they protected is now covered by the request-level tests below.
-
-The STATIC half of this contract — which methods are required to pass the flag — lives
-in a downstream architecture test. These pin the BEHAVIOUR, so
-a signature that silently stopped threading the flag fails here rather than passing an
-AST check.
+The flag is on every verb and installs a zero-retry policy (one send, no re-send) for that one request. It is a
+keyword argument rather than a transport extension so it shows in the verb's signature and at the call site. These
+tests pin the behaviour end to end, so a verb that silently stopped threading the flag fails here.
 """
 
 from __future__ import annotations

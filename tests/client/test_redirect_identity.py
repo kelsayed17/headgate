@@ -1,14 +1,10 @@
-"""A capped response reports the URL that ANSWERED, not the one we asked for.
+"""A capped response reports the URL that ANSWERED, not the one that was sent.
 
-``AsyncBaseClient`` re-builds every response after capping its body (``read_capped``), and httpx2 derives
-``Response.url`` from the request the response carries. Rebuilding with the ORIGINAL request made every capped
-response claim the URL we SENT — indistinguishable, to a caller, from one that was never redirected.
-
-That is not cosmetic: a client can detect a missing or invalid key by a **302 to an HTML landing page under HTTP 200**
-rather than a 401. With the original request attached, the landing page's URL never reached that branch, so it could
-not fire, and a bad key surfaced as a generic ``ResponseParseError``, indistinguishable from real no-data. (A client now
-refuses the redirect and reads the 302's ``Location`` through the base client's ``refusal`` check instead; the property
-pinned here is the base client's and stands on its own.)
+``AsyncBaseClient`` rebuilds every response after capping its body (``read_capped``), and httpx2 derives
+``Response.url`` from the request the response carries. The rebuild must therefore attach the final hop's request:
+with the original one attached, a redirected response would claim the URL it was sent to and be indistinguishable,
+to a caller, from one that was never redirected. A caller that detects a bad credential by where a redirect landed
+(an HTML landing page served as a 200 rather than a 401) depends on this.
 """
 
 from __future__ import annotations
@@ -55,7 +51,7 @@ async def test_capped_response_keeps_the_redirect_history(httpx2_mock: HTTPXMock
 
 
 async def test_no_redirect_still_reports_its_own_url(httpx2_mock: HTTPXMock) -> None:
-    """The ordinary path is unchanged — this is not a redirect-only behaviour."""
+    """An unredirected response reports its own URL and an empty history."""
     client = _Client()
     httpx2_mock.add_response(text="ok")
     resp = await client.get("plain", expect=RESPONSE)

@@ -1,25 +1,15 @@
-"""Native hishel ``BaseFilter`` subclasses (no I/O).
+"""The cache's ``hishel.BaseFilter`` subclasses, which compose into a client's :class:`hishel.FilterPolicy`.
 
-These three composable filters are the native-hishel primitives each cached client composes into its own
-:class:`hishel.FilterPolicy` (in ``headgate._cache``, and in each provider's ``cache.py``).
-Each is a plain :class:`hishel.BaseFilter` — ``needs_body()`` is always ``False``
-(they inspect only the request line / status code, never the body) and
-``apply(item, body)`` returns whether the item should be cached.
-
-hishel's own :class:`hishel.Request` / :class:`hishel.Response` are constructed
-directly (positional ``method, url`` for the request; keyword ``status_code``
-for the response), matching the shape hishel hands each filter at runtime.
+Each inspects only the request line or the status code, never the body, so ``needs_body()`` is always ``False`` and
+``apply(item, body)`` says whether to cache. hishel's own :class:`hishel.Request` and :class:`hishel.Response` are built
+here in the shape hishel hands a filter at runtime.
 """
 
 from __future__ import annotations
 
 from hishel import Request, Response
 
-from headgate._cache import (
-    MethodFilter,
-    PathFragmentFilter,
-    StatusCodeFilter,
-)
+from headgate._cache import MethodFilter, PathFragmentFilter, StatusCodeFilter
 
 
 def test_path_fragment_filter_matches_any_fragment() -> None:
@@ -27,16 +17,13 @@ def test_path_fragment_filter_matches_any_fragment() -> None:
 
     assert f.needs_body() is False
 
-    # A request whose URL path contains the first fragment -> True.
-    obs = Request("GET", "https://api.stlouisfed.org/fred/series/observations?series_id=GDP")
+    obs = Request("GET", "https://api.example.test/v1/series/observations?series_id=GDP")
     assert f.apply(obs, None) is True
 
-    # A request whose URL path contains the second fragment -> True.
-    dates = Request("GET", "https://api.stlouisfed.org/fred/releases/dates")
+    dates = Request("GET", "https://api.example.test/v1/releases/dates")
     assert f.apply(dates, None) is True
 
-    # A request matching no fragment -> False.
-    quote = Request("GET", "https://api.example.com/quotes/AAPL")
+    quote = Request("GET", "https://api.example.test/quotes/AAPL")
     assert f.apply(quote, None) is False
 
 
@@ -45,10 +32,10 @@ def test_method_filter() -> None:
 
     assert f.needs_body() is False
 
-    post = Request("POST", "https://api.bls.gov/publicAPI/v2/timeseries/data/")
+    post = Request("POST", "https://api.example.test/v2/timeseries/data/")
     assert f.apply(post, None) is True
 
-    get = Request("GET", "https://api.bls.gov/publicAPI/v2/timeseries/data/")
+    get = Request("GET", "https://api.example.test/v2/timeseries/data/")
     assert f.apply(get, None) is False
 
 

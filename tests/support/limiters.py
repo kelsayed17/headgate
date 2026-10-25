@@ -1,8 +1,7 @@
-"""Find a client's rate limiters in its transport stack (the seam that replaced ``client._rate_limiter``).
+"""Find a client's rate limiters in its transport stack.
 
-The limiters live in the stack's :class:`~headgate._transports.RateLimitTransport`, under retry and, when the
-client caches, under the cache transport too. Walking the stack keeps tests off a client attribute that production code
-never needed.
+The limiters live in the stack's :class:`~headgate._rate_limit.RateLimitTransport`, under retry and, when the client
+caches, under the cache transport too.
 """
 
 from __future__ import annotations

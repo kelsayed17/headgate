@@ -7,21 +7,20 @@ from typing import TYPE_CHECKING
 import pytest
 
 from headgate._auth import StaticHeaderAuth
-from headgate._client import AsyncBaseClient
 from headgate._rate_limit import Rate
+from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
     from pytest_httpx2 import HTTPXMock
 
 
-class _Client(AsyncBaseClient):
-    """Minimal subclass."""
-
-
-def _client(base_url: str = "https://api.example") -> _Client:
-    return _Client(
-        rate=Rate.per_second(100), base_url=base_url, auth=StaticHeaderAuth({"x-api-key": "k"}), max_attempts=1
+def _client() -> StubClient:
+    return StubClient(
+        rate=Rate.per_second(100),
+        base_url="https://api.example",
+        auth=StaticHeaderAuth({"x-api-key": "k"}),
+        max_attempts=1,
     )
 
 

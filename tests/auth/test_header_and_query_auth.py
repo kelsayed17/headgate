@@ -1,16 +1,7 @@
-"""Tests for the generic httpx2.Auth family in headgate._auth.
+"""``StaticHeaderAuth`` and ``QueryParamAuth``: a fixed credential merged into every request.
 
-Each Auth subclass replaces a per-request auth hook / per-call header|param
-injection. The load-bearing invariant is **explicit-header/param precedence**:
-a caller-supplied ``headers=``/``params=`` value must still win a clash with the
-Auth flow (reproducing the pre-migration ``_request_auth_headers`` merge, which
-put auth UNDER explicit headers). All Auth classes therefore use a
-setdefault-style merge.
-
-Provider-specific Auth classes are tested in their provider test dirs:
-``ExampleCDPAuth`` in ``tests/clients/example/test_auth.py`` and
-``FinraOAuth`` in ``tests/clients/finra/test_auth.py`` — keeping this
-module (and the shared ``_auth`` it tests) provider-agnostic.
+The invariant both pin is explicit-value precedence: a caller's ``headers=`` / ``params=`` wins a clash with the auth
+flow, because each class merges setdefault-style rather than assigning.
 """
 
 from __future__ import annotations
@@ -18,24 +9,20 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from headgate._auth import QueryParamAuth, StaticHeaderAuth
-from headgate._client import AsyncBaseClient
 from headgate._rate_limit import Rate
+from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
     from pytest_httpx2 import HTTPXMock
 
 
-class _StubClient(AsyncBaseClient):
-    """Minimal AsyncBaseClient subclass for wiring an Auth under test."""
-
-
-# ---------- StaticHeaderAuth ----------
+# --- StaticHeaderAuth ---
 
 
 async def test_static_header_auth_sets_header(httpx2_mock: HTTPXMock) -> None:
     httpx2_mock.add_response(url="https://api.example/x", json={})
-    client = _StubClient(
+    client = StubClient(
         rate=Rate.per_second(2),
         base_url="https://api.example",
         auth=StaticHeaderAuth({"Authorization": "Bearer T"}),
@@ -48,7 +35,7 @@ async def test_static_header_auth_sets_header(httpx2_mock: HTTPXMock) -> None:
 async def test_static_header_auth_explicit_header_wins(httpx2_mock: HTTPXMock) -> None:
     """An explicit ``headers=`` value wins over the Auth flow (setdefault)."""
     httpx2_mock.add_response(url="https://api.example/x", json={})
-    client = _StubClient(
+    client = StubClient(
         rate=Rate.per_second(2),
         base_url="https://api.example",
         auth=StaticHeaderAuth({"Authorization": "Bearer T"}),
@@ -60,18 +47,18 @@ async def test_static_header_auth_explicit_header_wins(httpx2_mock: HTTPXMock) -
 
 async def test_static_header_auth_empty_is_noop(httpx2_mock: HTTPXMock) -> None:
     httpx2_mock.add_response(url="https://api.example/x", json={})
-    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", auth=StaticHeaderAuth({}))
+    client = StubClient(rate=Rate.per_second(2), base_url="https://api.example", auth=StaticHeaderAuth({}))
     await client.get("x", expect=RESPONSE)
     req = httpx2_mock.get_requests()[0]
     assert "Authorization" not in req.headers
 
 
-# ---------- QueryParamAuth ----------
+# --- QueryParamAuth ---
 
 
 async def test_query_param_auth_merges_params(httpx2_mock: HTTPXMock) -> None:
     httpx2_mock.add_response(json={})
-    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", auth=QueryParamAuth({"api_key": "K"}))
+    client = StubClient(rate=Rate.per_second(2), base_url="https://api.example", auth=QueryParamAuth({"api_key": "K"}))
     await client.get("x", expect=RESPONSE, params={"series": "Y"})
     req = httpx2_mock.get_requests()[0]
     assert req.url.params["api_key"] == "K"
@@ -81,7 +68,7 @@ async def test_query_param_auth_merges_params(httpx2_mock: HTTPXMock) -> None:
 async def test_query_param_auth_explicit_param_wins(httpx2_mock: HTTPXMock) -> None:
     """A caller-supplied ``api_key`` param survives — setdefault, not overwrite."""
     httpx2_mock.add_response(json={})
-    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", auth=QueryParamAuth({"api_key": "K"}))
+    client = StubClient(rate=Rate.per_second(2), base_url="https://api.example", auth=QueryParamAuth({"api_key": "K"}))
     await client.get("x", expect=RESPONSE, params={"api_key": "CALLER"})
     req = httpx2_mock.get_requests()[0]
     assert req.url.params["api_key"] == "CALLER"

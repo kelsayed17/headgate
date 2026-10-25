@@ -1,14 +1,10 @@
-"""Tests for the async circuit breaker's state machine.
+"""The circuit breaker's state machine, driven directly.
 
-These drive the breaker directly. The seam it is driven THROUGH — one fetch per
-``with breaker.track()`` block inside ``AsyncBaseClient._send``, spanning the body read —
-is covered end-to-end in ``test_circuit_breaker.py``.
+The seam it is driven through (one ``with breaker.track()`` block per fetch inside ``AsyncBaseClient._send``,
+spanning the body read) is covered end-to-end in ``test_breaker_integration.py``.
 
-Written against ``breaker.call(coro_fn)`` Previously when the breaker stopped
-wrapping a callable and became a context manager. Now the verdict rides on the
-``Verdict`` the block marks, not on what escapes it: only a marked raise is a host failure,
-and an unmarked one — or a ``CancelledError`` — records nothing. See
-``CircuitBreaker.track``.
+The outcome of a block is decided by the ``Verdict`` it marks, not by what escapes it: only a marked raise is a host
+failure, and an unmarked raise or a ``CancelledError`` records nothing. See ``CircuitBreaker.track``.
 """
 
 from __future__ import annotations
@@ -26,9 +22,9 @@ from headgate._breaker import (
     CircuitOpenError,
 )
 
-#: The half-open tests' cooldown, and a sleep that outlasts it. The breaker reads ``time.monotonic``, which
-#: time-machine does not patch, so the cooldown really elapses. No test here checks a refusal INSIDE the cooldown, only what the breaker
-#: does once it has elapsed, and ``state`` reads OPEN until a probe is taken whatever the clock says.
+#: The half-open tests' cooldown, and a sleep that outlasts it. The breaker reads the real ``time.monotonic``, so the
+#: cooldown really elapses. No test here checks a refusal INSIDE the cooldown, only what the breaker does once it has
+#: elapsed, and ``state`` reads OPEN until a probe is taken whatever the clock says.
 _COOLDOWN = 0.001
 _PAST_COOLDOWN = 0.005
 
@@ -38,7 +34,7 @@ class _Boom(Exception):
 
 
 def _fail(cb: CircuitBreaker, times: int = 1) -> None:
-    """Record *times* host failures: a MARKED raise, which is what ``_base._send`` does for a wire failure."""
+    """Record *times* host failures: a MARKED raise, which is what ``AsyncBaseClient._send`` does for a wire failure."""
     for _ in range(times):
         with pytest.raises(_Boom), cb.track() as verdict:
             verdict.mark_failed()
@@ -124,10 +120,9 @@ async def test_half_open_gates_to_a_single_probe() -> None:
 
 
 async def test_a_cancelled_probe_neither_records_nor_holds_the_slot() -> None:
-    """The defect that made the original breaker unusable in the stack.
+    """A cancelled canary must release the probe slot, or the breaker refuses every caller forever.
 
-    ``except Exception`` does not catch a ``CancelledError``, so a cancelled canary left
-    ``_probe_in_flight`` set and the breaker refused every caller forever.
+    ``CancelledError`` is a ``BaseException``, so ``except Exception`` alone would never settle the probe.
     """
     cb = CircuitBreaker(failure_threshold=2, recovery_timeout=_COOLDOWN, name="t")
     _fail(cb, 2)

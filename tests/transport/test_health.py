@@ -1,6 +1,6 @@
-"""``headgate.health`` — the read surface a composition root exports transport degradation through.
+"""``headgate.health``: the read surface an application exports transport degradation through.
 
-The tier neither logs nor emits metrics, so these snapshots are the only way an open breaker or a broken
+headgate neither logs nor emits metrics, so these snapshots are the only way an open breaker or a broken
 cache reaches a dashboard. Each test drives the real mechanism (a breaker tripped by failures, a cache
 storage that faults) rather than writing the registry directly, so a rename on either side breaks here.
 """
@@ -40,6 +40,14 @@ def _clean_registries() -> Iterator[None]:
     CACHE_DEGRADATIONS.pop(_HOST, None)
 
 
+def _trip(breaker: CircuitBreaker) -> None:
+    """Record five marked failures: the default threshold."""
+    for _ in range(5):
+        with pytest.raises(OSError), breaker.track() as verdict:
+            verdict.mark_failed()
+            raise OSError
+
+
 def test_breaker_states_reports_a_tripped_host_as_open() -> None:
     breaker = HOST_BREAKERS[_HOST]
     assert breaker_states()[_HOST] == (BreakerState.CLOSED, False)
@@ -50,7 +58,7 @@ def test_breaker_states_reports_a_tripped_host_as_open() -> None:
 
 
 def test_a_tripped_breaker_past_its_cooldown_is_open_but_not_refusing() -> None:
-    """The latch ``state`` alone would show: OPEN stays OPEN until some call takes the probe."""
+    """``state`` stays OPEN until some call takes the probe; ``refusing`` goes false once the cooldown elapses."""
     breaker = CircuitBreaker(name=_HOST, recovery_timeout=0.0)
     HOST_BREAKERS[_HOST] = breaker
     _trip(breaker)
@@ -58,15 +66,8 @@ def test_a_tripped_breaker_past_its_cooldown_is_open_but_not_refusing() -> None:
     assert breaker_states()[_HOST] == (BreakerState.OPEN, False)
 
 
-def _trip(breaker: CircuitBreaker) -> None:
-    for _ in range(5):
-        with pytest.raises(OSError), breaker.track() as verdict:
-            verdict.mark_failed()
-            raise OSError
-
-
 def test_breaker_states_is_a_copy() -> None:
-    HOST_BREAKERS[_HOST]
+    HOST_BREAKERS[_HOST]  # the registry is a defaultdict: reading the host builds its breaker
     snapshot = breaker_states()
     snapshot.clear()
     assert _HOST in breaker_states()

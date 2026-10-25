@@ -1,10 +1,8 @@
 """``headgate._responses.event_stream``, the stock SSE reader, pinned on its own.
 
-It hands the parsing to a library (``httpx_sse`` Previously httpx2's built-in
-``EventSource`` since), so these cases are written against the WHATWG grammar rather than against
-either implementation — they are what makes swapping the library a no-op. The client tests exercise
-the one-line ``event: message`` shape the gateway sends today; these cover the rest of the grammar
-a gateway change could start sending.
+Parsing is delegated to httpx2's ``EventSource``, so these cases are written against the WHATWG grammar rather than
+against that implementation: they are what keeps swapping the parser a no-op. The client tests exercise the one-line
+``event: message`` shape; these cover the rest of the grammar a server may send.
 """
 
 from __future__ import annotations

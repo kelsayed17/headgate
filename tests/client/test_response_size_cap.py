@@ -1,15 +1,12 @@
-"""Response-body size cap on the shared transport (``AsyncBaseClient``).
+"""``AsyncBaseClient``'s response-body size cap (``max_response_bytes``).
 
-Every client buffers the whole response into memory before decoding, so an
-unbounded body is an OOM vector. The cap has one non-obvious requirement:
-it must count **decompressed** bytes.
+The client buffers the whole response into memory before decoding, so an unbounded body is an OOM vector. The cap
+has one non-obvious requirement: it must count **decompressed** bytes.
 
-``Content-Length`` is the *compressed* size, so a header check alone is
-useless against a gzip bomb — ~500 KB on the wire expands to 524 MB. It is
-also not always present: a filing index is served chunked with no
-``Content-Length`` at all. And a compression-ratio heuristic would
-false-positive on real data (an aggregate JSON legitimately
-compresses 14x). Hence: stream, count decoded bytes, abort past the ceiling.
+``Content-Length`` is the *compressed* size, so a header check alone is useless against a gzip bomb — ~500 KB on the
+wire can expand to 524 MB. The header is also absent from chunked responses. And a compression-ratio heuristic would
+false-positive on real data, since JSON legitimately compresses well over 10x. Hence: stream, count decoded bytes,
+abort past the ceiling.
 """
 
 from __future__ import annotations
@@ -61,21 +58,17 @@ class TestResponseSizeCap:
         try:
             with pytest.raises(ResponseTooLargeError) as ei:
                 await c.get("thing", expect=RESPONSE)
-            assert isinstance(ei.value, ClientError)  # maps to 502 at the boundary
+            assert isinstance(ei.value, ClientError), "caught by the same handler as every other client failure"
         finally:
             await c.aclose()
 
     async def test_gzip_bomb_is_capped_on_DECOMPRESSED_size(self) -> None:
-        """The whole point: a tiny wire body that explodes when decoded.
+        """A tiny wire body that explodes when decoded; a ``Content-Length``-only check would let it through.
 
-        A ``Content-Length``-only check would wave this straight through —
-        the compressed body is a few KB.
-
-        Driven through ``httpx2.MockTransport`` with a real ``ByteStream``
-        rather than ``httpx2_mock``: content-decoding only runs when the
-        response has a *stream* (a response constructed with ``content=``
-        sets ``_content`` and ``aiter_bytes`` skips the decoder entirely),
-        and this test is worthless unless the gzip is really decoded.
+        Driven through ``httpx2.MockTransport`` with a real ``ByteStream`` rather than ``httpx2_mock``:
+        content-decoding only runs when the response has a *stream* (a response constructed with ``content=`` sets
+        ``_content`` and ``aiter_bytes`` skips the decoder entirely), and this test is worthless unless the gzip is
+        really decoded.
         """
         payload = b"A" * (8 * 1024 * 1024)
         wire = gzip.compress(payload)
@@ -99,13 +92,13 @@ class TestResponseSizeCap:
             await c.aclose()
 
     async def test_httpx2_decodes_a_bomb_in_slices_of_at_most_one_mebibyte(self) -> None:
-        """The dependency property ``read_capped`` relies on for PEAK memory, pinned so a regression shows.
+        """The dependency property ``read_capped`` relies on for PEAK memory, pinned so a regression in httpx2 shows.
 
         The cap bounds the ACCUMULATED body; the transient peak is the largest single decoded chunk, which httpx2
-        (2.12+) bounds at 1 MiB by decompressing with ``max_length`` (``httpx2._decoders.MAX_DECODE_CHUNK_SIZE``).
-        Under upstream httpx2 0.28 one network read of a 1028:1 bomb decoded into a single 33 MB chunk. Fed here in
-        16 KiB reads, as a socket would deliver it: one ``ByteStream`` would hand the decoder the whole wire at once
-        and say nothing about how a real stream is sliced.
+        bounds at 1 MiB by decompressing with ``max_length`` (``httpx2._decoders.MAX_DECODE_CHUNK_SIZE``). Without
+        that bound, one network read of a highly compressed bomb decodes into a single chunk of tens of megabytes.
+        The wire is fed in 16 KiB reads, as a socket would deliver it: one ``ByteStream`` would hand the decoder the
+        whole wire at once and say nothing about how a real stream is sliced.
         """
         wire = gzip.compress(b"\0" * (64 * 1024 * 1024), compresslevel=9)
 
@@ -163,7 +156,7 @@ class TestResponseSizeCap:
             await c.aclose()
 
     async def test_missing_content_length_still_capped(self, httpx2_mock: HTTPXMock) -> None:
-        """Chunked responses carry no Content-Length — the House FD index is one."""
+        """A chunked response carries no Content-Length, so only the decoded-byte count can cap it."""
         httpx2_mock.add_response(content=b"x" * 20_000, headers={"Transfer-Encoding": "chunked"})
         c = _Client(max_response_bytes=8192)
         try:
@@ -172,8 +165,8 @@ class TestResponseSizeCap:
         finally:
             await c.aclose()
 
-    async def test_default_clears_the_largest_real_payload(self) -> None:
-        """3.3 MB (an aggregate ticker JSON) is the largest measured live body."""
+    def test_the_default_cap_is_at_least_8_mib(self) -> None:
+        """The default leaves headroom for multi-megabyte JSON payloads."""
         assert DEFAULT_MAX_RESPONSE_BYTES >= 8 * 1024 * 1024
 
     async def test_per_client_override_raises_the_ceiling(self, httpx2_mock: HTTPXMock) -> None:

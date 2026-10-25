@@ -1,11 +1,11 @@
-""":class:`ResilientCacheTransport` — simultaneous identical GETs share one download.
+""":class:`ResilientCacheTransport`: simultaneous identical GETs share one download.
 
 hishel has no request coalescing: while one request for a file is on its way to the network, an identical request finds
-nothing in storage and goes too. Measured against the live wires earlier, five concurrent lookups on a cold
-cache made five 1.8 MB FTP downloads, and three concurrent CFTC fetches of one archive made three. The first request now
-fetches, and every identical GET that arrives while it is in flight waits for it and gets its own copy of the response.
+nothing in storage and goes too, so five concurrent lookups of one large file on a cold cache would make five
+downloads. The first request fetches, and every identical GET that arrives while it is in flight waits for it and gets
+its own copy of the response.
 
-Driven through the REAL hishel machinery (an in-memory sqlite storage), with a network leg that holds each fetch open
+Driven through the real hishel machinery (an in-memory SQLite storage), with a network leg that holds each fetch open
 until the test releases it, so the requests genuinely overlap.
 """
 
@@ -16,28 +16,20 @@ import gc
 import logging
 from typing import TYPE_CHECKING, override
 
-import anysqlite
 import httpx2
 import pytest
-from hishel import AsyncSqliteStorage, FilterPolicy
+from hishel import FilterPolicy
 
-from headgate._cache import MethodFilter, ResilientCacheTransport, StatusCodeFilter
+from headgate._cache import MethodFilter, ResilientCacheTransport
+from tests.cache._helpers import every_get_policy
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import Callable
+
+    from hishel import AsyncSqliteStorage
 
 _URL = "https://example.test/files/2025.zip"
 _BODY = b"the whole file"
-
-
-@pytest.fixture
-async def storage() -> AsyncIterator[AsyncSqliteStorage]:
-    conn = await anysqlite.connect(":memory:")
-    store = AsyncSqliteStorage(connection=conn)
-    try:
-        yield store
-    finally:
-        await store.close()
 
 
 class _GatedNetwork(httpx2.AsyncBaseTransport):
@@ -58,13 +50,6 @@ class _GatedNetwork(httpx2.AsyncBaseTransport):
         return httpx2.Response(200, content=self._body, request=request)
 
 
-def _cache_every_get() -> FilterPolicy:
-    return FilterPolicy(
-        request_filters=[MethodFilter(frozenset({"GET"}))],
-        response_filters=[StatusCodeFilter(frozenset({200}))],
-    )
-
-
 def _cache_no_get() -> FilterPolicy:
     return FilterPolicy(request_filters=[MethodFilter(frozenset({"POST"}))])
 
@@ -79,7 +64,7 @@ def _transport(
     return ResilientCacheTransport(
         next_transport=network,
         storage=storage,
-        policy=policy or _cache_every_get(),
+        policy=policy or every_get_policy(),
         max_body_bytes=cap,
     )
 
@@ -156,7 +141,7 @@ async def test_requests_for_different_urls_do_not_share(storage: AsyncSqliteStor
 
 
 async def test_requests_that_differ_only_in_their_query_do_not_share(storage: AsyncSqliteStorage) -> None:
-    """OCC's walk asks one path for a different ``reportDate`` each day: the query is part of what is asked for."""
+    """One path asked for a different ``reportDate`` each day is two requests: the query is part of what is asked for."""
     network = _GatedNetwork()
     transport = _transport(storage, network)
 
@@ -261,8 +246,8 @@ class _OverCapNetwork(httpx2.AsyncBaseTransport):
 async def test_a_response_too_large_to_hold_is_not_shared(storage: AsyncSqliteStorage) -> None:
     """Past the cap the body is not held, so there is nothing to share.
 
-    The requests that waited each fetch their own, at the same time, and each client raises its own too-large error,
-    as it would have before.
+    The requests that waited each fetch their own, at the same time, and each client then raises its own too-large
+    error, as it would without sharing.
     """
     network = _OverCapNetwork(b"0123456789")
     transport = _transport(storage, network, cap=4)

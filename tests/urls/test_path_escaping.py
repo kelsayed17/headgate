@@ -1,7 +1,7 @@
 """Caller-supplied path segments are URL-escaped before they reach the wire.
 
-A client that interpolates a caller's value straight into an f-string path
-lets that value control the URL's STRUCTURE, not just one segment of it:
+A client that interpolates a caller's value straight into an f-string path lets that value control the URL's
+STRUCTURE, not just one segment of it:
 
     f"/v2/positions/{symbol}"   with symbol="../../v2/account"
       -> httpx2 resolves the dot segments
@@ -10,16 +10,17 @@ lets that value control the URL's STRUCTURE, not just one segment of it:
 That is reachable wherever a route forwards a user-supplied identifier into a path: a validator that permits `.` and `/`,
 plus a normalizer that only uppercases, leaves nothing between the route and the client to remove the traversal.
 
-The same lack of escaping is an ordinary correctness bug wherever a legitimate
-identifier contains a slash: a crypto symbol like ``BASE/QUOTE``, so
-``BTC/USD`` builds ``/v2/positions/BTC/USD`` — a different endpoint that
-simply 404s instead of closing the position.
+The same lack of escaping is an ordinary correctness bug wherever a legitimate identifier contains a slash: a pair
+symbol like ``BTC/USD`` builds ``/v2/positions/BTC/USD``, a different endpoint that simply 404s.
 
-Escaping belongs in the CLIENT because the client is what owns URL
-construction; every layer above it legitimately deals in unescaped values.
+Escaping belongs in the CLIENT because the client owns URL construction; every layer above it legitimately deals in
+unescaped values.
 """
 
 from __future__ import annotations
+
+from datetime import date
+from uuid import UUID
 
 import httpx2
 import pytest
@@ -27,7 +28,7 @@ import pytest
 from headgate._url import escape_segment, render_path
 
 
-class TestSegHelper:
+class TestEscapeSegment:
     @pytest.mark.parametrize(
         ("raw", "expected"),
         [
@@ -45,14 +46,12 @@ class TestSegHelper:
         assert escape_segment(raw) == expected
 
     def test_accepts_non_str(self) -> None:
-        """Ids arrive as UUID/int at some call sites."""
-        from uuid import UUID
-
+        """Ids may arrive as UUID or int."""
         assert escape_segment(7) == "7"
         assert escape_segment(UUID("12345678-1234-5678-1234-567812345678")) == "12345678-1234-5678-1234-567812345678"
 
 
-class TestBuiltUrls:
+class TestEscapeSegmentBuiltUrls:
     """End-to-end through httpx2: the escaped segment cannot restructure the URL."""
 
     @staticmethod
@@ -66,11 +65,7 @@ class TestBuiltUrls:
         )
 
     def test_unescaped_traversal_would_escape_the_endpoint(self) -> None:
-        """The negative control — proves the escaping above is load-bearing.
-
-        Without ``escape_segment`` this same input silently retargets the request, which
-        is exactly the bug being fixed.
-        """
+        """Negative control: without ``escape_segment`` this same input silently retargets the request."""
         assert self._url("/v2/positions/../../v2/account") == "https://api.example.test/v2/account"
 
     def test_slash_bearing_symbol_stays_one_segment(self) -> None:
@@ -82,15 +77,12 @@ class TestBuiltUrls:
         assert self._url(f"/v2/positions/{escape_segment('.')}") == "https://api.example.test/v2/positions/%2E"
 
     def test_unescaped_dot_would_hit_close_all_positions(self) -> None:
-        """Negative control: proves the escaping above is load-bearing.
-
-        ``DELETE /v2/positions`` is Example's liquidate-everything endpoint.
-        """
+        """Negative control: an unescaped ``.`` collapses onto the collection, here a close-everything endpoint."""
         assert self._url("/v2/positions/.") == "https://api.example.test/v2/positions"
 
 
 class TestPathRenderer:
-    """``render_path()`` escapes by DEFAULT; only a nested Template is trusted."""
+    """``render_path`` escapes by DEFAULT; only a nested Template is trusted."""
 
     def test_literal_only(self) -> None:
         assert render_path(t"/api/news/feed") == "/api/news/feed"
@@ -127,14 +119,10 @@ class TestPathRenderer:
         assert render_path(t"cnsfails{year:04d}{month:02d}.zip") == "cnsfails202603.zip"
 
     def test_date_format_spec(self) -> None:
-        from datetime import date
-
         d = date(2026, 1, 5)
         assert render_path(t"/shvol{d:%Y%m%d}.txt") == "/shvol20260105.txt"
 
     def test_non_str_values(self) -> None:
-        from uuid import UUID
-
         assert render_path(t"/o/{7}") == "/o/7"
         u = UUID("12345678-1234-5678-1234-567812345678")
         assert render_path(t"/o/{u}") == "/o/12345678-1234-5678-1234-567812345678"
@@ -151,30 +139,20 @@ class TestPathRenderer:
     def test_format_spec_output_is_still_escaped(self) -> None:
         """The spec is applied, and its OUTPUT still goes through ``escape_segment``.
 
-        ``test_format_spec_is_applied_then_escaped`` only formats digits, so a
-        variant that applied the spec and skipped the escape would pass it.
+        ``test_format_spec_is_applied_then_escaped`` only formats digits, which need no escaping.
         """
         v = "a/b"
         assert render_path(t"/x/{v:>4}") == "/x/%20a%2Fb"
 
     def test_raw_is_ignored_on_a_template_value(self) -> None:
-        """The ``Template`` branch precedes the ``raw`` branch — deliberately.
-
-        The alternative reading would let ``:raw`` on a wrapper launder every
-        value nested inside it.
-        """
+        """A nested ``Template`` is spliced whatever its spec, so ``:raw`` on a wrapper cannot launder its values."""
         sym = "A/B"
         inner = t"/x/{sym}"
         assert render_path(t"{inner:raw}/y") == render_path(t"{inner}/y") == "/x/A%2FB/y"
 
 
-class TestPathRejectsAmbiguousInput:
+class TestRenderPathRejectsAmbiguousInput:
     """A security primitive fails loudly rather than guessing."""
-
-    def test_conversion_raises(self) -> None:
-        v = "a/b"
-        with pytest.raises(ValueError, match=r"conversion !r is not supported"):
-            render_path(t"/x/{v!r}")
 
     @pytest.mark.parametrize("conversion", ["r", "s", "a"])
     def test_every_conversion_raises(self, conversion: str) -> None:
@@ -191,11 +169,7 @@ class TestPathRejectsAmbiguousInput:
             render_path(t"{inner}/y")
 
     def test_f_string_raises(self) -> None:
-        """Iterating a ``str`` yields characters that all take the literal branch.
-
-        Without this guard ``render_path()`` silently returns the f-string's already
-        interpolated, UNESCAPED text.
-        """
+        """An f-string is already interpolated, UNESCAPED text; ``render_path`` refuses it rather than pass it through."""
         sym = "BTC/USD"
         with pytest.raises(TypeError, match=r"takes a t-string Template, got str"):
             render_path(f"/v2/positions/{sym}")  # ty: ignore[invalid-argument-type]  # the TypeError IS the test
@@ -205,8 +179,8 @@ class TestPathRejectsAmbiguousInput:
             render_path("/v2/positions")  # ty: ignore[invalid-argument-type]  # the TypeError IS the test
 
 
-class TestPathBuiltUrls:
-    """``render_path()`` output through httpx2 — dot resolution is only visible here."""
+class TestRenderPathBuiltUrls:
+    """``render_path`` output through httpx2 — dot resolution is only visible here."""
 
     @staticmethod
     def _url(rendered: str) -> str:
@@ -221,10 +195,10 @@ class TestPathBuiltUrls:
 
     def test_slash_bearing_symbol_stays_one_segment(self) -> None:
         sym = "BTC/USD"
-        assert self._url(render_path(t"/v2/positions/{sym}")) == ("https://api.example.test/v2/positions/BTC%2FUSD")
+        assert self._url(render_path(t"/v2/positions/{sym}")) == "https://api.example.test/v2/positions/BTC%2FUSD"
 
     def test_dot_segment_cannot_retarget(self) -> None:
-        """Without the ``escape_segment`` dot fix this collapses to the liquidate-all endpoint."""
+        """An unescaped ``.`` would collapse onto the close-everything collection endpoint."""
         sym = "."
         assert self._url(render_path(t"/v2/positions/{sym}")) == "https://api.example.test/v2/positions/%2E"
 

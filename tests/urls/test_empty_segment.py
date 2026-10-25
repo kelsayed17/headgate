@@ -1,8 +1,8 @@
 """An empty URL path segment is refused.
 
-``t"/v2/positions/{symbol}"`` with ``symbol=""`` rendered ``DELETE /v2/positions/`` — one trailing slash from Example's
-close-EVERY-position endpoint, and a router that strips the slash with a 301/308 re-sends the DELETE there. The
-dot-segment hazard next to it (``.`` / ``..``) was already handled; the empty value was not.
+``t"/v2/positions/{symbol}"`` with ``symbol=""`` would render ``DELETE /v2/positions/``: one trailing slash from a
+collection endpoint (close EVERY position), and a router that strips the slash with a 301/308 re-sends the DELETE
+there. ``escape_segment`` refuses the empty value just as it neutralises the ``.`` / ``..`` dot segments.
 """
 
 from __future__ import annotations

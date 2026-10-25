@@ -1,11 +1,10 @@
 """The retry matrix: every input the retry transport decides on, and the golden outcome of each.
 
-The in-house retry transport is required to reproduce the in-house retry transport to
-reproduce httpx-retries 0.6.0, as ``headgate._transports.build_retry`` configured it, EXACTLY. This module is the
-matrix the library was driven through, once, to write the golden table, and the in-house transport is driven through on
-every run: attempt budget × method × status × exception × every ``Retry-After`` form. The golden table beside it
-(``retry_golden.json``) holds httpx-retries' own outcome for every case. It was generated while the library was
-installed, and it outlives the library: ``test_retry_golden.py`` replays it against the in-house transport.
+``headgate._retry.RetryTransport`` reproduces httpx-retries 0.6.0, as ``build_retry`` configures it, EXACTLY. This
+module is the matrix httpx-retries was driven through, once, to write the golden table, and that headgate's transport
+is driven through on every run: attempt budget × method × status × exception × every ``Retry-After`` form. The golden
+table beside it (``retry_golden.json``) holds httpx-retries' own outcome for every case, and
+``tests/transport/test_retry_golden.py`` replays it.
 
 An outcome is everything a caller of the transport can observe:
 
@@ -19,11 +18,10 @@ An outcome is everything a caller of the transport can observe:
   only that it is closed by the end.
 
 Provenance, and changing the table. The table was generated from httpx-retries 0.6.0, configured as ``build_retry``
-configured it, by a one-off differential script that is no longer part of this tree. A change to the table is a deliberate behaviour change, such as the
-deferred audit fixes (the 5 s ``Retry-After`` clamp, the broad exception tuple, the 501 retry): it is made on purpose,
-with the row diff reviewed, and this provenance statement is updated in the same commit. Never regenerate the table from
-the in-house transport to make a failing replay pass: the table would then record the transport's own behaviour and
-stop being evidence that it reproduces the library.
+configured it, by a one-off differential script that is not part of this tree. A change to the table is a deliberate
+behaviour change (for example to the 5 s ``Retry-After`` clamp, the broad exception tuple, or retrying 501): it is made
+on purpose, with the row diff reviewed, and this statement is updated in the same commit. Never regenerate the table
+from headgate's own transport to make a failing replay pass: it would then stop being evidence of anything.
 """
 
 from __future__ import annotations
@@ -260,7 +258,7 @@ async def run_case(make: TransportFactory, case: Case) -> Outcome:
     sleeps: list[float] = []
     closed_at_sleep: list[tuple[bool, ...]] = []
     # The patch below is process-wide, so it reaches every thread's event loop: a coroutine sleeping on another
-    # thread's loop during a case (DBOS keeps one) would otherwise be recorded into this case and, handed a sleep that
+    # thread's loop during a case would otherwise be recorded into this case and, handed a sleep that
     # returns at once, spin for the whole case. Only this case's own task is the transport; any other really sleeps.
     case_task = asyncio.current_task()
     real_sleep = asyncio.sleep

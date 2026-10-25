@@ -1,12 +1,7 @@
-"""Unit tests for the client policy transports (retry).
+"""``RetryTransport`` and ``build_retry``, tested directly: attempt-count mapping, per-request override, teardown.
 
-End-to-end behaviour (retries, Retry-After) is covered through ``AsyncBaseClient`` in
-``test_base_client.py``; these lock the transport-level contracts directly: the
-attempt-count mapping and the per-request retry override seam.
-
-The circuit breaker used to be a transport and was tested here too. It is driven from
-``AsyncBaseClient._send`` now, so that it can span the body read — see
-``test_circuit_breaker.py``, which carries those cases against the real seam.
+End-to-end retry behaviour (backoff, ``Retry-After``) is covered through ``AsyncBaseClient`` in
+``tests/client/test_client.py``, and the full decision table in ``test_retry_golden.py``.
 """
 
 from __future__ import annotations
@@ -16,10 +11,9 @@ from typing import override
 
 import httpx2
 
-from headgate._rate_limit import PathLimiters, Rate, RateRule
 from headgate._retry import _ALL_METHODS, RetryTransport, build_retry
 
-# ---------- build_retry: attempt-count mapping ----------
+# --- build_retry: attempt-count mapping ---
 
 
 def test_build_retry_maps_attempts_to_retries() -> None:
@@ -30,12 +24,11 @@ def test_build_retry_maps_attempts_to_retries() -> None:
 
 
 def test_the_retried_methods_include_every_verb_the_client_sends() -> None:
-    # The six verbs AsyncBaseClient sends, POST included: the data layer retries POSTs (OAuth token
-    # fetches, bulk submissions); order placement opts out per call with retry=False.
+    # The six verbs AsyncBaseClient sends, POST included: a call that must never be re-sent opts out with retry=False.
     assert {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"} <= set(_ALL_METHODS)
 
 
-# ---------- RetryTransport: per-request override ----------
+# --- RetryTransport: per-request override ---
 
 
 async def test_retry_transport_honours_per_request_override() -> None:
@@ -70,34 +63,11 @@ async def test_retry_transport_closes_the_transport_it_wraps() -> None:
     """The retry layer must delegate teardown, or the client's ``aclose`` stops at the top of the stack.
 
     httpx2's ``AsyncBaseTransport.aclose()`` is a no-op, so a retry layer that did not override it would strand the
-    cache storage and the connection pool below it. The retry matrix (``support/retry_matrix.py``) never closes the
-    transport, so nothing else pins this.
+    cache storage and the connection pool below it. The retry matrix (``tests/support/retry_matrix.py``) never closes
+    the transport, so nothing else pins this.
     """
     inner = _RecordsClose()
 
     await RetryTransport(transport=inner, retry=build_retry(3)).aclose()
 
     assert inner.closed is True
-
-
-# ---------- PathLimiters: the limiter a URL path selects ----------
-
-
-async def test_path_limiters_pick_the_first_matching_rule_and_default_otherwise() -> None:
-    # Two rules whose fragments BOTH occur in /api/candles: "first match wins" is only observable when more than one
-    # rule can match, and the second is declared after the first so a last-match scan picks the other limiter.
-    limiters = PathLimiters(
-        default=Rate.per_second(1000),
-        rules=[RateRule("/candles", Rate.per_second(1000)), RateRule("/api", Rate.per_second(1000))],
-    )
-    (_, candles), (_, api) = limiters._rules
-
-    both = httpx2.Request("GET", "https://x/api/candles?g=1")
-    assert limiters.for_request(both) is candles, "the first matching rule must win"
-    assert limiters.for_request(both) is not api
-    assert limiters.for_request(both) is not limiters.default
-
-    only_the_second = httpx2.Request("GET", "https://x/api/ticker")
-    assert limiters.for_request(only_the_second) is api, "a request only the later rule matches still reaches it"
-
-    assert limiters.for_request(httpx2.Request("GET", "https://x/ticker")) is limiters.default

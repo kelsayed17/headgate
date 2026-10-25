@@ -7,9 +7,10 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate._client import AsyncBaseClient
+from headgate import QueryParamAuth
 from headgate._rate_limit import Rate
 from headgate.errors import ClientError
+from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -18,11 +19,7 @@ if TYPE_CHECKING:
 _SECRET = "s3cr3t-value"
 
 
-class _Client(AsyncBaseClient):
-    """Minimal subclass."""
-
-
-async def _raised(client: _Client, param: str) -> ClientError:
+async def _raised(client: StubClient, param: str) -> ClientError:
     with pytest.raises(ClientError) as info:
         await client.get("data", expect=RESPONSE, params={param: _SECRET})
     return info.value
@@ -31,7 +28,7 @@ async def _raised(client: _Client, param: str) -> ClientError:
 @pytest.mark.parametrize("param", ["apikey", "api_key", "token"])
 @pytest.mark.parametrize("case", ["429", "500", "404", "transport"])
 async def test_secret_query_param_never_in_error(httpx2_mock: HTTPXMock, param: str, case: str) -> None:
-    client = _Client(rate=Rate.per_second(100), base_url="https://api.example", max_attempts=2)
+    client = StubClient(rate=Rate.per_second(100), base_url="https://api.example", max_attempts=2)
     if case == "transport":
         httpx2_mock.add_exception(httpx2.ConnectError("boom"), is_reusable=True)
     else:
@@ -45,16 +42,14 @@ async def test_secret_query_param_never_in_error(httpx2_mock: HTTPXMock, param: 
 async def test_common_credential_names_are_redacted_whatever_their_case_or_separator(
     httpx2_mock: HTTPXMock, param: str
 ) -> None:
-    client = _Client(rate=Rate.per_second(100), base_url="https://api.example", max_attempts=1)
+    client = StubClient(rate=Rate.per_second(100), base_url="https://api.example", max_attempts=1)
     httpx2_mock.add_response(status_code=429, text="slow", is_reusable=True)
     error = await _raised(client, param)
     assert _SECRET not in str(error)
 
 
 async def test_a_name_the_auth_declares_is_redacted_even_if_unlisted(httpx2_mock: HTTPXMock) -> None:
-    from headgate import QueryParamAuth
-
-    client = _Client(
+    client = StubClient(
         rate=Rate.per_second(100),
         base_url="https://api.example",
         max_attempts=1,
@@ -70,7 +65,7 @@ async def test_a_transport_message_that_echoes_the_url_is_redacted() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         raise httpx2.RemoteProtocolError(f"bad response from {request.url}")
 
-    client = _Client(
+    client = StubClient(
         rate=Rate.per_second(100),
         base_url="https://api.example",
         max_attempts=1,

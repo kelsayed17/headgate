@@ -1,7 +1,9 @@
-"""`AsyncCurlTransport`: a curl response comes back as the httpx2 response a native transport would give."""
+"""``AsyncCurlTransport``: a curl response comes back as the httpx2 response a native transport would give."""
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from datetime import timedelta
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -208,9 +210,6 @@ async def test_closing_the_transport_closes_the_curl_session(sessions: list[_Ses
 
 
 def test_import_without_curl_cffi_names_the_extra() -> None:
-    import subprocess
-    import sys
-
     script = "import sys\nsys.modules['curl_cffi'] = None\nimport headgate._curl"
     result = subprocess.run([sys.executable, "-I", "-c", script], capture_output=True, text=True, check=False)
     assert result.returncode != 0

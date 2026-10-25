@@ -1,9 +1,8 @@
-"""The no-close storage wrapper + the composition-owned storage wiring.
+""":class:`NoCloseStorage`: closing a client never closes a storage it shares.
 
-The ONE process-shared ``hishel.AsyncBaseStorage`` is built at boot on
-the application and passed to each opt-in client as ``HttpCache(storage=...)``. ``NoCloseStorage`` wraps the
-shared storage per adapter, delegating every method EXCEPT ``close()`` (a no-op)
-so a per-adapter ``AsyncCacheTransport.aclose()`` never closes the shared client.
+One ``hishel.AsyncBaseStorage`` may be shared by many clients, each handed it as ``HttpCache(storage=...)``. Each
+client's cache transport wraps it in a ``NoCloseStorage``, which delegates every method except ``close()``, so one
+client's ``aclose()`` leaves the storage open for the others and for whoever created it.
 """
 
 from __future__ import annotations
@@ -35,10 +34,5 @@ async def test_no_close_storage_delegates_but_skips_close() -> None:
     await wrapper.remove_entry(entry_id)
     inner.remove_entry.assert_awaited_once_with(entry_id)
 
-    # close() is a no-op — the inner's close is NEVER awaited (that's the
-    # load-bearing guarantee: the shared client survives per-adapter teardown).
     await wrapper.close()
     inner.close.assert_not_awaited()
-
-
-# The storage-sharing contract under test here is `NoCloseStorage`: closing a client never closes a shared storage.

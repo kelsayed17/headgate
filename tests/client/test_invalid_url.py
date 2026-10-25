@@ -1,8 +1,8 @@
 """A malformed URL raises as a ``ClientError``, not as httpx2's ``InvalidURL``.
 
-httpx2's ``InvalidURL`` is not an ``HTTPError``, so it escaped ``AsyncBaseClient``'s mapping and reached the REST
-boundary as a 500 rather than the 502 every other client failure maps to. It is also not a host failure, so it must
-not reach the per-host circuit breaker.
+httpx2's ``InvalidURL`` is not an ``HTTPError``, so the client maps it explicitly; without that it would escape the
+``ClientError`` tree every caller catches. It is also not a host failure, so it must not reach the per-host circuit
+breaker.
 """
 
 from __future__ import annotations

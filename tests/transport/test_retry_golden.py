@@ -1,12 +1,13 @@
-"""The in-house retry transport reproduces httpx-retries 0.6.0 exactly. The pin outlives the library.
+"""``headgate._retry.RetryTransport`` reproduces httpx-retries 0.6.0 exactly, case for case.
 
-``support/retry_golden.json`` holds httpx-retries' outcome for every case of the retry matrix
-(``support/retry_matrix.py``): the sends, every sleep as an exact float, the result, the attempt count, and the
-closes. It was generated from the library, configured as ``build_retry`` configured it, while the library was
-installed (spec §8, the "golden table"). This replays every case against ``headgate._transports.RetryTransport``.
+The in-house transport replaced httpx-retries, and the library's behaviour is kept as an oracle.
+``tests/support/retry_golden.json`` holds its outcome for every case of the retry matrix
+(``tests/support/retry_matrix.py``): the sends, every sleep as an exact float, the result, the attempt count, and the
+closes. It was recorded from httpx-retries 0.6.0, configured as ``build_retry`` configures the in-house transport.
+These tests replay every case against ``RetryTransport``.
 
-An ORACLE, not a snapshot, so it is deliberately not syrupy: the table is an external library's output,
-and ``--snapshot-update`` would re-capture it from the in-house transport under test, the one thing it must never be.
+An ORACLE, not a snapshot, so it is deliberately not syrupy: the table is an external library's output, and
+``--snapshot-update`` would re-capture it from the transport under test, the one thing it must never be.
 """
 
 from __future__ import annotations
@@ -77,11 +78,11 @@ class _Rendezvous(httpx2.AsyncBaseTransport):
 async def test_a_coroutine_sleeping_on_another_threads_loop_is_not_recorded_into_a_case(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The recorder patches ``asyncio.sleep`` for the whole process, so it reaches every thread's event loop.
+    """Only the case's own sleeps are recorded, though the recorder patches ``asyncio.sleep`` process-wide.
 
-    A background loop left running by another test (DBOS keeps one) once wrote 771 sleeps of 10.0 s into one case
-    and failed the table: handed a sleep that returns at once, its loop spun for the whole case. Every send here waits
-    until the background loop has slept inside it; only the case's own sleeps may be recorded.
+    The patch reaches every thread's event loop, so a loop running on another thread, handed a sleep that returns at
+    once, would spin for the whole case and flood it with foreign sleeps. Every send here waits until such a
+    background loop has slept inside it.
     """
     monkeypatch.setattr(_retry, "_BACKOFF_FACTOR", _PRODUCTION_BACKOFF_FACTOR)
     stop, in_case, slept = threading.Event(), threading.Event(), threading.Event()

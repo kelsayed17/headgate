@@ -31,14 +31,14 @@ def test_hierarchy() -> None:
 
 
 def test_status_error_carries_status_code() -> None:
-    err = UpstreamStatusError("boom", status_code=503, source="FredClient")
+    err = UpstreamStatusError("boom", status_code=503, source="ExampleClient")
     assert err.status_code == 503
-    assert err.source == "FredClient"
+    assert err.source == "ExampleClient"
     assert "503" in str(err)
 
 
 def test_every_status_error_carries_the_status_the_wire_sent() -> None:
-    """A quota refusal can arrive inside a 200 body (spec §4), so no subclass pins or defaults a status."""
+    """A quota refusal can arrive inside a 200 body, so no subclass pins or defaults a status."""
     assert RateLimitError("quota spent", status_code=200, source="X").status_code == 200
     assert RateLimitError("slow down", status_code=429, source="X").status_code == 429
     assert AuthError("key rejected", status_code=302, source="X").status_code == 302
@@ -51,7 +51,7 @@ def test_the_status_is_required_on_every_subclass(cls: type[UpstreamStatusError]
 
 
 def test_a_status_error_carries_the_providers_own_code() -> None:
-    err = RateLimitError("OKX rate limit", status_code=200, code="50011", source="OkxClient")
+    err = RateLimitError("rate limit", status_code=200, code="50011", source="ExampleClient")
     assert err.code == "50011"
     assert "(status=200, code=50011)" in str(err)
     plain = UpstreamStatusError("boom", status_code=503, source="X")
@@ -60,10 +60,10 @@ def test_a_status_error_carries_the_providers_own_code() -> None:
 
 
 def test_an_empty_code_is_not_the_same_as_no_code() -> None:
-    """``code=""`` is a real (if empty) code, so the message must still name it — unlike ``code=None``.
+    """``code=""`` is a real (if empty) code, so the message still names it — unlike ``code=None``.
 
-    Mutation-checked: reverting the tag's ``if code is not None`` to ``if code`` makes an empty string falsy,
-    dropping ``code=`` from the message even though ``.code`` and the REST body still carry ``""``.
+    A truthiness check (``if code`` instead of ``if code is not None``) would drop ``code=`` from the message while
+    ``.code`` still carries ``""``.
     """
     err = UpstreamStatusError("boom", status_code=200, code="", source="X")
     assert err.code == ""
@@ -89,11 +89,10 @@ def test_the_code_survives_a_pickle_round_trip() -> None:
     ],
 )
 def test_client_errors_survive_pickle_round_trip(err: ClientError) -> None:
-    """DBOS pickles a workflow's exception into its result store and depickles it on
-    ``get_result``. The subclasses take required kw-only ``__init__`` args, so the
-    default ``(cls, self.args)`` reduce raised ``TypeError: missing ... 'status_code'``
-    on unpickle (a rejected crypto order crossing a ``@DBOS.step`` boundary crashed the
-    btc cycle). ``__reduce__`` must round-trip type, message, source, and status_code.
+    """An exception crossing a process or durable-workflow boundary is pickled, and must unpickle.
+
+    The subclasses take required keyword-only ``__init__`` arguments, which the default ``(cls, self.args)`` reduce
+    drops, so unpickling would raise ``TypeError``. ``__reduce__`` round-trips type, message, source and status_code.
     """
     restored = pickle.loads(pickle.dumps(err))
     assert type(restored) is type(err)

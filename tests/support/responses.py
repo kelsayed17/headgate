@@ -1,8 +1,8 @@
-"""Test-only response helpers for the clients member — never shipped.
+"""Response helpers for tests.
 
 ``response`` builds a complete ``httpx2.Response`` to hand a reader directly. ``RESPONSE`` is a reader that hands a
-test the whole response, for the tests that used to read one off raw mode. It is test-only by design: a client method
-returning an ``httpx2.Response`` is what raw mode was. It must not appear in ``src/``.
+test the whole response. It is test-only by design: the library has no reader that returns the raw response, so no
+call can receive an undeclared status unread.
 """
 
 from __future__ import annotations

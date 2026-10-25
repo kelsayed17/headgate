@@ -1,10 +1,7 @@
-"""Tests for AsyncBaseClient failure policy — always raise a ClientError.
+"""``AsyncBaseClient``'s failure ladder: every failure raises the matching ``ClientError`` subtype.
 
-A true failure always raises the matching ``ClientError`` subtype. This is pure
-transport: there is no ``None`` return — every call declares its ``expect=`` reader, and an
-undeclared non-success status always raises rather than handing back a raw ``Response`` (there is
-no raw mode). No-data interpretation is a CONTENT judgement for the caller; no status degrades to
-``None`` anywhere in the client.
+Every call declares its ``expect=`` reader, and an undeclared non-success status always raises rather than returning
+``None`` or a raw ``Response``. Deciding that a response means "no data" is a content judgement left to the caller.
 """
 
 from __future__ import annotations
@@ -27,8 +24,10 @@ from headgate.errors import (
 from headgate.msgspec import decoder
 
 
-def _client(handler: httpx2.MockTransport) -> AsyncBaseClient:
-    return AsyncBaseClient(base_url="https://example.test", rate=Rate.per_second(2), max_attempts=1, transport=handler)
+def _client(transport: httpx2.MockTransport) -> AsyncBaseClient:
+    return AsyncBaseClient(
+        base_url="https://example.test", rate=Rate.per_second(2), max_attempts=1, transport=transport
+    )
 
 
 async def test_raises_upstream_status_on_server_error() -> None:
@@ -56,10 +55,9 @@ async def test_raises_transport_on_network_error() -> None:
 async def test_a_network_error_with_an_empty_message_still_names_what_failed(
     raised: type[httpx2.TransportError], expected: type[TransportError]
 ) -> None:
-    """httpx2's exceptions often stringify to ``""``.
+    """httpx2's exceptions often stringify to ``""``, so the message names the exception type instead.
 
-    The live spreads journal kept ``[PublicClient] GET …/portfolio/v2: `` and nothing after the
-    colon, so the one fact the operator needed — WHAT failed — was gone.
+    Otherwise the message would end ``GET /x: `` with nothing after the colon, dropping what failed.
     """
 
     def boom(req: httpx2.Request) -> httpx2.Response:
@@ -78,13 +76,12 @@ async def test_raises_parse_error_on_bad_json() -> None:
             await c.get("/x", expect=decoder(dict[str, Any]))
 
 
-# ---------- non-success: "retrieve or raise" (Stripe-style) ----------
+# --- non-success statuses raise ---
 
 
 @pytest.mark.parametrize("status", [404, 410])
 async def test_missing_resource_raises(status: int) -> None:
-    """A 404/410 on a read is a missing resource; it surfaces as a ClientError
-    (Stripe-style retrieve), not a silent None."""
+    """A 404/410 on a read is a missing resource; it raises rather than returning ``None``."""
     transport = httpx2.MockTransport(lambda req: httpx2.Response(status))
     async with _client(transport) as c:
         with pytest.raises(UpstreamStatusError) as ei:
@@ -114,10 +111,8 @@ async def test_bad_request_raises_upstream_status() -> None:
 async def test_the_error_names_the_client_class_that_raised_it() -> None:
     """``source`` is ``type(self).__name__``, so it names the SUBCLASS, not the base.
 
-    That attribution is why a caller can tell which upstream failed from the error alone,
-    and it is the one thing the per-provider copies of this ladder asserted that a base
-    test would miss — so it is pinned here, once, on a subclass rather than on
-    ``AsyncBaseClient`` itself. Every one of the 84 clients inherits the same mechanism.
+    That attribution is how a caller tells which upstream failed from the error alone, so it is pinned on a
+    subclass rather than on ``AsyncBaseClient`` itself.
     """
 
     class NamedClient(AsyncBaseClient):
@@ -135,14 +130,8 @@ async def test_the_error_names_the_client_class_that_raised_it() -> None:
 async def test_rate_limited_raises_rate_limit_error() -> None:
     """429 after retries is its own subtype, not a bare UpstreamStatusError.
 
-    Callers branch on it — a rate limit is a back-off signal, where a 400 or a 500 is
-    not — so collapsing it into the parent would be a silent behaviour change. It is a
-    subclass, so a handler catching UpstreamStatusError still sees it.
-
-    Added: this ladder rung and the timeout below were the only two NOT
-    pinned centrally, which is why 18 provider-tier suites had each grown their own copy
-    of "429 becomes RateLimitError" against their own provider's client. That mapping is
-    AsyncBaseClient's, identical for all 84 clients, so it belongs here once.
+    Callers branch on it — a rate limit is a back-off signal, where a 400 or a 500 is not. It is a subclass, so a
+    handler catching UpstreamStatusError still sees it.
     """
     transport = httpx2.MockTransport(lambda req: httpx2.Response(429))
     async with _client(transport) as c:
@@ -155,8 +144,8 @@ async def test_rate_limited_raises_rate_limit_error() -> None:
 async def test_timeout_raises_client_timeout_error() -> None:
     """A timeout is a TransportError subtype, distinguishable from a connection failure.
 
-    The distinction is load-bearing at the REST boundary, which maps ClientTimeoutError
-    to 504 and the rest of the tree to 502.
+    A caller can then treat the two differently (an HTTP gateway would answer 504 for one and 502 for the other)
+    while still catching both as ``TransportError``.
     """
 
     def _timeout(request: httpx2.Request) -> httpx2.Response:
@@ -168,12 +157,11 @@ async def test_timeout_raises_client_timeout_error() -> None:
         assert isinstance(ei.value, TransportError), "must stay catchable as the parent"
 
 
-# ---------- "must exist" reads: raising client returns a value on success ----------
+# --- success ---
 
 
 async def test_returns_value_on_success() -> None:
-    """A successful read returns its value (the must-exist read path: no raise,
-    real payload back)."""
+    """A successful read returns the decoded payload."""
     transport = httpx2.MockTransport(lambda req: httpx2.Response(200, json={"a": 1}))
     async with _client(transport) as c:
         result = await c.get("/x", expect=decoder(dict[str, Any]))

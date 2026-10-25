@@ -1,12 +1,7 @@
-"""``CachedTokenAuth`` — the shared token-cache policy, tested without a provider.
+"""``CachedTokenAuth``: the shared token-cache policy, tested without a provider.
 
-A client suite would exercise this through a real client and a real token
-endpoint. This one drives the base directly with a counting fake, so the four
-policy behaviours are pinned independently of any provider's request shape —
-which is the point of the extraction, since Public.com will inherit them
-unchanged.
-
-``asyncio_mode = "auto"`` (pyproject) — no per-test marker.
+A counting fake stands in for the token exchange, so caching, the expiry margin, the single 401 re-mint and the
+fresh-token rule are pinned independently of any provider's request shape.
 """
 
 from __future__ import annotations
@@ -22,6 +17,7 @@ import pytest
 from headgate import _auth
 from headgate._auth import CachedTokenAuth, Minted
 from headgate.errors import ClientConfigurationError
+from tests.support.tokens import premint
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Callable
@@ -96,10 +92,10 @@ class TestCaching:
     async def test_a_token_inside_the_expiry_margin_is_re_minted(
         self, client_factory: _Factory, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Re-mint BEFORE expiry: a token that dies mid-flight fails a request that may be an order.
+        """Re-mint BEFORE expiry: a token that dies mid-flight fails a request that may be an unrepeatable write.
 
-        Driven by a controlled clock. It used to lean on a 30 s lifetime being inside the 120 s margin, which is the
-        shape that minted on EVERY request (fixed; see ``TestShortLifetime``).
+        Driven by a controlled clock with a lifetime well past the margin; a lifetime inside the margin is
+        ``TestShortLifetime``'s case.
         """
         clock = [1000.0]
         monkeypatch.setattr(_auth, "time", SimpleNamespace(monotonic=lambda: clock[0]))
@@ -156,12 +152,9 @@ class TestRejection:
         assert auth.mints == 2
 
     async def test_concurrent_401s_collapse_to_a_single_re_mint(self, client_factory: _Factory) -> None:
-        """The measured defect this extraction fixed.
+        """Each waiter re-checks the cache against the token IT was rejected for, so all reuse the first replacement.
 
-        With a bare ``force=True`` flag every waiter skipped the cache check and
-        minted its own token — four concurrent 401s produced FIVE exchanges.
-        Passing the REJECTED token instead lets each waiter see that the cached
-        one is no longer the token it was rejected for, and reuse it.
+        A bare "force a re-mint" flag would skip that check and mint once per waiter: five exchanges for four 401s.
         """
 
         def handler(request: httpx2.Request) -> httpx2.Response:
@@ -178,12 +171,8 @@ class TestRejection:
 
 
 class TestPrecedence:
-    def test_there_is_no_unconfigured_path(self) -> None:
-        """Deleted: every credential a subclass mints from is required at boot, so the flow always mints."""
-        assert not hasattr(CachedTokenAuth, "_has_credentials")
-
     async def test_an_explicit_authorization_header_wins(self, client_factory: _Factory) -> None:
-        """setdefault precedence, matching every other Auth in this module."""
+        """A caller's ``Authorization`` skips the flow entirely: no mint, and the caller's header is sent."""
         auth = _CountingAuth()
         client = client_factory(auth, _ok)
 
@@ -215,19 +204,17 @@ class TestRotationRefusal:
 @pytest.mark.usefixtures("held_tokens")
 class TestTheRequestBody:
     async def test_a_streamed_body_survives_the_401_re_send(self) -> None:
-        """The 401 path re-sends the request, so the flow buffers its body first.
+        """The 401 path re-sends the request, so the flow buffers a streamed body before the first send.
 
-        That was ``requires_request_body = True`` until then, which httpx2 honours only in its DEFAULT flows — this
-        class overrides them, so the attribute did nothing and a streamed body reached the re-send unread.
+        ``requires_request_body = True`` would not do it: httpx2 honours that only in its default flows, which this
+        class overrides.
         """
         body = b'{"order": 1}'
 
         async def stream() -> AsyncIterator[bytes]:
             yield body
 
-        flow = _CountingAuth().async_auth_flow(
-            httpx2.Request("POST", "https://broker.example/orders", content=stream())
-        )
+        flow = _CountingAuth().async_auth_flow(httpx2.Request("POST", "https://api.example/orders", content=stream()))
         first = await flow.__anext__()
         second = await flow.asend(httpx2.Response(401, request=first))
 
@@ -238,9 +225,8 @@ class TestTheRequestBody:
 class TestAFreshTokenIsNotReMinted:
     """A 401 on a token minted within ``_FRESH_TOKEN_S`` surfaces; it does not re-mint.
 
-    A token that new is not stale, so a replacement carries the same authority and is rejected the same way. Re-minting
-    it anyway meant a gateway that rejects valid tokens cost one mint per REQUEST — for a provider whose refresh-token
-    rotation is a durable write, one each time.
+    A token that new is not stale, so a replacement carries the same authority and is rejected the same way. Skipping
+    the re-mint bounds a gateway that rejects valid tokens to one mint per window instead of one per request.
     """
 
     async def test_a_gateway_rejecting_fresh_tokens_costs_one_mint_not_one_per_request(
@@ -256,7 +242,7 @@ class TestAFreshTokenIsNotReMinted:
 
     async def test_a_token_held_past_the_window_is_re_minted(self) -> None:
         auth = _CountingAuth()
-        flow = auth.async_auth_flow(httpx2.Request("GET", "https://broker.example/x"))
+        flow = auth.async_auth_flow(httpx2.Request("GET", "https://api.example/x"))
         first = await flow.__anext__()
         auth._minted_at -= _auth._FRESH_TOKEN_S + 1  # held for longer than the window
 
@@ -268,8 +254,8 @@ class TestAFreshTokenIsNotReMinted:
     async def test_a_late_401_for_an_already_replaced_token_retries_with_the_replacement(self) -> None:
         """Freshness is judged on the token REJECTED, not on the cache: a replaced one is worth a retry, mint-free."""
         auth = _CountingAuth()
-        a = auth.async_auth_flow(httpx2.Request("GET", "https://broker.example/a"))
-        b = auth.async_auth_flow(httpx2.Request("GET", "https://broker.example/b"))
+        a = auth.async_auth_flow(httpx2.Request("GET", "https://api.example/a"))
+        b = auth.async_auth_flow(httpx2.Request("GET", "https://api.example/b"))
         sent_a = await a.__anext__()
         sent_b = await b.__anext__()  # both on tok-1
         auth._minted_at -= _auth._FRESH_TOKEN_S + 1
@@ -281,11 +267,9 @@ class TestAFreshTokenIsNotReMinted:
         assert auth.mints == 2
 
     async def test_a_preminted_token_counts_as_long_held(self) -> None:
-        """``premint`` stands in for a token held for minutes, so a 401 on it re-mints; client endpoint suites rely on it."""
-        from tests.support.tokens import premint
-
+        """``premint`` stands in for a token held for minutes, so a 401 on it re-mints, as endpoint tests expect."""
         auth = premint(_CountingAuth())
-        flow = auth.async_auth_flow(httpx2.Request("GET", "https://broker.example/x"))
+        flow = auth.async_auth_flow(httpx2.Request("GET", "https://api.example/x"))
         first = await flow.__anext__()
 
         second = await flow.asend(httpx2.Response(401, request=first))
@@ -298,7 +282,7 @@ class TestShortLifetime:
     async def test_a_lifetime_inside_the_refresh_margin_is_reused_until_half_life(
         self, client_factory: _Factory, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A server lifetime at or below the margin (120 s by default) used to cost one exchange per request."""
+        """A lifetime at or below the margin (120 s by default) refreshes at half-life, not on every request."""
         clock = [1000.0]
         monkeypatch.setattr(_auth, "time", SimpleNamespace(monotonic=lambda: clock[0]))
         auth = _CountingAuth(lifetime=90.0)
@@ -314,7 +298,7 @@ class TestShortLifetime:
 
 
 class _HoppingAuth(CachedTokenAuth[tuple[str, str]]):
-    """Mints through requests the flow yields — the shape Yahoo's cookie + crumb has — and rides as a header pair."""
+    """Mints through requests the flow yields (a cookie-plus-crumb exchange) and rides as a header pair."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -420,7 +404,7 @@ class TestASubclassMustSupplyAMint:
 
         assert _Child()._token is None
 
-    def test_a_mint_flow_alone_is_enough_and_the_flow_wins_when_both_exist(self) -> None:
+    async def test_a_mint_flow_alone_is_enough_and_the_flow_wins_when_both_exist(self) -> None:
         class _FlowOnly(CachedTokenAuth):
             @override
             async def _mint_flow(
@@ -436,4 +420,7 @@ class TestASubclassMustSupplyAMint:
                 yield Minted("from-flow", 60.0)
 
         assert _FlowOnly()._token is None
-        assert _Both()._token is None
+        both = _Both()
+        sent = await anext(both.async_auth_flow(httpx2.Request("GET", "https://api.example/x")))
+        assert sent.headers["Authorization"] == "Bearer from-flow"
+        assert both.mints == 0

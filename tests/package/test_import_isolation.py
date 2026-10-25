@@ -1,4 +1,4 @@
-"""Importing headgate never touches upstream ``httpx``, and works whether or not httpx2 was imported first."""
+"""What importing headgate pulls in: never upstream ``httpx``, and no codec unless a flavor module is imported."""
 
 from __future__ import annotations
 
@@ -7,26 +7,20 @@ import sys
 
 import pytest
 
-_MODULES = ["headgate.errors", "headgate._client", "headgate.msgspec"]
 
-
-def _run(script: str) -> subprocess.CompletedProcess[str]:
+def _import_with_blocked(module: str, *blocked: str) -> subprocess.CompletedProcess[str]:
+    """Import *module* in a fresh interpreter in which every name in *blocked* fails to import."""
+    script = "".join(f"import sys; sys.modules[{name!r}] = None\n" for name in blocked) + f"import {module}\n"
     return subprocess.run([sys.executable, "-I", "-c", script], capture_output=True, text=True, check=False)
 
 
-@pytest.mark.parametrize("module", _MODULES)
-def test_import_with_httpx_blocked(module: str) -> None:
-    result = _run(f"import sys\nsys.modules['httpx'] = None\nimport {module}")
+@pytest.mark.parametrize("module", ["headgate", "headgate.msgspec", "headgate.health", "headgate.policy"])
+def test_headgate_never_imports_upstream_httpx(module: str) -> None:
+    result = _import_with_blocked(module, "httpx")
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("module", _MODULES)
-def test_import_after_httpx2_already_imported(module: str) -> None:
-    result = _run(f"import httpx2\nimport {module}")
-    assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.parametrize("module", _MODULES)
-def test_import_before_httpx2(module: str) -> None:
-    result = _run(f"import {module}\nimport httpx2")
+@pytest.mark.parametrize("module", ["headgate", "headgate._client", "headgate._responses", "headgate.errors"])
+def test_the_core_imports_neither_codec(module: str) -> None:
+    result = _import_with_blocked(module, "msgspec", "pydantic")
     assert result.returncode == 0, result.stderr

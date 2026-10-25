@@ -1,9 +1,8 @@
-"""The construction seam that builds a client with its transport policy switched off.
+"""``policy_disabled()``: build a client with its transport policy (breaker, retries, pacing) switched off.
 
-Each test below pins one of the three behaviours the seam claims, plus the two
-properties that make it a CONSTRUCTION seam rather than a global switch. The tests
-assert on the assembled transport stack and on the limiter's effective rate rather
-than on timing, so they cannot flake on a slow box.
+The tests pin each of the three behaviours switched off, plus the properties that make it a construction-time
+switch rather than a global one. They assert on the assembled transport stack and on the limiters' effective rates
+rather than on timing, so they cannot flake on a slow machine.
 """
 
 from __future__ import annotations
@@ -25,12 +24,12 @@ if TYPE_CHECKING:
 
 
 class _Client(AsyncBaseClient):
-    """Minimal stand-in for the 84 real subclasses: hardcodes policy, exposes none."""
+    """A typical subclass: it fixes its own policy in ``super().__init__()`` and exposes none of it."""
 
     def __init__(self) -> None:
-        # A SECONDARY limiter the subclass declares — as example declares the one its candle ``rate_limits`` rule
-        # carries, which ``PathLimiters`` builds from the rule's own ``Rate`` — and the reason the seam is enforced
-        # inside AsyncRateLimiter rather than at the client: replacing the client's own ``rate=`` would leave it.
+        # The ``rate_limits`` rule gives this client a SECONDARY limiter, built from the rule's own ``Rate``. It is
+        # why the switch is enforced inside ``AsyncRateLimiter`` rather than by overriding the client's ``rate=``,
+        # which would leave the secondary limiter throttled.
         super().__init__(
             base_url="https://example.test",
             rate=Rate.per_second(2.0),
@@ -48,42 +47,30 @@ def _rule_limiter(client: AsyncBaseClient) -> AsyncRateLimiter:
 
 
 def _stack_has_breaker(client: AsyncBaseClient) -> bool:
-    """Whether this client consults the breaker at all.
-
-    It was ``isinstance(transport, BreakerTransport)`` while the breaker was a layer, then an instance flag;
-    it is the registry the client reads now — the shared one, or ``NO_BREAKERS``, which never reads it.
-    """
+    """Whether this client consults the shared breaker registry (``HOST_BREAKERS``) rather than ``NO_BREAKERS``."""
     return client._breakers is HOST_BREAKERS
 
 
 class TestPolicyOff:
     def test_breaker_is_not_consulted(self) -> None:
+        """A policy-off client reads ``NO_BREAKERS``, not the process-global registry.
+
+        Not recording failures is not enough: the registry is shared, so a client that still read it would be
+        REFUSED by a breaker some other client opened on the same host. This pins the registry choice; the refusal
+        itself is pinned end to end in ``tests/transport/test_breaker_integration.py``.
+        """
         with policy_disabled():
             off = _Client()
         on = _Client()
         assert _stack_has_breaker(on), "control: a normally-built client consults its breaker"
-        assert not _stack_has_breaker(off)
-
-    def test_breaker_consultation_is_skipped_too(self) -> None:
-        """The second half of "no breaker": _send reads a process-global registry.
-
-        Not recording failures is only half of "no breaker": the registry is process-global,
-        so without ``NO_BREAKERS`` a policy-off client would still be REFUSED by a breaker
-        some other client opened on the same host. This pins the registry choice; the refusal itself is
-        pinned end to end in ``test_circuit_breaker.py``.
-        """
-        with policy_disabled():
-            off = _Client()
         assert off._breakers is NO_BREAKERS
-        assert _Client()._breakers is HOST_BREAKERS
 
     def test_retries_are_zero_not_merely_instant(self) -> None:
-        """Stronger than the fixtures it replaces, which kept the retries and zeroed backoff.
+        """Policy-off removes the retries themselves, not just the backoff between them.
 
-        ``build_retry`` takes the ATTEMPT count and sets the retry policy's ``total``
-        (a RETRY count) to ``max(n - 1, 0)``, so policy-off is ``total == 0``: one
-        attempt, never repeated. The control below pins the other end of that mapping
-        so a change to the convention fails here rather than silently weakening this.
+        ``build_retry`` takes the ATTEMPT count and sets the retry policy's ``total`` (a RETRY count) to
+        ``max(n - 1, 0)``, so policy-off is ``total == 0``: one attempt, never repeated.
+        ``TestPolicyOnIsUnchanged`` pins the other end of that mapping.
         """
         with policy_disabled():
             off = _Client()
@@ -101,7 +88,7 @@ class TestPolicyOff:
         assert _rule_limiter(off)._max_rate == 1_000_000.0, "a secondary limiter must be covered too"
 
 
-class TestItIsAConstructionSeam:
+class TestItIsReadAtConstruction:
     def test_the_flag_does_not_leak_past_the_block(self) -> None:
         assert not policy_is_disabled()
         with policy_disabled():
@@ -140,7 +127,7 @@ class TestItIsAConstructionSeam:
 
 
 class TestPolicyOnIsUnchanged:
-    """The seam must be inert when nobody asks for it — the production path."""
+    """Without ``policy_disabled()`` a client keeps every policy."""
 
     def test_default_construction_keeps_every_policy(self) -> None:
         client = _Client()
@@ -150,4 +137,3 @@ class TestPolicyOnIsUnchanged:
         assert isinstance(transport, RetryTransport)
         assert transport.retry.total == 2
         assert default_limiter(client)._max_rate == 2.0
-        assert client._breakers is HOST_BREAKERS

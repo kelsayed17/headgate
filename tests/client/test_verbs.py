@@ -1,12 +1,9 @@
-"""Verb-method surface on AsyncBaseClient (get/post/put/patch/delete/head).
+"""The verb methods on ``AsyncBaseClient``: get/post/put/patch/delete/head.
 
-Transport-mocked: a MockTransport captures the outgoing httpx2.Request so we
-assert the verb maps to the right HTTP method and threads its args through to
-_request/_send. No network.
-
-Every verb takes the call's declared responses as ``expect=`` — a bare :data:`~headgate._responses.Reader`
-(the success reader) or an :class:`~headgate._responses.Expect`. There is no raw mode: an undeclared
-non-2xx always raises.
+A ``MockTransport`` captures the outgoing ``httpx2.Request``, so each test asserts the verb maps to the right HTTP
+method and threads its arguments through. Every verb takes the call's declared responses as ``expect=`` — a bare
+:data:`~headgate._responses.Reader` (the success reader) or an :class:`~headgate._responses.Expect` — and an
+undeclared non-2xx always raises.
 """
 
 from __future__ import annotations
@@ -70,43 +67,7 @@ async def test_get_decodes_struct_and_json_and_the_whole_response() -> None:
         assert whole.status_code == 200
 
 
-async def test_get_404_raises() -> None:
-    """A 404 the call did not declare raises UpstreamStatusError — there is no no-data
-    carve-out, and the raise reaches the caller (the ``none_on_status`` seam that mapped it was deleted."""
-    from headgate.errors import UpstreamStatusError
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(404)
-
-    async with _client(handler) as c:
-        with pytest.raises(UpstreamStatusError) as ei:
-            await c.get("missing", expect=decoder(_Model))
-    assert ei.value.status_code == 404
-
-
-async def test_raising_client_non_2xx_raises() -> None:
-    """A non-2xx surfaces as a ClientError at the verb boundary instead of a
-    silent ``None``."""
-    from headgate.errors import AuthError, UpstreamStatusError
-
-    def bad(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(500)
-
-    async with _client(bad) as c:
-        with pytest.raises(UpstreamStatusError) as ei:
-            await c.get("t", expect=decoder(_Model))
-        assert ei.value.status_code == 500
-
-    def denied(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(403)
-
-    async with _client(denied) as c:
-        with pytest.raises(AuthError) as ei2:
-            await c.get("t", expect=decoder(_Model))
-        assert ei2.value.status_code == 403
-
-
-# ---- post/put/patch/delete/head (Task C) -----------------------------------
+# --- post/put/patch/delete/head ---
 
 
 class _Body(msgspec.Struct):
@@ -160,8 +121,7 @@ async def test_post_maps_to_post_method_and_decodes_model() -> None:
 
 
 async def test_post_json_body_reaches_content_with_json_content_type() -> None:
-    # httpx-native: json=<builtins> rides **kwargs; httpx2 serializes (compact)
-    # and stamps the content-type.
+    # json=<builtins> rides **kwargs; httpx2 serializes it (compact) and stamps the content-type.
     seen: dict[str, Any] = {}
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -208,11 +168,9 @@ async def test_head_maps_to_head_method() -> None:
     assert isinstance(out, httpx2.Response) and out.status_code == 200
 
 
-# HEAD rides the same pipeline as every verb: an undeclared non-2xx raises.
-
-
 @pytest.mark.parametrize("status", [404, 500, 503])
 async def test_head_raises_upstream_status_on_a_returned_non_success(status: int) -> None:
+    """HEAD goes through the same response pipeline as every verb: an undeclared non-2xx raises."""
     async with _client(lambda request: httpx2.Response(status)) as c:
         with pytest.raises(UpstreamStatusError) as ei:
             await c.head("thing", expect=nothing)
@@ -233,9 +191,9 @@ async def test_head_maps_an_auth_status_to_auth_error(status: int) -> None:
 async def test_head_renders_a_tstring_path_before_naming_it_in_the_error() -> None:
     """The error message names the rendered path, not ``Template(...)``.
 
-    ``head`` is an ordinary verb now: it delegates straight to ``_request``, which renders a ``Template`` url once,
-    before both the send and any error path. A regression here is invisible to every other test: the request still
-    goes to the right URL and only the message is wrong.
+    ``head`` delegates to ``_request`` like every verb, and the ``Template`` url is rendered once, before both the
+    send and any error path. A regression here is invisible to every other test: the request still goes to the
+    right URL and only the message is wrong.
     """
     async with _client(lambda request: httpx2.Response(404)) as c:
         with pytest.raises(UpstreamStatusError) as ei:
@@ -244,11 +202,10 @@ async def test_head_renders_a_tstring_path_before_naming_it_in_the_error() -> No
     assert "thing/a%20b" in str(ei.value)
 
 
-async def test_there_is_no_raw_mode_an_undeclared_404_raises_even_for_bytes() -> None:
-    """The negative control for raw mode's deletion: no declaration hands back a non-2xx body as data.
+async def test_an_undeclared_404_raises_even_for_a_bytes_reader() -> None:
+    """No reader hands back an undeclared non-2xx body as data, not even ``as_bytes``, which accepts any body.
 
-    Previously the bulk-file downloads were raw and returned a Cloudflare 403 page as data. A 404 page read by
-    ``as_bytes`` is the same shape.
+    Otherwise an error page (a CDN's 403, a 404 page) would be returned to the caller as the downloaded file.
     """
     async with _client(lambda request: httpx2.Response(404, content=b"<html>not published</html>")) as c:
         with pytest.raises(UpstreamStatusError) as ei:
@@ -257,18 +214,15 @@ async def test_there_is_no_raw_mode_an_undeclared_404_raises_even_for_bytes() ->
     assert ei.value.status_code == 404
 
 
-# ---- t-string paths --------------------------------------------------------
-# A ``Template`` path is rendered ONCE at the top of ``_request`` (see
-# ``headgate._url.path``), so everything below the seam — ``_send``, the
-# error path's ``sanitize_url`` — sees a plain ``str``. A ``str`` path is
-# already-trusted structure and reaches the wire verbatim; that passthrough is
-# what lets the pagination helpers forward an absolute cursor URL unescaped.
+# --- t-string paths ---
+# A ``Template`` path is rendered ONCE, while the request is built (``headgate._url.render_path``, which escapes each
+# interpolation with ``escape_segment``), so everything after — the send, the error path's ``sanitize_url`` — sees a
+# plain ``str``. A ``str`` path is already-trusted structure and reaches the wire verbatim, which is what lets a
+# caller forward an absolute cursor URL unescaped.
 #
-# These assert on ``raw_path``, NOT ``url.path``: httpx2 percent-DECODES the
-# ``path`` property, so ``/v2/positions/BTC%2FUSD`` and ``/v2/positions/BTC/USD``
-# both read back as the latter. Asserting on ``path`` would pass whether or not
-# the escaping happened at all — exactly the false pass these tests exist to
-# rule out. ``raw_path`` is the bytes that go on the wire.
+# These assert on ``raw_path``, NOT ``url.path``: httpx2 percent-DECODES the ``path`` property, so
+# ``/v2/positions/BTC%2FUSD`` and ``/v2/positions/BTC/USD`` both read back as the latter. Asserting on ``path`` would
+# pass whether or not the escaping happened at all. ``raw_path`` is the bytes that go on the wire.
 
 
 async def test_tstring_path_escapes_interpolation_as_one_segment() -> None:

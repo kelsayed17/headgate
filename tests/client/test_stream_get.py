@@ -41,10 +41,9 @@ async def test_a_large_error_body_is_read_only_to_a_snippet(httpx2_mock: HTTPXMo
 
 
 async def test_a_refusal_check_runs_on_the_head_before_any_chunk(httpx2_mock: HTTPXMock) -> None:
-    class Refusing(_Client):
+    class Refusing(AsyncBaseClient):
         def __init__(self) -> None:
-            AsyncBaseClient.__init__(
-                self,
+            super().__init__(
                 base_url="https://x.test",
                 rate=Rate.per_second(100),
                 refusal_check=lambda r: Refused("no") if r.status_code == 200 else None,

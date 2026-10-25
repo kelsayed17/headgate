@@ -1,18 +1,14 @@
-""":class:`ResilientCacheTransport`: a storage blip must never fail a fetch.
+""":class:`ResilientCacheTransport`: a storage fault never fails a fetch.
 
-The HTTP cache is an optimization, but a storage fault used to propagate and kill the whole request.
+The HTTP cache is an optimization, so a fault inside the storage degrades to an uncached fetch. Driven through the real
+hishel machinery, with a genuinely faulting :class:`hishel.AsyncBaseStorage` rather than a stand-in transport:
 
-The contract pinned here, driven through the REAL hishel machinery (a genuinely faulting
-:class:`hishel.AsyncBaseStorage`, not a stand-in transport):
-
-  * a storage fault on LOOKUP (``get_entries``)  -> request served from the network
-  * a storage fault on STORE  (``create_entry``) -> request still served (the write
-    happens after the fetch, so this costs one extra fetch — safe, the cached surface
-    is read-only)
-  * a genuine ``httpx2.HTTPError``                -> re-raised untouched AND the
-    network is hit exactly once, so the retry + breaker layers above keep their
-    existing semantics
-  * a healthy cache                              -> HIT short-circuits, no network
+  * a fault on LOOKUP (``get_entries``)  -> the request is served from the network
+  * a fault on STORE (``create_entry``)  -> the request is still served, at the cost of one extra fetch (the store
+    happens after the fetch; the cached surface is read-only, so the replay is safe)
+  * a genuine ``httpx2.HTTPError``        -> re-raised untouched after exactly one fetch, so the retry and breaker
+    layers above see it as they would without a cache
+  * a healthy cache                      -> a HIT short-circuits, with no network call
 """
 
 from __future__ import annotations
@@ -20,45 +16,23 @@ from __future__ import annotations
 import dataclasses
 from typing import TYPE_CHECKING, override
 
-import anysqlite
 import httpx2
 import pytest
-from hishel import (
-    AsyncBaseStorage,
-    AsyncSqliteStorage,
-    Entry,
-    FilterPolicy,
-    Request,
-    Response,
-)
+from hishel import AsyncBaseStorage, Entry, Request, Response
 
-from headgate._cache import (
-    CACHE_DEGRADED_EXT,
-    MethodFilter,
-    NoCloseStorage,
-    ResilientCacheTransport,
-    StatusCodeFilter,
-)
+from headgate._cache import CACHE_DEGRADED_EXT, NoCloseStorage, ResilientCacheTransport
+from tests.cache._helpers import every_get_policy
 
 if TYPE_CHECKING:
     import uuid
     from collections.abc import AsyncIterator, Callable
 
+    from hishel import AsyncSqliteStorage
+
 _URL = "https://example.test/series?api_key=secret"
 
 # Sentinel for "this storage never faults" (a method name nothing calls).
 _NEVER = "never"
-
-
-@pytest.fixture
-async def storage() -> AsyncIterator[AsyncSqliteStorage]:
-    """A REAL hishel storage (in-memory sqlite) — same idiom as test_cache_wiring."""
-    conn = await anysqlite.connect(":memory:")
-    store = AsyncSqliteStorage(connection=conn)
-    try:
-        yield store
-    finally:
-        await store.close()
 
 
 class StorageTimeout(Exception):
@@ -70,7 +44,7 @@ class StorageUnreachable(Exception):
 
 
 class _Network(httpx2.AsyncBaseTransport):
-    """The real network leg — counts fetches."""
+    """The network leg: counts fetches, and raises *exc* from each one when given."""
 
     def __init__(self, exc: Exception | None = None) -> None:
         self.calls = 0
@@ -85,10 +59,9 @@ class _Network(httpx2.AsyncBaseTransport):
 
 
 class _Faulty(AsyncBaseStorage):
-    """Delegate to a real storage, but raise *exc* from ONE named method.
+    """Delegate to a real storage, but raise *exc* from the one method named by *failing*.
 
-    Mimics a storage blip on exactly one leg (lookup or store) while every other
-    operation behaves normally — so the healthy paths stay genuinely healthy.
+    A fault on exactly one leg (lookup or store) while every other operation behaves normally.
     """
 
     def __init__(self, inner: AsyncBaseStorage, exc: Exception, *, failing: str) -> None:
@@ -149,19 +122,11 @@ class _Faulty(AsyncBaseStorage):
         await self._inner.close()
 
 
-def _policy() -> FilterPolicy:
-    """Cache every GET — so hishel genuinely reaches the storage on each request."""
-    return FilterPolicy(
-        request_filters=[MethodFilter(frozenset({"GET"}))],
-        response_filters=[StatusCodeFilter(frozenset({200}))],
-    )
-
-
 def _transport(inner: AsyncBaseStorage, network: httpx2.AsyncBaseTransport) -> ResilientCacheTransport:
     return ResilientCacheTransport(
         next_transport=network,
         storage=NoCloseStorage(inner),
-        policy=_policy(),
+        policy=every_get_policy(),
         max_body_bytes=1024 * 1024,
     )
 
@@ -169,7 +134,7 @@ def _transport(inner: AsyncBaseStorage, network: httpx2.AsyncBaseTransport) -> R
 @pytest.mark.parametrize(
     "exc",
     [
-        StorageTimeout("timeout reading from storage"),  # the live failure
+        StorageTimeout("timeout reading from storage"),
         StorageUnreachable("connection refused"),
         ValueError("corrupt cache entry"),  # any non-httpx storage fault
     ],
@@ -186,7 +151,7 @@ async def test_lookup_fault_degrades_to_network(exc: Exception, storage: AsyncSq
 
 
 async def test_store_fault_still_serves_the_request(storage: AsyncSqliteStorage) -> None:
-    # A regression seen in production: create_entry blew up AFTER a healthy fetch.
+    """``create_entry`` raises after a healthy fetch; the request is still served."""
     network = _Network()
     faulty = _Faulty(
         storage,
@@ -207,8 +172,7 @@ async def test_store_fault_still_serves_the_request(storage: AsyncSqliteStorage)
     [httpx2.ConnectTimeout("network down"), httpx2.ConnectError("dns")],
 )
 async def test_genuine_httpx_error_is_reraised_and_not_refetched(exc: Exception, storage: AsyncSqliteStorage) -> None:
-    # A real transport failure is NOT the cache's fault: it must surface unchanged so
-    # retry/breaker behave exactly as before, and must NOT trigger a second fetch.
+    """A transport failure is not the cache's fault: it surfaces unchanged, for retry and the breaker, after one fetch."""
     network = _Network(exc=exc)
     faulty = _Faulty(storage, RuntimeError("unused"), failing=_NEVER)
 
@@ -218,11 +182,8 @@ async def test_genuine_httpx_error_is_reraised_and_not_refetched(exc: Exception,
     assert network.calls == 1
 
 
-async def test_healthy_cache_hit_never_touches_the_network(
-    storage: AsyncSqliteStorage,
-) -> None:
-    # Subclassing must not disturb hishel's own hit path: fetch once, then serve the
-    # second identical request from storage.
+async def test_healthy_cache_hit_never_touches_the_network(storage: AsyncSqliteStorage) -> None:
+    """The subclass leaves hishel's hit path intact: one fetch, then the identical request is served from storage."""
     network = _Network()
     faulty = _Faulty(storage, RuntimeError("unused"), failing=_NEVER)
     transport = _transport(faulty, network)
@@ -267,8 +228,11 @@ class _TrackingNetwork(httpx2.AsyncBaseTransport):
 
 
 async def test_a_store_fault_closes_the_network_response_it_abandoned(storage: AsyncSqliteStorage) -> None:
-    """hishel sends first and stores second; when the store raised, its unread network response held a pooled
-    connection forever. After ``max_connections`` storage faults every cache MISS waited out the pool timeout."""
+    """hishel sends first and stores second, so a store fault abandons an unread network response.
+
+    That response is closed before the fallback fetch; left open it would hold its pooled connection, and after
+    ``max_connections`` store faults every cache MISS would wait out the pool timeout.
+    """
     network = _TrackingNetwork()
     faulty = _Faulty(storage, StorageTimeout("timeout writing to storage"), failing="create_entry")
 
@@ -301,8 +265,11 @@ class _BodyFaulty(_Faulty):
 
 
 async def test_a_fault_while_the_body_streams_degrades_to_network(storage: AsyncSqliteStorage) -> None:
-    """The body used to be read after this transport returned, so a storage fault there escaped as a raw
-    a raw backend exception — not a ``ClientError`` — and failed a fetch that would have succeeded."""
+    """The body is read inside this transport, so a storage fault while it streams degrades to the network.
+
+    Read later, the fault would escape as a raw backend exception, not a ``ClientError``, and fail a fetch that would
+    have succeeded.
+    """
     network = _Network()
     faulty = _BodyFaulty(storage, StorageTimeout("timeout reading from storage"), failing=_NEVER)
 
@@ -314,8 +281,11 @@ async def test_a_fault_while_the_body_streams_degrades_to_network(storage: Async
 
 
 async def test_credential_query_params_never_reach_storage(storage: AsyncSqliteStorage) -> None:
-    """hishel persists the full request URL with every entry, so a key on the query string was stored in plaintext.
-    Stripped before hishel and restored below it: storage never sees it, the network does, and a hit still matches."""
+    """hishel persists the full request URL with every entry, so a key on the query string would be stored in plaintext.
+
+    The key is stripped before hishel and restored below it: storage never sees it, the network does, and a hit still
+    matches.
+    """
     stored_urls: list[str] = []
 
     class _Recording(_Faulty):

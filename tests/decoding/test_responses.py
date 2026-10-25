@@ -32,7 +32,7 @@ class _HasStatus(Protocol):
 
 
 def _quota_check(env: _HasStatus) -> Refused | None:
-    """A check typed over a structural Protocol naming only the field it reads (spec §6)."""
+    """A check typed over a structural Protocol naming only the field it reads."""
     if env.status == "OK":
         return None
     return Refused(f"refused: {env.status}", code=env.status, kind=RateLimitError)
