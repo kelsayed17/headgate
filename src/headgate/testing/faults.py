@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import json as jsonlib
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final, override
+from typing import TYPE_CHECKING, override
 
 import h2.errors
 import h2.events
@@ -29,6 +29,7 @@ import httpcore2
 import httpx2
 
 from headgate._core import CallContext
+from headgate.retry._tracking import head_size
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -44,9 +45,6 @@ __all__ = [
     "Slow",
     "Step",
 ]
-
-#: Bytes an HTTP/1.1 head spends around each header line (``": "`` and CRLF), and around the request line.
-_LINE_OVERHEAD: Final = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,12 +156,6 @@ class _TrackedBody(httpx2.AsyncByteStream):
     async def aclose(self) -> None:
         """Record the close."""
         self._call.response_closed = True
-
-
-def head_size(request: httpx2.Request) -> int:
-    """Return the size of *request*'s head as HTTP/1.1 writes it: the request line and every header line."""
-    size = len(request.method) + len(request.url.raw_path) + len(b"HTTP/1.1") + _LINE_OVERHEAD
-    return size + sum(len(name) + len(value) + _LINE_OVERHEAD for name, value in request.headers.raw)
 
 
 def _refused_stream(request: httpx2.Request) -> httpx2.RemoteProtocolError:

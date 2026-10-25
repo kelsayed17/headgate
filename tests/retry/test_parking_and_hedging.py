@@ -21,8 +21,8 @@ import pytest
 
 from headgate._core import BREAKER_GATE, CallContext, CallInfo, Emitter, RetryScheduled
 from headgate.retry import Backoff, Hedge, RetryBudget, RetryPolicy, RetryTransport
+from headgate.retry._tracking import head_size
 from headgate.testing import FaultyTransport, Respond, TestClock
-from headgate.testing.faults import head_size
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -117,6 +117,7 @@ async def test_a_parked_failure_keeps_its_status_headers_extensions_and_body() -
 
     assert (response.status_code, response.headers["x-request-id"]) == (503, _REQUEST_ID)
     assert response.extensions[_MARK] == "kept"
+    assert response.request.url == "https://api.test/orders"
     assert response.content == b"first second"
     assert network.body.closed
     assert network.sends == 1

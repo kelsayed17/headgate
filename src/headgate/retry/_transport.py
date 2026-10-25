@@ -35,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Final, override
 
 import httpx2
@@ -241,7 +241,9 @@ class _Sequence:
         keep: _Attempt | None = None
         try:
             while True:
-                if timer is None and extra < hedge.max_extra and self._sent < self._policy.attempts:
+                # Whether an attempt is left is judged when the timer fires (see _admit_hedge): a hedge created just
+                # before has not counted its send yet.
+                if timer is None and extra < hedge.max_extra:
                     timer = asyncio.create_task(_waited(self._sleep, hedge.after))
                 waiting: set[asyncio.Task[_Attempt] | asyncio.Task[None]] = {*pending}
                 if timer is not None:
@@ -267,15 +269,16 @@ class _Sequence:
                     keep = failed
                     return failed
         finally:
+            losers: list[asyncio.Task[_Attempt] | asyncio.Task[None]] = [*sends]
             if timer is not None:
-                timer.cancel()
-            await _cancel_losers([*sends, *([] if timer is None else [timer])], keep=keep)
+                losers.append(timer)
+            await _cancel_losers(losers, keep=keep)
 
     def _admit_hedge(self, after: float) -> bool:
         """Return whether a hedge may start now (an attempt left, time left, breaker closed, budget).
 
-        Emits ``RetryScheduled`` when it may. The attempts are counted here as well as when the timer starts: a timer
-        started right after a hedge was created saw the count before that hedge's send began.
+        Emits ``RetryScheduled`` when it may. The attempts are counted here, when the timer fires, rather than when it
+        starts: a timer starts right after the send before it is created, before that send has counted itself.
         """
         if self._sent >= self._policy.attempts or self._stop_reason() is not None:
             return False
@@ -387,7 +390,7 @@ async def _parked_attempt(attempt: _Attempt) -> _Attempt:
     """Return *attempt* with its response, if any, parked in memory (see :func:`_parked`) for the wait."""
     if not isinstance(attempt.result, httpx2.Response):
         return attempt
-    return _Attempt(await _parked(attempt.result, attempt.request), attempt.verdict, attempt.request)
+    return replace(attempt, result=await _parked(attempt.result, attempt.request))
 
 
 async def _cancel_losers(tasks: list[asyncio.Task[_Attempt] | asyncio.Task[None]], *, keep: _Attempt | None) -> None:

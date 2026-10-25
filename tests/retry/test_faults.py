@@ -13,6 +13,7 @@ import pytest
 
 from headgate._core import CallContext, CallInfo
 from headgate.retry._classify import refused_stream
+from headgate.retry._tracking import head_size
 from headgate.testing import (
     ConnectFail,
     DropMidBody,
@@ -23,7 +24,6 @@ from headgate.testing import (
     Slow,
     TestClock,
 )
-from headgate.testing.faults import head_size
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
