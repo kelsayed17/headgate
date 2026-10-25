@@ -80,6 +80,10 @@ _URL_LIMIT = 300
 #: Cap on any other outside text folded into a message: an exception's own message, a decoder's diagnosis.
 MESSAGE_TEXT_LIMIT = 1000
 
+#: What httpx2 raises for a response a mint handled out of order (its body read before it was fetched, or twice) or a
+#: cookie it asked for by a name two cookies share: the token response could not be read as the mint meant to.
+_MISREAD_RESPONSE_ERRORS: tuple[type[Exception], ...] = (httpx2.StreamError, httpx2.CookieConflict)
+
 #: The statuses that name our own credential as the failure.
 _AUTH_STATUSES = frozenset({httpx2.codes.UNAUTHORIZED, httpx2.codes.FORBIDDEN})
 
@@ -371,7 +375,9 @@ def mint_error(exc: Exception, *, source: str) -> Exception:
     * ``httpx2.HTTPStatusError`` (a mint's ``raise_for_status()``) becomes the status ladder's error for the token
       endpoint: ``AuthError`` for 401/403, ``UpstreamStatusError`` otherwise;
     * any other ``httpx2.HTTPError`` or an ``OSError`` becomes ``TransportError`` / ``ClientTimeoutError``;
-    * one of :data:`SHAPE_ERRORS` (an unreadable token response) becomes ``ResponseParseError``.
+    * one of :data:`SHAPE_ERRORS` (an unreadable token response), or an ``httpx2.StreamError`` or
+      ``httpx2.CookieConflict`` (a response handled out of order, a cookie name two cookies share), becomes
+      ``ResponseParseError``.
 
     Anything else is returned as it is, for the caller to re-raise: it is a bug in the mint, not a failure to report.
     """
@@ -396,7 +402,7 @@ def mint_error(exc: Exception, *, source: str) -> Exception:
     if isinstance(exc, httpx2.HTTPError | OSError):
         method, log_url = _request_line(exc)
         return transport_error(exc, CallSite(source, method, f"{log_url} (token mint)"))
-    if isinstance(exc, SHAPE_ERRORS):
+    if isinstance(exc, SHAPE_ERRORS + _MISREAD_RESPONSE_ERRORS):
         detail = shorten(redact_secrets(str(exc))) or type(exc).__name__
         return ResponseParseError(f"unreadable token response: {detail}", source=source)
     return exc

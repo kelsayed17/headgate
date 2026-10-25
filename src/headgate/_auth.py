@@ -31,18 +31,20 @@ from typing import TYPE_CHECKING, ClassVar, override
 
 import httpx2
 
-from headgate._core import origin_text
-from headgate._failures import mint_error
+from headgate._body import read_capped
+from headgate._core import CallContext, origin_text
+from headgate._failures import CallSite, loggable_url, mint_error
 from headgate._url import register_secret_params
 from headgate.errors import ClientConfigurationError
 from headgate.security import CHAIN_ORIGIN
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Iterable, Mapping
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable, Mapping
 
 __all__ = [
     "AUTH_HOP",
     "FRESH_TOKEN_S",
+    "MAX_MINT_RESPONSE_BYTES",
     "CachedTokenAuth",
     "Minted",
     "QueryParamAuth",
@@ -54,6 +56,10 @@ __all__ = [
 #: request. :class:`CachedTokenAuth` sets it on every request its :meth:`~CachedTokenAuth._mint_flow` yields. A fixture
 #: recorder can read it to skip the hop, which is not the endpoint's answer.
 AUTH_HOP = "headgate.auth_hop"
+
+#: The most of a mint flow's hop response that is read, in decompressed bytes. A token response is a few hundred bytes,
+#: and a cookie-plus-crumb page a few dozen KiB; past this the hop is refused as ``ResponseTooLargeError``.
+MAX_MINT_RESPONSE_BYTES = 1024 * 1024
 
 #: A token rejected within this many seconds of being minted is not re-minted: it is not stale, so a fresh one carries
 #: the same authority and is rejected the same way. See :class:`CachedTokenAuth`.
@@ -83,6 +89,65 @@ def failed_on_auth_hop(exc: BaseException) -> bool:
     except RuntimeError:  # httpx2 raises when the error was built without a request, as a transport double may do
         return False
     return bool(request.extensions.get(AUTH_HOP))
+
+
+class _Recorded(httpx2.AsyncByteStream):
+    """Pass a response's raw body through, keeping a copy of each chunk, so the body can be replayed once it is read."""
+
+    def __init__(self, raw: AsyncGenerator[bytes]) -> None:
+        """Pass *raw*'s chunks through."""
+        self._raw = raw
+        self.chunks: list[bytes] = []
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self._raw:
+            self.chunks.append(chunk)
+            yield chunk
+
+    @override
+    async def aclose(self) -> None:
+        """Close the raw body, and so the response it comes from."""
+        await self._raw.aclose()
+
+
+async def _read_hop(response: httpx2.Response, source: str) -> httpx2.Response:
+    """Read the response to a mint flow's hop, up to :data:`MAX_MINT_RESPONSE_BYTES`, and return it read.
+
+    httpx2 hands an auth flow each response unread, and reads it itself only after the flow has answered, so the flow
+    would see ``ResponseNotRead`` on ``.content`` or ``.json()``. The body is read through a copy that counts the
+    decompressed bytes (:func:`~headgate._body.read_capped`), and *response* is then given its raw bytes back to read
+    for itself: httpx2 reads the same response again to keep it in the call's history. Past the cap the read raises
+    ``ResponseTooLargeError``, naming the token mint, so a hostile token host cannot make the flow buffer without end.
+    """
+    request = response.request
+    site = CallSite(source, request.method, f"{loggable_url(str(request.url))} (token mint)")
+    raw = _Recorded(httpx2.Response(response.status_code, stream=response.stream).aiter_raw())
+    decoded = httpx2.Response(response.status_code, headers=response.headers, stream=raw, request=request)
+    try:
+        await read_capped(decoded, MAX_MINT_RESPONSE_BYTES, site)
+    finally:
+        response.stream = httpx2.ByteStream(b"".join(raw.chunks))
+    await response.aread()
+    return response
+
+
+def _prepare_hop(hop: httpx2.Request, call: httpx2.Request) -> None:
+    """Mark *hop*, a request a mint flow yielded for *call*, as an auth hop, and give it the call's timeouts.
+
+    The marks are :data:`AUTH_HOP` and the :data:`~headgate.security.CHAIN_ORIGIN` the credential guard trusts for the
+    hop. A hop that sets no ``timeout`` extension of its own takes the call's: a request built by hand has none, and a
+    token host that never answered would hold the call, and the mint's lock, until the deadline. Either way the hop's
+    timeouts are cut to the time the call's deadline leaves.
+    """
+    extensions = {**hop.extensions, AUTH_HOP: True, CHAIN_ORIGIN: origin_text(hop.url.origin)}
+    timeout = call.extensions.get("timeout")
+    if "timeout" not in extensions and isinstance(timeout, dict):
+        extensions["timeout"] = dict(timeout)
+    hop.extensions = extensions
+    context = CallContext.find(call)
+    if context is not None:
+        context.fit_timeouts(hop)
 
 
 class StaticHeaderAuth(httpx2.Auth):
@@ -216,15 +281,16 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     ("Exceeded maximum allowed redirects").
 
     The lock is held while a mint flow's requests are in flight, so requests that need a token wait for the mint to
-    finish or fail, bounded by the hop's own timeout. Closing the flow (an error, or the caller's cancellation)
-    releases it.
+    finish or fail, bounded by the hop's timeouts (the call's, unless the hop sets its own) and the call's deadline.
+    Closing the flow (an error, or the caller's cancellation) releases it.
 
     **A failed mint is reported as the token endpoint's failure**, never the API call's (see
     :func:`~headgate._failures.mint_error`): an exception the mint code raises (a ``ConnectError`` on its own client,
     a ``raise_for_status()``, an unreadable token response) becomes the ``ClientError`` it means, named for this auth
     class and the token endpoint, chained to the original. It is raised from the auth flow, so the API host's circuit
     breaker records nothing for it. A hop :meth:`_mint_flow` yields travels the owning client's stack and fails as any
-    request there does.
+    request there does; reading its response (bounded by :data:`MAX_MINT_RESPONSE_BYTES`) fails through the same
+    mapping, so a body that is too large is ``ResponseTooLargeError`` and a dropped connection ``TransportError``.
     """
 
     #: The headers :meth:`_attach` sets. A subclass whose :meth:`_attach` sets others declares them here.
@@ -307,8 +373,11 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     ) -> AsyncGenerator[httpx2.Request | Minted[TokenT], httpx2.Response]:
         """Mint through the owning client's stack: yield each request the exchange needs, end with :class:`Minted`.
 
-        *request* is the call that needs the credential, for a hop to copy its extensions from (timeout, retry
-        policy). Called with the lock held, like :meth:`_mint_token`; the default delegates to it.
+        Each response is sent back in already read (up to :data:`MAX_MINT_RESPONSE_BYTES`), so ``.content`` and
+        ``.json()`` work on it. A hop that sets no ``timeout`` extension is sent with the call's timeouts, and every
+        hop's timeouts are cut to what the call's deadline leaves. *request* is the call that needs the credential, for
+        a hop that wants another of its extensions. Called with the lock held, like :meth:`_mint_token`; the default
+        delegates to it.
         """
         del request  # only a flow that yields its own requests needs the call it is minting for
         token, lifetime = await self._mint_token()
@@ -378,8 +447,8 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         """
         return token == self._token and time.monotonic() - self._minted_at < FRESH_TOKEN_S
 
-    async def _mint_step(self, step: Awaitable[httpx2.Request | Minted[TokenT]]) -> httpx2.Request | Minted[TokenT]:
-        """Await the mint's next *step*, raising a failure in the mint code as the ``ClientError`` it means."""
+    async def _mint_step[T](self, step: Awaitable[T]) -> T:
+        """Await a *step* of the mint, raising a failure in it as the ``ClientError`` it means."""
         try:
             return await step
         except Exception as exc:
@@ -410,9 +479,9 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
                     try:
                         step = await self._mint_step(anext(mint))
                         while isinstance(step, httpx2.Request):
-                            chain = origin_text(step.url.origin)
-                            step.extensions = {**step.extensions, AUTH_HOP: True, CHAIN_ORIGIN: chain}
+                            _prepare_hop(step, request)
                             hop_response = yield step
+                            hop_response = await self._mint_step(_read_hop(hop_response, type(self).__name__))
                             step = await self._mint_step(mint.asend(hop_response))
                     except StopAsyncIteration:
                         msg = f"{type(self).__name__}._mint_flow ended without yielding Minted"

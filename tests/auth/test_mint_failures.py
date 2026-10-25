@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import CachedTokenAuth, HttpOptions, Minted, TransportPolicy
+from headgate import CachedTokenAuth, HttpOptions, Minted, Timeouts, TransportPolicy
+from headgate._auth import MAX_MINT_RESPONSE_BYTES
 from headgate._responses import as_bytes, nothing
 from headgate.errors import (
     AuthError,
@@ -24,6 +25,7 @@ from headgate.errors import (
     ClientTimeoutError,
     DecodeError,
     ResponseParseError,
+    ResponseTooLargeError,
     TransportError,
     UpstreamStatusError,
 )
@@ -267,3 +269,143 @@ async def test_a_mint_within_max_redirects_completes() -> None:
     await client.get("x", expect=nothing)
 
     assert len(fake.calls) == _ThreeHops.hops + 1
+
+
+class _Streamed(httpx2.AsyncByteStream):
+    """A body delivered as the network delivers it: unread until something iterates it."""
+
+    def __init__(self, *chunks: bytes) -> None:
+        """Deliver *chunks* in order."""
+        self._chunks = chunks
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _DropsMidBody(httpx2.AsyncByteStream):
+    """A body whose connection drops after its first chunk."""
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"{"
+        msg = "connection dropped"
+        raise httpx2.ReadError(msg)
+
+
+def _token_host(body: httpx2.AsyncByteStream) -> Callable[[httpx2.Request], httpx2.Response]:
+    """Answer the hop to ``/token`` with *body*, streamed, and every API call with a 200 echoing its bearer."""
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/token":
+            return httpx2.Response(httpx2.codes.OK, stream=body, headers={"Content-Type": "application/json"})
+        return httpx2.Response(httpx2.codes.OK, text=request.headers.get("Authorization", ""))
+
+    return handle
+
+
+async def test_a_mint_flow_is_handed_its_hops_body_read() -> None:
+    """Hand the flow its hop's response already read, so ``response.json()`` works on a streamed body."""
+    async with _api(_FlowReadsJson(), _token_host(_Streamed(b'{"access_', b'token": "t-1"}'))) as client:
+        bearer = await client.get("series", expect=as_bytes)
+
+    assert bearer == b"Bearer t-1"
+
+
+async def test_an_oversized_token_response_is_refused_as_too_large() -> None:
+    """Refuse a hop's body past ``MAX_MINT_RESPONSE_BYTES`` as ``ResponseTooLargeError`` naming the token mint."""
+    chunk = b" " * (64 * 1024)
+    chunks = [chunk] * (MAX_MINT_RESPONSE_BYTES // len(chunk) + 1)
+    with pytest.raises(ResponseTooLargeError, match=r"\(token mint\)"):
+        await _call(_FlowReadsJson(), _token_host(_Streamed(*chunks)))
+
+
+async def test_a_token_response_whose_connection_drops_is_a_transport_error() -> None:
+    """Map a failure reading a hop's body through ``mint_error``, naming the token endpoint."""
+    with pytest.raises(
+        TransportError, match=r"^\[_FlowReadsJson\] POST https://api\.example\.test/token \(token mint\)"
+    ):
+        await _call(_FlowReadsJson(), _token_host(_DropsMidBody()))
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        pytest.param(httpx2.ResponseNotRead(), id="a-response-not-read"),
+        pytest.param(httpx2.StreamConsumed(), id="a-stream-read-twice"),
+        pytest.param(httpx2.CookieConflict("two cookies named session"), id="a-cookie-conflict"),
+    ],
+)
+async def test_a_misread_token_response_is_a_parse_error(exc: Exception) -> None:
+    """Map what httpx2 raises for a response handled out of order, or an ambiguous cookie, to ``ResponseParseError``."""
+    with pytest.raises(ResponseParseError, match=r"^\[_Raises\] unreadable token response: ") as raised:
+        await _call(_Raises(exc))
+
+    assert raised.value.__cause__ is exc
+
+
+#: The client's timeouts in the timeout tests, every phase longer than their deadline.
+_CALL_TIMEOUTS = Timeouts(connect=11.0, read=22.0, write=13.0, pool=14.0)
+#: The deadline in the timeout tests, shorter than every phase of :data:`_CALL_TIMEOUTS`.
+_SHORT_DEADLINE = 2.5
+#: The timeouts a hop sets for itself in the timeout tests.
+_HOP_TIMEOUTS = {"connect": 1.0, "read": 1.0, "write": 1.0, "pool": 1.0}
+
+
+class _OneHop(CachedTokenAuth):
+    """A mint of one hop, built with *extensions*, whose response is the token itself."""
+
+    def __init__(self, extensions: dict[str, object] | None = None) -> None:
+        """Build the hop with *extensions*."""
+        super().__init__()
+        self._extensions = extensions or {}
+
+    @override
+    async def _mint_flow(
+        self, request: httpx2.Request
+    ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+        response = yield httpx2.Request("POST", f"https://{_API_HOST}/token", extensions=self._extensions)
+        yield Minted(response.text, 3600.0)
+
+
+async def _hop_timeouts(auth: CachedTokenAuth, *, deadline: float | None) -> dict[str, float]:
+    """Make one call minting through *auth* under *deadline*, and return the timeouts its hop was sent with."""
+    seen: dict[str, dict[str, float]] = {}
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        seen[request.url.path] = request.extensions["timeout"]
+        return httpx2.Response(httpx2.codes.OK, text="t")
+
+    client = StubClient(
+        base_url=f"https://{_API_HOST}",
+        rate=UNLIMITED,
+        auth=auth,
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1), deadline=deadline),
+        http=HttpOptions(transport=httpx2.MockTransport(handle), timeout=_CALL_TIMEOUTS),
+    )
+    async with client:
+        await client.get("series", expect=as_bytes)
+    return seen["/token"]
+
+
+async def test_a_hop_takes_the_calls_timeouts() -> None:
+    """Send a hop that sets no timeout with the call's, so a token host that never answers cannot hang the call."""
+    timeouts = await _hop_timeouts(_OneHop(), deadline=None)
+
+    assert timeouts == {"connect": 11.0, "read": 22.0, "write": 13.0, "pool": 14.0}
+
+
+async def test_a_hops_timeouts_are_cut_to_the_calls_deadline() -> None:
+    """Cut every phase of a hop's timeouts to the time the call's deadline leaves."""
+    timeouts = await _hop_timeouts(_OneHop(), deadline=_SHORT_DEADLINE)
+
+    assert set(timeouts) == {"connect", "read", "write", "pool"}
+    assert all(0 < limit <= _SHORT_DEADLINE for limit in timeouts.values())
+
+
+async def test_a_hop_that_sets_its_own_timeouts_keeps_them() -> None:
+    """Keep the timeouts a hop was built with, rather than the call's."""
+    timeouts = await _hop_timeouts(_OneHop({"timeout": _HOP_TIMEOUTS}), deadline=None)
+
+    assert timeouts == _HOP_TIMEOUTS

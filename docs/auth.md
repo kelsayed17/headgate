@@ -65,19 +65,23 @@ class PartnerAuth(CachedTokenAuth):
 
 Or `_mint_flow(request)` yields the requests the exchange needs, so they travel through the owning client's own stack
 (its transport, rate budget, retries and error mapping), and ends by yielding `Minted(token, lifetime)`.
-[`examples/orders_client.py`](../examples/orders_client.py) has a complete one. Two things to know when writing one:
+[`examples/orders_client.py`](../examples/orders_client.py) has a complete one. What the flow can count on:
 
-- **The response a hop is answered with arrives unread.** Call `await response.aread()` before reading its body.
-- **Copy the call's timeouts** onto the hop (`extensions={"timeout": request.extensions["timeout"]}`); a hop built
-  without them has no timeout of its own, only the call's deadline.
+- **Each response arrives read**, so `.content`, `.text` and `.json()` work on it. It is read up to 1 MiB
+  (`headgate._auth.MAX_MINT_RESPONSE_BYTES`, decompressed); a larger one fails the mint with `ResponseTooLargeError`.
+- **Each hop is sent with the call's timeouts** unless it sets a `timeout` extension of its own, and every hop's
+  timeouts are cut to what the call's deadline leaves, so a token host that never answers cannot hold the call (or
+  the other calls waiting for the token) past it.
 
 Each hop counts toward `HttpOptions.max_redirects`, because httpx2 keeps one history per call; a mint of several hops
 needs a higher limit. A hop may carry the mint's credentials to the origin it addresses and to same-origin redirects,
 and nowhere else.
 
 A failed mint is reported as the token endpoint's failure, never the API call's: a `raise_for_status()` becomes
-`AuthError` (401, 403) or `UpstreamStatusError`, a network failure `TransportError`, an unreadable token response
-`ResponseParseError`, each naming the auth class and the token endpoint. The API host's breaker records nothing for it.
+`AuthError` (401, 403) or `UpstreamStatusError`, a network failure (in the send or reading the body) `TransportError`,
+an oversized token response `ResponseTooLargeError`, and an unreadable one (a body that is not the expected shape, a
+response read out of order, an ambiguous cookie) `ResponseParseError`, each naming the auth class and the token
+endpoint. The API host's breaker records nothing for it.
 
 ### Other credential shapes
 

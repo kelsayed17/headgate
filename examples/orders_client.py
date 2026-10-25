@@ -90,11 +90,9 @@ class ShopTokenAuth(CachedTokenAuth):
     async def _mint_flow(
         self, request: httpx2.Request
     ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
-        # The hop takes the call's timeouts; the client's stack paces it, retries it when safe and maps its failures.
-        response = yield httpx2.Request(
-            "POST", MINT_ENDPOINT, data=self._form, extensions={"timeout": request.extensions["timeout"]}
-        )
-        await response.aread()  # an auth flow is handed the response unread
+        del request  # the hop needs nothing of the call: it is sent with the call's timeouts already
+        # The client's stack paces the hop, retries it when safe, maps its failures, and hands the response back read.
+        response = yield httpx2.Request("POST", MINT_ENDPOINT, data=self._form)
         response.raise_for_status()  # a refused mint raises AuthError, naming the token endpoint
         token = decode(response.content, Token)
         yield Minted(token.access_token, token.expires_in)

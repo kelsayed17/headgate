@@ -126,6 +126,10 @@ layer. Code written against the 0.1.0 source needs the migrations below; there a
 - `ClientError.retryable` is the retry policy's verdict on the outcome: a surviving 501 or 505, a 503 marked
   `x-should-retry: false`, a 503 on a POST without an idempotency key, and a body-read failure on such a POST are no
   longer reported retryable.
+- Auth: a mint flow is handed each hop's response read (bounded to 1 MiB), so `.json()` and `.content` work instead of
+  raising `httpx2.ResponseNotRead`; an oversized or dropped token response, an `httpx2.StreamError` and an
+  `httpx2.CookieConflict` map onto the `ClientError` tree. Every hop gets the call's timeouts, cut to its deadline,
+  unless it sets its own.
 - A non-ASCII `Content-Length` no longer crashes; error snippets no longer decode a whole 32 MiB body.
 - Backoff no longer overflows past 1023 retries or produces a NaN wait; `Rate` refuses NaN and infinite values.
 - `sanitize_url` no longer rewrites untouched parts of a URL and never raises; `event_stream` skips data-less blocks;
