@@ -14,6 +14,7 @@ place, so the client methods themselves stay one line each.
 pip install headgate               # core: httpx2, hishel, msgspec
 pip install 'headgate[pydantic]'   # + the pydantic codec flavor
 pip install 'headgate[curl]'       # + AsyncCurlTransport (browser TLS impersonation via curl_cffi)
+pip install 'headgate[otel]'       # + OpenTelemetryObserver (opentelemetry-api only)
 ```
 
 ## A client
@@ -209,6 +210,52 @@ pages = Cursor(items=items_of, next=cursor_of, param="after")
 async for item in client.paginate("items", expect=decoder(Page), pages=pages):  # item: Item
     ...
 ```
+
+## Per-call defaults
+
+`client.with_options(headers=..., timeout=..., deadline=..., retry=...)` returns a view of the client with other
+defaults for its calls. It shares the connection pool, rate budget, retry state and circuit breakers; the client it
+came from owns the pool, so closing a view closes nothing. `Expect(reader, accept="application/json")` sends that
+`Accept` header and raises `ResponseParseError` (with the status and `Content-Type`) for a body of another media type
+before the reader runs; parameters are ignored and a `+json` suffix counts as JSON.
+
+## Observability
+
+- **Events.** Install observers with `HttpOptions(observers=(...))`: each call reports `CallStarted`, one
+  `AttemptFinished` per send and `CallFinished`, plus `Deprecated` when the response carries a `Deprecation`
+  (RFC 9745) or `Sunset` (RFC 8594) header (dates parsed, `rel="deprecation"` / `rel="sunset"` links resolved). Events
+  carry sanitized data only. See `headgate.events`.
+- **OpenTelemetry** (`pip install 'headgate[otel]'`): `http = OpenTelemetryObserver().install(HttpOptions(...))` gives
+  every call one CLIENT span covering all its attempts and the body read, with the HTTP semantic-convention attributes
+  (the t-string route as `url.template`, re-sends as `http.request.resend_count`), the `http.client.request.duration`
+  histogram, and a W3C `traceparent` on every attempt. It works with any OpenTelemetry SDK, Logfire or Sentry's
+  OpenTelemetry integration, and nests the per-attempt spans of `HTTPX2ClientInstrumentor` under its own; see
+  `headgate.otel` for how to avoid recording the duration twice.
+- **Request ids.** Every `ClientError` carries `request_id`, read from the first of `HttpOptions.request_id_headers`
+  the response has (`x-request-id`, `request-id`, AWS's, Azure's, Cloudflare's by default).
+
+## Testing your client
+
+`headgate.testing` tests a client without patching anything private:
+
+```python
+from headgate import AsyncBaseClient, HttpOptions, Rate, as_bytes
+from headgate.testing import FakeTransport, TestClock, isolated_breakers
+
+fake = FakeTransport().route("GET", "/v1/series", 503, httpx2.Response(200, content=b"ok"))
+clock = TestClock()
+with clock.install(), isolated_breakers():  # the clients built in the block use them
+    client = AsyncBaseClient(
+        base_url="https://api.example.test/v1", rate=Rate.per_second(5), http=HttpOptions(transport=fake)
+    )
+assert await client.get("series", expect=as_bytes) == b"ok"
+assert len(fake.calls) == 2 and clock.sleeps  # the retry waited, on the test clock
+```
+
+`FakeTransport` answers from a method-and-path route table and logs every request; `TestClock` is a manual clock whose
+sleep advances it; `instant_retries()` retries without waiting; `isolated_breakers()` gives the clients built in its
+block a fresh breaker registry. `CassetteFilter` builds a vcrpy / pytest-recording `vcr_config` that filters
+headgate's credential headers and secret query parameters and, installed as middleware, skips token-mint requests.
 
 ## Errors
 

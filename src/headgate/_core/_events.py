@@ -23,7 +23,10 @@ import itertools
 from collections import Counter
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 __all__ = [
     "OBSERVER_FAILURES",
@@ -53,13 +56,16 @@ _CALL_IDS = itertools.count(1)
 class CallInfo:
     """What identifies one logical call in every event about it.
 
-    ``url`` is sanitized and bounded; ``route`` is the t-string template the URL was rendered from
-    (``"series/{series_id}"``), or ``None`` for a ``str`` URL.
+    ``url`` is the URL the call was given, sanitized and bounded; ``route`` is the t-string template the URL was
+    rendered from (``"series/{series_id}"``), or ``None`` for a ``str`` URL. ``full_url`` is the absolute URL of the
+    request as first built (before any redirect), sanitized: what an observer needs to name the server, as an
+    OpenTelemetry span does. It is ``None`` when the client has no observers.
     """
 
     method: str
     url: str
     route: str | None = None
+    full_url: str | None = None
     call_id: int = field(default_factory=lambda: next(_CALL_IDS))
 
 
@@ -133,11 +139,21 @@ class CacheResult(CallEvent):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Deprecated(CallEvent):
-    """The response announced its endpoint's deprecation (RFC 9745) or sunset (RFC 8594): each header as sent."""
+    """The call's response announced that its endpoint is deprecated (RFC 9745) or will be sunset (RFC 8594).
 
-    deprecation: str | None = None
-    sunset: str | None = None
+    * ``deprecated``: the response carried a valid ``Deprecation`` header;
+    * ``deprecated_at``: the date it names (in the past: deprecated since then; in the future: deprecated from then),
+      or ``None`` for the older ``Deprecation: true`` and for a response with only a ``Sunset`` header;
+    * ``sunset_at``: the ``Sunset`` date, after which the endpoint may stop answering, or ``None``;
+    * ``link`` / ``sunset_link``: the ``Link`` targets with ``rel="deprecation"`` / ``rel="sunset"`` (where the
+      provider documents the change), resolved against the request URL and with credentials redacted.
+    """
+
+    deprecated: bool = False
+    deprecated_at: datetime | None = None
+    sunset_at: datetime | None = None
     link: str | None = None
+    sunset_link: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

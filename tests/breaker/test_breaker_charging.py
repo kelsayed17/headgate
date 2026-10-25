@@ -26,9 +26,9 @@ from headgate.cache import StatusCodeFilter
 from headgate.errors import ClientError, RateLimitError, UpstreamStatusError
 from headgate.ratelimit import Rate
 from headgate.retry import NO_RETRY
+from headgate.testing import TestClock
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
-from tests.support.clock import FakeClock
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -151,7 +151,7 @@ async def test_a_5xx_served_from_the_cache_is_not_a_host_failure(storage: AsyncS
 
 async def test_every_transition_is_reported_once_by_the_call_that_caused_it() -> None:
     """Emit closed to open, open to half-open and half-open to open, then half-open to closed, each with its call."""
-    clock = FakeClock()
+    clock = TestClock()
     registry = BreakerRegistry(clock=clock)
     breaker = BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN, registry=registry)
     statuses = iter([503, 503, 503, 200])
@@ -224,7 +224,7 @@ def _gated_client(wire: _GateReader, policy: TransportPolicy) -> StubClient:
 
 async def test_the_gate_opens_when_another_call_trips_the_breaker_mid_call() -> None:
     """Read false while the breaker admits, and true once a concurrent failure has opened it."""
-    clock = FakeClock()
+    clock = TestClock()
     registry = BreakerRegistry(clock=clock)
     breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=registry)
 
@@ -244,7 +244,7 @@ async def test_the_gate_opens_when_another_call_trips_the_breaker_mid_call() -> 
 
 async def test_the_probe_is_not_stopped_by_its_own_probe_slot() -> None:
     """Read false for the half-open breaker's probe, so its own retries are its one recovery test."""
-    clock = FakeClock()
+    clock = TestClock()
     registry = BreakerRegistry(clock=clock)
     breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=registry)
     failing = _gated_client(_GateReader(503), TransportPolicy(retry=NO_RETRY, breaker=breaker))

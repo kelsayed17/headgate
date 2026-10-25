@@ -23,12 +23,12 @@ from headgate import CachedTokenAuth, HttpOptions, Minted, Timeouts, TransportPo
 from headgate import pydantic as pydantic_flavor
 from headgate._auth import AUTH_HOP, StaticHeaderAuth
 from headgate._client import AsyncBaseClient
-from headgate._core import Timing, timing_override
 from headgate._responses import Expect, RefusalCheck, RefusedError, as_bytes, nothing
 from headgate.errors import AuthError, RateLimitError, ResponseParseError, TransportError, UpstreamStatusError
 from headgate.msgspec import decoder
 from headgate.ratelimit import Rate, RateBudget
 from headgate.retry import Backoff, RetryPolicy
+from headgate.testing import TestClock
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
@@ -225,11 +225,6 @@ async def test_honors_retry_after_on_429(httpx2_mock: HTTPXMock) -> None:
     the fallback path and prove only that a 429 is retried at all. The client's sleep records the duration instead of
     waiting it, so asserting the duration costs no wall time.
     """
-    slept: list[float] = []
-
-    async def record(seconds: float, /) -> None:
-        slept.append(seconds)
-
     httpx2_mock.add_response(
         url="https://api.example/x", status_code=httpx2.codes.TOO_MANY_REQUESTS, headers={"Retry-After": "7"}
     )
@@ -237,12 +232,13 @@ async def test_honors_retry_after_on_429(httpx2_mock: HTTPXMock) -> None:
 
     # A zero backoff factor, so the backoff fallback would be a visible 0.0, not a plausible-looking wait.
     policy = TransportPolicy(retry=RetryPolicy(attempts=2, backoff=Backoff(factor=0.0)))
-    with timing_override(Timing(sleep=record)):
+    clock = TestClock()
+    with clock.install():
         client = StubClient(rate=_RATE, base_url="https://api.example", policy=policy)
     resp = await client.get("x", expect=RESPONSE)
 
     assert resp.status_code == httpx2.codes.OK
-    assert slept == [5.0], "the header's 7s is honoured, clamped to the backoff's max_wait of 5s"
+    assert clock.sleeps == [5.0], "the header's 7s is honoured, clamped to the backoff's max_wait of 5s"
 
 
 # --- Circuit breaker ---

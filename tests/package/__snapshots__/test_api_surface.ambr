@@ -154,18 +154,21 @@
       field error: str | None = None
       field attempts: int
       field elapsed: float
-  class CallInfo(object)(*, method: 'str', url: 'str', route: 'str | None' = None, call_id: 'int' = <factory>) -> 'None'
+  class CallInfo(object)(*, method: 'str', url: 'str', route: 'str | None' = None, full_url: 'str | None' = None, call_id: 'int' = <factory>) -> 'None'
       field method: str
       field url: str
       field route: str | None = None
+      field full_url: str | None = None
       field call_id: int = <factory>
   class CallStarted(CallEvent)(*, call: 'CallInfo') -> 'None'
       field call: CallInfo
-  class Deprecated(CallEvent)(*, call: 'CallInfo', deprecation: 'str | None' = None, sunset: 'str | None' = None, link: 'str | None' = None) -> 'None'
+  class Deprecated(CallEvent)(*, call: 'CallInfo', deprecated: 'bool' = False, deprecated_at: 'datetime | None' = None, sunset_at: 'datetime | None' = None, link: 'str | None' = None, sunset_link: 'str | None' = None) -> 'None'
       field call: CallInfo
-      field deprecation: str | None = None
-      field sunset: str | None = None
+      field deprecated: bool = False
+      field deprecated_at: datetime | None = None
+      field sunset_at: datetime | None = None
       field link: str | None = None
+      field sunset_link: str | None = None
   type Event = CallStarted | AttemptFinished | RetryScheduled | RateLimited | BreakerChanged | CacheResult | Deprecated | CallFinished
   class Observer(Protocol)(*args, **kwargs)
       def notify(self, event: 'Event') -> 'None'
@@ -201,6 +204,16 @@
   def decode(content: 'bytes', type_: 'TypeForm[T]', *, strict: 'bool' = True) -> 'T'
   def decoder(type_: 'TypeForm[T]', *, strict: 'bool' = True, allow_empty_body: 'bool' = False, check: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
   def to_builtins(value: 'object', *, drop_none: 'bool' = False) -> 'object'
+  '''
+# ---
+# name: test_the_public_surface_matches_the_snapshot[headgate.otel]
+  '''
+  module headgate.otel
+  __all__ = ['OpenTelemetryObserver']
+  class OpenTelemetryObserver(object)(*, tracer_provider: 'TracerProvider | None' = None, meter_provider: 'MeterProvider | None' = None, propagator: 'TextMapPropagator | None' = None) -> 'None'
+      def __call__(self, request: 'httpx2.Request', call_next: 'Next') -> 'httpx2.Response'
+      def install(self, http: 'HttpOptions') -> 'HttpOptions'
+      def notify(self, event: 'Event') -> 'None'
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.pagination]
@@ -341,6 +354,34 @@
       property status_code
   '''
 # ---
+# name: test_the_public_surface_matches_the_snapshot[headgate.testing]
+  '''
+  module headgate.testing
+  __all__ = ['CassetteFilter', 'FakeTransport', 'RecordedRequest', 'Reply', 'TestClock', 'UnmatchedRequestError', 'instant_retries', 'isolated_breakers']
+  class CassetteFilter(object)(*, auths: 'Iterable[object]' = (), headers: 'Iterable[str]' = (), params: 'Iterable[str]' = ()) -> 'None'
+      def __call__(self, request: 'httpx2.Request', call_next: 'Next') -> 'httpx2.Response'
+      def before_record_request(self, request: 'R') -> 'R | None'
+      def before_record_response(self, response: 'MutableMapping[str, object]') -> 'MutableMapping[str, object]'
+      def vcr_config(self) -> 'dict[str, object]'
+  class FakeTransport(AsyncBaseTransport)() -> 'None'
+      def aclose(self) -> 'None'
+      property calls
+      def calls_to(self, method: 'str', path: 'str') -> 'tuple[httpx2.Request, ...]'
+      def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
+      def route(self, method: 'str', path: 'str', *replies: 'Reply') -> 'Self'
+  class RecordedRequest(Protocol)(*args, **kwargs)
+  type Reply = httpx2.Response | int | Callable[[httpx2.Request], httpx2.Response | Awaitable[httpx2.Response]]
+  class TestClock(object)(start: 'float' = 0.0) -> 'None'
+      def __call__(self) -> 'float'
+      def advance(self, seconds: 'float') -> 'None'
+      def install(self) -> 'Generator[Self]'
+      def sleep(self, seconds: 'float', /) -> 'None'
+      property timing
+  class UnmatchedRequestError(AssertionError)(no signature)
+  def instant_retries() -> 'Generator[None]'
+  def isolated_breakers() -> 'Generator[BreakerRegistry]'
+  '''
+# ---
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
@@ -360,6 +401,7 @@
       def post(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
       def put(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
       def stream(self, method: '_Method', url: 'str | Template', *, retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, last_event_id: 'str | None' = None, **options: 'Unpack[RequestOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
+      def with_options(self, *, headers: 'Mapping[str, str] | None' = None, timeout: 'Timeouts | float | None' = None, deadline: 'float | Literal[Keep.KEEP] | None' = <Keep.KEEP: 'keep'>, retry: 'bool | RetryPolicy | None' = None) -> 'Self'
   class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
   class Backoff(object)(*, factor: 'float' = 0.5, max_wait: 'float' = 5.0, jitter: 'RandomSource' = <bound method SystemRandom.random of <random.SystemRandom object at 0x…>>) -> 'None'
       field factor: float = 0.5
@@ -397,10 +439,12 @@
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
   class DecodeError(Exception)(no signature)
-  class Expect(Generic)(ok: 'Reader[T]', answers: 'Mapping[int, Reader[T]]' = <factory>, *, headers: 'Mapping[str, str]' = <factory>) -> 'None'
+  class Expect(Generic)(ok: 'Reader[T]', answers: 'Mapping[int, Reader[T]]' = <factory>, *, headers: 'Mapping[str, str]' = <factory>, accept: 'str | None' = None) -> 'None'
       field ok: Reader[T]
       field answers: Mapping[int, Reader[T]] = <factory>
       field headers: Mapping[str, str] = <factory>
+      field accept: str | None = None
+      def accepts(self, resp: 'httpx2.Response') -> 'bool'
       def on(self, status: 'int', read: 'Reader[E]') -> 'Expect[T | E]'
   class Fresh(Generic)(value: 'T', validator: 'Validator') -> 'None'
       field value: T

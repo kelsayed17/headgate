@@ -22,9 +22,9 @@ from headgate.cache import MethodFilter, StatusCodeFilter
 from headgate.cache._transport import CACHE_DEGRADATIONS
 from headgate.ratelimit import Rate, RateBudget
 from headgate.retry import NO_RETRY
+from headgate.testing import TestClock
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
-from tests.support.clock import FakeClock
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -66,7 +66,7 @@ class _Server:
         return httpx2.Response(200, content=b"{}")
 
 
-def _budget(clock: FakeClock) -> RateBudget:
+def _budget(clock: TestClock) -> RateBudget:
     """Return a generous budget on *clock*."""
     return RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep), wall_clock=clock)
 
@@ -95,7 +95,7 @@ async def storage() -> AsyncIterator[AsyncSqliteStorage]:
 
 async def test_a_429_pauses_the_budget_for_every_client_sharing_it() -> None:
     """Make a second client sharing the budget wait out the first client's 429 before it sends."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock)
     server = _Server()
     recorder = _Recorder()
@@ -105,14 +105,14 @@ async def test_a_429_pauses_the_budget_for_every_client_sharing_it() -> None:
     response = await _client(budget, server, recorder=recorder).get("x", expect=RESPONSE)
 
     assert response.status_code == httpx2.codes.OK
-    assert clock.slept == [_PAUSE]
+    assert clock.sleeps == [_PAUSE]
     waits = [event for event in recorder.events if isinstance(event, RateLimited)]
     assert [(event.delay, event.reason) for event in waits] == [(_PAUSE, "paused")]
 
 
 async def test_a_pause_past_the_deadline_raises_rate_limit_error_without_sending() -> None:
     """Raise ``RateLimitError`` at once, retryable and carrying the pause, when the call cannot outwait it."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock)
     server = _Server()
     client = _client(budget, server)
@@ -131,7 +131,7 @@ async def test_a_pause_past_the_deadline_raises_rate_limit_error_without_sending
 
 async def test_a_pause_past_the_deadline_is_not_mistaken_for_a_cache_fault(storage: AsyncSqliteStorage) -> None:
     """Raise the pause through the cache layer as itself, counting no cache degradation."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock)
     server = _Server()
     policy = FilterPolicy(

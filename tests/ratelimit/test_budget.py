@@ -19,7 +19,7 @@ import pytest
 from headgate._core import CallContext, CallInfo, Emitter, Event, RateLimited, Timing
 from headgate.policy import policy_disabled
 from headgate.ratelimit import UNLIMITED, Adaptive, BudgetPausedError, PathBudgets, Rate, RateBudget, RateRule
-from tests.support.clock import FakeClock
+from headgate.testing import TestClock
 
 pytestmark = pytest.mark.transport_policy
 
@@ -52,13 +52,13 @@ class _Recorder:
         self.events.append(event)
 
 
-def _context(clock: FakeClock, *, deadline: float | None = None, observer: _Recorder | None = None) -> CallContext:
+def _context(clock: TestClock, *, deadline: float | None = None, observer: _Recorder | None = None) -> CallContext:
     """Return a call's context on *clock*, due *deadline* seconds from now, reporting to *observer*."""
     emitter = Emitter(() if observer is None else (observer,))
     return CallContext(CallInfo(method="GET", url="https://x/"), clock=clock, deadline_after=deadline, emitter=emitter)
 
 
-def _budget(clock: FakeClock, rate: Rate = _RATE, **options: Adaptive | int | None) -> RateBudget:
+def _budget(clock: TestClock, rate: Rate = _RATE, **options: Adaptive | int | None) -> RateBudget:
     """Return a budget at *rate* on *clock*."""
     adaptive = options.get("adaptive", Adaptive())
     in_flight = options.get("max_in_flight")
@@ -88,16 +88,16 @@ def _rate_limited(recorder: _Recorder) -> list[tuple[float, str]]:
 
 async def test_a_burst_goes_at_once_and_then_requests_are_spaced_by_the_interval() -> None:
     """Admit ``rate.requests`` back to back, then one per ``rate.interval``."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock)
     for _ in range(_BURST + 2):
         await budget.wait(_context(clock))
-    assert clock.slept == pytest.approx([_RATE.interval, _RATE.interval])
+    assert clock.sleeps == pytest.approx([_RATE.interval, _RATE.interval])
 
 
 async def test_concurrent_waiters_reserve_successive_turns_in_arrival_order() -> None:
     """Give each waiter beyond the burst the next turn, so the third waits three intervals."""
-    clock = FakeClock()
+    clock = TestClock()
     slept: list[float] = []
 
     async def record(seconds: float, /) -> None:
@@ -111,17 +111,17 @@ async def test_concurrent_waiters_reserve_successive_turns_in_arrival_order() ->
 
 async def test_a_rate_below_one_per_period_spaces_every_request() -> None:
     """Pace half a request per second as one request every two seconds, with no burst beyond the first."""
-    clock = FakeClock()
+    clock = TestClock()
     rate = Rate(requests=0.5, period=1.0)
     budget = _budget(clock, rate)
     await budget.wait(_context(clock))
     await budget.wait(_context(clock))
-    assert clock.slept == [rate.interval]
+    assert clock.sleeps == [rate.interval]
 
 
 async def test_a_cancelled_waiter_gives_its_turn_back() -> None:
     """Hand a cancelled waiter's turn to the next caller, so a deadline expiring in the queue wastes no send."""
-    clock = FakeClock()
+    clock = TestClock()
     blocked = asyncio.Event()
     slept: list[float] = []
 
@@ -143,7 +143,7 @@ async def test_a_cancelled_waiter_gives_its_turn_back() -> None:
 
 async def test_a_cancelled_waiter_behind_a_later_one_keeps_the_queue_intact() -> None:
     """Refund nothing when a later caller already reserved after the cancelled one: its turn stays in the schedule."""
-    clock = FakeClock()
+    clock = TestClock()
     blocked = asyncio.Event()
     slept: list[float] = []
 
@@ -166,7 +166,7 @@ async def test_a_cancelled_waiter_behind_a_later_one_keeps_the_queue_intact() ->
 
 async def test_every_wait_is_reported_with_its_reason() -> None:
     """Emit ``RateLimited`` for a paced wait, nothing for an admission without one."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock, Rate.per_second(1))
     recorder = _Recorder()
     await budget.wait(_context(clock, observer=recorder))
@@ -176,11 +176,11 @@ async def test_every_wait_is_reported_with_its_reason() -> None:
 
 async def test_a_wait_nobody_observes_builds_no_event() -> None:
     """Skip the event without observers; the wait itself is the same."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock, Rate.per_second(1))
     await budget.wait(_context(clock))
     await budget.wait(_context(clock))
-    assert clock.slept == [1.0]
+    assert clock.sleeps == [1.0]
 
 
 async def test_real_pacing_waits_on_the_system_clock() -> None:
@@ -199,7 +199,7 @@ async def test_real_pacing_waits_on_the_system_clock() -> None:
 
 async def test_a_retry_after_pauses_the_whole_budget() -> None:
     """Make every later call wait out a 429's ``Retry-After`` before its paced turn."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock, adaptive=None)
     recorder = _Recorder()
     budget.observe(_response(429, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
@@ -213,7 +213,7 @@ async def test_a_retry_after_pauses_the_whole_budget() -> None:
 
 async def test_a_pause_past_the_deadline_raises_at_once() -> None:
     """Refuse a call whose deadline ends inside the pause, naming the seconds left and the status that asked for it."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock)
     budget.observe(_response(503, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
 
@@ -221,27 +221,27 @@ async def test_a_pause_past_the_deadline_raises_at_once() -> None:
         await budget.wait(_context(clock, deadline=_SHORT_DEADLINE))
 
     assert (raised.value.retry_after, raised.value.status_code) == (_PAUSE, 503)
-    assert clock.slept == [], "a pause that cannot fit is never waited"
+    assert clock.sleeps == [], "a pause that cannot fit is never waited"
 
 
 async def test_a_pause_that_starts_while_a_call_waits_its_turn_is_waited_too() -> None:
     """Check the pause again after the paced wait, so a call queued before a 429 still honours it."""
-    clock = FakeClock()
+    clock = TestClock()
 
     async def sleep(seconds: float, /) -> None:
-        if not clock.slept:
+        if not clock.sleeps:
             budget.observe(_response(429, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
         await clock.sleep(seconds)
 
     budget = RateBudget(Rate.per_second(1), adaptive=None, timing=Timing(clock=clock, sleep=sleep), wall_clock=clock)
     await budget.wait(_context(clock))
     await budget.wait(_context(clock))
-    assert clock.slept == [1.0, _PAUSE - 1.0], "the pause began when the turn's wait did"
+    assert clock.sleeps == [1.0, _PAUSE - 1.0], "the pause began when the turn's wait did"
 
 
 async def test_a_pause_past_the_deadline_found_after_a_paced_wait_raises() -> None:
     """Raise, not wait, when the pause a queued call finds after its turn outlasts its deadline."""
-    clock = FakeClock()
+    clock = TestClock()
 
     async def sleep(seconds: float, /) -> None:
         budget.observe(_response(429, {"Retry-After": str(int(_LONG_DEADLINE * 2))}), sent_at=clock())
@@ -255,7 +255,7 @@ async def test_a_pause_past_the_deadline_found_after_a_paced_wait_raises() -> No
 
 async def test_a_shorter_pause_never_shortens_a_longer_one() -> None:
     """Keep the later of two pauses."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock)
     budget.observe(_response(429, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
     budget.observe(_response(429, {"Retry-After": "1"}), sent_at=clock())
@@ -267,7 +267,7 @@ async def test_a_shorter_pause_never_shortens_a_longer_one() -> None:
 
 async def test_pushback_halves_the_rate_down_to_its_floor() -> None:
     """Multiply the effective rate by ``decrease`` on each new pushback, never below ``min_rate``."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock, adaptive=Adaptive(decrease=0.5, min_rate=0.2))
     expected = [_BURST * 0.5, _BURST * 0.25, _BURST * 0.2]
     seen: list[float] = []
@@ -280,7 +280,7 @@ async def test_pushback_halves_the_rate_down_to_its_floor() -> None:
 
 async def test_one_burst_of_refusals_decreases_the_rate_once() -> None:
     """Ignore pushback on requests sent before the last decrease: concurrent refusals are one signal."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock)
     sent_at = clock()
     clock.advance(1)
@@ -292,7 +292,7 @@ async def test_one_burst_of_refusals_decreases_the_rate_once() -> None:
 
 async def test_success_restores_the_rate_over_time_up_to_the_configured_one() -> None:
     """Add back ``increase`` times the configured rate per second of successes, capped at the configured rate."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock, adaptive=Adaptive(decrease=0.5, increase=0.1))
     budget.observe(_response(503), sent_at=clock())
     clock.advance(_RECOVERY)
@@ -305,7 +305,7 @@ async def test_success_restores_the_rate_over_time_up_to_the_configured_one() ->
 
 async def test_a_server_error_neither_throttles_nor_restores() -> None:
     """Leave the rate alone on a 500: it says nothing about load the budget controls."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock)
     budget.observe(_response(429), sent_at=clock())
     clock.advance(_RECOVERY)
@@ -315,7 +315,7 @@ async def test_a_server_error_neither_throttles_nor_restores() -> None:
 
 async def test_an_exhausted_quota_header_throttles_and_pauses_a_success() -> None:
     """Treat ``RateLimit: r=0`` on a 200 as pushback: throttle, and pause for its ``t``."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock)
     budget.observe(_response(200, {"RateLimit": '"default";r=0;t=7'}), sent_at=clock())
     assert (budget.effective_rate.requests, budget.pause_remaining()) == (_BURST / 2, 7.0)
@@ -323,7 +323,7 @@ async def test_an_exhausted_quota_header_throttles_and_pauses_a_success() -> Non
 
 async def test_a_throttled_wait_says_so() -> None:
     """Report a wait paced at a throttled rate as ``throttled``."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock, Rate.per_second(1))
     recorder = _Recorder()
     budget.observe(_response(429), sent_at=clock())
@@ -334,7 +334,7 @@ async def test_a_throttled_wait_says_so() -> None:
 
 async def test_a_budget_without_adaptive_throttling_keeps_its_rate() -> None:
     """Never change the rate with ``adaptive=None``."""
-    clock = FakeClock()
+    clock = TestClock()
     budget = _budget(clock, adaptive=None)
     budget.observe(_response(429), sent_at=clock())
     assert budget.effective_rate == _RATE

@@ -8,16 +8,16 @@ from __future__ import annotations
 import httpx2
 
 from headgate._core import CallContext, CallInfo, CallStarted, Emitter, Event, SendProgress, Slot
-from tests.support.clock import FakeClock
+from headgate.testing import TestClock
 
 _URL = "https://api.example.test/v1/series"
 _DEADLINE = 10.0
 _STEP = 4.0
 
 
-def _context(clock: FakeClock | None = None, *, deadline_after: float | None = None) -> CallContext:
+def _context(clock: TestClock | None = None, *, deadline_after: float | None = None) -> CallContext:
     """Build a context for a GET of the test URL."""
-    return CallContext(CallInfo(method="GET", url=_URL), clock=clock or FakeClock(), deadline_after=deadline_after)
+    return CallContext(CallInfo(method="GET", url=_URL), clock=clock or TestClock(), deadline_after=deadline_after)
 
 
 def test_find_returns_the_attached_context_and_none_for_a_bare_request() -> None:
@@ -34,7 +34,7 @@ def test_find_returns_the_attached_context_and_none_for_a_bare_request() -> None
 
 def test_the_deadline_is_absolute_on_the_injected_clock() -> None:
     """Fix the deadline when the call starts, and count down on the clock the client was given."""
-    clock = FakeClock(start=100.0)
+    clock = TestClock(100.0)
     context = _context(clock, deadline_after=_DEADLINE)
     clock.advance(_STEP)
 
