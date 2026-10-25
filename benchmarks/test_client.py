@@ -149,7 +149,12 @@ def test_get_cache_hit(runner: asyncio.Runner, run_batch: Callable[[Operation], 
         response_filters=[StatusCodeFilter(frozenset({_OK}))],
     )
     client = _client(cache=HttpCache(policy=policy, storage=storage, ttl=3600))
-    run_batch(lambda: client.get("series", expect=_SERIES))
+    try:
+        run_batch(lambda: client.get("series", expect=_SERIES))
+    finally:
+        # The client never closes a storage, which other clients may share: whoever opened it closes it.
+        runner.run(client.aclose())
+        runner.run(storage.close())
 
 
 def test_concurrent_gets(benchmark: BenchmarkFixture, runner: asyncio.Runner) -> None:

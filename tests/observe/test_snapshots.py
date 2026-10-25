@@ -23,7 +23,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from syrupy.filters import props
 
-from headgate import BreakerPolicy, HttpCache, RetryPolicy, TransportPolicy, nothing
+from headgate import Backoff, BreakerPolicy, HttpCache, RetryPolicy, TransportPolicy, nothing
 from headgate.errors import ClientError
 from headgate.otel import OpenTelemetryObserver
 from headgate.testing import FakeTransport, isolated_breakers
@@ -39,6 +39,12 @@ if TYPE_CHECKING:
     from tests.support.clients import StubClient
 
 type _Scenario = Callable[[tuple[Observer, ...], AsyncSqliteStorage], Awaitable[None]]
+
+
+def _half_jitter() -> float:
+    """Return the middle of the jitter range, so each backoff wait is half its nominal value."""
+    return 0.5
+
 
 _DEPRECATED = {"Deprecation": "@1688169599", "Sunset": "Sun, 30 Jun 2024 23:59:59 GMT"}
 
@@ -66,8 +72,9 @@ async def _plain(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) 
 
 
 async def _retried(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) -> None:
-    """Make one call, answered on its third attempt."""
-    await _call(client(FakeTransport().route("GET", "/v1/x", 503, 502, 200), *observers))
+    """Make one call, answered on its third attempt, backing off by a fixed jitter so the delays are reproducible."""
+    policy = TransportPolicy(retry=RetryPolicy(backoff=Backoff(jitter=_half_jitter)))
+    await _call(client(FakeTransport().route("GET", "/v1/x", 503, 502, 200), *observers, policy=policy))
 
 
 async def _rate_limited(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) -> None:
