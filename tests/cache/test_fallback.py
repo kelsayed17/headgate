@@ -481,7 +481,8 @@ async def test_a_storage_fault_while_an_unheld_body_streams_is_a_value_free_tran
     received = _Received()
     try:
         with pytest.raises(TransportError) as raised:
-            await received.drain(client.stream_get("big"))
+            async with client.stream("GET", "big") as stream:
+                await received.drain(stream.aiter_bytes())
     finally:
         await client.aclose()
         await store.close()

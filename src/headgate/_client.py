@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 from dataclasses import dataclass, replace
 from string.templatelib import Template
 from typing import TYPE_CHECKING, Literal, Self, TypedDict, Unpack
@@ -69,6 +70,7 @@ from headgate._options import (
     match_route,
     reject_upstream_httpx,
 )
+from headgate._request_body import check_one_body, request_content
 from headgate._responses import Expect, Reader, RefusedError
 from headgate._stack import build_http_client, build_transport_stack
 from headgate._url import render_path, route_template
@@ -76,18 +78,22 @@ from headgate.breaker import BreakerOpenError, CircuitBreaker
 from headgate.breaker._registry import NO_BREAKER
 from headgate.cache._transport import host_untested
 from headgate.errors import CircuitOpenError, ClientError, ClientTimeoutError, RateLimitError
+from headgate.pagination import PageRequest, Paginated
 from headgate.ratelimit import BudgetPausedError
-from headgate.retry import NO_RETRY, RetryPolicy
+from headgate.retry import NO_RETRY, REPLAYABLE_BODY, RetryPolicy
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
+from headgate.streaming import Stream
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
+    from collections.abc import AsyncGenerator, Callable, Mapping
     from types import TracebackType
 
     from headgate._options import Route
+    from headgate._request_body import Body, UploadFiles
     from headgate._responses import RefusalCheck
     from headgate.breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
+    from headgate.pagination import Pager
     from headgate.ratelimit import Rate, RateBudget
 
 __all__ = ["AsyncBaseClient", "RequestOptions"]
@@ -117,6 +123,11 @@ class RequestOptions(TypedDict, total=False):
       once per item, and any value that is not a ``str``, number, bool or ``None`` is sent as its ``str()``.
     * ``headers``: added to the client's; a clash is won by the call.
     * ``json`` / ``data``: a JSON body (build it with a codec flavor's ``to_builtins``) or a form body.
+    * ``content``: a raw body: ``bytes``; an async iterable of ``bytes``, streamed once, so the call is never re-sent;
+      or a callable returning one, called once for each send, so the call stays retryable. It combines with no other
+      body option.
+    * ``files``: a multipart body, as httpx2 takes it (``{"name": file}``, or ``(filename, file, content_type)``
+      tuples), with ``data=`` as its form fields.
     * ``timeout``: :class:`~headgate.Timeouts` replacing the client's, or a number replacing its read timeout.
     * ``deadline``: seconds this call may take in all, or ``None`` for no deadline; absent, the route's or the
       policy's applies.
@@ -128,6 +139,8 @@ class RequestOptions(TypedDict, total=False):
     headers: Mapping[str, str]
     json: object
     data: Mapping[str, object]
+    content: Body
+    files: UploadFiles
     timeout: Timeouts | float
     deadline: float | None
     idempotency_key: str
@@ -350,33 +363,74 @@ class AsyncBaseClient:
         call = _Call("HEAD", url, options, retry=retry, follow_redirects=follow_redirects, cache_ttl=cache_ttl)
         return await self._request(call, expect)
 
-    async def stream_get(self, url: str | Template, *, follow_redirects: bool | None = None) -> AsyncIterator[bytes]:
-        """Send a GET and yield its 2xx body chunk by chunk, never buffered and never capped.
+    def stream(
+        self,
+        method: _Method,
+        url: str | Template,
+        *,
+        retry: bool | RetryPolicy = True,
+        follow_redirects: bool | None = None,
+        last_event_id: str | None = None,
+        **options: Unpack[RequestOptions],
+    ) -> contextlib.AbstractAsyncContextManager[Stream]:
+        """Send a request and open its 2xx response as a :class:`~headgate.streaming.Stream`, read as it arrives.
 
-        For a file too large to hold. The chunks are the body after content-decoding, the same bytes a buffered
-        ``get`` would see, and the call runs through the same stack and failure ladder, except that:
+        ``async with client.stream("GET", "export.csv") as stream:`` then ``async for chunk in
+        stream.aiter_bytes():``. The body is never buffered and never capped, and the response is closed when the block
+        exits. The call runs through the same stack and failure ladder as a verb, except that:
 
         * a 2xx is the only success: there is no ``expect=``, and a 3xx raises unless redirects are followed;
-        * the client's ``refusal_check`` runs on the response head, before the first chunk;
-        * a failure while the body is arriving raises ``TransportError`` or ``ClientTimeoutError`` from inside the
-          iteration, after earlier chunks were yielded. A retry covers only the head;
-        * the deadline does not apply, since the caller's pace of iteration decides how long the body takes.
+        * the client's ``refusal_check`` runs on the response head, before the block is entered;
+        * the deadline bounds opening the stream (every attempt, backoff and the head checks), not reading it, since
+          the caller's pace of iteration decides how long the body takes. Each read is bounded by the read timeout;
+          to bound the whole body, wrap the block in ``asyncio.timeout``;
+        * a retry covers opening only; a failure while the body arrives raises ``TransportError`` or
+          ``ClientTimeoutError`` from the iteration;
+        * the host's circuit breaker spans the whole block: a network failure mid-body that leaves the block counts
+          against the host, and a clean exit as a success.
 
-        The request goes out when iteration starts, not when this is called. A caller that may stop early should
-        iterate under ``contextlib.aclosing`` so the connection is released at once rather than when the generator
-        is garbage-collected.
+        ``last_event_id=`` sends ``Last-Event-ID`` (when not empty), to resume a server-sent event stream after the
+        last event a previous :class:`~headgate.streaming.Stream` saw (its ``last_event_id``).
+
+        The request goes out when the block is entered.
         """
-        prepared = self._prepare(_Call("GET", url, {"deadline": None}, follow_redirects=follow_redirects))
-        async with self._reported(prepared.context) as report, self._exchange(prepared) as streamed:
-            report.status_code = streamed.status_code
-            if (refused := _refusal(self._refusal_check, streamed)) is not None:
-                head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
-                raise refusal_error(refused, head, self._site(prepared)) from refused
-            if not streamed.is_success:
-                head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
-                raise status_error(head, self._site(prepared))
-            async for chunk in streamed.aiter_bytes():
-                yield chunk
+        if bool(last_event_id):
+            options = options.copy()
+            options["headers"] = {**options.get("headers", {}), "Last-Event-ID": last_event_id}
+        return self._streamed(_Call(method, url, options, retry=retry, follow_redirects=follow_redirects))
+
+    def paginate[P, I](
+        self,
+        url: str | Template,
+        *,
+        expect: Reader[P] | Expect[P],
+        pages: Pager[P, I],
+        retry: bool | RetryPolicy = True,
+        **options: Unpack[RequestOptions],
+    ) -> Paginated[P, I]:
+        """Return the pages *pages* follows from the GET of *url*, each read through *expect*, iterated lazily.
+
+        ``async for item in client.paginate(...)`` yields the items of each page in turn; ``.pages()`` yields the
+        pages. Each page is a GET through the whole stack, fetched only when the iteration reaches it, and a next-page
+        URL taken from a response is sent as an absolute URL, under the same credential rules as any other.
+        Iterating again starts again from the first page.
+
+        :raises ValueError: for a body option (``json``, ``data``, ``content``, ``files``): pages are GETs.
+        """
+        if any(name in options for name in ("json", "data", "content", "files")):
+            msg = "paginate sends GETs, so it takes no request body"
+            raise ValueError(msg)
+        spec: Expect[P] = expect if isinstance(expect, Expect) else Expect(expect)
+        paired = Expect(_paired(spec.ok), {status: _paired(read) for status, read in spec.answers.items()})
+        call_options = options.copy()
+        first = PageRequest(url, call_options.pop("params", None))
+
+        async def fetch(request: PageRequest) -> tuple[P, httpx2.Response]:
+            page_options = call_options.copy()
+            page_options["params"] = request.params
+            return await self.get(request.url, expect=paired, retry=retry, **page_options)
+
+        return Paginated(fetch, pages, first, source=self._source)
 
     # The steps of a call.
 
@@ -399,6 +453,9 @@ class AsyncBaseClient:
             raise ValueError(msg)
         options = call.options
         params = options.get("params")
+        files = options.get("files")
+        check_one_body(content=options.get("content"), json=options.get("json"), data=options.get("data"), files=files)
+        content, replayable = request_content(options.get("content"))
         try:
             request = self._http_client.build_request(
                 call.method,
@@ -407,6 +464,8 @@ class AsyncBaseClient:
                 headers=options.get("headers"),
                 json=options.get("json"),
                 data=options.get("data"),
+                content=content,
+                files=files,
                 timeout=httpx_timeout(self._timeout, options.get("timeout")),
             )
         except httpx2.InvalidURL as exc:
@@ -418,6 +477,8 @@ class AsyncBaseClient:
         context.follow_redirects = follow
         if (retry := self._retry_of(call, route_policy)) is not None:
             context.put(RETRY_POLICY, retry)
+        if not replayable:
+            context.put(REPLAYABLE_BODY, replayable)
         self._stamp_idempotency_key(request, context, options.get("idempotency_key"))
         # The cache transport only setdefaults the client's own TTL, so a per-call TTL stamped here wins.
         if call.cache_ttl is not None:
@@ -523,8 +584,11 @@ class AsyncBaseClient:
         )
 
     @contextlib.asynccontextmanager
-    async def _exchange(self, prepared: _Prepared) -> AsyncGenerator[httpx2.Response]:
-        """Send the request under its origin's circuit breaker and yield the streamed response, closing it afterwards.
+    async def _exchange(self, prepared: _Prepared) -> AsyncGenerator[tuple[httpx2.Response, Verdict]]:
+        """Send the request under its origin's circuit breaker; yield the streamed response, and the breaker's verdict.
+
+        The response is closed afterwards. The verdict lets a reader of the body outside this scope charge a network
+        failure to the origin (:meth:`_network_failure`).
 
         The response yielded is anything but a 429 or 5xx: one of those means the retry transport ran out of
         attempts, and it is raised here, so no call can declare either as an answer. A network failure or timeout,
@@ -545,7 +609,7 @@ class AsyncBaseClient:
             with breaker.track(self._breaker_listener(breaker, context)) as verdict:
                 context.put(BREAKER_GATE, _breaker_gate(breaker, verdict))
                 async with self._sent(prepared, verdict) as streamed:
-                    yield streamed
+                    yield streamed, verdict
         except BreakerOpenError as exc:
             details = self._site(prepared).details(retry_after=exc.retry_after)
             raise CircuitOpenError(str(exc), **details) from None
@@ -604,13 +668,37 @@ class AsyncBaseClient:
                 with contextlib.suppress(httpx2.HTTPError):
                     await streamed.aclose()
         except NETWORK_ERRORS as exc:
-            if _network_failure_charges_origin(exc):
-                verdict.mark_failed()
-            error = transport_error(exc, self._site(prepared))
+            error = self._network_failure(prepared, verdict, exc)
             if isinstance(exc, httpx2.LocalProtocolError):
                 # Its message, and so its traceback, quotes the header value it refused, usually the credential.
                 raise error from None
             raise error from exc
+
+    def _network_failure(self, prepared: _Prepared, verdict: Verdict, exc: httpx2.HTTPError | OSError) -> ClientError:
+        """Charge the network failure *exc* to the origin on *verdict*, and return the ``ClientError`` it becomes."""
+        if _network_failure_charges_origin(exc):
+            verdict.mark_failed()
+        return transport_error(exc, self._site(prepared))
+
+    @contextlib.asynccontextmanager
+    async def _streamed(self, call: _Call) -> AsyncGenerator[Stream]:
+        """Open *call*'s response as a :class:`~headgate.streaming.Stream` (see :meth:`stream`).
+
+        The exchange is entered under the deadline and left open past it, on the exit stack, so the deadline bounds the
+        send and the head checks while the breaker scope and the response last until the caller's block exits.
+        """
+        prepared = self._prepare(call)
+        async with self._reported(prepared.context) as report, contextlib.AsyncExitStack() as held:
+            async with self._deadline(prepared):
+                streamed, verdict = await held.enter_async_context(self._exchange(prepared))
+                report.status_code = streamed.status_code
+                if (refused := _refusal(self._refusal_check, streamed)) is not None:
+                    head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
+                    raise refusal_error(refused, head, self._site(prepared)) from refused
+                if not streamed.is_success:
+                    head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
+                    raise status_error(head, self._site(prepared))
+            yield Stream(streamed, self._site(prepared), functools.partial(self._network_failure, prepared, verdict))
 
     async def _request[T](self, call: _Call, expect: Reader[T] | Expect[T]) -> T:
         """Send *call* and read the reply through its declared responses.
@@ -634,7 +722,7 @@ class AsyncBaseClient:
         for name, value in spec.headers.items():
             prepared.request.headers.setdefault(name, value)
         async with self._reported(prepared.context) as report:
-            async with self._deadline(prepared), self._exchange(prepared) as streamed:
+            async with self._deadline(prepared), self._exchange(prepared) as (streamed, _):
                 resp = await read_capped(streamed, self._max_response_bytes, self._site(prepared))
             report.status_code = resp.status_code
             return self._dispatch(resp, spec, self._site(prepared))
@@ -701,6 +789,15 @@ def _refusal(check: RefusalCheck | None, resp: httpx2.Response) -> RefusedError 
         return check(resp)
     except RefusedError as refused:
         return refused
+
+
+def _paired[T](read: Reader[T]) -> Reader[tuple[T, httpx2.Response]]:
+    """Return a reader that returns what *read* reads together with the response, for a pager to read headers from."""
+
+    def _read(resp: httpx2.Response, /) -> tuple[T, httpx2.Response]:
+        return read(resp), resp
+
+    return _read
 
 
 def _invalid_url(exc: httpx2.InvalidURL, site: CallSite) -> ClientError:

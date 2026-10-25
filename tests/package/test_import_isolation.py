@@ -37,6 +37,8 @@ def _import_with_blocked(monkeypatch: pytest.MonkeyPatch, module: str, *blocked:
         "headgate.retry",
         "headgate.breaker",
         "headgate.ratelimit",
+        "headgate.streaming",
+        "headgate.pagination",
     ],
 )
 def test_headgate_never_imports_upstream_httpx(monkeypatch: pytest.MonkeyPatch, module: str) -> None:

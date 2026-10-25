@@ -7,7 +7,8 @@ Built on ``httpx2``; Python 3.14 or newer. A client subclasses :class:`AsyncBase
 :class:`Rate` (or a shared :class:`RateBudget`) and optionally :class:`TransportPolicy` and :class:`HttpOptions`, and
 picks a codec flavor by importing ``headgate.msgspec`` or ``headgate.pydantic``. The policy layers are subpackages
 with public paths of their own (:mod:`headgate.retry`, :mod:`headgate.breaker`, :mod:`headgate.ratelimit`,
-:mod:`headgate.cache`); their configuration values are re-exported here.
+:mod:`headgate.cache`, :mod:`headgate.streaming`, :mod:`headgate.pagination`); their configuration values are
+re-exported here.
 """
 
 from headgate._auth import CachedTokenAuth, Minted, QueryParamAuth, StaticHeaderAuth
@@ -42,8 +43,10 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
+from headgate.pagination import Cursor, LinkHeader, NextUrl, Offset, Pager, PageRequest, Paginated
 from headgate.ratelimit import Adaptive, Rate, RateBudget, RateRule
 from headgate.retry import NO_RETRY, Backoff, RetryPolicy
+from headgate.streaming import Stream
 
 __all__ = [
     "NO_RETRY",
@@ -58,17 +61,24 @@ __all__ = [
     "ClientConfigurationError",
     "ClientError",
     "ClientTimeoutError",
+    "Cursor",
     "DecodeError",
     "Expect",
     "Fresh",
     "HttpCache",
     "HttpOptions",
     "IdempotencyKeys",
+    "LinkHeader",
     "MethodFilter",
     "Middleware",
     "Minted",
+    "NextUrl",
     "NotModified",
     "Observer",
+    "Offset",
+    "PageRequest",
+    "Pager",
+    "Paginated",
     "Partition",
     "PathFragmentFilter",
     "Problem",
@@ -87,6 +97,7 @@ __all__ = [
     "Route",
     "StaticHeaderAuth",
     "StatusCodeFilter",
+    "Stream",
     "Timeouts",
     "TransportError",
     "TransportPolicy",

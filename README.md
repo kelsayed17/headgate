@@ -161,6 +161,53 @@ match result:
         ...  # new representation; keep its validator
     case NotModified():
         ...  # 304: what you hold is current
+
+## Streaming
+
+`stream()` opens a 2xx response under `async with` and reads it as it arrives, never buffered and never capped. The
+deadline bounds opening the stream; a failure mid-body raises `TransportError` / `ClientTimeoutError` from the loop.
+
+```python
+async with client.stream("GET", "exports/2026.csv") as stream:
+    async for chunk in stream.aiter_bytes():
+        sink.write(chunk)
+
+async with client.stream("GET", "events", headers={"Accept": "text/event-stream"}) as stream:
+    async for event in stream.aiter_events():  # parsed as each event arrives: event, data, id, retry
+        handle(event)
+# Resume later after the last event seen:
+async with client.stream("GET", "events", last_event_id=stream.last_event_id) as stream: ...
+```
+
+## Uploads
+
+`content=` sends raw bytes, a one-shot async iterable (the call is then never re-sent), or a factory returning one,
+called once per attempt so the call stays retryable. `files=` sends a multipart body, with `data=` as its form fields.
+
+```python
+await client.put("blobs/1", expect=nothing, content=lambda: read_chunks(path))
+await client.post("reports", expect=nothing, files={"report": ("q3.csv", fh, "text/csv")}, data={"kind": "q"})
+```
+
+## Pagination
+
+`paginate()` follows a paginated endpoint lazily, one GET through the full stack per page: `async for` yields items,
+`.pages()` yields pages. The strategies are `Cursor(items=, next=, param=)`, `Offset(items=, limit=, param=,
+start=)`, `LinkHeader(items=)` (RFC 8288 `rel="next"`) and `NextUrl(items=, next=)`; a next URL from the wire is sent
+absolute, under the usual credential rules, and a page that leads back to an earlier one raises instead of looping.
+
+```python
+def items_of(page: Page) -> list[Item]:
+    return page.data
+
+
+def cursor_of(page: Page) -> str | None:
+    return page.next_cursor
+
+
+pages = Cursor(items=items_of, next=cursor_of, param="after")
+async for item in client.paginate("items", expect=decoder(Page), pages=pages):  # item: Item
+    ...
 ```
 
 ## Errors
