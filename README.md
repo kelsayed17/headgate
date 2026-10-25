@@ -1,359 +1,333 @@
 # headgate
 
-An async HTTP client base for API clients, built on [`httpx2`](https://pypi.org/project/httpx2/).
+**An async API-client base for Python, built on [httpx2](https://pypi.org/project/httpx2/).** Subclass
+`AsyncBaseClient`, declare what each endpoint answers, and every client you build gets the same production behaviour:
+retries that re-send only when it is safe, a shared rate budget that listens to the server, a per-origin circuit
+breaker, whole-call deadlines, credentials that never leave your origin, an opt-in cache that never stores them, typed
+events and OpenTelemetry, and errors that say exactly what happened. Each endpoint method stays one line.
 
-**Requires Python 3.14 or newer and `httpx2`.** headgate does not support upstream `httpx`.
+A headgate controls how much water gets through a channel. This library does the same for requests, in one place,
+so that no client has to get it right on its own.
 
-A headgate controls how much water gets through. This library does the same for requests: every client you build on it
-gets retries, a rate budget, a per-origin circuit breaker, a response size cap and an optional HTTP cache, all in one
-place, so the client methods themselves stay one line each.
+## Requirements and install
 
-## Install
+Python 3.14 or newer (endpoint paths are t-strings) and `httpx2`, pydantic's fork of httpx. Upstream `httpx` is not
+supported: passing one of its objects raises a `TypeError` naming the mistake.
 
 ```bash
-pip install headgate               # core: httpx2, hishel, msgspec
+pip install headgate               # or: uv add headgate. Brings httpx2[http2], hishel and msgspec
 pip install 'headgate[pydantic]'   # + the pydantic codec flavor
-pip install 'headgate[curl]'       # + AsyncCurlTransport (browser TLS impersonation via curl_cffi)
+pip install 'headgate[curl]'       # + AsyncCurlTransport: a browser's TLS fingerprint, via curl_cffi
 pip install 'headgate[otel]'       # + OpenTelemetryObserver (opentelemetry-api only)
 ```
 
-## A client
+## Quickstart
+
+A client is a subclass that fixes its configuration in `super().__init__()` and exposes one method per endpoint. A
+path is a t-string, so every value is escaped as one segment; `expect=` declares what the endpoint answers.
 
 ```python
-from headgate import AsyncBaseClient, QueryParamAuth, Rate
-from headgate.msgspec import decoder
+from http import HTTPStatus
+from typing import TYPE_CHECKING
+
 import msgspec
+
+from headgate import AsyncBaseClient, Cursor, Expect, HttpOptions, Rate, StaticHeaderAuth, nothing
+from headgate.msgspec import decoder
+
+if TYPE_CHECKING:
+    import httpx2
+
+    from headgate import Paginated
 
 
 class Series(msgspec.Struct, frozen=True):
-    series_id: str
+    """A data series: its id, title and observations."""
+
+    id: str
+    title: str
     values: list[float]
 
 
-class ExampleClient(AsyncBaseClient):
-    def __init__(self, api_key: str) -> None:
-        super().__init__(
-            base_url="https://api.example.test/v1",
-            rate=Rate.per_second(5),
-            auth=QueryParamAuth({"api_key": api_key}),
-        )
+class Release(msgspec.Struct, frozen=True):
+    """A scheduled data release."""
 
-    async def get_series(self, series_id: str) -> Series:
-        return await self.get("series", expect=decoder(Series), params={"id": series_id})
-```
-
-`examples/series_client.py` shows the same client in both codec flavors.
-
-## Codec flavors
-
-The core is codec-free. You choose how a body becomes a typed value by importing a flavor:
-
-| Import | Decodes into | Notes |
-|---|---|---|
-| `headgate.msgspec` | `msgspec.Struct` | strict typing, fast; the default dependency |
-| `headgate.pydantic` | `pydantic.BaseModel` | needs the `pydantic` extra |
-
-Both expose `decode`, `decoder` and `to_builtins` with the same behavior, and both raise `headgate.errors.DecodeError`
-on a body that does not match, which the client turns into `ResponseParseError`.
-
-## The five contracts
-
-1. **Declared answers, or raise.** Each call declares what it can get back with `expect=`: a reader for any 2xx, and,
-   with `Expect(...).on(status, reader)`, the exact non-2xx statuses the provider documents as answers. Anything else
-   raises a `ClientError` subtype carrying the status the wire sent. There is no raw mode.
-2. **Transport only.** A client does I/O and decoding. Retry, rate limiting and the breaker live in the transport stack;
-   business decisions belong to the caller.
-3. **Wire types are data.** Responses decode into plain typed values with no behavior and no aliases invented by the
-   client.
-4. **No logging; typed events instead.** headgate emits no log records. A client reports its calls as frozen, typed
-   events (`headgate.events`) to the observers installed with `HttpOptions(observers=...)`, carrying sanitized data
-   only, and errors carry what a caller needs (client name, method, status, request id, attempt count, a bounded body
-   snippet or RFC 9457 problem detail, a URL with secret query parameters redacted). The caller decides what to record.
-5. **No environment reads.** Credentials are injected at construction. headgate never reads environment variables:
-   the HTTP client and its default transport are built with `trust_env=False`.
-
-## What the base client provides
-
-- Retry with exponential backoff and `Retry-After`, per-call opt-out with `retry=False`.
-- A rate budget per client, or shared between clients, with per-path rules (see [Rate budgets](#rate-budgets)).
-- A per-origin circuit breaker spanning the send and the body read (see [Circuit breaker](#circuit-breaker)).
-
-- Retries that re-send only when it is safe, within a budget and the call's deadline (see [Retries](#retries)).
-- A token-bucket rate limit per client (`Rate.per_second`, `Rate.per_minute`) with per-path override rules.
-- A per-origin circuit breaker spanning the send and the body read.
-- A response body cap measured on decompressed bytes.
-- Auth helpers: `StaticHeaderAuth`, `QueryParamAuth`, `CachedTokenAuth`. A static credential header is withheld from any
-  redirect hop that leaves the client's origin.
-- An opt-in `HttpCache` (hishel), partitioned by credential, that degrades to the network when its storage fails.
-
-- Auth helpers: `StaticHeaderAuth`, `QueryParamAuth`, `CachedTokenAuth`, whose credentials stay on your origin (below).
-- An opt-in `HttpCache` (hishel) that degrades to the network when its storage fails.
-- t-string URL paths (`self.get(t"series/{series_id}", ...)`) that escape each interpolated segment.
-
-## Rate budgets
-
-`rate=Rate.per_second(5)` gives a client a budget of its own. A `RateBudget` is the same budget as an object you can
-share: pass one instance to several clients (or to several `RateRule`s) and they spend from it together, even across
-event loops and threads.
-
-```python
-from headgate import AsyncBaseClient, Rate, RateBudget, RateRule, TransportPolicy
-
-shared = RateBudget(Rate.per_minute(600), max_in_flight=8)  # one quota, two clients
-search = AsyncBaseClient(base_url="https://api.example.test/search", rate=shared)
-reports = AsyncBaseClient(
-    base_url="https://api.example.test/reports",
-    rate=shared,
-    policy=TransportPolicy(rate_limits=(RateRule("/export", Rate.per_minute(6)),)),  # a slower lane of its own
-)
-```
-
-- **Pacing**: up to `requests` back to back, then one every `period / requests` seconds, first come first served.
-  Every attempt spends its own turn; a cache hit spends none.
-- **`max_in_flight`**: at most that many requests open at once, each counted until its response body is closed.
-- **Server feedback**: a 429/503 `Retry-After` or `retry-after-ms` (read as the retry layer reads it, so its wait and
-  the pause end together), or rate-limit headers saying the quota is spent (`RateLimit` / `RateLimit-Policy` from the
-  IETF draft, or `X-RateLimit-Remaining` / `X-RateLimit-Reset`), pauses the whole budget until the reset, so
-  concurrent calls queue instead of collecting refusals. A call whose deadline ends inside the pause raises
-  `RateLimitError` at once, with `retry_after` set.
-- **Adaptive throttling** (on by default, `adaptive=None` turns it off): each pushback halves the pacing rate, down to
-  `Adaptive.min_rate` of it; successes restore it gradually. Every wait, and every response that pauses the budget, is
-  a `RateLimited` event (reason `paced`, `throttled`, `paused` or `pushback`).
-
-## Circuit breaker
-
-Each origin (`scheme://host:port`) gets a breaker shared by every client whose `BreakerPolicy` names the same
-registry and thresholds; a client asking for other thresholds gets its own breaker for that origin, never one fixed by
-whichever client came first. `failure_threshold` consecutive failures (default 5) open it; after `recovery_timeout`
-seconds (default 60) one probe call is let through, and its outcome closes or re-opens it. A refused call raises
-`CircuitOpenError` with `retry_after`, and a retry sequence stops as soon as the breaker opens.
-
-Only what the origin said counts: a 5xx that survived retries, or a network failure. A 429, a cache hit or a cached
-5xx, a cancelled call, an auth mint failure, an oversized body and failures of our own side (a refused header,
-`PoolTimeout`) record nothing. Every transition is a `BreakerChanged` event, and `headgate.health.breaker_states()`
-snapshots them. The registry (`BreakerRegistry(max_hosts=1024)`) is thread-safe and drops its least recently used
-closed breaker when full; `TransportPolicy(breaker=None)` turns the breaker off.
-
-## Caching
-
-```python
-from hishel import AsyncSqliteStorage, FilterPolicy
-from headgate import HttpCache, PathFragmentFilter, StatusCodeFilter, TransportPolicy
-
-cache = HttpCache(
-    policy=FilterPolicy(
-        request_filters=[PathFragmentFilter(("/series",))],
-        response_filters=[StatusCodeFilter(frozenset({200}))],
-    ),
-    storage=AsyncSqliteStorage(),  # yours to close; many clients may share it
-    ttl=3600,
-)
-super().__init__(base_url=..., rate=..., auth=auth, policy=TransportPolicy(cache=cache))
-```
-
-- **Partitioned by credential.** An entry is visible only to requests made with the same credential: the partition is
-  an HMAC-SHA256, under a per-process random key, of the auth's `credential_identity()` and of any other credential
-  the request carries. Clients with different keys can share one storage. The auth must declare its credentials
-  (`headgate._core.CredentialStamper`); an auth that does not is refused at construction unless you opt into
-  `HttpCache(partition=Partition.SHARED)`, which is for public data only.
-- **Credentials are never stored.** `Authorization`, `Proxy-Authorization`, `Cookie`, every header and query parameter
-  the auth declares, well-known secret query parameters (`api_key`, `token`, ...) and URL userinfo are removed from
-  what hishel stores, and sent to the network unchanged. A response's `Set-Cookie` is never stored either; the request
-  that fetched it still receives it.
-- **TTL, not revalidation.** A `FilterPolicy` cache serves an entry until its `ttl` (or a per-call `cache_ttl=`) ends,
-  and never revalidates it with the origin. Credential-partitioned entries are not found again by another process.
-- **Conditional reads** are the caller-driven alternative: keep the `Validator` and send it back.
-
-```python
-from headgate.cache import Fresh, NotModified, Validator, conditional
-
-result = await self.get(t"docs/{doc_id}", expect=conditional(decoder(Doc), validator=held))
-match result:
-    case Fresh(value=doc, validator=held):
-        ...  # new representation; keep its validator
-    case NotModified():
-        ...  # 304: what you hold is current
-```
-
-## Streaming
-
-`stream()` opens a 2xx response under `async with` and reads it as it arrives, never buffered and never capped. The
-deadline bounds opening the stream; a failure mid-body raises `TransportError` / `ClientTimeoutError` from the loop.
-
-```python
-async with client.stream("GET", "exports/2026.csv") as stream:
-    async for chunk in stream.aiter_bytes():
-        sink.write(chunk)
-
-async with client.stream("GET", "events", headers={"Accept": "text/event-stream"}) as stream:
-    async for event in stream.aiter_events():  # parsed as each event arrives: event, data, id, retry
-        handle(event)
-# Resume later after the last event seen:
-async with client.stream("GET", "events", last_event_id=stream.last_event_id) as stream:
-    ...
-```
-
-## Uploads
-
-`content=` sends raw bytes, a one-shot async iterable (the call is then never re-sent, and a 307 or 308 asking for the
-body again is not followed but raised as its 3xx), or a factory returning one, called once per attempt so the call
-stays retryable. `files=` sends a multipart body, with `data=` as its form fields.
-
-```python
-await client.put("blobs/1", expect=nothing, content=lambda: read_chunks(path))
-await client.post("reports", expect=nothing, files={"report": ("q3.csv", fh, "text/csv")}, data={"kind": "q"})
-```
-
-## Pagination
-
-`paginate()` follows a paginated endpoint lazily, one GET through the full stack per page: `async for` yields items,
-`.pages()` yields pages. The strategies are `Cursor(items=, next=, param=)`, `Offset(items=, limit=, param=,
-start=)`, `LinkHeader(items=)` (RFC 8288 `rel="next"`) and `NextUrl(items=, next=)`; a next URL from the wire is sent
-absolute, under the usual credential rules, and a page that leads back to an earlier one raises instead of looping.
-
-```python
-def items_of(page: Page) -> list[Item]:
-    return page.data
+    id: int
+    name: str
 
 
-def cursor_of(page: Page) -> str | None:
+class ReleasePage(msgspec.Struct, frozen=True):
+    """One page of releases, and the cursor of the next page (``None`` on the last)."""
+
+    releases: list[Release]
+    next_cursor: str | None = None
+
+
+def releases_on(page: ReleasePage) -> list[Release]:
+    """Return the releases on *page*."""
+    return page.releases
+
+
+def cursor_after(page: ReleasePage) -> str | None:
+    """Return the cursor of the page after *page*."""
     return page.next_cursor
 
 
-pages = Cursor(items=items_of, next=cursor_of, param="after")
-async for item in client.paginate("items", expect=decoder(Page), pages=pages):  # item: Item
-    ...
+# Readers and pagers are values: build them once, at import, where a bad declaration fails.
+SERIES = decoder(Series)
+SERIES_OR_NONE = Expect(SERIES).on(HTTPStatus.NOT_FOUND, nothing)  # the API documents 404 as "no such series"
+RELEASE_PAGES = Cursor(items=releases_on, next=cursor_after, param="cursor")
+
+
+class CatalogClient(AsyncBaseClient):
+    """The catalog API: one method per endpoint, each one line."""
+
+    def __init__(self, api_key: str, *, transport: httpx2.AsyncBaseTransport | None = None) -> None:
+        """Authenticate with *api_key*; *transport* replaces the network, as a test does."""
+        super().__init__(
+            base_url="https://api.catalog.example/v1",
+            rate=Rate.per_second(10),
+            auth=StaticHeaderAuth({"Authorization": f"Bearer {api_key}"}),
+            http=HttpOptions(transport=transport),
+        )
+
+    async def get_series(self, series_id: str) -> Series:
+        """Return the series *series_id*; a 404, undeclared here, raises ``UpstreamStatusError``."""
+        return await self.get(t"series/{series_id}", expect=SERIES)
+
+    async def find_series(self, series_id: str) -> Series | None:
+        """Return the series *series_id*, or ``None`` when the API answers 404."""
+        return await self.get(t"series/{series_id}", expect=SERIES_OR_NONE)
+
+    def releases(self) -> Paginated[ReleasePage, Release]:
+        """Return every release, fetched a page at a time as the iteration reaches it."""
+        return self.paginate("releases", expect=decoder(ReleasePage), pages=RELEASE_PAGES)
 ```
 
-## Per-call defaults
-
-`client.with_options(headers=..., timeout=..., deadline=..., retry=...)` returns a view of the client with other
-defaults for its calls. It shares the connection pool, rate budget, retry state and circuit breakers; the client it
-came from owns the pool, so closing a view closes nothing. `Expect(reader, accept="application/json")` sends that
-`Accept` header and raises `ResponseParseError` (with the status and `Content-Type`) for a body of another media type
-before the reader runs; parameters are ignored and a `+json` suffix counts as JSON.
-
-## Observability
-
-- **Events.** Install observers with `HttpOptions(observers=(...))`: each call reports `CallStarted`, one
-  `AttemptFinished` per send and `CallFinished`, plus `Deprecated` when the response carries a `Deprecation`
-  (RFC 9745) or `Sunset` (RFC 8594) header (dates parsed, `rel="deprecation"` / `rel="sunset"` links resolved). Events
-  carry sanitized data only. See `headgate.events`.
-- **OpenTelemetry** (`pip install 'headgate[otel]'`): `http = OpenTelemetryObserver().install(HttpOptions(...))` gives
-  every call one CLIENT span covering all its attempts and the body read, with the HTTP semantic-convention attributes
-  (the t-string route as `url.template`, re-sends as `http.request.resend_count`), the `http.client.request.duration`
-  histogram, and a W3C `traceparent` on every attempt. It works with any OpenTelemetry SDK, Logfire or Sentry's
-  OpenTelemetry integration, and nests the per-attempt spans of `HTTPX2ClientInstrumentor` under its own; see
-  `headgate.otel` for how to avoid recording the duration twice.
-- **Request ids.** Every `ClientError` carries `request_id`, read from the first of `HttpOptions.request_id_headers`
-  the response has (`x-request-id`, `request-id`, AWS's, Azure's, Cloudflare's by default).
-
-## Testing your client
-
-`headgate.testing` tests a client without patching anything private:
+Use it with `async with`, which closes the connection pool on the way out:
 
 ```python
-from headgate import AsyncBaseClient, HttpOptions, Rate, as_bytes
-from headgate.testing import FakeTransport, TestClock, isolated_breakers
-
-fake = FakeTransport().route("GET", "/v1/series", 503, httpx2.Response(200, content=b"ok"))
-clock = TestClock()
-with clock.install(), isolated_breakers():  # the clients built in the block use them
-    client = AsyncBaseClient(
-        base_url="https://api.example.test/v1", rate=Rate.per_second(5), http=HttpOptions(transport=fake)
-    )
-assert await client.get("series", expect=as_bytes) == b"ok"
-assert len(fake.calls) == 2 and clock.sleeps  # the retry waited, on the test clock
+async def main(api_key: str) -> tuple[float, Series | None, list[str]]:
+    """Read one series, look up one that may not exist, and list every release."""
+    async with CatalogClient(api_key) as catalog:
+        gdp = await catalog.get_series("GDP")
+        retired = await catalog.find_series("RETIRED")  # None: the API answered 404
+        names = [release.name async for release in catalog.releases()]
+    return gdp.values[-1], retired, names
 ```
 
-`FakeTransport` answers from a method-and-path route table and logs every request; `TestClock` is a manual clock whose
-sleep advances it; `instant_retries()` retries without waiting; `isolated_breakers()` gives the clients built in its
-block a fresh breaker registry. `CassetteFilter` builds a vcrpy / pytest-recording `vcr_config` that filters
-headgate's credential headers, secret query parameters and `Set-Cookie` and, installed as middleware, skips token-mint
-requests. vcrpy (8.3 and later) records httpx2's own transports, so it sees what headgate's default network transport
-sends; a custom `transport=` (the curl transport, a `FakeTransport`) is not recorded.
+Nothing in those methods mentions retries, rate limits, timeouts or credentials, and nothing needs to:
+`get_series("GDP")` is paced by the client's budget, bounded by a 60-second deadline, retried on a 503 or a dropped
+connection, refused fast while the origin's breaker is open, and fails with an error that names the client, the
+request line, the status, the request id and every attempt. [`examples/`](examples/) has this client, the same client
+in both codec flavors, and a fuller one ([`orders_client.py`](examples/orders_client.py)): a minted OAuth token, an
+idempotent POST, a declared business refusal, `Link`-header pages and a streamed export.
 
-## Retries
+## What every client gets
 
-`TransportPolicy(retry=RetryPolicy(...))` sets the policy once on the client; a call overrides it with
-`retry=RetryPolicy(...)` or turns it off with `retry=False`.
+| Capability | What it does by default | Guide |
+| --- | --- | --- |
+| Declared responses | A reader for any 2xx, `Expect(...).on(status, reader)` for documented non-2xx answers; anything else raises | [responses](docs/responses.md) |
+| Retries | 3 sends with jittered backoff; idempotent methods after a network failure or a 408, 425, 429, 500, 502, 503, 504; a POST only when provably unprocessed or keyed | [retries](docs/retries.md) |
+| Retry budget and hedging | Retries capped at 20% of first attempts (plus 10 a second) per client; opt-in hedged sends for slow idempotent calls | [retries](docs/retries.md#the-retry-budget) |
+| `Retry-After` | Waited exactly up to 30 s, past that raised with `retry_after` set | [retries](docs/retries.md#retry-after) |
+| Rate budgets | GCRA pacing, shareable across clients and threads, per-path lanes, an optional in-flight cap | [rate budgets](docs/rate-budgets.md) |
+| Server feedback | 429/503 and `RateLimit` / `X-RateLimit-*` headers pause the whole budget; adaptive throttling (AIMD) | [rate budgets](docs/rate-budgets.md#server-feedback) |
+| Circuit breaker | Per origin, opens after 5 consecutive origin failures, one probe after 60 s | [breaker](docs/breaker.md) |
+| Deadlines and timeouts | 60 s for the whole call; each attempt's timeouts cut to what is left | [deadlines](docs/deadlines.md) |
+| Credentials stay home | Auth headers and params go only to `base_url`'s origin and `trusted_origins`, on every hop | [security](docs/security.md) |
+| Redirect hardening | No `https` to `http` downgrade, a hop limit, no re-sent one-shot body | [security](docs/security.md#redirects) |
+| SSRF guard | Opt-in: refuse private, loopback and other non-global addresses, pinned at connect time | [security](docs/security.md#the-ssrf-guard) |
+| Response cap | 32 MiB per buffered body, counted after decompression | [configuration](docs/configuration.md#httpoptions) |
+| Caching | Opt-in hishel cache, partitioned by credential, never storing one; coalesced identical GETs; conditional reads | [caching](docs/caching.md) |
+| Streaming and uploads | `stream()` for bodies and server-sent events with resume; raw, streamed and multipart request bodies | [streaming](docs/streaming.md) |
+| Pagination | `paginate()` with `Cursor`, `Offset`, `LinkHeader` or `NextUrl`, lazy, loop-safe | [pagination](docs/pagination.md) |
+| Errors | One `ClientError` tree; method, URL, request id, attempts, `retryable`, `retry_after`, RFC 9457 problems | [errors](docs/errors.md) |
+| Auth | Static headers, query keys, and a cached minted token with one re-mint on a 401 | [auth](docs/auth.md) |
+| Observability | Typed events, OpenTelemetry spans and metrics, request ids, `Deprecation` / `Sunset` notices, health snapshots | [observability](docs/observability.md) |
+| Testing kit | `FakeTransport`, `FaultyTransport`, `TestClock`, `isolated_breakers`, vcrpy cassette filters | [testing](docs/testing.md) |
+| Per-call options | `retry=`, `deadline=`, `timeout=`, `idempotency_key=`, `cache_ttl=`, and `with_options()` views | [configuration](docs/configuration.md#per-call-options) |
 
-- **What is re-sent.** Up to `attempts=3` sends, on a network failure or a status in `statuses` (408, 425, 429, 500,
-  502, 503, 504), with full-jitter exponential backoff between them. An idempotent method (`methods`: GET, HEAD,
-  OPTIONS, PUT, DELETE) is re-sent after any of these. A POST or PATCH is re-sent only when nothing of it was written
-  (each attempt's connection and written bytes are tracked), when the server proved it did not process it (425 Too
-  Early, an HTTP/2 `REFUSED_STREAM`), or when it carries an idempotency key. A server's `x-should-retry: true|false`
-  decides when it sends one. Local mistakes (an unencodable header, an unsupported scheme) are never re-sent.
-- **`Retry-After`.** A 429's or 503's `Retry-After` (seconds, fractional seconds or an HTTP-date) or `retry-after-ms` is
-  waited exactly when it is at most `max_retry_after` (30 s) and fits in the deadline. Otherwise the call stops at once
-  and raises `RateLimitError` (429) or `UpstreamStatusError` with `retry_after` set, so the caller can reschedule.
-- **Budget.** Retries may add at most `RetryBudget(ratio=0.2, min_per_second=10, window=10.0)`: 20% of first attempts
-  over a sliding 10 s window, plus a floor of 10 per second. The budget is shared by every call of a client, so an
-  outage cannot multiply its traffic; a call that finds it spent raises with the note `retry budget exhausted`.
-- **Deadline and breaker.** Each attempt's timeouts are cut to the time left before the call's deadline, and no retry
-  or wait starts with less than `min_attempt_time` (0.05 s) left. A retry sequence stops as soon as the origin's breaker
-  opens, and counts once toward it.
-- **Hedging (opt-in).** `RetryPolicy(hedge=Hedge(after=0.5, max_extra=1))` sends a second copy of an idempotent request
-  that has not answered after `after` seconds; the first answer wins and the other send is cancelled. Hedges count as
-  attempts and spend the budget.
-- **History.** The error a call raises carries `attempts`, `retryable`, `retry_after`, and one note per attempt, such
-  as `attempt 2/3: 503 Service Unavailable (Retry-After 2.0s) after 0.41s`. Notes name statuses and exception types
-  only, never a header or a URL's secrets.
+How the pieces fit together, for contributors and the curious: [design](docs/design.md).
 
-To make a POST safe to retry, give it an idempotency key the upstream deduplicates on: stamp one on every POST and
-PATCH with `TransportPolicy(idempotency=IdempotencyKeys())`, or pass `idempotency_key=` on the call. Every attempt of
-the call carries the same key.
+## The contracts
 
-`headgate.testing.FaultyTransport` plays a schedule of faults (`ConnectFail()`, `Respond(503, retry_after=1)`,
-`DropMidBody(after_bytes=100)`, `Slow(seconds=2)`, `RefusedStream()`, ...) and records what each attempt sent, for
-testing a client's retry behaviour.
+1. **Declared answers, or raise.** A call returns what its reader read from a 2xx or from a status it declared, and
+   raises a `ClientError` for anything else. There is no raw mode and no `None` for "it failed".
+2. **Transport only.** A client does I/O and decoding. Retries, pacing and the breaker live in the transport stack;
+   business decisions belong to the caller.
+3. **Wire types are data.** Responses decode into plain typed values (msgspec structs or pydantic models) with no
+   behaviour.
+4. **No logging; typed events instead.** headgate writes no log records. It reports to the observers you install,
+   with sanitized data only, and its errors carry what you need to diagnose a failure.
+5. **No environment reads.** Credentials are passed in. No proxy variable, `.netrc` or `SSL_CERT_FILE` is read: the
+   HTTP client and its transport are built with `trust_env=False`.
 
-## Credentials stay on your origin
+## Configuration
 
-Every auth headgate ships declares the headers and query parameters it stamps. They are sent only to `base_url`'s
-origin and the origins in `HttpOptions(trusted_origins=...)`, on every hop: the first request (an absolute cursor URL
-from a response body), each redirect, and each redirect a token mint is answered with. A request to any other origin
-still goes out, unsigned, so a signed download URL on a CDN works. `Authorization`, `Proxy-Authorization` and (without
-`cookies=True`) `Cookie` are withheld from untrusted origins whatever the auth, a third-party one included. A redirect
-from `https` to `http` is never followed: it raises as the 3xx it is.
-
-A `CachedTokenAuth` subclass whose `_attach` sets another header declares it:
+`AsyncBaseClient(*, base_url, rate, auth=None, policy=TransportPolicy(), http=HttpOptions())`. `rate` is a `Rate` (a
+budget of the client's own) or a `RateBudget` shared with other clients. `TransportPolicy` says what the stack does to
+every request, `HttpOptions` how requests are sent and read. Both are frozen and validate on construction.
 
 ```python
-class CrumbAuth(CachedTokenAuth):
-    token_headers = frozenset({"X-Crumb"})
+class OrdersClient(AsyncBaseClient):
+    """The shop's order API."""
 
-    def _attach(self, request: httpx2.Request, token: str) -> None:
-        request.headers["X-Crumb"] = token
+    def __init__(
+        self,
+        client_id: str,
+        client_secret: str,
+        *,
+        observers: tuple[Observer, ...] = (),
+        transport: httpx2.AsyncBaseTransport | None = None,
+    ) -> None:
+        """Mint tokens with *client_id* and *client_secret*; report to *observers*; *transport* replaces the network."""
+        super().__init__(
+            base_url="https://api.shop.example/v2",
+            rate=Rate.per_second(20),
+            auth=ShopTokenAuth(client_id, client_secret),
+            policy=TransportPolicy(
+                retry=RetryPolicy(attempts=4),  # four sends at most, the first included
+                deadline=30.0,  # each call, every attempt and wait included
+                idempotency=IdempotencyKeys(),  # every POST and PATCH carries a key, so it is retried safely
+                rate_limits=(RateRule("/exports", Rate.per_minute(6)),),  # a slower lane for the export endpoint
+                routes=(Route("/exports", deadline=300.0),),  # and a longer deadline
+            ),
+            http=HttpOptions(
+                transport=transport,
+                timeout=Timeouts(read=20.0),
+                user_agent="shop-sync/1.4",
+                observers=observers,
+            ),
+        )
 ```
 
-## SSRF protection
+| `TransportPolicy` | Default | | `HttpOptions` | Default |
+| --- | --- | --- | --- | --- |
+| `retry` | `RetryPolicy()`: 3 attempts | | `timeout` | `Timeouts(connect=10, read=30, write=10, pool=15)` |
+| `deadline` | `60.0` seconds per call | | `headers` | none beyond `User-Agent` |
+| `breaker` | `BreakerPolicy()`: 5 failures, 60 s | | `follow_redirects`, `max_redirects` | `True`, `5` |
+| `rate_limits` | none | | `max_response_bytes` | 32 MiB |
+| `cache` | none | | `trusted_origins` | `base_url`'s origin only |
+| `idempotency` | none | | `allow_private_hosts` | `True` (SSRF guard off) |
+| `routes` | none | | `observers`, `middleware` | none |
 
-A client that fetches URLs it did not write (webhooks, user-supplied links, cursors) sets
-`HttpOptions(allow_private_hosts=False)`. Every hop's host is resolved and refused, as `ForbiddenDestinationError`,
-when any address it resolves to is loopback, private, link-local, multicast, reserved or unspecified, IPv4-mapped and
-NAT64 forms included. The default transport connects only to the address it checked, so a DNS answer that changes
-between check and connect cannot redirect it; TLS still verifies the host name. A custom transport (curl included) is
-checked on every hop but resolves names itself, so it is not pinned. The guard cannot be combined with `proxy=`, and
-`HttpOptions(resolver=...)` replaces the event loop's `getaddrinfo`.
+Every option, its validation and the precedence of call, view, route and policy:
+[configuration](docs/configuration.md).
+
+## Per-call options
+
+Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`) takes the URL, `expect=`, and optionally `retry=False` or
+a `RetryPolicy`, `follow_redirects=`, `cache_ttl=`, `timeout=`, `deadline=`, `idempotency_key=`, and the request
+options `params=`, `headers=`, `json=`, `data=`, `content=` and `files=`. `client.with_options(headers=...,
+timeout=..., deadline=..., retry=...)` returns a view with other defaults that shares the pool, the budgets and the
+breakers; the client it came from owns the pool.
 
 ## Errors
 
-`ClientError` is the root. `TransportError` (with `ClientTimeoutError`), `UpstreamStatusError` (with `RateLimitError`
-and `AuthError`), `ResponseParseError` and `ForbiddenDestinationError` let a boundary map failures to the right
-response.
+Every failure is a `ClientError`, so an application boundary can map the tree onto its own answers:
+
+```text
+ClientError                      also: an unparseable URL, a pagination loop
+├── TransportError               a network failure that outlasted retries
+│   ├── ClientTimeoutError       a timeout, or the call's deadline
+│   └── CircuitOpenError         the origin's breaker refused the call unsent
+├── UpstreamStatusError          an undeclared status; a 5xx that outlasted retries; a refusal in a body
+│   ├── AuthError                401 or 403: our credential was refused
+│   └── RateLimitError           429, a quota refusal, or a server pause past the deadline
+├── ResponseParseError           a 2xx body the reader could not read
+├── ResponseTooLargeError        a body past max_response_bytes
+├── ForbiddenDestinationError    a hop the SSRF guard refused
+└── ClientConfigurationError     our own setup is wrong
+```
+
+Every error carries `method`, `url` (credentials redacted), `request_id`, `attempts`, `retryable`, `retry_after` and a
+note per attempt (`attempt 2/3: 503 Service Unavailable (Retry-After 2.0s) after 0.41s`). An `UpstreamStatusError`
+adds `status_code`, the provider's `code` and its RFC 9457 `problem`. All of them pickle.
+
+```python
+def gateway_status(error: ClientError) -> HTTPStatus:
+    """Return the status an API gateway answers with when a call to an upstream failed with *error*."""
+    match error:
+        case ClientTimeoutError():
+            return HTTPStatus.GATEWAY_TIMEOUT  # the upstream was too slow, or the call's deadline passed
+        case ClientConfigurationError():
+            return HTTPStatus.SERVICE_UNAVAILABLE  # our own setup is wrong; an operator must act
+        case _:
+            return HTTPStatus.BAD_GATEWAY  # the upstream failed, refused us, or sent something unreadable
+```
+
+More in [errors](docs/errors.md).
+
+## Testing your client
+
+`headgate.testing` tests a client through its real stack, with nothing private patched: a `FakeTransport` stands in
+for the network, and a `TestClock` makes every wait instant.
+
+```python
+import httpx2
+from quickstart import CatalogClient
+
+from headgate.testing import FakeTransport, TestClock, isolated_breakers
+
+GDP = {"id": "GDP", "title": "Gross domestic product", "values": [27.4, 28.1]}
+
+
+async def test_find_series_reads_a_404_as_none() -> None:
+    """Return ``None`` for the 404 the endpoint documents, signing the request with the key."""
+    fake = FakeTransport().route("GET", "/v1/series/RETIRED", 404)
+    async with CatalogClient("test-key", transport=fake) as catalog:
+        assert await catalog.find_series("RETIRED") is None
+    assert fake.calls[0].headers["Authorization"] == "Bearer test-key"
+
+
+async def test_a_503_is_retried_after_the_wait_it_asks_for() -> None:
+    """Retry a 503 once its ``Retry-After`` has passed, on a test clock that makes the wait instant."""
+    fake = FakeTransport().route(
+        "GET",
+        "/v1/series/GDP",
+        httpx2.Response(503, headers={"Retry-After": "2"}),
+        httpx2.Response(200, json=GDP),
+    )
+    clock = TestClock()
+    with clock.install(), isolated_breakers():  # the clients built in the block use them
+        catalog = CatalogClient("test-key", transport=fake)
+    async with catalog:
+        series = await catalog.get_series("GDP")
+    assert series.values == [27.4, 28.1]
+    assert clock.sleeps == [2.0]
+```
+
+Fault schedules, cassettes and switching the policy off: [testing](docs/testing.md).
+
+## Codec flavors
+
+The core imports no codec. A client picks one by import, and both flavors expose `decode`, `decoder` and
+`to_builtins` with the same behaviour: strict typing (a field that changes type fails), unknown fields ignored, and a
+mismatch raised as `DecodeError`, which the client turns into `ResponseParseError`.
+
+| Import | Decodes into | Install |
+| --- | --- | --- |
+| `headgate.msgspec` | `msgspec.Struct` and any msgspec type | core |
+| `headgate.pydantic` | `pydantic.BaseModel` and any pydantic type | `headgate[pydantic]` |
 
 ## Development
 
 ```bash
-uv sync
-uv run python -m pytest
-uv run ruff check . && uv run ty check
+uv sync                                   # Python 3.14 and every dev dependency
+uv run ruff check && uv run ruff format --check
+uv run ty check
+uv run python -m pytest --cov             # 100% line and branch coverage is required
+uv run python -m pytest benchmarks        # the benchmarks, as CI runs them
+uv run mutmut run                         # mutation testing; slow, run it before a release
 ```
 
-The test suite uses `pytest-httpx` through a small alias plugin (`headgate_pytest_alias.py`) so its `httpx_mock` fixture
-patches `httpx2`.
+Lint selects every ruff rule, ty treats every rule as an error, and suppression comments are not accepted. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the rules a change must keep, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for how we
+work together, and [SECURITY.md](SECURITY.md) to report a vulnerability privately. The changes in each release are in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Licence
 
-MIT. `src/headgate/_curl.py` is derived from `httpx-curl-cffi` (BSD-3-Clause); its notice is kept in the file.
+MIT. `src/headgate/_curl.py` is derived from [httpx-curl-cffi](https://github.com/vgavro/httpx-curl-cffi)
+(BSD-3-Clause); its notice is kept in the file.
