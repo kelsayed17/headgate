@@ -6,7 +6,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
-0.2.0, the first release published to PyPI. It reshapes the client around option objects and rebuilds every policy
+## [0.2.0] - 2026-10-25
+
+The first release published to PyPI. It reshapes the client around option objects and rebuilds every policy
 layer. Code written against the 0.1.0 source needs the migrations below; there are no compatibility aliases.
 
 ### Migrating from 0.1.0
@@ -183,5 +185,6 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/commits/main
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/kelsayed17/headgate/compare/f319ad8...v0.2.0
 [0.1.0]: https://github.com/kelsayed17/headgate/commit/f319ad8
