@@ -218,15 +218,15 @@ async def test_raises_after_exhausting_retries(httpx2_mock: HTTPXMock) -> None:
 
 
 async def test_honors_retry_after_on_429(httpx2_mock: HTTPXMock) -> None:
-    """Check that a 429's ``Retry-After`` decides the wait, not the backoff curve.
+    """Check that a 429's ``Retry-After`` is waited exactly, not the backoff curve and not clamped to its cap.
 
-    The retry transport parses the two forms the header allows, a whole number of seconds or an HTTP date, and falls
-    back to its own backoff for anything else. The test therefore sends a whole number: a fractional value would take
-    the fallback path and prove only that a 429 is retried at all. The client's sleep records the duration instead of
-    waiting it, so asserting the duration costs no wall time.
+    The client's sleep records the duration instead of waiting it, so asserting the duration costs no wall time.
     """
+    retry_after = 7.0
     httpx2_mock.add_response(
-        url="https://api.example/x", status_code=httpx2.codes.TOO_MANY_REQUESTS, headers={"Retry-After": "7"}
+        url="https://api.example/x",
+        status_code=httpx2.codes.TOO_MANY_REQUESTS,
+        headers={"Retry-After": f"{retry_after:g}"},
     )
     httpx2_mock.add_response(url="https://api.example/x", json={"ok": True})
 
@@ -238,7 +238,7 @@ async def test_honors_retry_after_on_429(httpx2_mock: HTTPXMock) -> None:
     resp = await client.get("x", expect=RESPONSE)
 
     assert resp.status_code == httpx2.codes.OK
-    assert clock.sleeps == [5.0], "the header's 7s is honoured, clamped to the backoff's max_wait of 5s"
+    assert clock.sleeps == [retry_after], "the header's 7s is waited exactly, past the backoff's max_wait of 5s"
 
 
 # --- Circuit breaker ---

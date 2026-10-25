@@ -27,6 +27,7 @@ from headgate import (
     MethodFilter,
     QueryParamAuth,
     Rate,
+    RetryPolicy,
     StatusCodeFilter,
     TransportPolicy,
     as_bytes,
@@ -72,12 +73,15 @@ def _client(
     cache: HttpCache | None = None,
     breaker: bool = True,
 ) -> AsyncBaseClient:
-    """Build a client over an in-memory transport with a budget that never throttles."""
+    """Build a client over an in-memory transport with a rate and a retry budget that never throttle."""
+    retry = RetryPolicy(budget=None)
     return AsyncBaseClient(
         base_url=_BASE_URL,
         rate=_FAST,
         auth=auth,
-        policy=TransportPolicy(cache=cache) if breaker else TransportPolicy(cache=cache, breaker=None),
+        policy=TransportPolicy(retry=retry, cache=cache)
+        if breaker
+        else TransportPolicy(retry=retry, cache=cache, breaker=None),
         http=HttpOptions(transport=httpx2.MockTransport(handler)),
     )
 

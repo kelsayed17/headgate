@@ -85,7 +85,7 @@ from headgate.errors import CircuitOpenError, ClientError, ClientTimeoutError, D
 from headgate.pagination import PageRequest, Paginated
 from headgate.ratelimit import BudgetPausedError
 from headgate.retry import NO_RETRY, REPLAYABLE_BODY, RetryPolicy
-from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
+from headgate.retry._policy import NETWORK_ERRORS, RETRY_OUTCOME, RETRY_POLICY
 from headgate.streaming import Stream
 
 if TYPE_CHECKING:
@@ -213,8 +213,8 @@ class AsyncBaseClient:
     undeclared non-2xx raises, a 404 included. A non-2xx the provider documents as an answer is declared with
     :meth:`Expect.on <headgate._responses.Expect.on>` and comes back as its own wire type.
 
-    **Per-call overrides.** ``retry=False`` sends once and never re-sends, which is what a non-idempotent write
-    (placing an order) needs, since every method is retried by default; ``retry=RetryPolicy(...)`` replaces the
+    **Per-call overrides.** ``retry=False`` sends once and never re-sends (a POST or PATCH is already re-sent only
+    when that is safe, see :class:`~headgate.RetryPolicy`); ``retry=RetryPolicy(...)`` replaces the
     client's policy for the call. ``follow_redirects=False`` makes a redirect raise as its 3xx. ``cache_ttl=`` sets
     this request's cache lifetime. ``timeout=``, ``deadline=`` and ``idempotency_key=`` ride :class:`RequestOptions`.
     :meth:`with_options` makes a view whose calls take other defaults for headers, timeouts, deadline and retry.
@@ -577,8 +577,11 @@ class AsyncBaseClient:
 
     def _site(self, prepared: _Prepared) -> CallSite:
         """Return where *prepared*'s call is now, for an error raised about it: the attempt count is read now."""
-        info = prepared.context.info
-        return CallSite(self._source, info.method, info.url, prepared.context.attempt, self._request_id_headers)
+        context = prepared.context
+        info = context.info
+        return CallSite(
+            self._source, info.method, info.url, context.attempt, self._request_id_headers, context.get(RETRY_OUTCOME)
+        )
 
     @contextlib.asynccontextmanager
     async def _reported(self, context: CallContext) -> AsyncGenerator[_Report]:

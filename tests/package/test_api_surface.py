@@ -49,10 +49,18 @@ _PUBLIC_MODULES = (
 #: An object's address in a default value's ``repr``, which differs between runs.
 _ADDRESS = re.compile(r" at 0x[0-9a-fA-F]+")
 
+#: A flat set literal in a ``repr``, whose item order follows string hashing and so differs between runs.
+_SET = re.compile(r"frozenset\(\{([^{}()]*)\}\)")
+
+
+def _sorted_set(match: re.Match[str]) -> str:
+    """Return the set literal *match* found with its items sorted."""
+    return f"frozenset({{{', '.join(sorted(match.group(1).split(', ')))}}})"
+
 
 def _masked(text: str) -> str:
-    """Return *text* with every memory address masked."""
-    return _ADDRESS.sub(" at 0x…", text)
+    """Return *text* with every memory address masked and every flat set's items sorted."""
+    return _SET.sub(_sorted_set, _ADDRESS.sub(" at 0x…", text))
 
 
 def _signature(obj: Callable[..., object]) -> str:

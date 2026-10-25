@@ -14,8 +14,9 @@ from hypothesis import strategies as st
 from headgate import Expect, nothing
 from headgate._codec import drop_none
 from headgate.retry import Backoff, RetryPolicy
+from headgate.retry._policy import retry_after_of
 
-#: The longest any single retry wait may be: the default ``Backoff.max_wait``, which caps a ``Retry-After`` too.
+#: The longest a backoff wait may be: the default ``Backoff.max_wait``.
 _MAX_WAIT = 5.0
 #: Statuses no call may declare as an answer: the client's own credentials, the rate limit, and every 5xx.
 _UNCLAIMABLE = frozenset({httpx2.codes.UNAUTHORIZED, httpx2.codes.PROXY_AUTHENTICATION_REQUIRED, 429})
@@ -35,10 +36,10 @@ _JSON = st.recursive(
     backoff_factor=st.floats(min_value=0, max_value=1e6),
     jitter=st.floats(min_value=0, max_value=1),
 )
-def test_a_retry_wait_is_always_finite_non_negative_and_capped(
+def test_a_retry_wait_is_finite_non_negative_and_capped_unless_the_server_asked(
     retry_after: str, retry: int, backoff_factor: float, jitter: float
 ) -> None:
-    """Wait between zero and the cap after any response, whatever its ``Retry-After`` says and however many retries."""
+    """Wait the delay a 503's ``Retry-After`` asks for exactly, and otherwise a backoff between zero and its cap."""
     policy = RetryPolicy(attempts=retry + 1, backoff=Backoff(factor=backoff_factor, jitter=lambda: jitter))
     # Header bytes arrive from the wire as Latin-1, so any of the 256 byte values can appear.
     headers = [(b"Retry-After", retry_after.encode("latin-1"))]
@@ -47,7 +48,12 @@ def test_a_retry_wait_is_always_finite_non_negative_and_capped(
     wait = policy.wait_after(response, retry)
 
     assert math.isfinite(wait)
-    assert 0 <= wait <= _MAX_WAIT
+    assert wait >= 0
+    asked = retry_after_of(response)
+    if asked is None:
+        assert wait <= _MAX_WAIT
+    else:
+        assert wait == asked
 
 
 def _contains_none_value(value: object) -> bool:

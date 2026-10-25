@@ -45,7 +45,7 @@ from headgate.errors import (
 )
 from headgate.pagination import Cursor, LinkHeader, NextUrl, Offset, Pager, PageRequest, Paginated
 from headgate.ratelimit import Adaptive, Rate, RateBudget, RateRule
-from headgate.retry import NO_RETRY, Backoff, RetryPolicy
+from headgate.retry import NO_RETRY, Backoff, Hedge, RetryBudget, RetryPolicy
 from headgate.streaming import Stream
 
 __all__ = [
@@ -65,6 +65,7 @@ __all__ = [
     "DecodeError",
     "Expect",
     "Fresh",
+    "Hedge",
     "HttpCache",
     "HttpOptions",
     "IdempotencyKeys",
@@ -93,6 +94,7 @@ __all__ = [
     "RequestOptions",
     "ResponseParseError",
     "ResponseTooLargeError",
+    "RetryBudget",
     "RetryPolicy",
     "Route",
     "StaticHeaderAuth",

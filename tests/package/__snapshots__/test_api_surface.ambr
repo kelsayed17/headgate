@@ -322,19 +322,39 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.retry]
   '''
   module headgate.retry
-  __all__ = ['NO_RETRY', 'REPLAYABLE_BODY', 'Backoff', 'RetryPolicy', 'RetryTransport']
-  NO_RETRY = RetryPolicy(attempts=1, backoff=Backoff(factor=0.5, max_wait=5.0))
+  __all__ = ['IDEMPOTENT_METHODS', 'NO_RETRY', 'REPLAYABLE_BODY', 'RETRY_STATUSES', 'Backoff', 'Hedge', 'RetryBudget', 'RetryPolicy', 'RetryTransport', 'SendTrackingTransport']
+  IDEMPOTENT_METHODS = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'})
+  NO_RETRY = RetryPolicy(attempts=1, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryBudget(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05)
   REPLAYABLE_BODY = Slot('replayable_body')
+  RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
   class Backoff(object)(*, factor: 'float' = 0.5, max_wait: 'float' = 5.0, jitter: 'RandomSource' = <bound method SystemRandom.random of <random.SystemRandom object at 0x…>>) -> 'None'
       field factor: float = 0.5
       field max_wait: float = 5.0
       field jitter: RandomSource = <bound method SystemRandom.random of <random.SystemRandom object at 0x…>>
       def delay(self, retry: 'int') -> 'float'
-  class RetryPolicy(object)(*, attempts: 'int' = 3, backoff: 'Backoff' = <factory>) -> 'None'
+  class Hedge(object)(*, after: 'float' = 0.5, max_extra: 'int' = 1) -> 'None'
+      field after: float = 0.5
+      field max_extra: int = 1
+  class RetryBudget(object)(*, ratio: 'float' = 0.2, min_per_second: 'float' = 10.0, window: 'float' = 10.0, clock: 'Clock | None' = None) -> 'None'
+      field ratio: float = 0.2
+      field min_per_second: float = 10.0
+      field window: float = 10.0
+      field clock: Clock | None = None
+  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
       field attempts: int = 3
+      field methods: frozenset[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'})
+      field statuses: frozenset[int] = frozenset({408, 425, 429, 500, 502, 503, 504})
       field backoff: Backoff = <factory>
+      field max_retry_after: float = 30.0
+      field budget: RetryBudget | None = <factory>
+      field respect_should_retry: bool = True
+      field hedge: Hedge | None = None
+      field min_attempt_time: float = 0.05
       def wait_after(self, failure: 'httpx2.Response | Exception', retry: 'int') -> 'float'
-  class RetryTransport(AsyncBaseTransport)(*, transport: 'httpx2.AsyncBaseTransport', policy: 'RetryPolicy', sleep: 'Sleep' = <function asyncio_sleep at 0x…>) -> 'None'
+  class RetryTransport(AsyncBaseTransport)(*, transport: 'httpx2.AsyncBaseTransport', policy: 'RetryPolicy', sleep: 'Sleep' = <function asyncio_sleep at 0x…>, clock: 'Clock' = <built-in function monotonic>) -> 'None'
+      def aclose(self) -> 'None'
+      def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
+  class SendTrackingTransport(AsyncBaseTransport)(*, transport: 'httpx2.AsyncBaseTransport') -> 'None'
       def aclose(self) -> 'None'
       def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
   '''
@@ -357,20 +377,49 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.testing]
   '''
   module headgate.testing
-  __all__ = ['CassetteFilter', 'FakeTransport', 'RecordedRequest', 'Reply', 'TestClock', 'UnmatchedRequestError', 'instant_retries', 'isolated_breakers']
+  __all__ = ['CassetteFilter', 'ConnectFail', 'DropMidBody', 'FakeTransport', 'FaultCall', 'FaultyTransport', 'PoolFull', 'RecordedRequest', 'RefusedStream', 'Reply', 'Respond', 'Slow', 'Step', 'TestClock', 'UnmatchedRequestError', 'instant_retries', 'isolated_breakers']
   class CassetteFilter(object)(*, auths: 'Iterable[object]' = (), headers: 'Iterable[str]' = (), params: 'Iterable[str]' = ()) -> 'None'
       def __call__(self, request: 'httpx2.Request', call_next: 'Next') -> 'httpx2.Response'
       def before_record_request(self, request: 'R') -> 'R | None'
       def before_record_response(self, response: 'MutableMapping[str, object]') -> 'MutableMapping[str, object]'
       def vcr_config(self) -> 'dict[str, object]'
+  class ConnectFail(object)(timeout: 'bool' = False) -> 'None'
+      field timeout: bool = False
+  class DropMidBody(object)(after_bytes: 'int') -> 'None'
+      field after_bytes: int
   class FakeTransport(AsyncBaseTransport)() -> 'None'
       def aclose(self) -> 'None'
       property calls
       def calls_to(self, method: 'str', path: 'str') -> 'tuple[httpx2.Request, ...]'
       def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
       def route(self, method: 'str', path: 'str', *replies: 'Reply') -> 'Self'
+  class FaultCall(object)(step: 'Step', method: 'str', url: 'str', headers: 'httpx2.Headers', connected: 'bool' = False, bytes_sent: 'int' = 0, response: 'httpx2.Response | None' = None, response_closed: 'bool | None' = None, error: 'Exception | None' = None) -> 'None'
+      field step: Step
+      field method: str
+      field url: str
+      field headers: httpx2.Headers
+      field connected: bool = False
+      field bytes_sent: int = 0
+      field response: httpx2.Response | None = None
+      field response_closed: bool | None = None
+      field error: Exception | None = None
+  class FaultyTransport(AsyncBaseTransport)(*, schedule: 'list[Step]', sleep: 'Callable[[float], Awaitable[None]]' = <function sleep at 0x…>) -> 'None'
+      def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
+  class PoolFull(object)() -> 'None'
   class RecordedRequest(Protocol)(*args, **kwargs)
+  class RefusedStream(object)() -> 'None'
   type Reply = httpx2.Response | int | Callable[[httpx2.Request], httpx2.Response | Awaitable[httpx2.Response]]
+  class Respond(object)(status: 'int' = 200, headers: 'Mapping[str, str]' = <factory>, json: 'object' = None, content: 'bytes' = b'', retry_after: 'float | None' = None) -> 'None'
+      field status: int = 200
+      field headers: Mapping[str, str] = <factory>
+      field json: object = None
+      field content: bytes = b''
+      field retry_after: float | None = None
+      def response(self) -> 'tuple[list[tuple[str, str]], bytes]'
+  class Slow(object)(seconds: 'float', then: 'Respond' = <factory>) -> 'None'
+      field seconds: float
+      field then: Respond = <factory>
+  type Step = ConnectFail | PoolFull | Respond | DropMidBody | Slow | RefusedStream
   class TestClock(object)(start: 'float' = 0.0) -> 'None'
       def __call__(self) -> 'float'
       def advance(self, seconds: 'float') -> 'None'
@@ -385,13 +434,13 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['NO_RETRY', 'Adaptive', 'AsyncBaseClient', 'AuthError', 'Backoff', 'BreakerPolicy', 'BreakerRegistry', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Cursor', 'DecodeError', 'Expect', 'Fresh', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'LinkHeader', 'MethodFilter', 'Middleware', 'Minted', 'NextUrl', 'NotModified', 'Observer', 'Offset', 'PageRequest', 'Pager', 'Paginated', 'Partition', 'PathFragmentFilter', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'StaticHeaderAuth', 'StatusCodeFilter', 'Stream', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'Validator', 'as_bytes', 'conditional', 'event_stream', 'json_reader', 'nothing']
-  NO_RETRY = RetryPolicy(attempts=1, backoff=Backoff(factor=0.5, max_wait=5.0))
+  __all__ = ['NO_RETRY', 'Adaptive', 'AsyncBaseClient', 'AuthError', 'Backoff', 'BreakerPolicy', 'BreakerRegistry', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Cursor', 'DecodeError', 'Expect', 'Fresh', 'Hedge', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'LinkHeader', 'MethodFilter', 'Middleware', 'Minted', 'NextUrl', 'NotModified', 'Observer', 'Offset', 'PageRequest', 'Pager', 'Paginated', 'Partition', 'PathFragmentFilter', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryBudget', 'RetryPolicy', 'Route', 'StaticHeaderAuth', 'StatusCodeFilter', 'Stream', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'Validator', 'as_bytes', 'conditional', 'event_stream', 'json_reader', 'nothing']
+  NO_RETRY = RetryPolicy(attempts=1, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryBudget(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05)
   class Adaptive(object)(*, decrease: 'float' = 0.5, increase: 'float' = 0.1, min_rate: 'float' = 0.1) -> 'None'
       field decrease: float = 0.5
       field increase: float = 0.1
       field min_rate: float = 0.1
-  class AsyncBaseClient(object)(*, base_url: 'str', rate: 'Rate | RateBudget', auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, backoff=Backoff(factor=0.5, max_wait=5.0)), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=<headgate.breaker._registry.BreakerRegistry object at 0x…>), rate_limits=(), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), timeout=Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, refusal_check=None, trusted_origins=frozenset(), allow_private_hosts=True, ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray'), observers=(), middleware=())) -> 'None'
+  class AsyncBaseClient(object)(*, base_url: 'str', rate: 'Rate | RateBudget', auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryBudget(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=<headgate.breaker._registry.BreakerRegistry object at 0x…>), rate_limits=(), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), timeout=Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, refusal_check=None, trusted_origins=frozenset(), allow_private_hosts=True, ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray'), observers=(), middleware=())) -> 'None'
       def aclose(self) -> 'None'
       def delete(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
       def get(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
@@ -449,6 +498,9 @@
   class Fresh(Generic)(value: 'T', validator: 'Validator') -> 'None'
       field value: T
       field validator: Validator
+  class Hedge(object)(*, after: 'float' = 0.5, max_extra: 'int' = 1) -> 'None'
+      field after: float = 0.5
+      field max_extra: int = 1
   class HttpCache(object)(*, policy: 'FilterPolicy', storage: 'AsyncBaseStorage', ttl: 'float | None' = None, partition: 'Partition' = <Partition.CREDENTIAL: 'credential'>) -> 'None'
       field policy: FilterPolicy
       field storage: AsyncBaseStorage
@@ -570,9 +622,21 @@
       property content_type
       property status_code
   class ResponseTooLargeError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  class RetryPolicy(object)(*, attempts: 'int' = 3, backoff: 'Backoff' = <factory>) -> 'None'
+  class RetryBudget(object)(*, ratio: 'float' = 0.2, min_per_second: 'float' = 10.0, window: 'float' = 10.0, clock: 'Clock | None' = None) -> 'None'
+      field ratio: float = 0.2
+      field min_per_second: float = 10.0
+      field window: float = 10.0
+      field clock: Clock | None = None
+  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
       field attempts: int = 3
+      field methods: frozenset[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'})
+      field statuses: frozenset[int] = frozenset({408, 425, 429, 500, 502, 503, 504})
       field backoff: Backoff = <factory>
+      field max_retry_after: float = 30.0
+      field budget: RetryBudget | None = <factory>
+      field respect_should_retry: bool = True
+      field hedge: Hedge | None = None
+      field min_attempt_time: float = 0.05
       def wait_after(self, failure: 'httpx2.Response | Exception', retry: 'int') -> 'float'
   class Route(object)(fragment: 'str', *, retry: 'RetryPolicy | None' = None, deadline: 'float | None' = None) -> 'None'
       field fragment: str

@@ -11,7 +11,8 @@
         MiddlewareTransport(         # HttpOptions.middleware, once per attempt (only with middleware)
           ResilientCacheTransport(   # opt-in response cache; a hit stops here
             RateLimitTransport(      # the rate budget: every network send takes its turn and feeds back
-              network_transport)))))  # httpx2.AsyncHTTPTransport(trust_env=False, ...) or HttpOptions.transport
+              SendTrackingTransport( # records whether each send connected and how many request bytes it wrote
+                network_transport))))))  # httpx2.AsyncHTTPTransport(trust_env=False, ...) or HttpOptions.transport
 
 :func:`build_transport_stack` builds the layers bottom-up, one statement per layer: a new layer is one more statement in
 its place there, wrapping the layer below it.
@@ -40,7 +41,7 @@ from headgate._user_agent import user_agent
 from headgate.cache._credentials import credential_scope
 from headgate.cache._transport import ResilientCacheTransport
 from headgate.ratelimit import PathBudgets, RateLimitTransport
-from headgate.retry import RetryTransport
+from headgate.retry import RetryTransport, SendTrackingTransport
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -83,7 +84,7 @@ def build_transport_stack(
 
     *auth* is the client's, which the cache partitions its entries by.
     """
-    layer = _network(http)
+    layer = SendTrackingTransport(transport=_network(http))
     budgets = PathBudgets(default=rate, rules=policy.rate_limits, timing=timing)
     layer = RateLimitTransport(budgets=budgets, transport=layer)
     if (cache := policy.cache) is not None:
@@ -93,7 +94,7 @@ def build_transport_stack(
         layer = MiddlewareTransport(transport=layer, middleware=http.middleware)
     if http.observers:
         layer = AttemptTransport(transport=layer)
-    return RetryTransport(transport=layer, policy=policy.retry, sleep=timing.sleep)
+    return RetryTransport(transport=layer, policy=policy.retry, sleep=timing.sleep, clock=timing.clock)
 
 
 def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:

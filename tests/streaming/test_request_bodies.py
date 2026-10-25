@@ -141,9 +141,12 @@ async def test_files_are_sent_as_multipart_with_form_fields() -> None:
 
 
 async def test_a_multipart_upload_is_whole_on_every_attempt() -> None:
-    """Re-read a file object from its start when a multipart call is retried."""
+    """Re-read a file object from its start when a multipart call is retried.
+
+    A POST that sent its body is re-sent only under an Idempotency-Key, so the call carries one.
+    """
     server = _Server(failures=1)
-    await server.client().post("upload", expect=nothing, files={"f": io.BytesIO(_BODY)})
+    await server.client().post("upload", expect=nothing, files={"f": io.BytesIO(_BODY)}, idempotency_key="upload-1")
     first, second = server.bodies
     assert _BODY in first
     assert _BODY in second

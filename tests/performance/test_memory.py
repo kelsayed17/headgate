@@ -25,6 +25,7 @@ from headgate import (
     HttpCache,
     HttpOptions,
     MethodFilter,
+    RetryPolicy,
     StatusCodeFilter,
     TransportPolicy,
     as_bytes,
@@ -71,11 +72,11 @@ def _ok(request: httpx2.Request) -> httpx2.Response:
 
 
 def _client(handler: Callable[[httpx2.Request], httpx2.Response] = _ok, cache: HttpCache | None = None) -> StubClient:
-    """Build a client over an in-memory transport that never throttles."""
+    """Build a client over an in-memory transport that never throttles, with no retry budget to run out of."""
     return StubClient(
         base_url="https://api.example.test",
         rate=_FAST,
-        policy=TransportPolicy(cache=cache),
+        policy=TransportPolicy(retry=RetryPolicy(budget=None), cache=cache),
         http=HttpOptions(transport=httpx2.MockTransport(handler)),
     )
 

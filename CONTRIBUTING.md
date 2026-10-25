@@ -24,12 +24,14 @@ uv run python -m pytest --cov
 - **Coverage is 100% of lines and branches.** A new branch needs a test; an unreachable branch should be deleted.
 - **Docstrings** describe what the code does now and why, in the present tense.
 
-## The retry golden table
+## Retry invariants
 
-`tests/support/retry_golden.json` records how httpx-retries 0.6.0 decided every case in the retry matrix, and
-`tests/retry/test_retry_golden.py` replays it against headgate's own retry transport. Never regenerate the table
-to make a failing replay pass. A deliberate change to retry behaviour updates the table on purpose, with the row diff
-reviewed, in the same pull request.
+`tests/retry/test_properties.py` checks, with Hypothesis over random `FaultyTransport` schedules, the invariants every
+change to the retry layer must keep: a POST or PATCH without an idempotency key is never re-sent after any of its bytes
+were written (unless the server proved it unprocessed); no attempt or wait runs past the deadline; retries never exceed
+the budget; every response that is not returned is closed; and the error's attempt history matches what was sent. A
+failing example is a bug to fix, not a test to loosen. Behaviour the invariants do not pin is covered by the behaviour
+tests beside them.
 
 ## Pull requests
 

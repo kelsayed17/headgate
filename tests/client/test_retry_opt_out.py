@@ -1,11 +1,12 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``retry=False``, the opt-out for non-idempotent writes, disables retries entirely.
+"""``retry=False`` disables retries entirely, even for a request the policy would safely re-send.
 
 The flag is on every verb and installs a zero-retry policy (one send, no re-send) for that one request. It is a
 keyword argument rather than a transport extension so it shows in the verb's signature and at the call site. These
-tests pin the behaviour end to end, so a verb that silently stopped threading the flag fails here.
+tests pin the behaviour end to end, so a verb that silently stopped threading the flag fails here. The controls use a
+POST carrying an idempotency key, which the default policy does re-send.
 """
 
 from __future__ import annotations
@@ -58,7 +59,7 @@ async def test_retry_false_works_on_a_read_verb(httpx2_mock: HTTPXMock) -> None:
 
 
 async def test_the_default_retries(httpx2_mock: HTTPXMock) -> None:
-    """Check, as a control, that the same POST without the flag is re-sent: the hazard the flag closes.
+    """Check, as a control, that a keyed POST without the flag is re-sent.
 
     Without this the one-request assertions above would pass just as happily against a client that had stopped
     retrying altogether.
@@ -67,9 +68,20 @@ async def test_the_default_retries(httpx2_mock: HTTPXMock) -> None:
 
     async with _Probe() as client:
         with pytest.raises(UpstreamStatusError):
-            await client.post("orders", expect=RESPONSE)
+            await client.post("orders", expect=RESPONSE, idempotency_key="order-1")
 
     assert len(httpx2_mock.get_requests()) > 1
+
+
+async def test_retry_false_wins_over_an_idempotency_key(httpx2_mock: HTTPXMock) -> None:
+    """Check that the flag stops even a keyed POST, which the policy would otherwise re-send."""
+    httpx2_mock.add_response(status_code=httpx2.codes.INTERNAL_SERVER_ERROR)
+
+    async with _Probe() as client:
+        with pytest.raises(UpstreamStatusError):
+            await client.post("orders", expect=RESPONSE, idempotency_key="order-1", retry=False)
+
+    assert len(httpx2_mock.get_requests()) == 1
 
 
 async def test_retry_true_is_explicitly_the_default(httpx2_mock: HTTPXMock) -> None:
@@ -78,7 +90,7 @@ async def test_retry_true_is_explicitly_the_default(httpx2_mock: HTTPXMock) -> N
 
     async with _Probe() as client:
         with pytest.raises(UpstreamStatusError):
-            await client.post("orders", expect=RESPONSE, retry=True)
+            await client.post("orders", expect=RESPONSE, idempotency_key="order-1", retry=True)
 
     assert len(httpx2_mock.get_requests()) > 1
 
