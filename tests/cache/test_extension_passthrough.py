@@ -23,10 +23,11 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, TransportPolicy
+from headgate import HttpOptions, Timeouts, TransportPolicy
 from headgate._cache import HttpCache
-from headgate._rate_limit import UNLIMITED
 from headgate.errors import ClientTimeoutError
+from headgate.ratelimit import UNLIMITED
+from headgate.retry import RetryPolicy
 from tests.cache._helpers import series_policy, stub_client
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
@@ -80,9 +81,10 @@ async def test_a_per_call_timeout_still_wins_through_the_cache(storage: AsyncSql
         cache=HttpCache(policy=series_policy(), storage=storage),
     )
 
-    await client.get("/series?id=B", expect=RESPONSE, timeout=_CALL_TIMEOUT)
+    every = dict.fromkeys(("connect", "read", "write", "pool"), _CALL_TIMEOUT)
+    await client.get("/series?id=B", expect=RESPONSE, timeout=Timeouts(**every))
 
-    assert base.extensions[0]["timeout"] == dict.fromkeys(("connect", "read", "write", "pool"), _CALL_TIMEOUT)
+    assert base.extensions[0]["timeout"] == every
 
 
 async def test_the_cache_layer_keeps_its_own_extension(storage: AsyncSqliteStorage) -> None:
@@ -105,7 +107,7 @@ async def test_a_black_holing_host_times_out_through_the_cache(storage: AsyncSql
     client = StubClient(
         base_url=f"http://127.0.0.1:{port}",
         rate=UNLIMITED,
-        policy=TransportPolicy(max_attempts=1, cache=HttpCache(policy=series_policy(), storage=storage)),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1), cache=HttpCache(policy=series_policy(), storage=storage)),
         http=HttpOptions(timeout=_SHORT_TIMEOUT),
     )
     started = time.monotonic()

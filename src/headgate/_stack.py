@@ -3,86 +3,120 @@
 
 """The transport stack every client is built on, assembled in one place.
 
-:func:`build_http_client` returns the ``httpx2.AsyncClient`` an ``AsyncBaseClient`` holds, built over::
+:func:`build_http_client` returns the ``httpx2.AsyncClient`` an ``AsyncBaseClient`` holds, over the stack
+:func:`build_transport_stack` builds::
 
-    RetryTransport(                  # status/exception retries, backoff, Retry-After
-      ResilientCacheTransport(       # opt-in response cache; a hit stops here
-        RateLimitTransport(          # the rate budget: every network send takes a token
-          base_or_custom_transport)))
+    RetryTransport(                  # re-sends per the RetryPolicy; begins each attempt on the call's context
+      AttemptTransport(              # AttemptFinished per send (only with observers)
+        MiddlewareTransport(         # HttpOptions.middleware, once per attempt (only with middleware)
+          ResilientCacheTransport(   # opt-in response cache; a hit stops here
+            RateLimitTransport(      # the rate budget: every network send takes a token
+              network_transport)))))  # httpx2.AsyncHTTPTransport(trust_env=False, ...) or HttpOptions.transport
 
-The circuit breaker is not in this stack. ``AsyncBaseClient`` drives it around both the send and the body read, which
-no transport can span (see :mod:`headgate._breaker`).
+:func:`build_transport_stack` builds the layers bottom-up, one statement per layer: a new layer is one more statement in
+its place there, wrapping the layer below it.
+
+The circuit breaker and the deadline are not in this stack. ``AsyncBaseClient`` drives both around the send and the
+body read, which no transport can span. The auth flow and the request and response hooks run in ``httpx2.AsyncClient``
+above the stack, once per logical call and once per redirect hop.
+
+Nothing here reads the environment: the client and the default transport are built with ``trust_env=False``, and the
+cookie jar refuses every cookie unless ``HttpOptions(cookies=True)``.
 """
 
 from __future__ import annotations
 
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import TYPE_CHECKING
 
 import httpx2
 
+from headgate._attempts import AttemptTransport
 from headgate._auth import StaticHeaderAuth
 from headgate._cache import ResilientCacheTransport
-from headgate._rate_limit import PathLimiters, RateLimitTransport
+from headgate._middleware import MiddlewareTransport
+from headgate._options import httpx_timeout
 from headgate._redirects import credential_header_guard, drop_followed_redirect_body
-from headgate._retry import RetryTransport, build_retry
+from headgate._user_agent import user_agent
+from headgate.ratelimit import PathLimiters, RateLimitTransport
+from headgate.retry import RetryTransport
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from headgate._core import Timing
     from headgate._options import HttpOptions, TransportPolicy
-    from headgate._rate_limit import Rate
+    from headgate.ratelimit import Rate
 
-__all__ = ["build_http_client"]
-
-#: The connection pool every client's default transport gets. The rate limiter is the intended throttle; the pool only
-#: has to be wide enough never to bind first (see ``AsyncBaseClient``). A client that needs a different pool passes its
-#: own ``HttpOptions(transport=...)``, which owns its pool.
-_MAX_CONNECTIONS = 10
-_MAX_KEEPALIVE_CONNECTIONS = 5
-
-#: The timeouts other than the read timeout, which is ``HttpOptions.timeout``.
-_CONNECT_TIMEOUT = 10.0
-_WRITE_TIMEOUT = 10.0
-_POOL_TIMEOUT = 15.0
+__all__ = ["build_http_client", "build_transport_stack"]
 
 
 def build_http_client(
-    *, base_url: str, rate: Rate, auth: httpx2.Auth | None, policy: TransportPolicy, http: HttpOptions
+    *, base_url: str, auth: httpx2.Auth | None, http: HttpOptions, transport: httpx2.AsyncBaseTransport
 ) -> httpx2.AsyncClient:
-    """Build a client's ``httpx2.AsyncClient`` over its policy stack (see the module docstring for the layers)."""
+    """Build a client's ``httpx2.AsyncClient`` over *transport*, the stack :func:`build_transport_stack` built."""
     # httpx2 joins a relative path onto base_url only when base_url ends with "/".
     base_url = base_url if base_url.endswith("/") else base_url + "/"
     return httpx2.AsyncClient(
-        transport=RetryTransport(
-            transport=_policy_transport(rate, policy, http), retry=build_retry(policy.max_attempts)
-        ),
+        transport=transport,
         auth=auth,
         base_url=base_url,
-        headers=http.headers,
+        headers=_default_headers(http),
+        cookies=None if http.cookies else _refusing_jar(),
         follow_redirects=http.follow_redirects,
+        max_redirects=http.max_redirects,
         event_hooks={"request": _request_hooks(auth, httpx2.URL(base_url)), "response": [drop_followed_redirect_body]},
-        timeout=httpx2.Timeout(connect=_CONNECT_TIMEOUT, read=http.timeout, write=_WRITE_TIMEOUT, pool=_POOL_TIMEOUT),
+        timeout=httpx_timeout(http.timeout),
+        trust_env=False,
     )
 
 
-def _policy_transport(rate: Rate, policy: TransportPolicy, http: HttpOptions) -> httpx2.AsyncBaseTransport:
-    """Return the layers under retry: the optional cache over the rate limiter over the network transport."""
-    # A custom transport (AsyncCurlTransport, a test double) is used as-is and owns its pool.
-    network = http.transport or httpx2.AsyncHTTPTransport(
-        http2=True,
-        limits=httpx2.Limits(max_connections=_MAX_CONNECTIONS, max_keepalive_connections=_MAX_KEEPALIVE_CONNECTIONS),
-    )
-    paced = RateLimitTransport(limiters=PathLimiters(default=rate, rules=policy.rate_limits), transport=network)
+def build_transport_stack(
+    rate: Rate, policy: TransportPolicy, http: HttpOptions, timing: Timing
+) -> httpx2.AsyncBaseTransport:
+    """Build the layers under ``httpx2.AsyncClient``, bottom-up: each statement wraps the layer before it."""
+    layer = _network(http)
+    layer = RateLimitTransport(limiters=PathLimiters(default=rate, rules=policy.rate_limits), transport=layer)
     cache = policy.cache
-    if cache is None or cache.storage is None:
-        return paced
-    return ResilientCacheTransport(
-        next_transport=paced,
-        storage=cache.storage,
-        policy=cache.policy,
-        max_body_bytes=http.max_response_bytes,
-        ttl=cache.ttl,
+    if cache is not None and cache.storage is not None:
+        layer = ResilientCacheTransport(
+            next_transport=layer,
+            storage=cache.storage,
+            policy=cache.policy,
+            max_body_bytes=http.max_response_bytes,
+            ttl=cache.ttl,
+        )
+    if http.middleware:
+        layer = MiddlewareTransport(transport=layer, middleware=http.middleware)
+    if http.observers:
+        layer = AttemptTransport(transport=layer)
+    return RetryTransport(transport=layer, policy=policy.retry, sleep=timing.sleep)
+
+
+def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
+    """Return the network transport: the caller's own, used as it is, or an HTTP/2 pool that reads no environment."""
+    if http.transport is not None:
+        return http.transport
+    return httpx2.AsyncHTTPTransport(
+        verify=True if http.ssl_context is None else http.ssl_context,
+        http2=True,
+        limits=http.limits,
+        proxy=http.proxy,
+        trust_env=False,
     )
+
+
+def _default_headers(http: HttpOptions) -> httpx2.Headers:
+    """Return the headers every request carries: the ``User-Agent``, then the caller's, which win any clash."""
+    headers = httpx2.Headers({"User-Agent": user_agent(http.user_agent)})
+    # Headers.update replaces case-insensitively, so a caller's "user-agent" replaces headgate's rather than joining it.
+    headers.update(http.headers)
+    return headers
+
+
+def _refusing_jar() -> CookieJar:
+    """Return a cookie jar whose policy allows no domain, so it stores no cookie and sends none back."""
+    return CookieJar(policy=DefaultCookiePolicy(allowed_domains=[]))
 
 
 def _request_hooks(auth: httpx2.Auth | None, base_url: httpx2.URL) -> list[Callable[[httpx2.Request], Awaitable[None]]]:

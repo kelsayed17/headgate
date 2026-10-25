@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import httpx2
 
 from headgate._client import AsyncBaseClient
-from headgate._rate_limit import Rate
+from headgate.ratelimit import Rate
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:

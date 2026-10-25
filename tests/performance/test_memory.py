@@ -9,6 +9,7 @@ the regular suite. Timing lives in ``benchmarks/``.
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import itertools
 import tracemalloc
@@ -28,7 +29,7 @@ from headgate import (
     TransportPolicy,
     as_bytes,
 )
-from headgate._rate_limit import Rate
+from headgate.ratelimit import Rate
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
@@ -84,6 +85,10 @@ async def _growth_per_window(operation: Callable[[], Awaitable[object]]) -> int:
 
     A leak retains something on every run, so it grows window after window; a bounded cache fills during the warmup
     and then stops. Measuring a window after the warmup tells the two apart.
+
+    The event loop turns once before each snapshot, as it does between requests in any real program. An in-memory
+    transport never suspends, so without that turn the loop never purges the deadline timers each call cancels, which
+    it does whenever it runs.
     """
     for _ in range(_WARMUP_REQUESTS):
         await operation()
@@ -91,10 +96,12 @@ async def _growth_per_window(operation: Callable[[], Awaitable[object]]) -> int:
     try:
         for _ in range(_WINDOW_REQUESTS):
             await operation()
+        await asyncio.sleep(0)
         gc.collect()
         before = tracemalloc.take_snapshot()
         for _ in range(_WINDOW_REQUESTS):
             await operation()
+        await asyncio.sleep(0)
         gc.collect()
         after = tracemalloc.take_snapshot()
     finally:
@@ -134,9 +141,8 @@ async def test_repeated_failures_retain_nothing() -> None:
     assert await _growth_per_window(failing_get) < _GROWTH_LIMIT
 
 
-async def test_repeated_retries_retain_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_repeated_retries_retain_nothing() -> None:
     """Retain nothing per request across thousands of GETs that are answered 503 once and then retried."""
-    monkeypatch.setattr("headgate._retry._BACKOFF_FACTOR", 0.0)
     sent = itertools.count()
 
     def flaky(request: httpx2.Request) -> httpx2.Response:

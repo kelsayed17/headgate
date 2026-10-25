@@ -14,7 +14,6 @@ import pytest
 
 from headgate import HttpOptions, TransportPolicy
 from headgate._client import AsyncBaseClient
-from headgate._rate_limit import Rate
 from headgate.errors import (
     AuthError,
     ClientTimeoutError,
@@ -24,8 +23,10 @@ from headgate.errors import (
     UpstreamStatusError,
 )
 from headgate.msgspec import decoder
+from headgate.ratelimit import Rate
+from headgate.retry import RetryPolicy
 
-_POLICY = TransportPolicy(max_attempts=1)
+_POLICY = TransportPolicy(retry=RetryPolicy(attempts=1))
 
 
 def _client(transport: httpx2.MockTransport) -> AsyncBaseClient:

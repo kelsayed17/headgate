@@ -42,6 +42,7 @@ __all__ = [
     "redact_secrets",
     "register_secret_params",
     "render_path",
+    "route_template",
     "sanitize_url",
 ]
 
@@ -193,6 +194,24 @@ def render_path(template: Template) -> str:
         else:
             value = format(part.value, part.format_spec) if part.format_spec else str(part.value)
             out.append(escape_segment(value))
+    return "".join(out)
+
+
+def route_template(template: Template) -> str:
+    """Return the route a t-string URL path names: its literal text with each hole written as ``{expression}``.
+
+    ``t"series/{series_id}/observations"`` gives ``"series/{series_id}/observations"`` whatever the id, so events and
+    traces can group calls by endpoint without the values in them. A nested ``Template`` contributes its own route; a
+    format spec, ``:raw`` included, is not shown.
+    """
+    out: list[str] = []
+    for part in template:
+        if isinstance(part, str):
+            out.append(part)
+        elif isinstance(part.value, Template):
+            out.append(route_template(part.value))
+        else:
+            out.append(f"{{{part.expression}}}")
     return "".join(out)
 
 

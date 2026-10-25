@@ -50,8 +50,9 @@ import httpx2
 from hishel import AsyncBaseStorage, BaseFilter, CachePolicy, Entry, FilterPolicy, Request, Response
 from hishel.httpx2 import AsyncCacheTransport
 
-from headgate._retry import NETWORK_ERRORS
+from headgate._core import CallContext
 from headgate._url import is_secret_param
+from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
 
 if TYPE_CHECKING:
     import uuid
@@ -156,7 +157,7 @@ def _storage_faults(passing: tuple[type[Exception], ...] = _PASS_FROM_STORAGE) -
 
     An ``httpx2.HTTPError`` passes through because a storage that stores a miss streams the network body while writing
     it, so a network failure can surface from inside the storage and must still reach the retry layer as one. The body
-    of a miss passes every one of :data:`~headgate._retry.NETWORK_ERRORS`, an ``OSError`` from a custom transport
+    of a miss passes every one of :data:`~headgate.retry._policy.NETWORK_ERRORS`, an ``OSError`` from a custom transport
     included; anywhere else an ``OSError`` comes from the backend (a full disk) and is a storage fault.
     """
     try:
@@ -420,7 +421,7 @@ class _Download:
         )
 
 
-#: A network failure, as the retry layer defines it (:data:`~headgate._retry.NETWORK_ERRORS`).
+#: A network failure, as the retry layer defines it (:data:`~headgate.retry._policy.NETWORK_ERRORS`).
 type _NetworkError = httpx2.HTTPError | OSError
 
 
@@ -469,13 +470,14 @@ def _sharing_key(request: httpx2.Request) -> _SharingKey:
     """Return what two in-flight GETs must agree on to share one download.
 
     Headers as well as the URL, since two GETs that differ in ``Range``, ``Accept`` or a credential ask for different
-    responses. The ``timeout`` and ``retry`` extensions too, since a request willing to wait longer, or to try more
-    often, must not inherit the ``ReadTimeout`` of one that was not.
+    responses. The ``timeout`` extension and the call's own retry policy too, since a request willing to wait longer,
+    or to try more often, must not inherit the ``ReadTimeout`` of one that was not.
     """
     timeout = request.extensions.get("timeout")
     named: list[tuple[str, object]] = [(str(name), value) for name, value in timeout.items()] if timeout else []
     timeouts = tuple(sorted(named, key=itemgetter(0)))
-    return str(request.url), tuple(sorted(request.headers.multi_items())), timeouts, request.extensions.get("retry")
+    retry = CallContext.of(request).get(RETRY_POLICY)
+    return str(request.url), tuple(sorted(request.headers.multi_items())), timeouts, retry
 
 
 class ResilientCacheTransport(AsyncCacheTransport):
@@ -501,9 +503,9 @@ class ResilientCacheTransport(AsyncCacheTransport):
     **Simultaneous identical GETs share one download.** hishel has no request coalescing, so an identical GET that
     arrives while the first is still fetching would find nothing in storage and go to the network too. Instead it waits
     and gets its own copy of the first one's response, whether a hit, a miss or degraded, since the body is held whole
-    here anyway. A network failure (one of :data:`~headgate._retry.NETWORK_ERRORS`) fails every waiting request from
-    the one attempt, each with its own copy chained to the original; each caller's retry layer then retries, and those
-    retries share again. What a waiting request receives is marked :data:`HOST_UNTESTED`, so only the request that
+    here anyway. A network failure (one of :data:`~headgate.retry._policy.NETWORK_ERRORS`) fails every waiting request
+    from the one attempt, each with its own copy chained to the original; each caller's retry layer then retries, and
+    those retries share again. What a waiting request receives is marked :data:`HOST_UNTESTED`, so only the request that
     fetched counts toward the circuit breaker. If the first request is cancelled or fails outside the network, the next
     waiting request fetches for the rest. A body past the cap is not held, so each waiting request fetches its own.
     POSTs are never shared, since a POST's body is part of what it asks for.

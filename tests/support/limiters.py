@@ -3,7 +3,7 @@
 
 """Find a client's rate limiters in its transport stack.
 
-The limiters live in the stack's :class:`~headgate._rate_limit.RateLimitTransport`, under retry and, when the client
+The limiters live in the stack's :class:`~headgate.ratelimit.RateLimitTransport`, under retry and, when the client
 caches, under the cache transport too. Neither ``AsyncBaseClient`` nor ``httpx2.AsyncClient`` exposes its transport,
 and each layer names the one below it differently, so the stack is searched through the object graph
 (:func:`gc.get_referents`) rather than by private attribute names. The search follows only instance dictionaries,
@@ -17,11 +17,11 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate._rate_limit import RateLimitTransport
+from headgate.ratelimit import RateLimitTransport
 
 if TYPE_CHECKING:
     from headgate._client import AsyncBaseClient
-    from headgate._rate_limit import AsyncRateLimiter
+    from headgate.ratelimit import AsyncRateLimiter
 
 
 def _is_stack_node(obj: object) -> bool:

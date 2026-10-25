@@ -11,33 +11,40 @@ whose subject is the throttle's own timing opts out of the no-op rate-limiter wa
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 import pytest
 
-from headgate._breaker import HOST_BREAKERS
-from headgate._rate_limit import AsyncRateLimiter
+from headgate._core import Timing, timing_override
+from headgate.breaker import DEFAULT_REGISTRY
+from headgate.ratelimit import AsyncRateLimiter
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
 
-@pytest.fixture(autouse=True)
-def no_retry_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Zero the retry backoff, so a mocked failure is retried the way production retries it, without sleeping.
+async def _yield_only(_seconds: float, /) -> None:
+    """Yield to the event loop once instead of sleeping, as a zero-second backoff would."""
+    await asyncio.sleep(0)
 
-    ``build_retry`` reads the factor when a client is built, so as an autouse fixture this patches before any client
-    in the test exists.
+
+@pytest.fixture(autouse=True)
+def instant_retry_sleep() -> Iterator[None]:
+    """Build every client with a sleep that returns at once, so a mocked failure is retried without waiting.
+
+    Clients read their timing when they are built, and every client in a test is built inside this fixture's block.
     """
-    monkeypatch.setattr("headgate._retry._BACKOFF_FACTOR", 0.0)
+    with timing_override(Timing(sleep=_yield_only)):
+        yield
 
 
 @pytest.fixture(autouse=True)
 def reset_circuit_breakers() -> Iterator[None]:
-    """Reset the process-global per-host breakers around every test, so failures never carry into a later test."""
-    HOST_BREAKERS.clear()
+    """Reset the shared default breaker registry around every test, so failures never carry into a later test."""
+    DEFAULT_REGISTRY.clear()
     yield
-    HOST_BREAKERS.clear()
+    DEFAULT_REGISTRY.clear()
 
 
 @pytest.fixture(autouse=True)

@@ -32,11 +32,11 @@ from headgate import (
     as_bytes,
 )
 from headgate import msgspec as msgspec_flavor
+from headgate._core import Timing, timing_override
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    import pytest
     from pytest_codspeed import BenchmarkFixture
 
     from benchmarks.conftest import Operation
@@ -70,14 +70,14 @@ def _client(
     *,
     auth: httpx2.Auth | None = None,
     cache: HttpCache | None = None,
-    circuit_breaker: bool = True,
+    breaker: bool = True,
 ) -> AsyncBaseClient:
     """Build a client over an in-memory transport with a budget that never throttles."""
     return AsyncBaseClient(
         base_url=_BASE_URL,
         rate=_FAST,
         auth=auth,
-        policy=TransportPolicy(cache=cache, circuit_breaker=circuit_breaker),
+        policy=TransportPolicy(cache=cache) if breaker else TransportPolicy(cache=cache, breaker=None),
         http=HttpOptions(transport=httpx2.MockTransport(handler)),
     )
 
@@ -114,13 +114,17 @@ def test_get_with_query_param_auth(run_batch: Callable[[Operation], None]) -> No
 
 def test_get_without_circuit_breaker(run_batch: Callable[[Operation], None]) -> None:
     """Measure a GET with the breaker off, to isolate the breaker's share of the cost."""
-    client = _client(circuit_breaker=False)
+    client = _client(breaker=False)
     run_batch(lambda: client.get("series", expect=_SERIES))
 
 
-def test_get_retried_once(run_batch: Callable[[Operation], None], monkeypatch: pytest.MonkeyPatch) -> None:
-    """Measure a GET that is answered 503 once and then retried, with the backoff at zero."""
-    monkeypatch.setattr("headgate._retry._BACKOFF_FACTOR", 0.0)
+async def _no_wait(_seconds: float, /) -> None:
+    """Yield to the event loop instead of sleeping, as a zero-second backoff would."""
+    await asyncio.sleep(0)
+
+
+def test_get_retried_once(run_batch: Callable[[Operation], None]) -> None:
+    """Measure a GET that is answered 503 once and then retried, with the backoff sleep returning at once."""
     sent = itertools.count()
 
     def flaky(request: httpx2.Request) -> httpx2.Response:
@@ -128,7 +132,8 @@ def test_get_retried_once(run_batch: Callable[[Operation], None], monkeypatch: p
             return httpx2.Response(_UNAVAILABLE, request=request)
         return _ok(request)
 
-    client = _client(flaky)
+    with timing_override(Timing(sleep=_no_wait)):
+        client = _client(flaky)
     run_batch(lambda: client.get("series", expect=_SERIES))
 
 

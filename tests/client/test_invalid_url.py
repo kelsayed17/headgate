@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import pytest
 
-from headgate._breaker import HOST_BREAKERS
 from headgate._client import AsyncBaseClient
-from headgate._rate_limit import Rate
 from headgate._responses import as_bytes
 from headgate.errors import ClientError
+from headgate.ratelimit import Rate
+from tests.support.breakers import failures
 
 
 class _Client(AsyncBaseClient):
@@ -35,4 +35,4 @@ async def test_a_malformed_url_is_a_client_error_and_not_a_host_failure() -> Non
             await client.get("a\x00b", expect=as_bytes)
     finally:
         await client.aclose()
-    assert HOST_BREAKERS["example.test"].failure_count == 0, "a malformed URL is not a host failure"
+    assert failures("example.test") == 0, "a malformed URL is not a host failure"

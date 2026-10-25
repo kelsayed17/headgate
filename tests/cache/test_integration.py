@@ -22,7 +22,7 @@ import time_machine
 
 from headgate._cache import HttpCache
 from headgate._client import AsyncBaseClient
-from headgate._rate_limit import Rate
+from headgate.ratelimit import Rate
 from tests.cache._helpers import CloseCountingStorage, series_policy, stub_client
 from tests.support.responses import RESPONSE
 

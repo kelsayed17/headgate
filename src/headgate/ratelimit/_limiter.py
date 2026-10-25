@@ -1,11 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Rate limiting: a client's budget (:class:`Rate`), the limiter that enforces it, and the transport that applies it.
-
-:class:`RateLimitTransport` is the bottom layer of every client's transport stack (see :mod:`headgate._stack`). Below
-the cache, a cache hit returns above it and spends no token; below retry, every re-send passes through it and spends
-its own. A client's ``rate_limits`` rules give a matching URL path a limiter of its own (:class:`PathLimiters`).
+"""The limiters that enforce a :class:`~headgate.ratelimit.Rate`, and the choice of limiter by URL path.
 
 The limiter is chosen by URL path rather than by a request extension: hishel's cache transport rebuilds the request
 before handing it down and forwards only its own ``hishel_*`` keys, so a limiter chosen through an extension would be
@@ -15,67 +11,23 @@ invisible below the cache. The URL survives.
 from __future__ import annotations
 
 import asyncio
-import math
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING
 
-import httpx2
 from aiolimiter import AsyncLimiter
 
-from headgate.policy import policy_is_disabled
+from headgate._core import policy_is_disabled
+from headgate.ratelimit._rate import UNLIMITED, Rate
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from types import TracebackType
     from typing import Self
 
-__all__ = ["UNLIMITED", "AsyncRateLimiter", "PathLimiters", "Rate", "RateLimitTransport", "RateRule"]
+    import httpx2
 
+    from headgate.ratelimit._rate import RateRule
 
-@dataclass(frozen=True, slots=True)
-class Rate:
-    """``requests`` per ``period`` seconds: a client's rate budget, with its unit in the call that builds it.
-
-    ``Rate.per_minute(120)`` and ``Rate.per_second(2)`` are the same budget.
-    """
-
-    requests: float
-    period: float
-
-    def __post_init__(self) -> None:
-        """Reject a budget that cannot pace: non-positive, NaN, or an infinite period."""
-        if math.isnan(self.requests) or self.requests <= 0:
-            msg = f"requests must be > 0 (got {self.requests})"
-            raise ValueError(msg)
-        if not math.isfinite(self.period) or self.period <= 0:
-            msg = f"period must be > 0 and finite (got {self.period})"
-            raise ValueError(msg)
-
-    @classmethod
-    def per_second(cls, requests: float) -> Rate:
-        """Return a budget of *requests* per second."""
-        return cls(requests=requests, period=1.0)
-
-    @classmethod
-    def per_minute(cls, requests: float) -> Rate:
-        """Return a budget of *requests* per minute."""
-        return cls(requests=requests, period=60.0)
-
-
-#: A rate that never throttles in practice (1M req/s): what a limiter built with transport policy off paces at.
-UNLIMITED = Rate.per_second(1_000_000)
-
-
-@dataclass(frozen=True, slots=True)
-class RateRule:
-    """A second rate for the requests whose URL path contains ``fragment``.
-
-    The fragment is matched as a substring of the URL path, the same idiom :class:`headgate.PathFragmentFilter` uses
-    to scope the cache, and enough for a rule that names one endpoint. The first matching rule wins.
-    """
-
-    fragment: str
-    rate: Rate
+__all__ = ["AsyncRateLimiter", "PathLimiters"]
 
 
 class AsyncRateLimiter:
@@ -153,31 +105,3 @@ class PathLimiters:
         """Return the limiter *request* paces on: the first matching rule's, else :attr:`default`."""
         path = request.url.path
         return next((limiter for fragment, limiter in self._rules if fragment in path), self.default)
-
-
-class RateLimitTransport(httpx2.AsyncBaseTransport):
-    """Pace every request that reaches the network, and close the transport it wraps.
-
-    ``httpx2.AsyncBaseTransport.aclose`` is a no-op, so the override is what lets a client's teardown reach the cache
-    storage and the connection pool below this layer.
-    """
-
-    def __init__(self, *, limiters: PathLimiters, transport: httpx2.AsyncBaseTransport) -> None:
-        """Pace requests to *transport* on *limiters*."""
-        self._limiters = limiters
-        self._transport = transport
-
-    @property
-    def limiters(self) -> PathLimiters:
-        """The limiters this layer chooses from."""
-        return self._limiters
-
-    @override
-    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
-        async with self._limiters.for_request(request):
-            return await self._transport.handle_async_request(request)
-
-    @override
-    async def aclose(self) -> None:
-        """Close the wrapped transport."""
-        await self._transport.aclose()

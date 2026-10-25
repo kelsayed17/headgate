@@ -50,8 +50,8 @@ The transport behaves like a native httpx2 one wherever the layers above it can 
   decoder and a cache that stores the stream replays it correctly. The headers as received stay on the ``curl_cffi``
   response, in ``response.extensions["curl"]["response"]``.
 * ``default_headers=True`` hands the header set to curl's impersonation profile, so httpx2's own defaults
-  (``User-Agent: python-httpx2/...``, ``Accept-Encoding``, ...) are removed from the request when the caller left them
-  untouched.
+  (``User-Agent: python-httpx2/...``, ``Accept-Encoding``, ...) and the ``User-Agent`` a client sends without
+  ``HttpOptions(user_agent=...)`` are removed from the request when the caller left them untouched.
 * A curl error code, raised while sending or while streaming the body, maps onto the httpx2 exception a native
   transport would raise, so the policy layers classify it.
 * Closing a response before its body is read aborts the transfer. ``curl_cffi``'s own ``aclose`` waits for the whole
@@ -65,6 +65,8 @@ import functools
 from typing import TYPE_CHECKING, Any, get_args, override
 
 import httpx2
+
+from headgate._user_agent import DEFAULT_USER_AGENT
 
 try:
     from curl_cffi import CurlECode, CurlHttpVersion, CurlOpt
@@ -269,6 +271,10 @@ def _curl_timeout(timeout: Mapping[str, float | None]) -> tuple[float, float] | 
 
 @functools.cache
 def _httpx_default_headers() -> tuple[tuple[str, str], ...]:
-    """Return the headers httpx2 adds to a request the caller gave none, read from a client rather than hard-coded."""
+    """Return the headers httpx2 and headgate add to a request the caller gave none.
+
+    httpx2's are read from a client rather than hard-coded; headgate's is the ``User-Agent`` of a client without a
+    product token of its own.
+    """
     with httpx2.Client(trust_env=False) as client:
-        return tuple(client.headers.items())
+        return (*client.headers.items(), ("user-agent", DEFAULT_USER_AGENT))

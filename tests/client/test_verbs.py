@@ -24,10 +24,11 @@ import pytest
 from headgate import HttpOptions, TransportPolicy
 from headgate import msgspec as flavor
 from headgate._client import AsyncBaseClient
-from headgate._rate_limit import Rate
 from headgate._responses import as_bytes, nothing
 from headgate.errors import AuthError, UpstreamStatusError
 from headgate.msgspec import decoder
+from headgate.ratelimit import Rate
+from headgate.retry import RetryPolicy
 from tests.support.responses import RESPONSE
 
 _VALUE = 7
@@ -72,7 +73,7 @@ def _client(wire: _Wire) -> AsyncBaseClient:
     return AsyncBaseClient(
         base_url="https://example.test",
         rate=Rate.per_second(2),
-        policy=TransportPolicy(max_attempts=1),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(transport=httpx2.MockTransport(wire)),
     )
 

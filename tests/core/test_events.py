@@ -1,0 +1,47 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
+"""The emitter: an observer's exception is counted and swallowed, never raised into the call."""
+
+from __future__ import annotations
+
+from headgate._core import OBSERVER_FAILURES, SILENT, CallInfo, CallStarted, Emitter, Event
+
+
+class _Broken:
+    """An observer whose ``notify`` always raises."""
+
+    def notify(self, event: Event) -> None:
+        """Raise."""
+        msg = f"cannot handle {type(event).__name__}"
+        raise RuntimeError(msg)
+
+
+class _Recorder:
+    """An observer that keeps what it receives."""
+
+    def __init__(self) -> None:
+        """Start empty."""
+        self.events: list[Event] = []
+
+    def notify(self, event: Event) -> None:
+        """Keep *event*."""
+        self.events.append(event)
+
+
+def test_a_failing_observer_is_counted_and_the_next_still_receives_the_event() -> None:
+    """Count the broken observer's failure by its class and still deliver to the observers after it."""
+    before = OBSERVER_FAILURES[_Broken.__qualname__]
+    recorder = _Recorder()
+    event = CallStarted(call=CallInfo(method="GET", url="https://a.test/x"))
+
+    Emitter((_Broken(), recorder)).emit(event)
+
+    assert recorder.events == [event]
+    assert OBSERVER_FAILURES[_Broken.__qualname__] == before + 1
+
+
+def test_the_silent_emitter_has_no_listeners() -> None:
+    """Report no listeners, so the client can skip building events."""
+    assert not SILENT.active
+    SILENT.emit(CallStarted(call=CallInfo(method="GET", url="https://a.test/x")))

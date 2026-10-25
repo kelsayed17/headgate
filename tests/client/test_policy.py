@@ -18,12 +18,13 @@ import pytest
 from aiolimiter import AsyncLimiter
 
 from headgate import HttpOptions, TransportPolicy
-from headgate._breaker import HOST_BREAKERS
 from headgate._client import AsyncBaseClient
-from headgate._rate_limit import UNLIMITED, Rate, RateRule
 from headgate._responses import nothing
+from headgate.breaker import DEFAULT_REGISTRY
 from headgate.errors import TransportError, UpstreamStatusError
 from headgate.policy import policy_disabled, policy_is_disabled
+from headgate.ratelimit import UNLIMITED, Rate, RateRule
+from headgate.retry import RetryPolicy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -63,7 +64,9 @@ class _Client(AsyncBaseClient):
         super().__init__(
             base_url=f"https://{_HOST}",
             rate=_RATE,
-            policy=TransportPolicy(max_attempts=_MAX_ATTEMPTS, rate_limits=[RateRule("/r", _RULE_RATE)]),
+            policy=TransportPolicy(
+                retry=RetryPolicy(attempts=_MAX_ATTEMPTS), rate_limits=(RateRule("/r", _RULE_RATE),)
+            ),
             http=HttpOptions(transport=httpx2.MockTransport(wire)),
         )
 
@@ -80,7 +83,7 @@ async def _open_the_breaker() -> None:
     """Fail a normally built client against the host until the shared breaker refuses it."""
     failing = _Client(_Wire(httpx2.codes.SERVICE_UNAVAILABLE))
     for _ in range(_ENOUGH_FAILURES):
-        if HOST_BREAKERS[_HOST].refusing:
+        if _HOST in DEFAULT_REGISTRY and DEFAULT_REGISTRY[_HOST].refusing:
             return
         with pytest.raises(UpstreamStatusError):
             await failing.get("x", expect=nothing)

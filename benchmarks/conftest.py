@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from headgate._breaker import HOST_BREAKERS
+from headgate.breaker import DEFAULT_REGISTRY
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator
@@ -36,9 +36,9 @@ def runner() -> Iterator[asyncio.Runner]:
 @pytest.fixture(autouse=True)
 def fresh_breakers() -> Iterator[None]:
     """Start every benchmark with no circuit breaker state carried over."""
-    HOST_BREAKERS.clear()
+    DEFAULT_REGISTRY.clear()
     yield
-    HOST_BREAKERS.clear()
+    DEFAULT_REGISTRY.clear()
 
 
 type Operation = Callable[[], Awaitable[object]]

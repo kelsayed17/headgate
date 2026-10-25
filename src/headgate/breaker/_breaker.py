@@ -1,10 +1,11 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The per-host circuit breaker: stop calling a host that is failing, find out cheaply when it recovers.
+"""The circuit breaker: stop calling a host that is failing, find out cheaply when it recovers.
 
-There is one breaker per host, shared by every client in the process through :data:`HOST_BREAKERS`, so two clients
-addressing the same upstream cannot each spend their own quota of failures against it.
+There is one breaker per host, shared by every client that uses the same :class:`~headgate.breaker.BreakerRegistry`
+(by default the process-wide one), so two clients addressing the same upstream cannot each spend their own quota of
+failures against it.
 
 Three design choices, each fixing a failure mode of the usual ``with breaker:`` wrapper:
 
@@ -17,12 +18,12 @@ Three design choices, each fixing a failure mode of the usual ``with breaker:`` 
   dying mid-body is a failure of the fetch. A transport layer would see only the response headers, which is why there
   is no breaker transport.
 
-The trip rule is five consecutive failures, so any success resets the count, and a host failing half its calls never
-trips. A failure-rate window over the last N calls is the obvious alternative if that is ever wanted.
+The trip rule is ``failure_threshold`` consecutive failures, so any success resets the count, and a host failing half
+its calls never trips. A failure-rate window over the last N calls is the obvious alternative if that is ever wanted.
 
 There is no lock: every state change happens between awaits on one event loop, so there is no critical section. An
-``asyncio.Lock`` would be wrong here besides, since it binds to the loop that first awaits it while the registry is
-process-global and outlives any one loop.
+``asyncio.Lock`` would be wrong here besides, since it binds to the loop that first awaits it while a registry may be
+process-global and outlive any one loop.
 """
 
 from __future__ import annotations
@@ -30,35 +31,29 @@ from __future__ import annotations
 import enum
 import time
 from contextlib import contextmanager
-from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
+
+from headgate._core import BreakerState
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
-    from contextlib import AbstractContextManager
+    from collections.abc import Generator
 
-__all__ = [
-    "HOST_BREAKERS",
-    "NO_BREAKERS",
-    "Breaker",
-    "BreakerState",
-    "Breakers",
-    "CircuitBreaker",
-    "CircuitOpenError",
-    "Verdict",
-]
+    from headgate._core import Clock
+
+__all__ = ["BreakerOpenError", "CircuitBreaker", "Verdict"]
 
 
-class BreakerState(StrEnum):
-    """Circuit-breaker states; the value is what :attr:`CircuitBreaker.state` reports."""
+class BreakerOpenError(Exception):
+    """Raised by :meth:`CircuitBreaker.track` when it refuses a call: open, or its one probe already out.
 
-    CLOSED = "closed"
-    OPEN = "open"
-    HALF_OPEN = "half_open"
+    ``AsyncBaseClient`` raises it to its caller as :class:`headgate.errors.CircuitOpenError`. ``retry_after`` is how
+    many seconds remain until the breaker admits a probe, or ``None`` while a probe is out (its outcome decides).
+    """
 
-
-class CircuitOpenError(Exception):
-    """Raised when a call is refused because the breaker is open, or its one probe is already out."""
+    def __init__(self, message: str, *, retry_after: float | None) -> None:
+        """Record *message* and *retry_after*."""
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class _Outcome(enum.Enum):
@@ -112,11 +107,11 @@ class CircuitBreaker:
         failure_threshold: int = 5,
         recovery_timeout: float = 60.0,
         name: str = "",
-        clock: Callable[[], float] = time.monotonic,
+        clock: Clock = time.monotonic,
     ) -> None:
         """Trip after *failure_threshold* consecutive failures; admit a probe *recovery_timeout* seconds later.
 
-        *name* (the host) appears in the :class:`CircuitOpenError` message. *clock* returns monotonic seconds; it is a
+        *name* (the host) appears in the :class:`BreakerOpenError` message. *clock* returns monotonic seconds; it is a
         parameter so the cooldown can be driven by a test without waiting.
         """
         self._clock = clock
@@ -147,6 +142,12 @@ class CircuitBreaker:
         """Consecutive failures recorded since the last success."""
         return self._failures
 
+    def _cooldown_left(self) -> float | None:
+        """Return the seconds until a probe is admitted, or ``None`` while one is out."""
+        if self._probe_in_flight:
+            return None
+        return max(0.0, self._recovery_timeout - (self._clock() - self._opened_at))
+
     def _admits(self) -> bool:
         """Whether a call would be let through, without taking the probe slot."""
         if self._state is BreakerState.CLOSED:
@@ -159,7 +160,7 @@ class CircuitBreaker:
     def track(self) -> Generator[Verdict]:
         """Run one fetch through the breaker.
 
-        Raises :class:`CircuitOpenError` instead of yielding when the host is being refused. Otherwise yields a
+        Raises :class:`BreakerOpenError` instead of yielding when the host is being refused. Otherwise yields a
         :class:`Verdict` the fetch marks as it goes, and what the call records on the way out is:
 
         * **a host failure**: only when the fetch marked :meth:`Verdict.mark_failed` before raising, which
@@ -182,7 +183,7 @@ class CircuitBreaker:
         """
         if not self._admits():
             msg = f"circuit breaker open for {self._name}"
-            raise CircuitOpenError(msg)
+            raise BreakerOpenError(msg, retry_after=self._cooldown_left())
         probing = self._state is not BreakerState.CLOSED
         if probing:
             # The cooldown has elapsed and this caller is the canary: take the slot so concurrent callers are refused
@@ -228,66 +229,3 @@ class CircuitBreaker:
         """Trip the breaker, starting its cooldown now."""
         self._state = BreakerState.OPEN
         self._opened_at = self._clock()
-
-
-class Breaker(Protocol):
-    """What a client needs of a breaker: one ``track()`` scope per fetch; :class:`CircuitBreaker` is the real one."""
-
-    def track(self) -> AbstractContextManager[Verdict]:
-        """Run one fetch through the breaker, yielding the :class:`Verdict` it marks."""
-        ...
-
-
-class Breakers(Protocol):
-    """Where a client looks up its host's breaker: :data:`HOST_BREAKERS`, or :data:`NO_BREAKERS`."""
-
-    def __getitem__(self, host: str, /) -> Breaker:
-        """Return *host*'s breaker."""
-        ...
-
-
-class _NoBreaker:
-    """A breaker that admits every call and records nothing."""
-
-    __slots__ = ()
-
-    @contextmanager
-    def track(self) -> Generator[Verdict]:
-        """Admit the call; the verdict it marks is discarded."""
-        yield Verdict()
-
-
-class _NoBreakers:
-    """Map every host to a breaker that admits all calls and records nothing.
-
-    The registry of a client built with ``TransportPolicy(circuit_breaker=False)``, or with transport policy off. It
-    never reads :data:`HOST_BREAKERS`, and that is half of what
-    "no breaker" means: the registry is process-global, so a client that merely stopped recording would still be
-    refused by a breaker another client opened on the same host.
-    """
-
-    __slots__ = ()
-
-    def __getitem__(self, host: str, /) -> _NoBreaker:
-        """Return the shared no-op breaker, whatever the host."""
-        return _NO_BREAKER
-
-
-_NO_BREAKER = _NoBreaker()
-
-#: The breaker registry for a client with no breaker. See :class:`_NoBreakers`.
-NO_BREAKERS = _NoBreakers()
-
-
-class _BreakerRegistry(dict[str, CircuitBreaker]):
-    """A host-to-breaker mapping that builds a missing host's breaker on lookup, named for its host."""
-
-    def __missing__(self, host: str) -> CircuitBreaker:
-        """Build, register and return *host*'s breaker (``dict.__getitem__`` calls this for a missing key)."""
-        breaker = self[host] = CircuitBreaker(name=host)
-        return breaker
-
-
-#: The registry every client shares, keyed by host. Module-level so concurrent clients to one host share a breaker,
-#: and so tests can clear or inspect it.
-HOST_BREAKERS = _BreakerRegistry()

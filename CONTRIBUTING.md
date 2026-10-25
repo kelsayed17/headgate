@@ -27,7 +27,7 @@ uv run python -m pytest --cov
 ## The retry golden table
 
 `tests/support/retry_golden.json` records how httpx-retries 0.6.0 decided every case in the retry matrix, and
-`tests/transport/test_retry_golden.py` replays it against headgate's own retry transport. Never regenerate the table
+`tests/retry/test_retry_golden.py` replays it against headgate's own retry transport. Never regenerate the table
 to make a failing replay pass. A deliberate change to retry behaviour updates the table on purpose, with the row diff
 reviewed, in the same pull request.
 

@@ -30,7 +30,8 @@ from hishel import AsyncSqliteStorage, FilterPolicy
 
 from headgate import HttpOptions, TransportPolicy
 from headgate._cache import HttpCache, PathFragmentFilter, StatusCodeFilter
-from headgate._rate_limit import AsyncRateLimiter, PathLimiters, Rate, RateLimitTransport, RateRule
+from headgate.ratelimit import AsyncRateLimiter, PathLimiters, Rate, RateLimitTransport, RateRule
+from headgate.retry import RetryPolicy
 from tests.support.clients import StubClient
 from tests.support.limiters import default_limiter, rate_limit_transport
 from tests.support.responses import RESPONSE
@@ -131,7 +132,7 @@ async def test_every_retry_takes_a_token(acquired: dict[int, int]) -> None:
     client = StubClient(
         base_url="https://x",
         rate=Rate.per_second(_INSTANT),
-        policy=TransportPolicy(max_attempts=len(statuses)),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=len(statuses))),
         http=HttpOptions(transport=base),
     )
 
@@ -165,7 +166,7 @@ async def test_each_retry_takes_its_token_before_it_is_sent(acquired: dict[int, 
     client = StubClient(
         base_url="https://x",
         rate=Rate.per_second(_INSTANT),
-        policy=TransportPolicy(max_attempts=len(statuses)),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=len(statuses))),
         http=HttpOptions(transport=base),
     )
 
@@ -180,7 +181,7 @@ async def test_a_path_rule_selects_its_own_limiter(acquired: dict[int, int]) -> 
     client = StubClient(
         base_url="https://x",
         rate=Rate.per_second(_INSTANT),
-        policy=TransportPolicy(rate_limits=[RateRule("/candles", Rate.per_second(_INSTANT))]),
+        policy=TransportPolicy(rate_limits=(RateRule("/candles", Rate.per_second(_INSTANT)),)),
         http=HttpOptions(transport=base),
     )
 

@@ -16,10 +16,14 @@ suppressing a close failure: closing a partly read compressed stream makes httpx
 from __future__ import annotations
 
 import contextlib
+from typing import TYPE_CHECKING
 
 import httpx2
 
 from headgate.errors import ResponseTooLargeError
+
+if TYPE_CHECKING:
+    from headgate._failures import CallSite
 
 __all__ = ["DEFAULT_MAX_RESPONSE_BYTES", "read_capped", "read_head"]
 
@@ -32,12 +36,13 @@ DEFAULT_MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 _WIRE_ENCODING_HEADERS = ("content-encoding", "content-length")
 
 
-async def read_capped(streamed: httpx2.Response, cap: int, *, source: str, url: str) -> httpx2.Response:
+async def read_capped(streamed: httpx2.Response, cap: int, site: CallSite) -> httpx2.Response:
     """Read *streamed*'s body up to *cap* decompressed bytes, close it, and return the response rebuilt around it.
 
-    Raises :class:`~headgate.errors.ResponseTooLargeError` past the cap. ``Content-Length`` is checked first as a
-    cheap refusal of an honestly oversized body, but it is never the control: it reports the compressed size (so a gzip
-    bomb passes it) and is absent on a chunked response. The control is the running count of decoded bytes.
+    Raises :class:`~headgate.errors.ResponseTooLargeError` past the cap, naming the call at *site*.
+    ``Content-Length`` is checked first as a cheap refusal of an honestly oversized body, but it is never the control:
+    it reports the compressed size (so a gzip bomb passes it) and is absent on a chunked response. The control is the
+    running count of decoded bytes.
 
     Bodies httpx2 reads itself are outside this function: a followed redirect's body is dropped unread by
     :func:`~headgate._redirects.drop_followed_redirect_body`, and a 401 an auth flow answers by re-sending is read in
@@ -47,14 +52,14 @@ async def read_capped(streamed: httpx2.Response, cap: int, *, source: str, url: 
         declared = streamed.headers.get("content-length")
         # isascii: str.isdigit() also accepts digits int() rejects, such as a latin-1 "²".
         if declared is not None and declared.isascii() and declared.isdigit() and int(declared) > cap:
-            msg = f"declared response size {int(declared)} exceeds cap {cap} for {url}"
-            raise ResponseTooLargeError(msg, source=source)
+            msg = f"declared response size {int(declared)} exceeds cap {cap} for {site.url}"
+            raise ResponseTooLargeError(msg, **site.details(streamed))
         content = await _read_past(streamed, cap)
     finally:
         await _close(streamed)
     if len(content) > cap:
-        msg = f"response body exceeded cap {cap} bytes for {url}"
-        raise ResponseTooLargeError(msg, source=source)
+        msg = f"response body exceeded cap {cap} bytes for {site.url}"
+        raise ResponseTooLargeError(msg, **site.details(streamed))
     return _rebuilt(streamed, content)
 
 

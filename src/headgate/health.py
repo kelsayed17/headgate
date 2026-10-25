@@ -3,22 +3,27 @@
 
 """Read-only snapshots of the transport tier's degradation state, for an application to export.
 
-This package neither logs nor emits metrics. Two pieces of state that say a host or the cache is degraded live here
-anyway, process-global: the per-host circuit breakers and the count of requests the cache handed to the live transport
-because it broke. Without these, an open breaker reaches someone only as the ``TransportError`` its caller saw.
+This package never logs. Three pieces of process-global state that say something is degraded are readable here: the
+circuit breakers of the default :class:`~headgate.breaker.BreakerRegistry`, the count of requests the cache handed to
+the live transport because it broke, and the count of observer failures headgate swallowed. Without these, an open
+breaker reaches someone only as the ``CircuitOpenError`` its caller saw.
 
-These two functions, and the snapshot type the first returns, are the whole read surface. Each returns a fresh copy, so
-a caller can neither mutate the registry nor see it change mid-iteration; a metrics callback can call them on a timer.
+These functions, and the snapshot type the first returns, are the whole read surface. Each returns a fresh copy, so a
+caller can neither mutate the state nor see it change mid-iteration; a metrics callback can call them on a timer.
 """
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
-from headgate._breaker import HOST_BREAKERS, BreakerState
 from headgate._cache import CACHE_DEGRADATIONS
+from headgate._core import OBSERVER_FAILURES, BreakerState
+from headgate.breaker import DEFAULT_REGISTRY
 
-__all__ = ["BreakerSnapshot", "BreakerState", "breaker_states", "cache_degradations"]
+if TYPE_CHECKING:
+    from headgate.breaker import BreakerRegistry
+
+__all__ = ["BreakerSnapshot", "BreakerState", "breaker_states", "cache_degradations", "observer_failures"]
 
 
 class BreakerSnapshot(NamedTuple):
@@ -33,11 +38,16 @@ class BreakerSnapshot(NamedTuple):
     refusing: bool
 
 
-def breaker_states() -> dict[str, BreakerSnapshot]:
-    """Return a snapshot of every host breaker built so far; a host no client has called yet is absent."""
-    return {host: BreakerSnapshot(breaker.state, breaker.refusing) for host, breaker in tuple(HOST_BREAKERS.items())}
+def breaker_states(registry: BreakerRegistry = DEFAULT_REGISTRY) -> dict[str, BreakerSnapshot]:
+    """Return a snapshot of every host breaker *registry* has built; a host no client has called yet is absent."""
+    return {host: BreakerSnapshot(breaker.state, breaker.refusing) for host, breaker in registry.items()}
 
 
 def cache_degradations() -> dict[str, int]:
     """Return, per host, how many requests found the HTTP cache broken and were handed to the live transport."""
     return dict(CACHE_DEGRADATIONS)
+
+
+def observer_failures() -> dict[str, int]:
+    """Return, per observer class, how many events its ``notify`` raised on, which headgate swallowed."""
+    return dict(OBSERVER_FAILURES)

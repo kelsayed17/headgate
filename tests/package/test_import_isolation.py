@@ -26,13 +26,27 @@ def _import_with_blocked(monkeypatch: pytest.MonkeyPatch, module: str, *blocked:
     importlib.import_module(module)
 
 
-@pytest.mark.parametrize("module", ["headgate", "headgate.msgspec", "headgate.health", "headgate.policy"])
+@pytest.mark.parametrize(
+    "module",
+    [
+        "headgate",
+        "headgate.msgspec",
+        "headgate.health",
+        "headgate.policy",
+        "headgate.events",
+        "headgate.retry",
+        "headgate.breaker",
+        "headgate.ratelimit",
+    ],
+)
 def test_headgate_never_imports_upstream_httpx(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
     """Check that *module* imports with upstream ``httpx`` unavailable."""
     _import_with_blocked(monkeypatch, module, "httpx")
 
 
-@pytest.mark.parametrize("module", ["headgate", "headgate._client", "headgate._responses", "headgate.errors"])
+@pytest.mark.parametrize(
+    "module", ["headgate", "headgate._client", "headgate._core", "headgate._responses", "headgate.errors"]
+)
 def test_the_core_imports_neither_codec(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
     """Check that the codec-free core imports with neither msgspec nor pydantic available."""
     _import_with_blocked(monkeypatch, module, "msgspec", "pydantic")

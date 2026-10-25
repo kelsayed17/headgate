@@ -13,9 +13,9 @@ from hypothesis import strategies as st
 
 from headgate import Expect, nothing
 from headgate._codec import drop_none
-from headgate._retry import Retry
+from headgate.retry import Backoff, RetryPolicy
 
-#: The longest any single retry wait may be, as documented on ``Retry.sleep_seconds``.
+#: The longest any single retry wait may be: the default ``Backoff.max_wait``, which caps a ``Retry-After`` too.
 _MAX_WAIT = 5.0
 #: Statuses no call may declare as an answer: the client's own credentials, the rate limit, and every 5xx.
 _UNCLAIMABLE = frozenset({httpx2.codes.UNAUTHORIZED, httpx2.codes.PROXY_AUTHENTICATION_REQUIRED, 429})
@@ -31,22 +31,20 @@ _JSON = st.recursive(
 
 @given(
     retry_after=st.text(alphabet=st.characters(max_codepoint=0xFF), max_size=40),
-    attempts_made=st.integers(min_value=1, max_value=2000),
+    retry=st.integers(min_value=1, max_value=2000),
     backoff_factor=st.floats(min_value=0, max_value=1e6),
     jitter=st.floats(min_value=0, max_value=1),
 )
 def test_a_retry_wait_is_always_finite_non_negative_and_capped(
-    retry_after: str, attempts_made: int, backoff_factor: float, jitter: float
+    retry_after: str, retry: int, backoff_factor: float, jitter: float
 ) -> None:
     """Wait between zero and the cap after any response, whatever its ``Retry-After`` says and however many retries."""
-    policy = Retry(
-        total=attempts_made, backoff_factor=backoff_factor, attempts_made=attempts_made, jitter=lambda: jitter
-    )
+    policy = RetryPolicy(attempts=retry + 1, backoff=Backoff(factor=backoff_factor, jitter=lambda: jitter))
     # Header bytes arrive from the wire as Latin-1, so any of the 256 byte values can appear.
     headers = [(b"Retry-After", retry_after.encode("latin-1"))]
     response = httpx2.Response(httpx2.codes.SERVICE_UNAVAILABLE, headers=headers)
 
-    wait = policy.sleep_seconds(response)
+    wait = policy.wait_after(response, retry)
 
     assert math.isfinite(wait)
     assert 0 <= wait <= _MAX_WAIT

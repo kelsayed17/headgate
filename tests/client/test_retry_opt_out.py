@@ -16,8 +16,11 @@ import httpx2
 import pytest
 
 from headgate._client import AsyncBaseClient
-from headgate._rate_limit import Rate
+from headgate._core import CallContext
 from headgate.errors import UpstreamStatusError
+from headgate.ratelimit import Rate
+from headgate.retry import NO_RETRY
+from headgate.retry._policy import RETRY_POLICY
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -81,7 +84,7 @@ async def test_retry_true_is_explicitly_the_default(httpx2_mock: HTTPXMock) -> N
 
 
 async def test_retry_false_and_a_cache_ttl_are_both_stamped(httpx2_mock: HTTPXMock) -> None:
-    """Check that the two per-call extensions are stamped side by side: ``retry=False`` does not replace a TTL."""
+    """Check that the two per-call overrides are stamped side by side: ``retry=False`` does not replace a TTL."""
     httpx2_mock.add_response(status_code=httpx2.codes.OK)
     ttl = 5.0
 
@@ -89,5 +92,7 @@ async def test_retry_false_and_a_cache_ttl_are_both_stamped(httpx2_mock: HTTPXMo
         await client.post("orders", expect=RESPONSE, retry=False, cache_ttl=ttl)
 
     sent = httpx2_mock.get_requests()[0]
+    context = CallContext.find(sent)
     assert sent.extensions["hishel_ttl"] == ttl
-    assert sent.extensions["retry"].total == 0
+    assert context is not None
+    assert context.get(RETRY_POLICY) is NO_RETRY

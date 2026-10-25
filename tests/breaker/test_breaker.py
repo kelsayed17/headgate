@@ -3,7 +3,7 @@
 
 """The circuit breaker's state machine, driven directly.
 
-The seam it is driven through (one ``with breaker.track()`` block per fetch inside ``AsyncBaseClient._send``,
+The seam it is driven through (one ``with breaker.track()`` block per fetch inside ``AsyncBaseClient._exchange``,
 spanning the body read) is covered end-to-end in ``test_breaker_integration.py``.
 
 The outcome of a block is decided by the ``Verdict`` it marks, not by what escapes it: only a marked raise is a host
@@ -21,13 +21,15 @@ import contextlib
 
 import pytest
 
-from headgate._breaker import (
-    HOST_BREAKERS,
-    NO_BREAKERS,
+from headgate.breaker import (
+    DEFAULT_REGISTRY,
+    BreakerOpenError,
+    BreakerPolicy,
+    BreakerRegistry,
     BreakerState,
     CircuitBreaker,
-    CircuitOpenError,
 )
+from headgate.breaker._registry import NO_BREAKER
 
 #: The half-open tests' cooldown, and a sleep that outlasts it.
 _COOLDOWN = 0.001
@@ -98,7 +100,7 @@ def test_open_refuses_before_the_block_runs() -> None:
     _fail(cb, _THRESHOLD)
     ran = False
 
-    with pytest.raises(CircuitOpenError, match="open for t"), cb.track():
+    with pytest.raises(BreakerOpenError, match="open for t"), cb.track():
         ran = True
 
     assert ran is False
@@ -147,7 +149,7 @@ async def test_half_open_gates_to_a_single_probe() -> None:
     probe_task = asyncio.create_task(_slow_probe())
     await probe_started.wait()
 
-    with pytest.raises(CircuitOpenError), cb.track():
+    with pytest.raises(BreakerOpenError), cb.track():
         ran_concurrently = True
 
     release.set()
@@ -246,7 +248,7 @@ async def test_a_stale_call_cancelled_after_the_trip_does_not_free_the_probe_slo
     with pytest.raises(asyncio.CancelledError):
         await stale
 
-    with pytest.raises(CircuitOpenError), cb.track():
+    with pytest.raises(BreakerOpenError), cb.track():
         pass
 
     release.set()
@@ -296,12 +298,93 @@ async def test_a_stale_failure_does_not_reopen_over_the_probe_in_flight() -> Non
 
 def test_no_breakers_admits_every_call_and_never_reads_the_shared_registry() -> None:
     """Record nothing without a breaker, and never read the registry another client's breaker lives in."""
-    HOST_BREAKERS.clear()
-    breaker = NO_BREAKERS["api.example"]
+    DEFAULT_REGISTRY.clear()
+    breaker = NO_BREAKER
     for _ in range(10):
         with contextlib.suppress(RuntimeError), breaker.track() as verdict:
             verdict.mark_failed()
             raise RuntimeError
     with breaker.track():
         pass  # still admitted after ten marked failures
-    assert "api.example" not in HOST_BREAKERS
+    assert "api.example" not in DEFAULT_REGISTRY
+
+
+class _Clock:
+    """A monotonic clock that moves only when a test advances it."""
+
+    def __init__(self) -> None:
+        """Start at zero."""
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        """Return the current reading."""
+        return self.now
+
+
+def test_a_refusal_says_how_long_the_cooldown_has_left() -> None:
+    """Carry the seconds until a probe is admitted, and ``None`` while the probe is out."""
+    clock = _Clock()
+    cb = CircuitBreaker(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN, name="t", clock=clock)
+    _fail(cb)
+    elapsed = 4.0
+    clock.now = elapsed
+    with pytest.raises(BreakerOpenError) as refused, cb.track():
+        pass
+    assert refused.value.retry_after == _LONG_COOLDOWN - elapsed
+
+    clock.now = _LONG_COOLDOWN
+    with cb.track(), pytest.raises(BreakerOpenError) as during_probe, cb.track():
+        pass
+    assert during_probe.value.retry_after is None
+
+
+def test_a_registry_builds_a_hosts_breaker_once_with_the_first_callers_settings() -> None:
+    """Build on first use only, keep the first caller's threshold, and never build on a read."""
+    registry = BreakerRegistry()
+    first = registry.breaker_for("a.example", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
+    again = registry.breaker_for("a.example", failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
+    assert first is again
+    _fail(first)
+    assert first.state is BreakerState.OPEN, "the first caller's threshold of one applies"
+
+    with pytest.raises(KeyError):
+        registry["b.example"]
+    assert "b.example" not in registry
+    assert registry["a.example"] is first
+    assert list(registry) == ["a.example"]
+    assert len(registry) == 1
+    assert registry.items() == (("a.example", first),)
+
+    registry.clear()
+    assert len(registry) == 0
+
+
+def test_a_registrys_breakers_read_its_clock() -> None:
+    """Hand the registry's clock to every breaker it builds, so a test can drive their cooldowns."""
+    clock = _Clock()
+    registry = BreakerRegistry(clock=clock)
+    cb = registry.breaker_for("a.example", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
+    _fail(cb)
+    assert cb.refusing
+    clock.now = _LONG_COOLDOWN
+    assert not cb.refusing
+
+
+@pytest.mark.parametrize(
+    ("threshold", "cooldown", "match"),
+    [
+        (0, _COOLDOWN, "failure_threshold"),
+        (1, -1.0, "recovery_timeout"),
+        (1, float("nan"), "recovery_timeout"),
+        (1, float("inf"), "recovery_timeout"),
+    ],
+)
+def test_a_breaker_policy_refuses_a_nonsense_value(threshold: int, cooldown: float, match: str) -> None:
+    """Refuse a threshold below one and a cooldown that is negative, NaN or infinite."""
+    with pytest.raises(ValueError, match=match):
+        BreakerPolicy(failure_threshold=threshold, recovery_timeout=cooldown)
+
+
+def test_a_breaker_policy_shares_the_default_registry_by_default() -> None:
+    """Use the process-wide registry unless the policy names another."""
+    assert BreakerPolicy().registry is DEFAULT_REGISTRY

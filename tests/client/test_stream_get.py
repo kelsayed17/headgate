@@ -12,9 +12,9 @@ import pytest
 
 from headgate import HttpOptions
 from headgate._client import AsyncBaseClient
-from headgate._rate_limit import Rate
 from headgate._responses import RefusedError
 from headgate.errors import ClientError, UpstreamStatusError
+from headgate.ratelimit import Rate
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

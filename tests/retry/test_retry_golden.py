@@ -1,12 +1,12 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``headgate._retry.RetryTransport`` reproduces httpx-retries 0.6.0 exactly, case for case.
+"""``headgate.retry.RetryTransport`` reproduces httpx-retries 0.6.0 exactly, case for case.
 
 ``tests/support/retry_golden.json`` holds httpx-retries' outcome for every case of the retry matrix
 (``tests/support/retry_matrix.py``): the sends, every sleep as an exact float, the result, the attempt count, and the
-closes, recorded with the library configured as ``build_retry`` configures this transport. These tests replay every
-case against ``RetryTransport``.
+closes, recorded with the library configured as the default ``RetryPolicy`` configures this transport. These tests
+replay every case against ``RetryTransport``.
 
 It is an oracle, not a snapshot, so it is deliberately not syrupy: the table is an external library's output, and
 ``--snapshot-update`` would re-capture it from the transport under test, the one thing it must never be.
@@ -16,19 +16,15 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from dataclasses import replace
 from typing import TYPE_CHECKING, override
 
 import httpx2
 
-from headgate import _retry
-from headgate._retry import DEFAULT_BACKOFF_FACTOR, RetryTransport, build_retry
+from headgate.retry import Backoff, RetryPolicy, RetryTransport
 from tests.support.retry_matrix import CASES, case_json, load_golden, outcome_json, run_case
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    import pytest
 
 #: How many cases the cross-thread test replays: enough to cover sleeps of every kind, few enough to stay fast.
 _CROSS_THREAD_CASES = 100
@@ -40,8 +36,13 @@ _RENDEZVOUS_TIMEOUT = 5.0
 def _in_house(
     inner: httpx2.AsyncBaseTransport, attempts: int, jitter: Callable[[], float]
 ) -> httpx2.AsyncBaseTransport:
-    """Wrap *inner* in the transport under test, configured as production configures it."""
-    return RetryTransport(transport=inner, retry=replace(build_retry(attempts), jitter=jitter))
+    """Wrap *inner* in the transport under test, configured as production configures it.
+
+    The matrix's attempt budgets include 0, which httpx-retries clamped to one send; a ``RetryPolicy`` refuses it, so
+    it is clamped here the same way.
+    """
+    policy = RetryPolicy(attempts=max(attempts, 1), backoff=Backoff(jitter=jitter))
+    return RetryTransport(transport=inner, policy=policy)
 
 
 def test_the_golden_table_covers_the_matrix() -> None:
@@ -49,9 +50,8 @@ def test_the_golden_table_covers_the_matrix() -> None:
     assert [row["case"] for row in load_golden()] == [case_json(case) for case in CASES]
 
 
-async def test_the_in_house_transport_reproduces_the_golden_table(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_the_in_house_transport_reproduces_the_golden_table() -> None:
     """Replay every case and compare the observed outcome with the recorded one."""
-    monkeypatch.setattr(_retry, "_BACKOFF_FACTOR", DEFAULT_BACKOFF_FACTOR)
     golden = load_golden()
     mismatches = []
     for case, row in zip(CASES, golden, strict=True):
@@ -84,16 +84,13 @@ class _Rendezvous(httpx2.AsyncBaseTransport):
         return await self._inner.handle_async_request(request)
 
 
-async def test_a_coroutine_sleeping_on_another_threads_loop_is_not_recorded_into_a_case(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_a_coroutine_sleeping_on_another_threads_loop_is_not_recorded_into_a_case() -> None:
     """Record only the case's own sleeps, though the recorder patches ``asyncio.sleep`` process-wide.
 
     The patch reaches every thread's event loop, so a loop running on another thread, handed a sleep that returns at
     once, would spin for the whole case and flood it with foreign sleeps. Every send here waits until such a
     background loop has slept inside it.
     """
-    monkeypatch.setattr(_retry, "_BACKOFF_FACTOR", DEFAULT_BACKOFF_FACTOR)
     stop, in_case, slept = threading.Event(), threading.Event(), threading.Event()
 
     async def background() -> None:

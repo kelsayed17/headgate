@@ -4,8 +4,8 @@
 """What a redirect may do to a request: the two hooks every client installs.
 
 :func:`drop_followed_redirect_body` is a response hook and :func:`credential_header_guard` a request hook; both are
-installed by :func:`headgate._stack.build_http_client`. :data:`FOLLOW_REDIRECTS_EXT` is the request extension that
-tells the first one whether this request's redirects are being followed.
+installed by :func:`headgate._stack.build_http_client`. The call's :class:`~headgate._core.CallContext` tells the first
+one whether this request's redirects are being followed.
 """
 
 from __future__ import annotations
@@ -14,17 +14,14 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
+from headgate._core import CallContext
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from headgate._auth import StaticHeaderAuth
 
-__all__ = ["FOLLOW_REDIRECTS_EXT", "credential_header_guard", "drop_followed_redirect_body"]
-
-#: Request extension naming whether this request's redirects will be followed. ``AsyncBaseClient`` sets it, and
-#: httpx2 copies a request's extensions onto every redirect hop, so :func:`drop_followed_redirect_body` sees it on each
-#: response.
-FOLLOW_REDIRECTS_EXT = "headgate.follow_redirects"
+__all__ = ["credential_header_guard", "drop_followed_redirect_body"]
 
 
 async def drop_followed_redirect_body(response: httpx2.Response) -> None:
@@ -34,14 +31,17 @@ async def drop_followed_redirect_body(response: httpx2.Response) -> None:
     :func:`~headgate._body.read_capped`, which only ever sees the final response. A 302 whose body decompressed far
     past ``max_response_bytes`` would otherwise be held in memory, kept alive in the response history. Nothing reads a
     followed redirect's body, so it is replaced with an empty stream rather than capped. A redirect that is not followed
-    is the final response, and keeps its body for ``read_capped``.
+    is the final response, and keeps its body for ``read_capped``. httpx2 hands the call's extensions, and so its
+    context, to every hop.
 
     An ``AsyncClient`` always hands its hooks an async stream; the ``isinstance`` check only narrows the type.
     """
     stream = response.stream
+    context = CallContext.find(response.request)
     if (
         response.has_redirect_location
-        and response.request.extensions.get(FOLLOW_REDIRECTS_EXT)
+        and context is not None
+        and context.follow_redirects
         and isinstance(stream, httpx2.AsyncByteStream)
     ):
         await stream.aclose()

@@ -13,7 +13,7 @@ from hishel import AsyncBaseStorage, AsyncSqliteStorage, Entry, FilterPolicy, Re
 
 from headgate import HttpOptions, TransportPolicy
 from headgate._cache import MethodFilter, PathFragmentFilter, ResilientCacheTransport, StatusCodeFilter
-from headgate._rate_limit import UNLIMITED
+from headgate.ratelimit import UNLIMITED
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:

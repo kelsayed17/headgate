@@ -1,0 +1,379 @@
+# serializer version: 1
+# name: test_the_public_surface_matches_the_snapshot[headgate.breaker]
+  '''
+  module headgate.breaker
+  __all__ = ['DEFAULT_REGISTRY', 'BreakerOpenError', 'BreakerPolicy', 'BreakerRegistry', 'BreakerState', 'CircuitBreaker', 'Verdict']
+  DEFAULT_REGISTRY = <headgate.breaker._registry.BreakerRegistry object at 0x…>
+  class BreakerOpenError(Exception)(message: 'str', *, retry_after: 'float | None') -> 'None'
+  class BreakerPolicy(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0, registry: 'BreakerRegistry' = <headgate.breaker._registry.BreakerRegistry object at 0x…>) -> 'None'
+      field failure_threshold: int = 5
+      field recovery_timeout: float = 60.0
+      field registry: BreakerRegistry = <headgate.breaker._registry.BreakerRegistry object at 0x…>
+  class BreakerRegistry(object)(*, clock: 'Clock' = <built-in function monotonic>) -> 'None'
+      def breaker_for(self, host: 'str', *, failure_threshold: 'int', recovery_timeout: 'float') -> 'CircuitBreaker'
+      def clear(self) -> 'None'
+      def items(self) -> 'tuple[tuple[str, CircuitBreaker], ...]'
+  class BreakerState(StrEnum)(*values)
+      CLOSED = 'closed'
+      OPEN = 'open'
+      HALF_OPEN = 'half_open'
+  class CircuitBreaker(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0, name: 'str' = '', clock: 'Clock' = <built-in function monotonic>) -> 'None'
+      property failure_count
+      property refusing
+      property state
+      def track(self) -> 'Generator[Verdict]'
+  class Verdict(object)() -> 'None'
+      def mark_failed(self) -> 'None'
+      def mark_untested(self) -> 'None'
+  '''
+# ---
+# name: test_the_public_surface_matches_the_snapshot[headgate.curl]
+  '''
+  module headgate.curl
+  __all__ = ['AsyncCurlTransport']
+  class AsyncCurlTransport(AsyncBaseTransport)(*, impersonate: 'BrowserTypeLiteral', default_headers: 'bool' = False, curl_options: 'Mapping[CurlOpt, Any] | None' = None, max_connections: 'int' = 10) -> 'None'
+      def aclose(self) -> 'None'
+      def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
+  '''
+# ---
+# name: test_the_public_surface_matches_the_snapshot[headgate.errors]
+  '''
+  module headgate.errors
+  __all__ = ['AuthError', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'DecodeError', 'ErrorDetails', 'Problem', 'RateLimitError', 'ResponseParseError', 'ResponseTooLargeError', 'TransportError', 'UpstreamStatusError']
+  class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+  class CircuitOpenError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+  class ClientConfigurationError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+  class ClientError(Exception)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+      property attempts
+      property method
+      property request_id
+      property retry_after
+      property retryable
+      property url
+  class ClientTimeoutError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+  class DecodeError(Exception)(no signature)
+  class ErrorDetails(dict)(no signature)
+      key source: str | None (optional)
+      key method: str | None (optional)
+      key url: str | None (optional)
+      key request_id: str | None (optional)
+      key attempts: int | None (optional)
+      key retryable: bool (optional)
+      key retry_after: float | None (optional)
+  class Problem(object)(*, type: 'str' = 'about:blank', title: 'str | None' = None, status: 'int | None' = None, detail: 'str | None' = None, instance: 'str | None' = None, extensions: 'Mapping[str, object]' = <factory>) -> 'None'
+      field type: str = 'about:blank'
+      field title: str | None = None
+      field status: int | None = None
+      field detail: str | None = None
+      field instance: str | None = None
+      field extensions: Mapping[str, object] = <factory>
+  class RateLimitError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+  class ResponseParseError(ClientError)(message: 'str', *, status_code: 'int | None' = None, content_type: 'str | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+      property content_type
+      property status_code
+  class ResponseTooLargeError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+  class TransportError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+  class UpstreamStatusError(ClientError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+      property problem
+  '''
+# ---
+# name: test_the_public_surface_matches_the_snapshot[headgate.events]
+  '''
+  module headgate.events
+  __all__ = ['AttemptFinished', 'BreakerChanged', 'BreakerState', 'CacheOutcome', 'CacheResult', 'CallEvent', 'CallFinished', 'CallInfo', 'CallStarted', 'Deprecated', 'Event', 'Observer', 'RateLimited', 'RetryScheduled']
+  class AttemptFinished(CallEvent)(*, call: 'CallInfo', attempt: 'int', status_code: 'int | None' = None, error: 'str | None' = None, elapsed: 'float') -> 'None'
+      field call: CallInfo
+      field attempt: int
+      field status_code: int | None = None
+      field error: str | None = None
+      field elapsed: float
+  class BreakerChanged(object)(*, origin: 'str', previous: 'BreakerState', state: 'BreakerState', failures: 'int', call: 'CallInfo | None' = None) -> 'None'
+      field origin: str
+      field previous: BreakerState
+      field state: BreakerState
+      field failures: int
+      field call: CallInfo | None = None
+  class BreakerState(StrEnum)(*values)
+      CLOSED = 'closed'
+      OPEN = 'open'
+      HALF_OPEN = 'half_open'
+  class CacheOutcome(StrEnum)(*values)
+      HIT = 'hit'
+      MISS = 'miss'
+      REVALIDATED = 'revalidated'
+      SHARED = 'shared'
+      DEGRADED = 'degraded'
+  class CacheResult(CallEvent)(*, call: 'CallInfo', outcome: 'CacheOutcome') -> 'None'
+      field call: CallInfo
+      field outcome: CacheOutcome
+  class CallEvent(object)(*, call: 'CallInfo') -> 'None'
+      field call: CallInfo
+  class CallFinished(CallEvent)(*, call: 'CallInfo', status_code: 'int | None' = None, error: 'str | None' = None, attempts: 'int', elapsed: 'float') -> 'None'
+      field call: CallInfo
+      field status_code: int | None = None
+      field error: str | None = None
+      field attempts: int
+      field elapsed: float
+  class CallInfo(object)(*, method: 'str', url: 'str', route: 'str | None' = None, call_id: 'int' = <factory>) -> 'None'
+      field method: str
+      field url: str
+      field route: str | None = None
+      field call_id: int = <factory>
+  class CallStarted(CallEvent)(*, call: 'CallInfo') -> 'None'
+      field call: CallInfo
+  class Deprecated(CallEvent)(*, call: 'CallInfo', deprecation: 'str | None' = None, sunset: 'str | None' = None, link: 'str | None' = None) -> 'None'
+      field call: CallInfo
+      field deprecation: str | None = None
+      field sunset: str | None = None
+      field link: str | None = None
+  type Event = CallStarted | AttemptFinished | RetryScheduled | RateLimited | BreakerChanged | CacheResult | Deprecated | CallFinished
+  class Observer(Protocol)(*args, **kwargs)
+      def notify(self, event: 'Event') -> 'None'
+  class RateLimited(CallEvent)(*, call: 'CallInfo', delay: 'float', reason: 'str') -> 'None'
+      field call: CallInfo
+      field delay: float
+      field reason: str
+  class RetryScheduled(CallEvent)(*, call: 'CallInfo', attempt: 'int', delay: 'float', reason: 'str') -> 'None'
+      field call: CallInfo
+      field attempt: int
+      field delay: float
+      field reason: str
+  '''
+# ---
+# name: test_the_public_surface_matches_the_snapshot[headgate.health]
+  '''
+  module headgate.health
+  __all__ = ['BreakerSnapshot', 'BreakerState', 'breaker_states', 'cache_degradations', 'observer_failures']
+  class BreakerSnapshot(tuple)(state: 'BreakerState', refusing: 'bool')
+  class BreakerState(StrEnum)(*values)
+      CLOSED = 'closed'
+      OPEN = 'open'
+      HALF_OPEN = 'half_open'
+  def breaker_states(registry: 'BreakerRegistry' = <headgate.breaker._registry.BreakerRegistry object at 0x…>) -> 'dict[str, BreakerSnapshot]'
+  def cache_degradations() -> 'dict[str, int]'
+  def observer_failures() -> 'dict[str, int]'
+  '''
+# ---
+# name: test_the_public_surface_matches_the_snapshot[headgate.msgspec]
+  '''
+  module headgate.msgspec
+  __all__ = ['decode', 'decoder', 'to_builtins']
+  def decode(content: 'bytes', type_: 'TypeForm[T]', *, strict: 'bool' = True) -> 'T'
+  def decoder(type_: 'TypeForm[T]', *, strict: 'bool' = True, allow_empty_body: 'bool' = False, check: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
+  def to_builtins(value: 'object', *, drop_none: 'bool' = False) -> 'object'
+  '''
+# ---
+# name: test_the_public_surface_matches_the_snapshot[headgate.policy]
+  '''
+  module headgate.policy
+  __all__ = ['policy_disabled', 'policy_is_disabled']
+  def policy_disabled() -> 'Generator[None]'
+  def policy_is_disabled() -> 'bool'
+  '''
+# ---
+# name: test_the_public_surface_matches_the_snapshot[headgate.pydantic]
+  '''
+  module headgate.pydantic
+  __all__ = ['decode', 'decoder', 'to_builtins']
+  def decode(content: 'bytes', type_: 'TypeForm[T]', *, strict: 'bool' = True) -> 'T'
+  def decoder(type_: 'TypeForm[T]', *, strict: 'bool' = True, allow_empty_body: 'bool' = False, check: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
+  def to_builtins(value: 'object', *, drop_none: 'bool' = False) -> 'object'
+  '''
+# ---
+# name: test_the_public_surface_matches_the_snapshot[headgate.ratelimit]
+  '''
+  module headgate.ratelimit
+  __all__ = ['UNLIMITED', 'AsyncRateLimiter', 'PathLimiters', 'Rate', 'RateLimitTransport', 'RateRule']
+  UNLIMITED = Rate(requests=1000000, period=1.0)
+  class AsyncRateLimiter(object)(rate: 'Rate') -> 'None'
+      property rate
+      def wait(self) -> 'None'
+  class PathLimiters(object)(*, default: 'Rate', rules: 'Sequence[RateRule]' = ()) -> 'None'
+      def for_request(self, request: 'httpx2.Request') -> 'AsyncRateLimiter'
+  class Rate(object)(requests: 'float', period: 'float') -> 'None'
+      field requests: float
+      field period: float
+      classmethod per_minute(cls, requests: 'float') -> 'Rate'
+      classmethod per_second(cls, requests: 'float') -> 'Rate'
+  class RateLimitTransport(AsyncBaseTransport)(*, limiters: 'PathLimiters', transport: 'httpx2.AsyncBaseTransport') -> 'None'
+      def aclose(self) -> 'None'
+      def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
+      property limiters
+  class RateRule(object)(fragment: 'str', rate: 'Rate') -> 'None'
+      field fragment: str
+      field rate: Rate
+  '''
+# ---
+# name: test_the_public_surface_matches_the_snapshot[headgate.retry]
+  '''
+  module headgate.retry
+  __all__ = ['NO_RETRY', 'Backoff', 'RetryPolicy', 'RetryTransport']
+  NO_RETRY = RetryPolicy(attempts=1, backoff=Backoff(factor=0.5, max_wait=5.0))
+  class Backoff(object)(*, factor: 'float' = 0.5, max_wait: 'float' = 5.0, jitter: 'RandomSource' = <bound method SystemRandom.random of <random.SystemRandom object at 0x…>>) -> 'None'
+      field factor: float = 0.5
+      field max_wait: float = 5.0
+      field jitter: RandomSource = <bound method SystemRandom.random of <random.SystemRandom object at 0x…>>
+      def delay(self, retry: 'int') -> 'float'
+  class RetryPolicy(object)(*, attempts: 'int' = 3, backoff: 'Backoff' = <factory>) -> 'None'
+      field attempts: int = 3
+      field backoff: Backoff = <factory>
+      def wait_after(self, failure: 'httpx2.Response | Exception', retry: 'int') -> 'float'
+  class RetryTransport(AsyncBaseTransport)(*, transport: 'httpx2.AsyncBaseTransport', policy: 'RetryPolicy', sleep: 'Sleep' = <function asyncio_sleep at 0x…>) -> 'None'
+      def aclose(self) -> 'None'
+      def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
+  '''
+# ---
+# name: test_the_public_surface_matches_the_snapshot[headgate]
+  '''
+  module headgate
+  __all__ = ['NO_RETRY', 'AsyncBaseClient', 'AuthError', 'Backoff', 'BreakerPolicy', 'BreakerRegistry', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'DecodeError', 'Expect', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'MethodFilter', 'Middleware', 'Minted', 'Observer', 'PathFragmentFilter', 'Problem', 'QueryParamAuth', 'Rate', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'StaticHeaderAuth', 'StatusCodeFilter', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'as_bytes', 'event_stream', 'json_reader', 'nothing']
+  NO_RETRY = RetryPolicy(attempts=1, backoff=Backoff(factor=0.5, max_wait=5.0))
+  class AsyncBaseClient(object)(*, base_url: 'str', rate: 'Rate', auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, backoff=Backoff(factor=0.5, max_wait=5.0)), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=<headgate.breaker._registry.BreakerRegistry object at 0x…>), rate_limits=(), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), timeout=Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, refusal_check=None, trusted_origins=frozenset(), allow_private_hosts=True, ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray'), observers=(), middleware=())) -> 'None'
+      def aclose(self) -> 'None'
+      def delete(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
+      def get(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
+      def head(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
+      def patch(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
+      def post(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
+      def put(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
+      def stream_get(self, url: 'str | Template', *, follow_redirects: 'bool | None' = None) -> 'AsyncIterator[bytes]'
+  class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+  class Backoff(object)(*, factor: 'float' = 0.5, max_wait: 'float' = 5.0, jitter: 'RandomSource' = <bound method SystemRandom.random of <random.SystemRandom object at 0x…>>) -> 'None'
+      field factor: float = 0.5
+      field max_wait: float = 5.0
+      field jitter: RandomSource = <bound method SystemRandom.random of <random.SystemRandom object at 0x…>>
+      def delay(self, retry: 'int') -> 'float'
+  class BreakerPolicy(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0, registry: 'BreakerRegistry' = <headgate.breaker._registry.BreakerRegistry object at 0x…>) -> 'None'
+      field failure_threshold: int = 5
+      field recovery_timeout: float = 60.0
+      field registry: BreakerRegistry = <headgate.breaker._registry.BreakerRegistry object at 0x…>
+  class BreakerRegistry(object)(*, clock: 'Clock' = <built-in function monotonic>) -> 'None'
+      def breaker_for(self, host: 'str', *, failure_threshold: 'int', recovery_timeout: 'float') -> 'CircuitBreaker'
+      def clear(self) -> 'None'
+      def items(self) -> 'tuple[tuple[str, CircuitBreaker], ...]'
+  class CachedTokenAuth(Auth, Generic)(*, refresh_margin_s: 'float' = 120.0) -> 'None'
+      def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
+      staticmethod reject_credential_rotation(returned: 'str | None', configured: 'str', *, provider: 'str', setting: 'str') -> 'None'
+      def seed(self, token: 'TokenT', lifetime: 'float') -> 'None'
+  class CircuitOpenError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+  class ClientConfigurationError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+  class ClientError(Exception)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+      property attempts
+      property method
+      property request_id
+      property retry_after
+      property retryable
+      property url
+  class ClientTimeoutError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+  class DecodeError(Exception)(no signature)
+  class Expect(Generic)(ok: 'Reader[T]', answers: 'Mapping[int, Reader[T]]' = <factory>) -> 'None'
+      field ok: Reader[T]
+      field answers: Mapping[int, Reader[T]] = <factory>
+      def on(self, status: 'int', read: 'Reader[E]') -> 'Expect[T | E]'
+  class HttpCache(object)(policy: 'FilterPolicy', storage: 'AsyncBaseStorage | None', ttl: 'float | None' = None) -> 'None'
+      field policy: FilterPolicy
+      field storage: AsyncBaseStorage | None
+      field ttl: float | None = None
+  class HttpOptions(object)(*, transport: 'httpx2.AsyncBaseTransport | None' = None, headers: 'Mapping[str, str]' = <factory>, timeout: 'Timeouts | float' = <factory>, follow_redirects: 'bool' = True, max_redirects: 'int' = 5, max_response_bytes: 'int' = 33554432, refusal_check: 'RefusalCheck | None' = None, trusted_origins: 'frozenset[str]' = frozenset(), allow_private_hosts: 'bool' = True, ssl_context: 'ssl.SSLContext | None' = None, limits: 'httpx2.Limits' = <factory>, proxy: 'str | None' = None, user_agent: 'str | None' = None, cookies: 'bool' = False, request_id_headers: 'tuple[str, ...]' = ('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray'), observers: 'tuple[Observer, ...]' = (), middleware: 'tuple[Middleware, ...]' = ()) -> 'None'
+      field transport: httpx2.AsyncBaseTransport | None = None
+      field headers: Mapping[str, str] = <factory>
+      field timeout: Timeouts | float = <factory>
+      field follow_redirects: bool = True
+      field max_redirects: int = 5
+      field max_response_bytes: int = 33554432
+      field refusal_check: RefusalCheck | None = None
+      field trusted_origins: frozenset[str] = frozenset()
+      field allow_private_hosts: bool = True
+      field ssl_context: ssl.SSLContext | None = None
+      field limits: httpx2.Limits = <factory>
+      field proxy: str | None = None
+      field user_agent: str | None = None
+      field cookies: bool = False
+      field request_id_headers: tuple[str, ...] = ('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')
+      field observers: tuple[Observer, ...] = ()
+      field middleware: tuple[Middleware, ...] = ()
+  class IdempotencyKeys(object)(*, header: 'str' = 'Idempotency-Key', factory: 'Callable[[], str]' = <function _uuid4_text at 0x…>) -> 'None'
+      field header: str = 'Idempotency-Key'
+      field factory: Callable[[], str] = <function _uuid4_text at 0x…>
+  class MethodFilter(BaseFilter)(methods: 'frozenset[str]') -> 'None'
+      def apply(self, item: 'Request', body: 'bytes | None') -> 'bool'
+      def needs_body(self) -> 'bool'
+  class Middleware(Protocol)(*args, **kwargs)
+      def __call__(self, request: 'httpx2.Request', call_next: 'Next') -> 'httpx2.Response'
+  class Minted(Generic)(token: 'TokenT', lifetime: 'float') -> 'None'
+      field token: TokenT
+      field lifetime: float
+  class Observer(Protocol)(*args, **kwargs)
+      def notify(self, event: 'Event') -> 'None'
+  class PathFragmentFilter(BaseFilter)(fragments: 'tuple[str, ...]') -> 'None'
+      def apply(self, item: 'Request', body: 'bytes | None') -> 'bool'
+      def needs_body(self) -> 'bool'
+  class Problem(object)(*, type: 'str' = 'about:blank', title: 'str | None' = None, status: 'int | None' = None, detail: 'str | None' = None, instance: 'str | None' = None, extensions: 'Mapping[str, object]' = <factory>) -> 'None'
+      field type: str = 'about:blank'
+      field title: str | None = None
+      field status: int | None = None
+      field detail: str | None = None
+      field instance: str | None = None
+      field extensions: Mapping[str, object] = <factory>
+  class QueryParamAuth(Auth)(params: 'Mapping[str, str]') -> 'None'
+      def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
+  class Rate(object)(requests: 'float', period: 'float') -> 'None'
+      field requests: float
+      field period: float
+      classmethod per_minute(cls, requests: 'float') -> 'Rate'
+      classmethod per_second(cls, requests: 'float') -> 'Rate'
+  class RateLimitError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+  class RateRule(object)(fragment: 'str', rate: 'Rate') -> 'None'
+      field fragment: str
+      field rate: Rate
+  type Reader[T] = Callable[[httpx2.Response], T]
+  type RefusalCheck = Callable[[httpx2.Response], RefusedError | None]
+  class RefusedError(Exception)(message: 'str', *, code: 'str | None' = None, kind: 'type[UpstreamStatusError]' = <class 'headgate.errors.UpstreamStatusError'>) -> 'None'
+  class RequestOptions(dict)(no signature)
+      key params: Mapping[str, object] | None (optional)
+      key headers: Mapping[str, str] (optional)
+      key json: object (optional)
+      key data: Mapping[str, object] (optional)
+      key timeout: Timeouts | float (optional)
+      key deadline: float | None (optional)
+      key idempotency_key: str (optional)
+  class ResponseParseError(ClientError)(message: 'str', *, status_code: 'int | None' = None, content_type: 'str | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+      property content_type
+      property status_code
+  class ResponseTooLargeError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+  class RetryPolicy(object)(*, attempts: 'int' = 3, backoff: 'Backoff' = <factory>) -> 'None'
+      field attempts: int = 3
+      field backoff: Backoff = <factory>
+      def wait_after(self, failure: 'httpx2.Response | Exception', retry: 'int') -> 'float'
+  class Route(object)(fragment: 'str', *, retry: 'RetryPolicy | None' = None, deadline: 'float | None' = None) -> 'None'
+      field fragment: str
+      field retry: RetryPolicy | None = None
+      field deadline: float | None = None
+  class StaticHeaderAuth(Auth)(headers: 'Mapping[str, str]') -> 'None'
+      def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
+      property header_names
+  class StatusCodeFilter(BaseFilter)(codes: 'frozenset[int]') -> 'None'
+      def apply(self, item: 'Response', body: 'bytes | None') -> 'bool'
+      def needs_body(self) -> 'bool'
+  class Timeouts(object)(*, connect: 'float' = 10.0, read: 'float' = 30.0, write: 'float' = 10.0, pool: 'float' = 15.0) -> 'None'
+      field connect: float = 10.0
+      field read: float = 30.0
+      field write: float = 10.0
+      field pool: float = 15.0
+  class TransportError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+  class TransportPolicy(object)(*, retry: 'RetryPolicy' = <factory>, deadline: 'float | None' = 60.0, breaker: 'BreakerPolicy | None' = <factory>, rate_limits: 'tuple[RateRule, ...]' = (), cache: 'HttpCache | None' = None, idempotency: 'IdempotencyKeys | None' = None, routes: 'tuple[Route, ...]' = ()) -> 'None'
+      field retry: RetryPolicy = <factory>
+      field deadline: float | None = 60.0
+      field breaker: BreakerPolicy | None = <factory>
+      field rate_limits: tuple[RateRule, ...] = ()
+      field cache: HttpCache | None = None
+      field idempotency: IdempotencyKeys | None = None
+      field routes: tuple[Route, ...] = ()
+  class UpstreamStatusError(ClientError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+      property problem
+  def as_bytes(resp: 'httpx2.Response', /) -> 'bytes'
+  def event_stream(resp: 'httpx2.Response', /) -> 'list[bytes]'
+  def json_reader(decode: 'Callable[[bytes], T]', *, allow_empty_body: 'bool' = False, check: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
+  def nothing(resp: 'httpx2.Response', /) -> 'None'
+  '''
+# ---

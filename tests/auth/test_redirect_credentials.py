@@ -11,7 +11,8 @@ import pytest
 
 from headgate import TransportPolicy
 from headgate._auth import StaticHeaderAuth
-from headgate._rate_limit import Rate
+from headgate.ratelimit import Rate
+from headgate.retry import RetryPolicy
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
@@ -28,7 +29,7 @@ async def _follow_redirect_to(httpx2_mock: HTTPXMock, target: str) -> httpx2.Req
         rate=Rate.per_second(100),
         base_url="https://api.example",
         auth=StaticHeaderAuth({"x-api-key": "k"}),
-        policy=TransportPolicy(max_attempts=1),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
     )
     response = await client.get("start", expect=RESPONSE)
     assert response.text == "ok"

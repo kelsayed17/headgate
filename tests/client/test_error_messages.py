@@ -19,9 +19,7 @@ import httpx2
 import pytest
 
 from headgate import Expect, HttpOptions, RefusedError, StaticHeaderAuth, TransportPolicy
-from headgate._breaker import HOST_BREAKERS
-from headgate._failures import MESSAGE_TEXT_LIMIT, transport_error
-from headgate._rate_limit import UNLIMITED
+from headgate._failures import MESSAGE_TEXT_LIMIT, CallSite, transport_error
 from headgate._responses import as_bytes
 from headgate.errors import (
     AuthError,
@@ -31,6 +29,9 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
+from headgate.ratelimit import UNLIMITED
+from headgate.retry import RetryPolicy
+from tests.support.breakers import failures
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
@@ -52,7 +53,7 @@ def _client(
     return StubClient(
         base_url=f"https://{_HOST}",
         rate=UNLIMITED,
-        policy=TransportPolicy(max_attempts=1),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(
             transport=httpx2.MockTransport(handler),
             refusal_check=refusal_check,
@@ -98,7 +99,7 @@ async def test_a_header_value_the_http_library_refuses_is_never_quoted(local_ser
     client = StubClient(
         base_url=local_server,
         rate=UNLIMITED,
-        policy=TransportPolicy(max_attempts=1),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         auth=StaticHeaderAuth({"Authorization": f"Bearer {_CANARY}\n"}),
     )
     try:
@@ -116,7 +117,7 @@ async def test_a_header_value_the_http_library_refuses_is_never_quoted(local_ser
 
 def test_an_unencodable_request_without_a_request_attached_gets_the_fixed_message() -> None:
     """Fall back to the fixed message when the error names no request, as a transport double's may not."""
-    error = transport_error(httpx2.LocalProtocolError(f"Illegal header value {_CANARY!r}"), "GET", "x", source="S")
+    error = transport_error(httpx2.LocalProtocolError(f"Illegal header value {_CANARY!r}"), CallSite("S", "GET", "x"))
 
     assert str(error) == "[S] GET x: the request could not be encoded (LocalProtocolError)"
 
@@ -135,7 +136,7 @@ def test_an_unencodable_request_names_only_legal_header_names(
     request = httpx2.Request("GET", "https://example.test/x", headers=headers)
     exc = httpx2.LocalProtocolError("Illegal header", request=request)
 
-    assert str(transport_error(exc, "GET", "x", source="S")).endswith(expected)
+    assert str(transport_error(exc, CallSite("S", "GET", "x"))).endswith(expected)
 
 
 # --- A surviving 429/5xx reads like every other status error ---
@@ -288,7 +289,7 @@ async def test_a_refusal_check_that_raises_is_treated_like_one_that_returns() ->
 
     assert caught.value.status_code == httpx2.codes.FOUND
     assert caught.value.code == "KEY"
-    assert HOST_BREAKERS[_HOST].failure_count == 0
+    assert failures(_HOST) == 0
 
 
 async def test_a_refusal_check_that_raises_on_a_stream_is_treated_like_one_that_returns() -> None:

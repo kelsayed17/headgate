@@ -17,7 +17,6 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage, Entry, FilterPolicy
 
-from headgate._breaker import HOST_BREAKERS, CircuitBreaker
 from headgate._cache import (
     CACHE_DEGRADATIONS,
     CACHE_DEGRADED_EXT,
@@ -25,27 +24,30 @@ from headgate._cache import (
     ResilientCacheTransport,
     StatusCodeFilter,
 )
-from headgate.health import BreakerState, breaker_states, cache_degradations
+from headgate._core import OBSERVER_FAILURES
+from headgate.breaker import DEFAULT_REGISTRY, BreakerRegistry
+from headgate.health import BreakerState, breaker_states, cache_degradations, observer_failures
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from headgate.breaker import CircuitBreaker
+
 _HOST = "health.example.test"
 
-#: The registry's breakers trip after this many consecutive failures.
-_DEFAULT_THRESHOLD = 5
+#: The test breakers trip after this many consecutive failures, and one cooldown no test outlasts.
+_THRESHOLD = 5
+_LONG_COOLDOWN = 3600.0
 
 #: How many requests the cache-fault test sends.
 _REQUESTS = 2
 
 
 @pytest.fixture(autouse=True)
-def _clean_registries() -> Iterator[None]:
-    """Drop the test host from both process-global registries around each test."""
-    HOST_BREAKERS.pop(_HOST, None)
+def _clean_cache_counts() -> Iterator[None]:
+    """Drop the test host from the process-global degradation count around each test."""
     CACHE_DEGRADATIONS.pop(_HOST, None)
     yield
-    HOST_BREAKERS.pop(_HOST, None)
     CACHE_DEGRADATIONS.pop(_HOST, None)
 
 
@@ -57,37 +59,44 @@ def _fail_once(breaker: CircuitBreaker) -> None:
 
 
 def _trip(breaker: CircuitBreaker) -> None:
-    """Record the default threshold's worth of marked failures."""
-    for _ in range(_DEFAULT_THRESHOLD):
+    """Record the threshold's worth of marked failures."""
+    for _ in range(_THRESHOLD):
         with pytest.raises(ConnectionError):
             _fail_once(breaker)
 
 
 def test_breaker_states_reports_a_tripped_host_as_open() -> None:
     """Report a host's breaker as closed and admitting, then open and refusing once it trips."""
-    breaker = HOST_BREAKERS[_HOST]
-    assert breaker_states()[_HOST] == (BreakerState.CLOSED, False)
+    registry = BreakerRegistry()
+    breaker = registry.breaker_for(_HOST, failure_threshold=_THRESHOLD, recovery_timeout=_LONG_COOLDOWN)
+    assert breaker_states(registry)[_HOST] == (BreakerState.CLOSED, False)
 
     _trip(breaker)
 
-    assert breaker_states()[_HOST] == (BreakerState.OPEN, True)
+    assert breaker_states(registry)[_HOST] == (BreakerState.OPEN, True)
 
 
 def test_a_tripped_breaker_past_its_cooldown_is_open_but_not_refusing() -> None:
     """Report open but not refusing: ``state`` waits for a probe, ``refusing`` follows the cooldown."""
-    breaker = CircuitBreaker(name=_HOST, recovery_timeout=0.0)
-    HOST_BREAKERS[_HOST] = breaker
-    _trip(breaker)
+    registry = BreakerRegistry()
+    _trip(registry.breaker_for(_HOST, failure_threshold=_THRESHOLD, recovery_timeout=0.0))
 
-    assert breaker_states()[_HOST] == (BreakerState.OPEN, False)
+    assert breaker_states(registry)[_HOST] == (BreakerState.OPEN, False)
 
 
-def test_breaker_states_is_a_copy() -> None:
-    """Return a fresh mapping each call, so clearing a snapshot leaves the registry intact."""
-    HOST_BREAKERS[_HOST]  # the registry is a defaultdict: reading the host builds its breaker
+def test_breaker_states_reads_the_default_registry_and_is_a_copy() -> None:
+    """Read the shared registry by default, and return a fresh mapping each call that leaves the registry intact."""
+    DEFAULT_REGISTRY.breaker_for(_HOST, failure_threshold=_THRESHOLD, recovery_timeout=_LONG_COOLDOWN)
     snapshot = breaker_states()
     snapshot.clear()
     assert _HOST in breaker_states()
+
+
+def test_observer_failures_is_a_copy() -> None:
+    """Return a fresh mapping each call, so clearing a snapshot leaves the count intact."""
+    snapshot = observer_failures()
+    snapshot.clear()
+    assert observer_failures() == dict(OBSERVER_FAILURES)
 
 
 class _LookupFails(AsyncSqliteStorage):

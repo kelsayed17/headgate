@@ -12,8 +12,8 @@ import warnings
 import httpx2
 import pytest
 
-from headgate._rate_limit import UNLIMITED, AsyncRateLimiter, PathLimiters, Rate, RateRule
 from headgate.policy import policy_disabled
+from headgate.ratelimit import UNLIMITED, AsyncRateLimiter, PathLimiters, Rate, RateRule
 
 #: Under this many seconds, a wait counts as no wait at all.
 #: A period short enough that a real wait keeps the suite fast, long enough to dwarf timer slack.

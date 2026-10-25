@@ -28,7 +28,6 @@ import pytest
 from hishel import AsyncBaseStorage, AsyncSqliteStorage, BaseFilter, Entry, FilterPolicy, Request, Response
 
 from headgate import HttpCache, HttpOptions, TransportError
-from headgate._breaker import HOST_BREAKERS
 from headgate._cache import CACHE_DEGRADATIONS, CACHE_DEGRADED_EXT, HOST_UNTESTED, CacheStorageError, host_untested
 from tests.cache._helpers import (
     NETWORK_BODY,
@@ -40,6 +39,7 @@ from tests.cache._helpers import (
     every_get_policy,
     stub_client,
 )
+from tests.support.breakers import failures
 
 if TYPE_CHECKING:
     import uuid
@@ -488,7 +488,7 @@ async def test_a_storage_fault_while_an_unheld_body_streams_is_a_value_free_tran
     assert read_error.__cause__ is None, "the backend's own error is not chained"
     assert read_error.__suppress_context__
     assert host_untested(read_error)
-    assert HOST_BREAKERS["x"].failure_count == 0
+    assert failures("x") == 0
 
 
 def test_an_unmarked_response_or_error_is_host_evidence() -> None:

@@ -63,9 +63,12 @@ on a body that does not match, which the client turns into `ResponseParseError`.
 2. **Transport only.** A client does I/O and decoding. Retry, rate limiting and the breaker live in the transport stack;
    business decisions belong to the caller.
 3. **Wire types are data.** Responses decode into plain typed values with no behavior and no aliases invented by the client.
-4. **No logging.** headgate emits no log records. Errors carry what a caller needs (client name, status, a bounded body
-   snippet, a URL with secret query parameters redacted) and the caller decides what to record.
-5. **No environment reads.** Credentials are injected at construction. headgate never reads environment variables.
+4. **No logging; typed events instead.** headgate emits no log records. A client reports its calls as frozen, typed
+   events (`headgate.events`) to the observers installed with `HttpOptions(observers=...)`, carrying sanitized data
+   only, and errors carry what a caller needs (client name, method, status, request id, attempt count, a bounded body
+   snippet or RFC 9457 problem detail, a URL with secret query parameters redacted). The caller decides what to record.
+5. **No environment reads.** Credentials are injected at construction. headgate never reads environment variables:
+   the HTTP client and its default transport are built with `trust_env=False`.
 
 ## What the base client provides
 

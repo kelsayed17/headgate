@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, override
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, initialize, invariant, precondition, rule
 
-from headgate._breaker import BreakerState, CircuitBreaker, CircuitOpenError, Verdict
+from headgate.breaker import BreakerOpenError, BreakerState, CircuitBreaker, Verdict
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
@@ -74,7 +74,7 @@ class BreakerMachine(RuleBasedStateMachine):
         scope = self.breaker.track()
         try:
             verdict = scope.__enter__()
-        except CircuitOpenError:
+        except BreakerOpenError:
             assert not was_closed, "a closed breaker must admit every call"
             return
         self.open_calls.append(_Call(scope, verdict, probe=not was_closed))

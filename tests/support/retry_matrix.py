@@ -3,11 +3,11 @@
 
 """The retry matrix: every input the retry transport decides on, and the golden outcome of each.
 
-``headgate._retry.RetryTransport`` reproduces httpx-retries 0.6.0, as ``build_retry`` configures it, exactly. This
-module is the matrix httpx-retries was driven through, once, to write the golden table, and that headgate's transport
-is driven through on every run: attempt budget x method x status x exception x every ``Retry-After`` form. The golden
-table beside it (``retry_golden.json``) holds httpx-retries' own outcome for every case, and
-``tests/transport/test_retry_golden.py`` replays it.
+``headgate.retry.RetryTransport`` reproduces httpx-retries 0.6.0, as the default ``RetryPolicy`` configures it,
+exactly. This module is the matrix httpx-retries was driven through, once, to write the golden table, and that
+headgate's transport is driven through on every run: attempt budget x method x status x exception x every
+``Retry-After`` form. The golden table beside it (``retry_golden.json``) holds httpx-retries' own outcome for every
+case, and ``tests/retry/test_retry_golden.py`` replays it.
 
 An outcome is everything a caller of the transport can observe:
 
@@ -15,17 +15,19 @@ An outcome is everything a caller of the transport can observe:
 * every sleep, as an exact float (the clock is frozen, and the jitter is the ``random`` module's generator seeded with
   the case's seed, which is what httpx-retries drew from when the table was recorded);
 * what came back: a status, or the exception's class name;
-* the attempt count on the returned response's ``retry`` extension;
+* the retries spent on a returned response, read from the call context's attempt count (``None`` for a method the
+  layer never retries, which httpx-retries left unmarked);
 * which network responses were closed. Each is backed by a stream httpx2 does not pre-read, so ``is_closed`` flips only
   when the retry layer calls ``aclose()``: a response it retried past reads ``true``, the one it returned ``false``;
 * which were already closed when each sleep began, so closing the failed response before sleeping is pinned, and not
   only that it is closed by the end.
 
-Provenance, and changing the table. The table was generated from httpx-retries 0.6.0, configured as ``build_retry``
-configured it, by a one-off differential script that is not part of this tree. A change to the table is a deliberate
-behaviour change (for example to the 5 s ``Retry-After`` clamp, the broad exception tuple, or retrying 501): it is made
-on purpose, with the row diff reviewed, and this statement is updated in the same commit. Never regenerate the table
-from headgate's own transport to make a failing replay pass: it would then stop being evidence of anything.
+Provenance, and changing the table. The table was generated from httpx-retries 0.6.0, configured as the default
+``RetryPolicy`` configures this transport, by a one-off differential script that is not part of this tree. A change to
+the table is a deliberate behaviour change (for example to the 5 s ``Retry-After`` clamp, the broad exception tuple, or
+retrying 501): it is made on purpose, with the row diff reviewed, and this statement is updated in the same commit.
+Never regenerate the table from headgate's own transport to make a failing replay pass: it would then stop being
+evidence of anything.
 """
 
 from __future__ import annotations
@@ -44,6 +46,9 @@ import httpx2
 import msgspec
 import time_machine
 
+from headgate._core import CallContext
+from headgate.retry._policy import RETRIED_METHODS
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator
 
@@ -53,8 +58,8 @@ GOLDEN = Path(__file__).with_name("retry_golden.json")
 #: The instant every case runs at, so an HTTP-date ``Retry-After`` resolves to the same delay on every run.
 FROZEN_NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 
-#: Wraps the scripted network transport in a retry transport built for ``build_retry(attempts)`` that draws its jitter
-#: from the given source.
+#: Wraps the scripted network transport in a retry transport allowed ``attempts`` sends that draws its jitter from the
+#: given source.
 type TransportFactory = Callable[[httpx2.AsyncBaseTransport, int, Callable[[], float]], httpx2.AsyncBaseTransport]
 
 
@@ -69,7 +74,7 @@ class Step:
 
 @dataclass(frozen=True, slots=True)
 class Case:
-    """One matrix case: ``attempts`` is ``build_retry``'s argument; the script's last step repeats once it runs out."""
+    """One matrix case: ``attempts`` is the send budget; the script's last step repeats once it runs out."""
 
     attempts: int
     method: str
@@ -325,8 +330,8 @@ async def run_case(make: TransportFactory, case: Case) -> Outcome:
             result, attempts_made = f"raise:{type(exc).__name__}", None
         else:
             result = f"status:{response.status_code}"
-            retry = response.extensions.get("retry")
-            attempts_made = None if retry is None else retry.attempts_made
+            context = CallContext.of(request)
+            attempts_made = context.attempt - 1 if request.method in RETRIED_METHODS else None
     closed = tuple(r.is_closed for r in responses)
     return Outcome(sends, tuple(sleeps), result, attempts_made, closed, tuple(closed_at_sleep))
 

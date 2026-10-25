@@ -23,8 +23,8 @@ import pytest
 from headgate import HttpOptions
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
 from headgate._client import AsyncBaseClient
-from headgate._rate_limit import Rate
 from headgate.errors import ClientError, ResponseTooLargeError
+from headgate.ratelimit import Rate
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:

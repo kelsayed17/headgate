@@ -16,8 +16,6 @@ import httpx2
 import pytest
 
 from headgate import CachedTokenAuth, HttpOptions, Minted, TransportPolicy
-from headgate._breaker import HOST_BREAKERS
-from headgate._rate_limit import UNLIMITED
 from headgate._responses import as_bytes
 from headgate.errors import (
     AuthError,
@@ -28,6 +26,9 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
+from headgate.ratelimit import UNLIMITED
+from headgate.retry import RetryPolicy
+from tests.support.breakers import failures
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
@@ -85,7 +86,7 @@ def _api(auth: httpx2.Auth, handler: Callable[[httpx2.Request], httpx2.Response]
         base_url=f"https://{_API_HOST}",
         rate=UNLIMITED,
         auth=auth,
-        policy=TransportPolicy(max_attempts=1),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(transport=httpx2.MockTransport(handler or (lambda _r: httpx2.Response(httpx2.codes.OK)))),
     )
 
@@ -116,7 +117,7 @@ async def test_an_unreachable_token_host_names_the_token_endpoint_and_spares_the
     assert type(raised.value) is TransportError
     assert str(raised.value) == f"[_MintsOver] POST {_LOGGED_EXCHANGE_URL} (token mint): connection refused"
     assert isinstance(raised.value.__cause__, httpx2.ConnectError)
-    assert HOST_BREAKERS[_API_HOST].failure_count == 0
+    assert failures(_API_HOST) == 0
 
 
 async def test_a_token_host_that_times_out_is_a_client_timeout() -> None:

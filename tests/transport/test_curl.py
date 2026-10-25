@@ -26,7 +26,7 @@ from hishel import AsyncSqliteStorage
 from hishel.httpx2 import AsyncCacheTransport
 
 import headgate.curl
-from headgate import _curl
+from headgate import AsyncBaseClient, HttpOptions, Rate, _curl, nothing
 from headgate.curl import AsyncCurlTransport
 
 if TYPE_CHECKING:
@@ -306,6 +306,27 @@ async def test_default_headers_drop_httpxs_own_defaults_but_keep_one_the_caller_
     sent = {k.lower(): v for k, v in call["headers"]}
     assert b"user-agent" not in sent
     assert sent[b"accept"] == b"application/vnd.test+json"
+
+
+@pytest.mark.parametrize(
+    ("product", "kept"),
+    [pytest.param(None, None, id="headgates-own-is-dropped"), pytest.param("app/1", "app/1", id="a-product-is-kept")],
+)
+async def test_default_headers_drop_headgates_own_user_agent(
+    sessions: list[_Session], product: str | None, kept: str | None
+) -> None:
+    """Drop the ``User-Agent`` a client sends without a product token, so the profile's is sent; keep a chosen one."""
+    transport, session = _transport(sessions, default_headers=True)
+    client = AsyncBaseClient(
+        base_url="https://api.example.test",
+        rate=Rate.per_second(1000),
+        http=HttpOptions(transport=transport, user_agent=product),
+    )
+    async with client:
+        await client.get("x", expect=nothing)
+    (call,) = session.calls
+    sent = {k.lower(): v for k, v in call["headers"]}
+    assert (sent[b"user-agent"].decode().partition(" ")[0] if b"user-agent" in sent else None) == kept
 
 
 async def test_without_default_headers_httpxs_defaults_are_sent(sessions: list[_Session]) -> None:

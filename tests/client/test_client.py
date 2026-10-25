@@ -19,16 +19,17 @@ import msgspec
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from headgate import CachedTokenAuth, HttpOptions, Minted, TransportPolicy
+from headgate import CachedTokenAuth, HttpOptions, Minted, Timeouts, TransportPolicy
 from headgate import pydantic as pydantic_flavor
 from headgate._auth import AUTH_HOP, StaticHeaderAuth
-from headgate._breaker import HOST_BREAKERS
 from headgate._client import AsyncBaseClient
-from headgate._rate_limit import AsyncRateLimiter, Rate
+from headgate._core import Timing, timing_override
 from headgate._responses import Expect, RefusalCheck, RefusedError, as_bytes, nothing
-from headgate._retry import Retry
 from headgate.errors import AuthError, RateLimitError, ResponseParseError, TransportError, UpstreamStatusError
 from headgate.msgspec import decoder
+from headgate.ratelimit import AsyncRateLimiter, Rate
+from headgate.retry import Backoff, RetryPolicy
+from tests.support.breakers import failures
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
@@ -65,7 +66,7 @@ async def test_every_retry_is_paced_by_the_rate_limiter(monkeypatch: pytest.Monk
     client = StubClient(
         rate=_RATE,
         base_url="https://x",
-        policy=TransportPolicy(max_attempts=max_attempts),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=max_attempts)),
         http=HttpOptions(transport=httpx2.MockTransport(handler)),
     )
     assert (await client.get("y", expect=RESPONSE)).status_code == httpx2.codes.OK
@@ -75,10 +76,12 @@ async def test_every_retry_is_paced_by_the_rate_limiter(monkeypatch: pytest.Monk
 async def test_a_client_reports_its_failures_to_the_shared_breaker(httpx2_mock: HTTPXMock) -> None:
     """Check that a failed call is charged to the process-wide breaker of the host it addressed."""
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.SERVICE_UNAVAILABLE)
-    client = StubClient(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(max_attempts=1))
+    client = StubClient(
+        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=1))
+    )
     with pytest.raises(UpstreamStatusError):
         await client.get("x", expect=RESPONSE)
-    assert HOST_BREAKERS["api.example"].failure_count == 1
+    assert failures("api.example") == 1
 
 
 # --- Construction ---
@@ -111,7 +114,7 @@ async def test_each_client_has_its_own_http_client() -> None:
 @pytest.mark.parametrize(
     ("build", "match"),
     [
-        (lambda: TransportPolicy(max_attempts=0), "max_attempts"),
+        (lambda: TransportPolicy(retry=RetryPolicy(attempts=0)), "attempts"),
         (lambda: HttpOptions(timeout=0), "timeout"),
         (lambda: HttpOptions(max_response_bytes=0), "max_response_bytes"),
     ],
@@ -194,7 +197,9 @@ async def test_retries_on_503_then_succeeds(httpx2_mock: HTTPXMock) -> None:
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.SERVICE_UNAVAILABLE)
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.SERVICE_UNAVAILABLE)
     httpx2_mock.add_response(url="https://api.example/x", json={"ok": True})
-    client = StubClient(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(max_attempts=3))
+    client = StubClient(
+        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3))
+    )
     resp = await client.get("x", expect=RESPONSE)
     assert resp.status_code == httpx2.codes.OK
 
@@ -203,39 +208,39 @@ async def test_raises_after_exhausting_retries(httpx2_mock: HTTPXMock) -> None:
     """Check that a 5xx surviving every attempt raises."""
     for _ in range(3):
         httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.SERVICE_UNAVAILABLE)
-    client = StubClient(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(max_attempts=3))
+    client = StubClient(
+        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3))
+    )
     with pytest.raises(UpstreamStatusError):
         await client.get("x", expect=RESPONSE)
 
 
-async def test_honors_retry_after_on_429(httpx2_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_honors_retry_after_on_429(httpx2_mock: HTTPXMock) -> None:
     """Check that a 429's ``Retry-After`` decides the wait, not the backoff curve.
 
     The retry transport parses the two forms the header allows, a whole number of seconds or an HTTP date, and falls
     back to its own backoff for anything else. The test therefore sends a whole number: a fractional value would take
-    the fallback path and prove only that a 429 is retried at all. The sleep is captured rather than served, so
-    asserting the duration costs no wall time.
+    the fallback path and prove only that a 429 is retried at all. The client's sleep records the duration instead of
+    waiting it, so asserting the duration costs no wall time.
     """
     slept: list[float] = []
-    real_sleep_seconds = Retry.sleep_seconds
 
-    def _record(self: Retry, failure: httpx2.Response | Exception) -> float:
-        slept.append(real_sleep_seconds(self, failure))
-        return 0.0  # compute the real duration, then wait none of it
+    async def record(seconds: float, /) -> None:
+        slept.append(seconds)
 
-    monkeypatch.setattr(Retry, "sleep_seconds", _record)
-    # Zeroed so the backoff fallback would be a visible 0.0, not a plausible-looking wait.
-    monkeypatch.setattr("headgate._retry._BACKOFF_FACTOR", 0.0)
     httpx2_mock.add_response(
         url="https://api.example/x", status_code=httpx2.codes.TOO_MANY_REQUESTS, headers={"Retry-After": "7"}
     )
     httpx2_mock.add_response(url="https://api.example/x", json={"ok": True})
 
-    client = StubClient(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(max_attempts=2))
+    # A zero backoff factor, so the backoff fallback would be a visible 0.0, not a plausible-looking wait.
+    policy = TransportPolicy(retry=RetryPolicy(attempts=2, backoff=Backoff(factor=0.0)))
+    with timing_override(Timing(sleep=record)):
+        client = StubClient(rate=_RATE, base_url="https://api.example", policy=policy)
     resp = await client.get("x", expect=RESPONSE)
 
     assert resp.status_code == httpx2.codes.OK
-    assert slept == [5.0], "the header's 7s is honoured, clamped to max_backoff_wait=5s"
+    assert slept == [5.0], "the header's 7s is honoured, clamped to the backoff's max_wait of 5s"
 
 
 # --- Circuit breaker ---
@@ -243,7 +248,9 @@ async def test_honors_retry_after_on_429(httpx2_mock: HTTPXMock, monkeypatch: py
 
 async def test_circuit_breaker_opens_after_threshold(httpx2_mock: HTTPXMock) -> None:
     """Check that five consecutive failures open the host's breaker, which then refuses without sending."""
-    client = StubClient(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(max_attempts=1))
+    client = StubClient(
+        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=1))
+    )
     for _ in range(5):
         httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.SERVICE_UNAVAILABLE)
         with pytest.raises(UpstreamStatusError):
@@ -257,12 +264,14 @@ async def test_circuit_breaker_opens_after_threshold(httpx2_mock: HTTPXMock) -> 
 async def test_circuit_breaker_resets_on_success(httpx2_mock: HTTPXMock) -> None:
     """Check that a success after a failure resets the host's failure count."""
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.SERVICE_UNAVAILABLE)
-    client = StubClient(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(max_attempts=1))
+    client = StubClient(
+        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=1))
+    )
     with pytest.raises(UpstreamStatusError):
         await client.get("x", expect=RESPONSE)
     httpx2_mock.add_response(url="https://api.example/x", json={"ok": True})
     await client.get("x", expect=RESPONSE)
-    assert HOST_BREAKERS["api.example"].failure_count == 0
+    assert failures("api.example") == 0
 
 
 class _HopAuth(CachedTokenAuth):
@@ -288,12 +297,12 @@ async def test_a_failed_auth_hop_is_not_charged_to_the_called_host() -> None:
         rate=_RATE,
         base_url="https://api.example",
         auth=_HopAuth(),
-        policy=TransportPolicy(max_attempts=1),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(transport=httpx2.MockTransport(handler)),
     )
     with pytest.raises(TransportError, match="credential host down"):
         await client.get("x", expect=nothing)
-    assert HOST_BREAKERS["api.example"].failure_count == 0
+    assert failures("api.example") == 0
 
 
 # --- Request bodies ---
@@ -355,8 +364,19 @@ async def test_a_form_body_rides_data() -> None:
     assert seen == [b"side=buy"]
 
 
-async def test_timeout_named_param_forwarded_to_httpx() -> None:
-    """Check that a per-call ``timeout=`` replaces every one of the client's timeouts for that request."""
+@pytest.mark.parametrize(
+    ("per_call", "expected"),
+    [
+        pytest.param(5.0, {"connect": 10.0, "read": 5.0, "write": 10.0, "pool": 15.0}, id="a-number-is-the-read"),
+        pytest.param(
+            Timeouts(connect=1.0, read=2.0, write=3.0, pool=4.0),
+            {"connect": 1.0, "read": 2.0, "write": 3.0, "pool": 4.0},
+            id="timeouts-replace-all",
+        ),
+    ],
+)
+async def test_timeout_named_param_forwarded_to_httpx(per_call: Timeouts | float, expected: dict[str, float]) -> None:
+    """Check that a per-call ``timeout=`` number replaces the read timeout, and ``Timeouts`` every one of them."""
     captured: dict[str, object] = {}
 
     def handler(req: httpx2.Request) -> httpx2.Response:
@@ -366,8 +386,8 @@ async def test_timeout_named_param_forwarded_to_httpx() -> None:
     client = StubClient(
         rate=_RATE, base_url="https://api.example", http=HttpOptions(transport=httpx2.MockTransport(handler))
     )
-    await client.get("x", expect=RESPONSE, timeout=5.0)
-    assert captured["timeout"] == {"connect": 5.0, "read": 5.0, "write": 5.0, "pool": 5.0}
+    await client.get("x", expect=RESPONSE, timeout=per_call)
+    assert captured["timeout"] == expected
 
 
 # --- Non-transient 4xx is not retried ---
@@ -376,7 +396,9 @@ async def test_timeout_named_param_forwarded_to_httpx() -> None:
 async def test_non_transient_4xx_raises_after_one_request(httpx2_mock: HTTPXMock) -> None:
     """Check that a non-transient 4xx (a 404) is not retried and raises with its real status."""
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.NOT_FOUND)
-    client = StubClient(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(max_attempts=3))
+    client = StubClient(
+        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3))
+    )
     with pytest.raises(UpstreamStatusError) as ei:
         await client.get("x", expect=RESPONSE)
     assert ei.value.status_code == httpx2.codes.NOT_FOUND
@@ -386,7 +408,9 @@ async def test_non_transient_4xx_raises_after_one_request(httpx2_mock: HTTPXMock
 async def test_403_raises_auth_error_after_one_request(httpx2_mock: HTTPXMock) -> None:
     """Check that a 403 is not retried and raises ``AuthError``, naming this client's credential."""
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.FORBIDDEN)
-    client = StubClient(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(max_attempts=3))
+    client = StubClient(
+        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3))
+    )
     with pytest.raises(AuthError) as ei:
         await client.get("x", expect=RESPONSE)
     assert ei.value.status_code == httpx2.codes.FORBIDDEN
@@ -404,7 +428,9 @@ async def test_reported_failure_reflects_the_last_attempt_kind(httpx2_mock: HTTP
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.SERVICE_UNAVAILABLE)
     httpx2_mock.add_exception(httpx2.ConnectError("net"))
     httpx2_mock.add_exception(httpx2.ConnectError("net"))
-    client = StubClient(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(max_attempts=3))
+    client = StubClient(
+        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3))
+    )
     with pytest.raises(TransportError) as ei:
         await client.get("x", expect=RESPONSE)
 

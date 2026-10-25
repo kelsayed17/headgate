@@ -24,12 +24,14 @@ import pytest
 from hishel import FilterPolicy
 
 from headgate import HttpCache, HttpOptions, TransportError, TransportPolicy, UpstreamStatusError
-from headgate._breaker import HOST_BREAKERS
 from headgate._cache import CACHE_DEGRADED_EXT, MethodFilter, host_untested
-from headgate._rate_limit import UNLIMITED
+from headgate._core import CallContext, CallInfo
 from headgate._responses import as_bytes
-from headgate._retry import ZERO_RETRY, build_retry
+from headgate.ratelimit import UNLIMITED
+from headgate.retry import NO_RETRY, RetryPolicy
+from headgate.retry._policy import RETRY_POLICY
 from tests.cache._helpers import FaultyStorage, TrackingNetwork, cache_transport, every_get_policy
+from tests.support.breakers import failures
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
@@ -416,21 +418,35 @@ async def test_a_shared_response_is_marked_and_the_fetched_one_is_not(storage: A
     assert all(host_untested(response) for response in shared)
 
 
+def _timed(read: float) -> httpx2.Request:
+    """Return a GET of the shared URL whose read timeout is *read*."""
+    return httpx2.Request("GET", _URL, extensions={"timeout": {"read": read}})
+
+
+def _retried(policy: RetryPolicy) -> httpx2.Request:
+    """Return a GET of the shared URL whose call carries its own retry *policy*."""
+    request = httpx2.Request("GET", _URL)
+    context = CallContext(CallInfo(method="GET", url=_URL))
+    context.put(RETRY_POLICY, policy)
+    context.attach(request)
+    return request
+
+
 @pytest.mark.parametrize(
-    "extensions",
+    "build",
     [
-        pytest.param(({"timeout": {"read": 1.0}}, {"timeout": {"read": 60.0}}), id="timeouts"),
-        pytest.param(({"retry": ZERO_RETRY}, {"retry": build_retry(5)}), id="retry-policies"),
+        pytest.param(lambda: (_timed(1.0), _timed(60.0)), id="timeouts"),
+        pytest.param(lambda: (_retried(NO_RETRY), _retried(RetryPolicy(attempts=5))), id="retry-policies"),
     ],
 )
 async def test_gets_that_differ_in_timeout_or_retry_policy_do_not_share(
-    extensions: tuple[dict[str, object], dict[str, object]], storage: AsyncSqliteStorage
+    build: Callable[[], tuple[httpx2.Request, httpx2.Request]], storage: AsyncSqliteStorage
 ) -> None:
     """A GET willing to wait longer, or to try more often, must not inherit the failure of one that was not."""
     network = _GatedNetwork()
     transport = cache_transport(storage, network, policy=_cache_no_get())
 
-    requests = [httpx2.Request("GET", _URL, extensions=ext) for ext in extensions]
+    requests = build()
     tasks = [asyncio.create_task(transport.handle_async_request(request)) for request in requests]
     await _eventually(lambda: network.calls == len(requests))
     network.gate.set()
@@ -444,7 +460,9 @@ def _sharing_client(network: _GatedNetwork, storage: AsyncSqliteStorage) -> Stub
     return StubClient(
         base_url="https://example.test",
         rate=UNLIMITED,
-        policy=TransportPolicy(max_attempts=1, cache=HttpCache(policy=every_get_policy(), storage=storage)),
+        policy=TransportPolicy(
+            retry=RetryPolicy(attempts=1), cache=HttpCache(policy=every_get_policy(), storage=storage)
+        ),
         http=HttpOptions(transport=network),
     )
 
@@ -473,4 +491,4 @@ async def test_one_shared_upstream_failure_is_one_breaker_failure(
 
     assert all(isinstance(result, raised) for result in results), results
     assert network.calls == 1
-    assert HOST_BREAKERS["example.test"].failure_count == 1
+    assert failures("example.test") == 1

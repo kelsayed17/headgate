@@ -13,8 +13,8 @@ import uuid
 from typing import TYPE_CHECKING, Unpack
 
 from headgate._auth import QueryParamAuth, StaticHeaderAuth
-from headgate._rate_limit import Rate
 from headgate._url import is_secret_param
+from headgate.ratelimit import Rate
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 

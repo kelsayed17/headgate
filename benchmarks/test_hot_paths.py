@@ -17,11 +17,11 @@ from pydantic import BaseModel
 
 from headgate import msgspec as msgspec_flavor
 from headgate import pydantic as pydantic_flavor
-from headgate._breaker import CircuitBreaker
-from headgate._failures import status_error
-from headgate._rate_limit import PathLimiters, Rate, RateRule
-from headgate._retry import build_retry
+from headgate._failures import CallSite, status_error
 from headgate._url import escape_segment, redact_secrets, render_path, sanitize_url
+from headgate.breaker import CircuitBreaker
+from headgate.ratelimit import PathLimiters, Rate, RateRule
+from headgate.retry import RetryPolicy
 
 if TYPE_CHECKING:
     from pytest_codspeed import BenchmarkFixture
@@ -76,7 +76,7 @@ def test_redact_secrets(benchmark: BenchmarkFixture) -> None:
 def test_status_error(benchmark: BenchmarkFixture) -> None:
     """Measure building the ``ClientError`` for an undeclared 4xx, including its body snippet."""
     response = httpx2.Response(httpx2.codes.BAD_REQUEST, text="field 'limit' must be <= 1000 " * 40)
-    benchmark(status_error, response, "GET", "https://api.example.test/v1/series", source="ExampleClient")
+    benchmark(status_error, response, CallSite("ExampleClient", "GET", "https://api.example.test/v1/series"))
 
 
 def test_msgspec_decode_rows(benchmark: BenchmarkFixture) -> None:
@@ -102,11 +102,11 @@ def test_breaker_track(benchmark: BenchmarkFixture) -> None:
 
 def test_retry_backoff(benchmark: BenchmarkFixture) -> None:
     """Measure computing the wait after a 503 that carries a ``Retry-After`` HTTP-date."""
-    policy = build_retry(3).increment()
+    policy = RetryPolicy()
     failure = httpx2.Response(
         httpx2.codes.SERVICE_UNAVAILABLE, headers={"Retry-After": "Wed, 21 Oct 2099 07:28:00 GMT"}
     )
-    benchmark(policy.sleep_seconds, failure)
+    benchmark(policy.wait_after, failure, 1)
 
 
 def test_path_limiter_lookup(benchmark: BenchmarkFixture) -> None:
