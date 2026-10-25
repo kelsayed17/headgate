@@ -142,3 +142,11 @@ async def test_retry_transport_closes_the_transport_it_wraps() -> None:
     await RetryTransport(transport=inner, retry=build_retry(3)).aclose()
 
     assert inner.closed is True
+
+
+def test_an_overflowing_backoff_with_a_zero_draw_waits_zero_not_nan() -> None:
+    """Keep the wait finite when ``factor · 2^attempts`` overflows to infinity and the jitter draws zero."""
+    attempts = 1023
+    policy = Retry(total=attempts, backoff_factor=2.0, attempts_made=attempts, jitter=lambda: 0.0)
+
+    assert policy.sleep_seconds(httpx2.Response(httpx2.codes.SERVICE_UNAVAILABLE)) == 0.0

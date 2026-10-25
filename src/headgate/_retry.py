@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import sys
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -118,7 +119,10 @@ class Retry:
                 if seconds is not None and (capped := min(seconds, _MAX_BACKOFF_WAIT)) > 0:
                     return capped
         exponent = min(self.attempts_made, _MAX_BACKOFF_EXPONENT)
-        return min(self.backoff_factor * (2.0**exponent) * self.jitter(), _MAX_BACKOFF_WAIT)
+        # A large factor times 2^1023 overflows to infinity, and infinity times a zero draw is NaN; the largest finite
+        # float keeps the product finite while leaving every value that does not overflow exactly as it was.
+        backoff = min(self.backoff_factor * (2.0**exponent), sys.float_info.max)
+        return min(backoff * self.jitter(), _MAX_BACKOFF_WAIT)
 
 
 def build_retry(max_attempts: int) -> Retry:

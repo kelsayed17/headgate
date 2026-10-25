@@ -35,6 +35,8 @@ dev = [
     "headgate[pydantic,curl]",
     "pytest-cov>=7",
     "pytest-codspeed>=5.0.3",
+    "hypothesis>=6.170",
+    "mutmut>=3.8",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -93,3 +95,9 @@ source = ["headgate"]
 fail_under = 100
 show_missing = true
 skip_covered = true
+
+[tool.mutmut]
+source_paths = ["src/"]
+pytest_add_cli_args_test_selection = ["tests/"]
+pytest_add_cli_args = ["-p", "no:cacheprovider", "-x", "-q"]
+also_copy = ["tests/", "examples/"]

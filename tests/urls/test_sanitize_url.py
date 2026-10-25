@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from headgate._url import is_secret_param, redact_secrets, register_secret_params, sanitize_url
@@ -78,7 +80,10 @@ def test_redact_secrets_replaces_secret_pairs_in_free_text() -> None:
 
 def test_a_registered_name_is_secret_whatever_its_spelling() -> None:
     """Fold a registered name like a listed one: case-insensitive, with ``_`` and ``-`` ignored."""
-    assert not is_secret_param("zz-registered-only")
-    register_secret_params(["ZZ_Registered_Only"])
-    assert is_secret_param("zz-registered-only")
-    assert sanitize_url("https://x.test/?zzregisteredonly=v") == "https://x.test/?zzregisteredonly=%2A%2A%2A"
+    # The registry is process-wide and add-only, so a name unique to this run keeps the test independent of order.
+    unique = f"zz{uuid.uuid4().hex}"
+    assert not is_secret_param(f"{unique}-registered")
+    register_secret_params([f"{unique.upper()}_Registered"])
+    assert is_secret_param(f"{unique}-registered")
+    redacted = sanitize_url(f"https://x.test/?{unique}registered=v")
+    assert redacted == f"https://x.test/?{unique}registered=%2A%2A%2A"

@@ -34,7 +34,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
     from contextlib import AbstractContextManager
 
 __all__ = [
@@ -96,6 +96,7 @@ class CircuitBreaker:
     """A closed / open / half-open breaker, driven by one ``with breaker.track()`` block per fetch."""
 
     __slots__ = (
+        "_clock",
         "_failure_threshold",
         "_failures",
         "_name",
@@ -105,11 +106,20 @@ class CircuitBreaker:
         "_state",
     )
 
-    def __init__(self, *, failure_threshold: int = 5, recovery_timeout: float = 60.0, name: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        failure_threshold: int = 5,
+        recovery_timeout: float = 60.0,
+        name: str = "",
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         """Trip after *failure_threshold* consecutive failures; admit a probe *recovery_timeout* seconds later.
 
-        *name* (the host) appears in the :class:`CircuitOpenError` message.
+        *name* (the host) appears in the :class:`CircuitOpenError` message. *clock* returns monotonic seconds; it is a
+        parameter so the cooldown can be driven by a test without waiting.
         """
+        self._clock = clock
         self._failure_threshold = failure_threshold
         self._recovery_timeout = recovery_timeout
         self._name = name
@@ -143,7 +153,7 @@ class CircuitBreaker:
             return True
         if self._probe_in_flight:
             return False
-        return time.monotonic() - self._opened_at >= self._recovery_timeout
+        return self._clock() - self._opened_at >= self._recovery_timeout
 
     @contextmanager
     def track(self) -> Generator[Verdict]:
@@ -217,7 +227,7 @@ class CircuitBreaker:
     def _open(self) -> None:
         """Trip the breaker, starting its cooldown now."""
         self._state = BreakerState.OPEN
-        self._opened_at = time.monotonic()
+        self._opened_at = self._clock()
 
 
 class Breaker(Protocol):

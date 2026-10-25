@@ -9,6 +9,7 @@ flow, because each class merges setdefault-style rather than assigning.
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING, Unpack
 
 from headgate._auth import QueryParamAuth, StaticHeaderAuth
@@ -80,7 +81,8 @@ class TestQueryParamAuth:
 
     def test_the_param_names_are_registered_as_secret(self) -> None:
         """Register a name the well-known list lacks, so error messages and the cache redact it."""
-        name = "headgate_test_credential"
+        # The registry is process-wide and add-only, so a name unique to this run keeps the test independent of order.
+        name = f"headgate_test_credential_{uuid.uuid4().hex}"
         assert not is_secret_param(name)
 
         QueryParamAuth({name: "v"})

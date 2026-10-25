@@ -184,22 +184,17 @@ async def test_a_per_call_cache_ttl_beats_the_client_ttl_inside_hishel(storage: 
 
 # A per-call cache_ttl= is forwarded by every verb that accepts one.
 
-#: Every public verb on the client that takes ``cache_ttl``, found rather than listed so a verb added later is covered.
-_VERBS_TAKING_CACHE_TTL = sorted(
-    name
-    for name, member in vars(AsyncBaseClient).items()
-    if not name.startswith("_")
-    and inspect.iscoroutinefunction(member)
-    and "cache_ttl" in inspect.signature(member).parameters
-)
+#: The client's HTTP verbs, every one of which takes a per-call ``cache_ttl``.
+_VERBS = ("delete", "get", "head", "patch", "post", "put")
 
 
-def test_the_verbs_taking_cache_ttl_are_the_six_http_methods() -> None:
-    """Find every HTTP verb, so the parametrized test below is not vacuous."""
-    assert _VERBS_TAKING_CACHE_TTL == ["delete", "get", "head", "patch", "post", "put"]
+@pytest.mark.parametrize("verb", _VERBS)
+def test_every_http_verb_takes_a_cache_ttl(verb: str) -> None:
+    """Accept ``cache_ttl`` on every verb, so the forwarding test below covers them all."""
+    assert "cache_ttl" in inspect.signature(getattr(AsyncBaseClient, verb)).parameters
 
 
-@pytest.mark.parametrize("verb", _VERBS_TAKING_CACHE_TTL)
+@pytest.mark.parametrize("verb", _VERBS)
 async def test_every_verb_forwards_a_per_call_cache_ttl(verb: str) -> None:
     """``cache_ttl=`` reaches the request the network sees (as ``hishel_ttl``) from every verb."""
     base = _CountingTransport()
