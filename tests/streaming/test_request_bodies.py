@@ -61,11 +61,22 @@ async def _chunks() -> AsyncIterator[bytes]:
 
 
 class _Iterable:
-    """An async iterable of the test body that is not an async generator."""
+    """An async iterator over the test body that is not an async generator, so it has nothing to close."""
+
+    def __init__(self) -> None:
+        """Start at the first piece."""
+        self._pieces = iter(_CHUNKS)
 
     def __aiter__(self) -> AsyncIterator[bytes]:
-        """Return a fresh iterator over the pieces."""
-        return _chunks()
+        """Return this iterator."""
+        return self
+
+    async def __anext__(self) -> bytes:
+        """Return the next piece."""
+        piece = next(self._pieces, None)
+        if piece is None:
+            raise StopAsyncIteration
+        return piece
 
 
 async def test_bytes_content_is_sent_and_stays_replayable() -> None:
