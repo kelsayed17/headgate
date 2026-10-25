@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/kelsayed17/headgate/main/docs/assets/logo.png" alt="headgate logo: a gate metering a stream of requests" width="160">
+</p>
+
 # headgate
 
 **An async API-client base for Python, built on [httpx2](https://pypi.org/project/httpx2/).** Subclass

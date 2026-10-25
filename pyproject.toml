@@ -83,7 +83,7 @@ include = [
     "LICENSE",
     "pyproject.toml",
 ]
-exclude = [".hypothesis", "**/__pycache__", "**/*.pyc", "mutants", ".coverage*", ".codspeed"]
+exclude = ["docs/assets", ".hypothesis", "**/__pycache__", "**/*.pyc", "mutants", ".coverage*", ".codspeed"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
