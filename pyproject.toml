@@ -39,6 +39,8 @@ dependencies = [
 pydantic = ["pydantic>=2.14.1"]
 curl = ["curl_cffi>=0.16.3"]
 otel = ["opentelemetry-api>=1.45.1"]
+# hishel's own extra for its async storages: AsyncSqliteStorage imports anysqlite.
+cache = ["hishel[async]>=1.4.0"]
 
 [project.urls]
 Homepage = "https://github.com/kelsayed17/headgate"
@@ -55,10 +57,9 @@ dev = [
     "syrupy>=6.1.1",
     "httpx2-pytest>=2.0.0",
     "time-machine",
-    "anysqlite",
     "ruff",
     "ty",
-    "headgate[pydantic,curl,otel]",
+    "headgate[pydantic,curl,otel,cache]",
     "opentelemetry-sdk>=1.45.1",
     "pytest-cov>=7",
     "pytest-codspeed>=5.0.3",

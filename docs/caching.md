@@ -20,7 +20,8 @@ cache = HttpCache(
 policy = TransportPolicy(cache=cache)
 ```
 
-`AsyncSqliteStorage` needs `anysqlite` (`pip install 'hishel[async]'`); `AsyncRedisStorage` needs `hishel[redis]`.
+`AsyncSqliteStorage` needs `anysqlite`, which a plain `pip install headgate` does not bring: install
+`pip install 'headgate[cache]'` (it pulls `hishel[async]`). `AsyncRedisStorage` needs `hishel[redis]`.
 
 ## What is stored, and for how long
 

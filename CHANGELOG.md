@@ -74,6 +74,8 @@ layer. Code written against the 0.1.0 source needs the migrations below; there a
 - `Method` and `RequestOptions` are public; `RequestOptions` gains `content`, `files`, `deadline` and
   `idempotency_key`, and its `timeout` takes `Timeouts`.
 - `CachedTokenAuth.seed()`, `token_headers` and `credential_identity()`; `Minted` for mint flows.
+- The `cache` extra (`pip install 'headgate[cache]'`), which brings `hishel[async]` and so the `anysqlite` that
+  hishel's `AsyncSqliteStorage` needs.
 - Documentation: a guide per area in `docs/`, a design document, and tested examples.
 
 ### Changed

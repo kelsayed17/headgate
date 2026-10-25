@@ -19,6 +19,7 @@ pip install headgate               # or: uv add headgate. Brings httpx2[http2], 
 pip install 'headgate[pydantic]'   # + the pydantic codec flavor
 pip install 'headgate[curl]'       # + AsyncCurlTransport: a browser's TLS fingerprint, via curl_cffi
 pip install 'headgate[otel]'       # + OpenTelemetryObserver (opentelemetry-api only)
+pip install 'headgate[cache]'      # + what hishel's AsyncSqliteStorage needs (hishel[async]: anysqlite)
 ```
 
 ## Quickstart

@@ -265,6 +265,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+cache = [
+    { name = "hishel", extra = ["async"] },
+]
 curl = [
     { name = "curl-cffi" },
 ]
@@ -277,8 +280,7 @@ pydantic = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "anysqlite" },
-    { name = "headgate", extra = ["curl", "otel", "pydantic"] },
+    { name = "headgate", extra = ["cache", "curl", "otel", "pydantic"] },
     { name = "httpx2-pytest" },
     { name = "hypothesis" },
     { name = "mutmut" },
@@ -298,18 +300,18 @@ dev = [
 requires-dist = [
     { name = "curl-cffi", marker = "extra == 'curl'", specifier = ">=0.16.3" },
     { name = "hishel", specifier = ">=1.4.0" },
+    { name = "hishel", extras = ["async"], marker = "extra == 'cache'", specifier = ">=1.4.0" },
     { name = "httpx2", extras = ["http2"], specifier = ">=2.16.0" },
     { name = "msgspec", specifier = ">=0.22.0" },
     { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.45.1" },
     { name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.14.1" },
     { name = "typing-extensions", marker = "python_full_version < '3.15'", specifier = ">=4.15" },
 ]
-provides-extras = ["pydantic", "curl", "otel"]
+provides-extras = ["pydantic", "curl", "otel", "cache"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "anysqlite" },
-    { name = "headgate", extras = ["pydantic", "curl", "otel"], editable = "." },
+    { name = "headgate", extras = ["pydantic", "curl", "otel", "cache"], editable = "." },
     { name = "httpx2-pytest", specifier = ">=2.0.0" },
     { name = "hypothesis", specifier = ">=6.170" },
     { name = "mutmut", specifier = ">=3.8" },
@@ -336,6 +338,12 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c6/ff/efba29288e1d304359491fa3aab83174c3ef24a63819e6acad6873d8c0a9/hishel-1.4.0.tar.gz", hash = "sha256:e406b052c658ce28629fc31423b9914b637d47d7c923f5fe9e288ec47e4823d1", size = 813499, upload-time = "2026-09-16T15:38:54.085Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/da/c5/2cf7b80da9833de6ae5099111b64cf541830ccb4ef26605ae86f23ed5604/hishel-1.4.0-py3-none-any.whl", hash = "sha256:38cb62d7d38fb437dc086f789c26d0cab41310d12497ec3f56dcead4b08571f0", size = 80795, upload-time = "2026-09-16T15:38:52.545Z" },
+]
+
+[package.optional-dependencies]
+async = [
+    { name = "anyio" },
+    { name = "anysqlite" },
 ]
 
 [[package]]

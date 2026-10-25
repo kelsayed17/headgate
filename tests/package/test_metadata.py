@@ -38,3 +38,9 @@ def test_core_dependencies_are_httpx2_based_and_extras_are_optional() -> None:
 def test_the_package_is_marked_typed() -> None:
     """Check that the package ships ``py.typed``."""
     assert (Path(headgate.__file__).parent / "py.typed").is_file()
+
+
+def test_the_cache_extra_brings_what_the_sqlite_storage_needs() -> None:
+    """Check that ``headgate[cache]`` pulls ``hishel[async]``, whose ``anysqlite`` the SQLite cache storage imports."""
+    cache = [r.replace(" ", "") for r in requires("headgate") or [] if "extra=='cache'" in r.replace(" ", "")]
+    assert any(r.startswith("hishel[async]") for r in cache), cache
