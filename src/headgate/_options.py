@@ -180,7 +180,8 @@ class TransportPolicy:
     * ``deadline``: seconds the whole logical call may take, every attempt, wait and the body read included; ``None``
       for none. Past it the call raises ``ClientTimeoutError``. A call overrides it with ``deadline=``.
     * ``breaker``: the circuit breaker (:class:`~headgate.BreakerPolicy`), or ``None`` for none.
-    * ``rate_limits``: a second rate for the requests whose path matches a rule (see :class:`~headgate.RateRule`).
+    * ``rate_limits``: per-path budgets (:class:`~headgate.RateRule`): a request whose path matches a rule spends from
+      the first matching rule's budget instead of the client's.
     * ``cache``: an opt-in :class:`~headgate.HttpCache`.
     * ``idempotency``: stamp idempotency keys on POST and PATCH (:class:`IdempotencyKeys`), or ``None``.
     * ``routes``: per-route retry and deadline overrides (:class:`Route`).

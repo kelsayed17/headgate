@@ -95,7 +95,8 @@ class RateRule:
     ``rate`` is a :class:`Rate`, from which the client builds a budget of its own, or a
     :class:`~headgate.ratelimit.RateBudget` shared with whoever else holds it. The fragment is matched as a substring of
     the URL path, the same idiom :class:`headgate.PathFragmentFilter` uses to scope the cache, and enough for a rule
-    that names one endpoint. The first matching rule wins.
+    that names one endpoint. The first matching rule wins, and a matching request spends from that rule's budget
+    instead of the client's, not from both.
     """
 
     fragment: str
