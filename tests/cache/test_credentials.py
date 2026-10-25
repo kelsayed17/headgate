@@ -372,6 +372,15 @@ def test_labels_separate_credentials_and_follow_the_identity() -> None:
     assert _label(CredentialScope(), "https://x/?api_key=1") != _label(CredentialScope(), "https://x/?api_key=2")
 
 
+class _OtherKeyAuth(_KeyAuth):
+    """The same credential under another auth class."""
+
+
+def test_labels_separate_auth_classes_with_the_same_identity() -> None:
+    """Partition by the auth's class as well as its identity: two auths that happen to share an identity never share."""
+    assert _label(CredentialScope(_KeyAuth("k")), _URL) != _label(CredentialScope(_OtherKeyAuth("k")), _URL)
+
+
 def test_a_shared_scope_never_labels() -> None:
     """Under ``Partition.SHARED`` no request is labelled, whatever credential it carries."""
     shared = CredentialScope(_KeyAuth("alice"), partition=Partition.SHARED)

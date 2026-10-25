@@ -43,7 +43,6 @@ from collections import Counter
 from collections.abc import Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from operator import itemgetter
 from typing import TYPE_CHECKING, override
 
 import httpx2
@@ -422,8 +421,8 @@ def _sharing_key(request: httpx2.Request) -> _SharingKey:
     or to try more often, must not inherit the ``ReadTimeout`` of one that was not.
     """
     timeout = request.extensions.get("timeout")
-    named: list[tuple[str, object]] = [(str(name), value) for name, value in timeout.items()] if timeout else []
-    timeouts = tuple(sorted(named, key=itemgetter(0)))
+    # Sorted by name, which is unique, so the values (a float or None) are never compared.
+    timeouts: tuple[tuple[str, object], ...] = tuple(sorted(timeout.items())) if timeout else ()
     retry = CallContext.of(request).get(RETRY_POLICY)
     return str(request.url), tuple(sorted(request.headers.multi_items())), timeouts, retry
 
@@ -555,7 +554,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
         response: httpx2.Response | None = None
         try:
             response = await super().handle_async_request(request)
-            if call.set_cookies and not response.extensions.get("hishel_from_cache"):
+            if call.set_cookies:
                 cookies = [("set-cookie", value) for value in call.set_cookies]
                 response.headers = httpx2.Headers([*response.headers.multi_items(), *cookies])
             return await _buffer_up_to(response, self._max_body_bytes, sources=(response, *call.handed_up))

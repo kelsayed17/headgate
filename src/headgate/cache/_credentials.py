@@ -75,7 +75,7 @@ class CredentialScope:
             self._declared_params = frozenset(stamper.credential_params)
         self._declared_headers = declared
         self._secret_headers = ALWAYS_SECRET_HEADERS | declared
-        self._stamper = stamper if partition is Partition.CREDENTIAL else None
+        self._stamper = stamper
         self._partitioned = partition is Partition.CREDENTIAL
 
     def view(self, request: httpx2.Request) -> tuple[httpx2.URL, httpx2.Headers]:
@@ -107,14 +107,11 @@ class CredentialScope:
         """Return the fragment naming the request's partition, or ``None`` for a shared or credential-free request."""
         if not self._partitioned:
             return None
-        parts = list(undeclared)
+        parts: list[bytes] = []
         if self._stamper is not None:
             auth = type(self._stamper)
-            parts[:0] = (
-                b"auth",
-                f"{auth.__module__}.{auth.__qualname__}".encode(),
-                self._stamper.credential_identity(),
-            )
+            parts += (b"auth", f"{auth.__module__}.{auth.__qualname__}".encode(), self._stamper.credential_identity())
+        parts += undeclared
         if not parts:
             return None
         mac = hmac.new(_PARTITION_KEY, digestmod=hashlib.sha256)
