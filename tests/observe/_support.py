@@ -14,27 +14,11 @@ if TYPE_CHECKING:
     import httpx2
 
     from headgate import RateBudget
-    from headgate.events import Event, Observer
+    from headgate.events import Observer
     from headgate.testing import FakeTransport
 
 BASE = "https://api.example.test/v1"
 RATE = Rate.per_second(1000)
-
-
-class Recorder:
-    """An observer that keeps every event it receives."""
-
-    def __init__(self) -> None:
-        """Start empty."""
-        self.events: list[Event] = []
-
-    def notify(self, event: Event) -> None:
-        """Keep *event*."""
-        self.events.append(event)
-
-    def of[E](self, kind: type[E]) -> list[E]:
-        """Return the events of *kind*, in order."""
-        return [event for event in self.events if isinstance(event, kind)]
 
 
 def client(

@@ -14,7 +14,6 @@ import contextlib
 import dataclasses
 from typing import TYPE_CHECKING
 
-import anysqlite
 import httpx2
 import pytest
 from hishel import AsyncSqliteStorage
@@ -31,10 +30,11 @@ from headgate.ratelimit import Rate
 from headgate.retry import NO_RETRY
 from headgate.testing import FakeTransport, TestClock, isolated_breakers
 from tests.cache._helpers import FaultyStorage, every_get_policy
-from tests.observe._support import Recorder, client
+from tests.observe._support import client
+from tests.support.events import Recorder
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable
+    from collections.abc import Awaitable, Callable
 
     from syrupy.assertion import SnapshotAssertion
 
@@ -53,16 +53,6 @@ def _half_jitter() -> float:
 _ONCE = TransportPolicy(retry=NO_RETRY)
 
 _DEPRECATED = {"Deprecation": "@1688169599", "Sunset": "Sun, 30 Jun 2024 23:59:59 GMT"}
-
-
-@pytest.fixture
-async def storage() -> AsyncIterator[AsyncSqliteStorage]:
-    """Yield a hishel storage on an in-memory SQLite database, closed after the test."""
-    store = AsyncSqliteStorage(connection=await anysqlite.connect(":memory:"))
-    try:
-        yield store
-    finally:
-        await store.close()
 
 
 async def _call(built: StubClient, times: int = 1) -> None:

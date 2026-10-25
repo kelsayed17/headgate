@@ -19,23 +19,12 @@ from headgate.health import observer_failures
 from headgate.retry import NO_RETRY
 from headgate.testing import FakeTransport, Reply, TestClock
 from tests.support.clients import StubClient
+from tests.support.events import Recorder
 
 _BASE = "https://api.example.test/v1"
 _RATE = Rate.per_second(1000)
 #: How long each send takes on the test clock.
 _SEND_TIME = 0.25
-
-
-class _Recorder:
-    """An observer that keeps every event it receives."""
-
-    def __init__(self) -> None:
-        """Start empty."""
-        self.events: list[Event] = []
-
-    def notify(self, event: Event) -> None:
-        """Keep *event*."""
-        self.events.append(event)
 
 
 class _Broken:
@@ -53,7 +42,7 @@ def _get(path: str, *replies: Reply) -> FakeTransport:
 
 def _client(
     fake: FakeTransport,
-    *observers: _Recorder | _Broken,
+    *observers: Recorder | _Broken,
     policy: TransportPolicy | None = None,
     auth: httpx2.Auth | None = None,
 ) -> StubClient:
@@ -69,7 +58,7 @@ def _client(
 
 async def test_a_call_reports_its_start_each_send_and_its_end_under_one_call_info() -> None:
     """Emit started, finished-attempt, finished, all naming the call's sanitized URL and route template."""
-    recorder = _Recorder()
+    recorder = Recorder()
     series_id = "GDP/real"
     client = _client(_get("series/GDP%2Freal"), recorder, auth=QueryParamAuth({"api_key": "secret"}))
     await client.get(t"series/{series_id}", expect=nothing, params={"token": "t0k"})
@@ -94,7 +83,7 @@ async def test_a_call_reports_its_start_each_send_and_its_end_under_one_call_inf
 
 async def test_a_str_url_has_no_route() -> None:
     """Report no route template for a ``str`` URL, which has none."""
-    recorder = _Recorder()
+    recorder = Recorder()
     await _client(_get("series"), recorder).get("series", expect=nothing)
     started = recorder.events[0]
     assert isinstance(started, CallStarted)
@@ -103,7 +92,7 @@ async def test_a_str_url_has_no_route() -> None:
 
 async def test_each_retry_is_its_own_attempt() -> None:
     """Report every send as an attempt, numbered from one, and the call's total."""
-    recorder = _Recorder()
+    recorder = Recorder()
     await _client(_get("x", 503, 503, 200), recorder).get("x", expect=nothing)
 
     attempts = [event for event in recorder.events if isinstance(event, AttemptFinished)]
@@ -121,7 +110,7 @@ def _refuse(request: httpx2.Request) -> httpx2.Response:
 
 async def test_a_failed_call_reports_the_error_types() -> None:
     """Name what a send raised on its attempt, and the ``ClientError`` the call raised on its end."""
-    recorder = _Recorder()
+    recorder = Recorder()
     with pytest.raises(TransportError):
         await _client(_get("x", _refuse), recorder, policy=TransportPolicy(retry=NO_RETRY)).get("x", expect=nothing)
 
@@ -134,7 +123,7 @@ async def test_a_failed_call_reports_the_error_types() -> None:
 
 async def test_an_undeclared_status_reports_both_the_status_and_the_error() -> None:
     """Report the final status and the error the status ladder raised for it."""
-    recorder = _Recorder()
+    recorder = Recorder()
     with pytest.raises(UpstreamStatusError):
         await _client(_get("x", 404), recorder).get("x", expect=nothing)
 
@@ -151,7 +140,7 @@ async def test_durations_are_measured_on_the_clients_clock() -> None:
         clock.advance(_SEND_TIME)
         return httpx2.Response(200, request=request)
 
-    recorder = _Recorder()
+    recorder = Recorder()
     with clock.install():
         client = _client(_get("x", slow), recorder, policy=TransportPolicy(retry=RetryPolicy(attempts=1)))
     await client.get("x", expect=nothing)
@@ -166,7 +155,7 @@ async def test_durations_are_measured_on_the_clients_clock() -> None:
 async def test_a_failing_observer_never_breaks_the_call() -> None:
     """Complete the call, deliver to the other observers, and count the failures in ``headgate.health``."""
     before = observer_failures().get(_Broken.__qualname__, 0)
-    recorder = _Recorder()
+    recorder = Recorder()
     body = await _client(_get("x"), _Broken(), recorder).get("x", expect=as_bytes)
 
     assert body == b""
@@ -176,7 +165,7 @@ async def test_a_failing_observer_never_breaks_the_call() -> None:
 
 async def test_a_streamed_get_reports_its_start_and_end() -> None:
     """Report a ``stream`` call like any other, its status included."""
-    recorder = _Recorder()
+    recorder = Recorder()
     client = _client(_get("f", httpx2.Response(200, content=b"abc")), recorder)
     async with client.stream("GET", "f") as stream:
         chunks = [chunk async for chunk in stream.aiter_bytes()]

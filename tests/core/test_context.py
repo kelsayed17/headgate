@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import httpx2
 
-from headgate._core import CallContext, CallInfo, CallStarted, Emitter, Event, SendProgress, Slot
+from headgate._core import CallContext, CallInfo, CallStarted, Emitter, SendProgress, Slot
 from headgate.testing import TestClock
+from tests.support.events import Recorder
 
 _URL = "https://api.example.test/v1/series"
 _DEADLINE = 10.0
@@ -87,21 +88,9 @@ def test_a_slot_holds_one_layers_value() -> None:
     assert repr(filled) == "Slot('filled')"
 
 
-class _Recorder:
-    """An observer that keeps what it receives."""
-
-    def __init__(self) -> None:
-        """Start empty."""
-        self.events: list[Event] = []
-
-    def notify(self, event: Event) -> None:
-        """Keep *event*."""
-        self.events.append(event)
-
-
 def test_emit_delivers_to_the_clients_observers() -> None:
     """Deliver an event through the context's emitter, and say whether anyone listens."""
-    recorder = _Recorder()
+    recorder = Recorder()
     info = CallInfo(method="GET", url=_URL)
     context = CallContext(info, emitter=Emitter((recorder,)))
     assert context.observed

@@ -16,7 +16,8 @@ from headgate import HttpOptions, RateBudget, nothing
 from headgate.events import RateLimited, RetryScheduled
 from headgate.ratelimit import Rate
 from headgate.testing import FakeTransport, TestClock
-from tests.integration._support import Recorder, client
+from tests.integration._support import client
+from tests.support.events import Recorder
 
 pytestmark = pytest.mark.transport_policy
 

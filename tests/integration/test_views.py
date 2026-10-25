@@ -29,7 +29,8 @@ from headgate.events import RateLimited
 from headgate.ratelimit import Rate
 from headgate.retry import NO_RETRY
 from headgate.testing import FakeTransport, TestClock, isolated_breakers
-from tests.integration._support import Recorder, client
+from tests.integration._support import client
+from tests.support.events import Recorder
 
 #: A budget that admits exactly one retry per window, whatever the traffic: no ratio, a floor of one.
 _ONE_RETRY = RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0)

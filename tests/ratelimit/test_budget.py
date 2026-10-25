@@ -16,10 +16,11 @@ import time
 import httpx2
 import pytest
 
-from headgate._core import CallContext, CallInfo, Emitter, Event, RateLimited, Timing
+from headgate._core import CallContext, CallInfo, Emitter, RateLimited, Timing
 from headgate.policy import policy_disabled
 from headgate.ratelimit import UNLIMITED, Adaptive, BudgetPausedError, PathBudgets, Rate, RateBudget, RateRule
 from headgate.testing import TestClock
+from tests.support.events import Recorder
 
 pytestmark = pytest.mark.transport_policy
 
@@ -40,19 +41,7 @@ _PER_THREAD = 4
 _THREADS = 3
 
 
-class _Recorder:
-    """Collect every event delivered."""
-
-    def __init__(self) -> None:
-        """Start empty."""
-        self.events: list[Event] = []
-
-    def notify(self, event: Event) -> None:
-        """Keep *event*."""
-        self.events.append(event)
-
-
-def _context(clock: TestClock, *, deadline: float | None = None, observer: _Recorder | None = None) -> CallContext:
+def _context(clock: TestClock, *, deadline: float | None = None, observer: Recorder | None = None) -> CallContext:
     """Return a call's context on *clock*, due *deadline* seconds from now, reporting to *observer*."""
     emitter = Emitter(() if observer is None else (observer,))
     return CallContext(CallInfo(method="GET", url="https://x/"), clock=clock, deadline_after=deadline, emitter=emitter)
@@ -78,7 +67,7 @@ def _response(status: int, headers: dict[str, str] | None = None) -> httpx2.Resp
     return httpx2.Response(status, headers=headers)
 
 
-def _rate_limited(recorder: _Recorder) -> list[tuple[float, str]]:
+def _rate_limited(recorder: Recorder) -> list[tuple[float, str]]:
     """Return each ``RateLimited`` event's delay and reason."""
     return [(event.delay, event.reason) for event in recorder.events if isinstance(event, RateLimited)]
 
@@ -168,7 +157,7 @@ async def test_every_wait_is_reported_with_its_reason() -> None:
     """Emit ``RateLimited`` for a paced wait, nothing for an admission without one."""
     clock = TestClock()
     budget = _budget(clock, Rate.per_second(1))
-    recorder = _Recorder()
+    recorder = Recorder()
     await budget.wait(_context(clock, observer=recorder))
     await budget.wait(_context(clock, observer=recorder))
     assert _rate_limited(recorder) == [(1.0, "paced")]
@@ -201,7 +190,7 @@ async def test_a_retry_after_pauses_the_whole_budget() -> None:
     """Make every later call wait out a 429's ``Retry-After`` before its paced turn."""
     clock = TestClock()
     budget = _budget(clock, adaptive=None)
-    recorder = _Recorder()
+    recorder = Recorder()
     budget.observe(_response(429, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
     assert budget.pause_remaining() == _PAUSE
 
@@ -325,7 +314,7 @@ async def test_a_throttled_wait_says_so() -> None:
     """Report a wait paced at a throttled rate as ``throttled``."""
     clock = TestClock()
     budget = _budget(clock, Rate.per_second(1))
-    recorder = _Recorder()
+    recorder = Recorder()
     budget.observe(_response(429), sent_at=clock())
     await budget.wait(_context(clock, observer=recorder))
     await budget.wait(_context(clock, observer=recorder))

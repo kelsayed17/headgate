@@ -15,13 +15,12 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING, override
 
-import anysqlite
 import httpx2
 import pytest
 from hishel import AsyncSqliteStorage, FilterPolicy
 
 from headgate import BreakerPolicy, BreakerRegistry, HttpCache, HttpOptions, TransportPolicy
-from headgate._core import BREAKER_GATE, BreakerChanged, BreakerState, CallContext, Event
+from headgate._core import BREAKER_GATE, BreakerChanged, BreakerState, CallContext
 from headgate.cache import StatusCodeFilter
 from headgate.errors import ClientError, RateLimitError, UpstreamStatusError
 from headgate.ratelimit import Rate
@@ -29,10 +28,11 @@ from headgate.retry import NO_RETRY
 from headgate.testing import TestClock
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
+from tests.support.events import Recorder
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import Callable
 
 _HOST = "charged.example"
 _ORIGIN = f"https://{_HOST}"
@@ -43,27 +43,16 @@ _THRESHOLD = 2
 _COOLDOWN = 60.0
 
 
-class _Recorder:
-    """Collect every event delivered."""
-
-    def __init__(self) -> None:
-        """Start empty."""
-        self.events: list[Event] = []
-
-    def notify(self, event: Event) -> None:
-        """Keep *event*."""
-        self.events.append(event)
-
-    def transitions(self) -> list[tuple[BreakerState, BreakerState, int]]:
-        """Return each ``BreakerChanged`` event's previous state, new state and failure count."""
-        return [(e.previous, e.state, e.failures) for e in self.events if isinstance(e, BreakerChanged)]
+def _transitions(recorder: Recorder) -> list[tuple[BreakerState, BreakerState, int]]:
+    """Return each ``BreakerChanged`` event's previous state, new state and failure count."""
+    return [(event.previous, event.state, event.failures) for event in recorder.of(BreakerChanged)]
 
 
 def _client(
     handler: Callable[[httpx2.Request], httpx2.Response],
     *,
     policy: TransportPolicy | None = None,
-    recorder: _Recorder | None = None,
+    recorder: Recorder | None = None,
 ) -> StubClient:
     """Return a client against *handler*, sending each call once, on the default registry's default breaker."""
     return StubClient(
@@ -119,16 +108,6 @@ async def test_a_network_failure_is_a_host_failure(exc: type[httpx2.TransportErr
     assert failures(_HOST) == 1
 
 
-@pytest.fixture
-async def storage() -> AsyncIterator[AsyncSqliteStorage]:
-    """Yield an in-memory hishel storage, closed after the test."""
-    store = AsyncSqliteStorage(connection=await anysqlite.connect(":memory:"))
-    try:
-        yield store
-    finally:
-        await store.close()
-
-
 async def test_a_5xx_served_from_the_cache_is_not_a_host_failure(storage: AsyncSqliteStorage) -> None:
     """Charge the 503 the network returned once, not the copies the cache serves afterwards."""
     served: list[httpx2.Request] = []
@@ -155,7 +134,7 @@ async def test_every_transition_is_reported_once_by_the_call_that_caused_it() ->
     registry = BreakerRegistry(clock=clock)
     breaker = BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN, registry=registry)
     statuses = iter([503, 503, 503, 200])
-    recorder = _Recorder()
+    recorder = Recorder()
     client = _client(
         lambda _request: httpx2.Response(next(statuses), content=b"{}"),
         policy=TransportPolicy(retry=NO_RETRY, breaker=breaker),
@@ -172,7 +151,7 @@ async def test_every_transition_is_reported_once_by_the_call_that_caused_it() ->
     await client.get("x", expect=RESPONSE)  # the probe succeeds
 
     closed, opened, probing = BreakerState.CLOSED, BreakerState.OPEN, BreakerState.HALF_OPEN
-    assert recorder.transitions() == [
+    assert _transitions(recorder) == [
         (closed, opened, _THRESHOLD),
         (opened, probing, _THRESHOLD),
         (probing, opened, _THRESHOLD),
@@ -186,14 +165,14 @@ async def test_every_transition_is_reported_once_by_the_call_that_caused_it() ->
 
 async def test_a_client_without_a_breaker_reports_no_transition() -> None:
     """Emit no ``BreakerChanged`` from a client built with ``breaker=None``, observers or not."""
-    recorder = _Recorder()
+    recorder = Recorder()
     client = _client(
         lambda _request: httpx2.Response(503), policy=TransportPolicy(retry=NO_RETRY, breaker=None), recorder=recorder
     )
     for _ in range(_THRESHOLD):
         with pytest.raises(UpstreamStatusError):
             await client.get("x", expect=RESPONSE)
-    assert recorder.transitions() == []
+    assert _transitions(recorder) == []
 
 
 # --- The gate the retry layer reads ---

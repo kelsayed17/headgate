@@ -28,7 +28,8 @@ from headgate import (
 from headgate.breaker import BreakerState
 from headgate.events import RetryScheduled
 from headgate.testing import FakeTransport, TestClock, isolated_breakers
-from tests.integration._support import BASE, Recorder, client
+from tests.integration._support import BASE, client
+from tests.support.events import Recorder
 
 _HEDGE = Hedge(after=0.5)
 

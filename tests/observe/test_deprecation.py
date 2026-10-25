@@ -14,7 +14,8 @@ from headgate import as_bytes, nothing
 from headgate._deprecation import parse_deprecation, parse_http_date
 from headgate.events import Deprecated
 from headgate.testing import FakeTransport
-from tests.observe._support import Recorder, client
+from tests.observe._support import client
+from tests.support.events import Recorder
 
 #: 2023-06-30T23:59:59Z, RFC 9745's example, as seconds since the epoch and as an HTTP-date.
 _EPOCH = 1688169599

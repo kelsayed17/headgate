@@ -9,15 +9,12 @@ The budgets here run on a fake clock and sleep, so a pause of minutes costs noth
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-import anysqlite
 import httpx2
 import pytest
 from hishel import AsyncSqliteStorage, FilterPolicy
 
 from headgate import HttpCache, HttpOptions, RateLimitError, TransportPolicy
-from headgate._core import Event, RateLimited, Timing
+from headgate._core import RateLimited, Timing
 from headgate.cache import MethodFilter, StatusCodeFilter
 from headgate.cache._transport import CACHE_DEGRADATIONS
 from headgate.ratelimit import Rate, RateBudget
@@ -25,10 +22,8 @@ from headgate.retry import NO_RETRY
 from headgate.testing import TestClock
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
+from tests.support.events import Recorder
 from tests.support.responses import RESPONSE
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
 
 pytestmark = pytest.mark.transport_policy
 
@@ -37,18 +32,6 @@ _HOST = "limited.example"
 #: The pause the server asks for, and a call deadline shorter than it.
 _PAUSE = 30
 _DEADLINE = 1.0
-
-
-class _Recorder:
-    """Collect every event delivered."""
-
-    def __init__(self) -> None:
-        """Start empty."""
-        self.events: list[Event] = []
-
-    def notify(self, event: Event) -> None:
-        """Keep *event*."""
-        self.events.append(event)
 
 
 class _Server:
@@ -72,7 +55,7 @@ def _budget(clock: TestClock) -> RateBudget:
 
 
 def _client(
-    budget: RateBudget, server: _Server, *, cache: HttpCache | None = None, recorder: _Recorder | None = None
+    budget: RateBudget, server: _Server, *, cache: HttpCache | None = None, recorder: Recorder | None = None
 ) -> StubClient:
     """Return a client spending *budget* against *server*, sending each call once."""
     return StubClient(
@@ -83,22 +66,12 @@ def _client(
     )
 
 
-@pytest.fixture
-async def storage() -> AsyncIterator[AsyncSqliteStorage]:
-    """Yield an in-memory hishel storage, closed after the test."""
-    store = AsyncSqliteStorage(connection=await anysqlite.connect(":memory:"))
-    try:
-        yield store
-    finally:
-        await store.close()
-
-
 async def test_a_429_pauses_the_budget_for_every_client_sharing_it() -> None:
     """Make a second client sharing the budget wait out the first client's 429 before it sends."""
     clock = TestClock()
     budget = _budget(clock)
     server = _Server()
-    recorder = _Recorder()
+    recorder = Recorder()
     with pytest.raises(RateLimitError):
         await _client(budget, server).get("x", expect=RESPONSE)
 

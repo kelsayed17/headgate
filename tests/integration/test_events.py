@@ -12,10 +12,8 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING, get_args
 
-import anysqlite
 import httpx2
 import pytest
-from hishel import AsyncSqliteStorage
 
 from headgate import (
     BreakerPolicy,
@@ -30,25 +28,16 @@ from headgate import (
 from headgate.events import CallFinished, Event
 from headgate.testing import FakeTransport, isolated_breakers
 from tests.cache._helpers import every_get_policy
-from tests.integration._support import Recorder, client
+from tests.integration._support import client
+from tests.support.events import Recorder
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from hishel import AsyncSqliteStorage
 
     from tests.support.clients import StubClient
 
 _DEPRECATED = {"Deprecation": "@1688169599", "Cache-Control": "max-age=60"}
 _LIMITED = httpx2.Response(429, headers={"Retry-After": "1"})
-
-
-@pytest.fixture
-async def storage() -> AsyncIterator[AsyncSqliteStorage]:
-    """Yield a hishel storage on an in-memory SQLite database, closed after the test."""
-    store = AsyncSqliteStorage(connection=await anysqlite.connect(":memory:"))
-    try:
-        yield store
-    finally:
-        await store.close()
 
 
 def _every_layer(storage: AsyncSqliteStorage, recorder: Recorder) -> StubClient:

@@ -17,17 +17,21 @@
 :func:`build_transport_stack` builds the layers bottom-up, one statement per layer: a new layer is one more statement in
 its place there, wrapping the layer below it.
 
+Above the stack, ``httpx2.AsyncClient`` runs the auth flow and the hooks, once per logical call and once per hop of a
+redirect or an auth flow:
+
+* request hooks: the credential guard (:class:`~headgate.security.CredentialGuard`), then, over a custom network
+  transport with ``HttpOptions(allow_private_hosts=False)``, the SSRF guard's vetting
+  (:func:`~headgate.security.address_hook`); the default transport pins vetted addresses itself
+  (:class:`~headgate.security.PinnedHTTPTransport`);
+* response hooks: the https-downgrade refusal, the refusal to re-send a one-shot body on a redirect, and the drop of a
+  followed redirect's body (:mod:`headgate._redirects`).
+
 The circuit breaker and the deadline are not in this stack. ``AsyncBaseClient`` drives both around the send and the
-body read, which no transport can span. The auth flow and the request and response hooks run in ``httpx2.AsyncClient``
-above the stack, once per logical call and once per redirect hop.
+body read, which no transport can span.
 
 Nothing here reads the environment: the client and the default transport are built with ``trust_env=False``, and the
 cookie jar refuses every cookie unless ``HttpOptions(cookies=True)``.
-
-The security hooks (:mod:`headgate.security`) are installed here too: the credential guard as the first request hook,
-the https-downgrade refusal as the first response hook, and, with ``HttpOptions(allow_private_hosts=False)``, the SSRF
-guard, as the network transport itself (:class:`~headgate.security.PinnedHTTPTransport`) or, over a custom transport,
-as a request hook.
 """
 
 from __future__ import annotations
@@ -57,6 +61,9 @@ if TYPE_CHECKING:
 
 __all__ = ["build_http_client", "build_transport_stack"]
 
+#: The response hooks, in the order they run on every hop.
+_RESPONSE_HOOKS = (refuse_https_downgrade, refuse_unreplayable_redirect, drop_followed_redirect_body)
+
 
 def build_http_client(
     *, base_url: str, auth: httpx2.Auth | None, http: HttpOptions, transport: httpx2.AsyncBaseTransport
@@ -74,7 +81,7 @@ def build_http_client(
         max_redirects=http.max_redirects,
         event_hooks={
             "request": _request_hooks(auth, httpx2.URL(base_url), http),
-            "response": [refuse_https_downgrade, refuse_unreplayable_redirect, drop_followed_redirect_body],
+            "response": list(_RESPONSE_HOOKS),
         },
         timeout=httpx_timeout(http.timeout),
         trust_env=False,
@@ -121,19 +128,6 @@ def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
     )
 
 
-def _default_headers(http: HttpOptions) -> httpx2.Headers:
-    """Return the headers every request carries: the ``User-Agent``, then the caller's, which win any clash."""
-    headers = httpx2.Headers({"User-Agent": user_agent(http.user_agent)})
-    # Headers.update replaces case-insensitively, so a caller's "user-agent" replaces headgate's rather than joining it.
-    headers.update(http.headers)
-    return headers
-
-
-def _refusing_jar() -> CookieJar:
-    """Return a cookie jar whose policy allows no domain, so it stores no cookie and sends none back."""
-    return CookieJar(policy=DefaultCookiePolicy(allowed_domains=[]))
-
-
 def _address_guard(http: HttpOptions) -> AddressGuard | None:
     """Return the SSRF guard *http* asks for, or ``None`` when it allows private hosts."""
     if http.allow_private_hosts:
@@ -152,3 +146,16 @@ def _request_hooks(
     if guard is not None and http.transport is not None:
         hooks.append(address_hook(guard))
     return hooks
+
+
+def _default_headers(http: HttpOptions) -> httpx2.Headers:
+    """Return the headers every request carries: the ``User-Agent``, then the caller's, which win any clash."""
+    headers = httpx2.Headers({"User-Agent": user_agent(http.user_agent)})
+    # Headers.update replaces case-insensitively, so a caller's "user-agent" replaces headgate's rather than joining it.
+    headers.update(http.headers)
+    return headers
+
+
+def _refusing_jar() -> CookieJar:
+    """Return a cookie jar whose policy allows no domain, so it stores no cookie and sends none back."""
+    return CookieJar(policy=DefaultCookiePolicy(allowed_domains=[]))

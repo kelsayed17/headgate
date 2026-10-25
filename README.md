@@ -110,12 +110,14 @@ reports = AsyncBaseClient(
 - **Pacing**: up to `requests` back to back, then one every `period / requests` seconds, first come first served.
   Every attempt spends its own turn; a cache hit spends none.
 - **`max_in_flight`**: at most that many requests open at once, each counted until its response body is closed.
-- **Server feedback**: a 429/503 `Retry-After`, or rate-limit headers saying the quota is spent (`RateLimit` /
-  `RateLimit-Policy` from the IETF draft, or `X-RateLimit-Remaining` / `X-RateLimit-Reset`), pauses the whole budget
-  until the reset, so concurrent calls queue instead of collecting refusals. A call whose deadline ends inside the
-  pause raises `RateLimitError` at once, with `retry_after` set.
+- **Server feedback**: a 429/503 `Retry-After` or `retry-after-ms` (read as the retry layer reads it, so its wait and
+  the pause end together), or rate-limit headers saying the quota is spent (`RateLimit` / `RateLimit-Policy` from the
+  IETF draft, or `X-RateLimit-Remaining` / `X-RateLimit-Reset`), pauses the whole budget until the reset, so
+  concurrent calls queue instead of collecting refusals. A call whose deadline ends inside the pause raises
+  `RateLimitError` at once, with `retry_after` set.
 - **Adaptive throttling** (on by default, `adaptive=None` turns it off): each pushback halves the pacing rate, down to
-  `Adaptive.min_rate` of it; successes restore it gradually. Waits are reported as `RateLimited` events.
+  `Adaptive.min_rate` of it; successes restore it gradually. Every wait, and every response that pauses the budget, is
+  a `RateLimited` event (reason `paced`, `throttled`, `paused` or `pushback`).
 
 ## Circuit breaker
 
@@ -155,7 +157,8 @@ super().__init__(base_url=..., rate=..., auth=auth, policy=TransportPolicy(cache
   `HttpCache(partition=Partition.SHARED)`, which is for public data only.
 - **Credentials are never stored.** `Authorization`, `Proxy-Authorization`, `Cookie`, every header and query parameter
   the auth declares, well-known secret query parameters (`api_key`, `token`, ...) and URL userinfo are removed from
-  what hishel stores, and sent to the network unchanged.
+  what hishel stores, and sent to the network unchanged. A response's `Set-Cookie` is never stored either; the request
+  that fetched it still receives it.
 - **TTL, not revalidation.** A `FilterPolicy` cache serves an entry until its `ttl` (or a per-call `cache_ttl=`) ends,
   and never revalidates it with the origin. Credential-partitioned entries are not found again by another process.
 - **Conditional reads** are the caller-driven alternative: keep the `Validator` and send it back.
@@ -169,6 +172,7 @@ match result:
         ...  # new representation; keep its validator
     case NotModified():
         ...  # 304: what you hold is current
+```
 
 ## Streaming
 
@@ -184,13 +188,15 @@ async with client.stream("GET", "events", headers={"Accept": "text/event-stream"
     async for event in stream.aiter_events():  # parsed as each event arrives: event, data, id, retry
         handle(event)
 # Resume later after the last event seen:
-async with client.stream("GET", "events", last_event_id=stream.last_event_id) as stream: ...
+async with client.stream("GET", "events", last_event_id=stream.last_event_id) as stream:
+    ...
 ```
 
 ## Uploads
 
-`content=` sends raw bytes, a one-shot async iterable (the call is then never re-sent), or a factory returning one,
-called once per attempt so the call stays retryable. `files=` sends a multipart body, with `data=` as its form fields.
+`content=` sends raw bytes, a one-shot async iterable (the call is then never re-sent, and a 307 or 308 asking for the
+body again is not followed but raised as its 3xx), or a factory returning one, called once per attempt so the call
+stays retryable. `files=` sends a multipart body, with `data=` as its form fields.
 
 ```python
 await client.put("blobs/1", expect=nothing, content=lambda: read_chunks(path))

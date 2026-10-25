@@ -240,7 +240,6 @@ class _ThreeHops(CachedTokenAuth):
         yield Minted("t", math.inf)
 
 
-
 def _hopping_client(max_redirects: int) -> tuple[StubClient, FakeTransport]:
     """Return a client minting through :class:`_ThreeHops` with *max_redirects*, and its network."""
     fake = FakeTransport().route("GET", "/v1/x", 200)

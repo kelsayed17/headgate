@@ -16,7 +16,8 @@ from headgate import BreakerPolicy, HttpOptions, TransportPolicy, UpstreamStatus
 from headgate.breaker import BreakerState, CircuitBreaker
 from headgate.events import BreakerChanged
 from headgate.testing import FakeTransport, TestClock, isolated_breakers
-from tests.integration._support import BASE, Recorder, client
+from tests.integration._support import BASE, client
+from tests.support.events import Recorder
 
 _PATH = "/v1/x"
 _COOLDOWN = 60.0

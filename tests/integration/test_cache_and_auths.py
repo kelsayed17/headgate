@@ -12,10 +12,8 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, override
 
-import anysqlite
 import httpx2
 import pytest
-from hishel import AsyncSqliteStorage
 
 from headgate import HttpCache, QueryParamAuth, StaticHeaderAuth, TransportPolicy, as_bytes
 from headgate.testing import CassetteFilter, FakeTransport
@@ -23,7 +21,9 @@ from tests.cache._helpers import every_get_policy
 from tests.integration._support import Bearer, client, seeded
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import Callable
+
+    from hishel import AsyncSqliteStorage
 
 #: Builds an auth holding the credential it is given.
 type _Holding = Callable[[str], httpx2.Auth]
@@ -54,16 +54,6 @@ _HOLDERS: dict[str, _Holding] = {
     "query-param": lambda secret: QueryParamAuth({"api_key": secret}),
     "cached-token-keyed": _keyed_bearer,
 }
-
-
-@pytest.fixture
-async def storage() -> AsyncIterator[AsyncSqliteStorage]:
-    """Yield a hishel storage on an in-memory SQLite database, closed after the test."""
-    store = AsyncSqliteStorage(connection=await anysqlite.connect(":memory:"))
-    try:
-        yield store
-    finally:
-        await store.close()
 
 
 def _cached(storage: AsyncSqliteStorage) -> TransportPolicy:

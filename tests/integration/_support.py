@@ -18,29 +18,12 @@ if TYPE_CHECKING:
     import httpx2
 
     from headgate import RateBudget
-    from headgate.events import Event
 
 #: The origin every client here is built for, and its path prefix.
 BASE = "https://api.example.test/v1"
 
 #: A rate no test here waits on unless it is about the rate.
 FAST = Rate.per_second(1000)
-
-
-class Recorder:
-    """An observer that keeps every event it receives, in order."""
-
-    def __init__(self) -> None:
-        """Start empty."""
-        self.events: list[Event] = []
-
-    def notify(self, event: Event) -> None:
-        """Keep *event*."""
-        self.events.append(event)
-
-    def of[E](self, kind: type[E]) -> list[E]:
-        """Return the events of *kind*, in order."""
-        return [event for event in self.events if isinstance(event, kind)]
 
 
 def client(

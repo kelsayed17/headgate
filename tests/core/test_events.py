@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from headgate._core import OBSERVER_FAILURES, SILENT, CallInfo, CallStarted, Emitter, Event
+from tests.support.events import Recorder
 
 
 class _Broken:
@@ -17,22 +18,10 @@ class _Broken:
         raise RuntimeError(msg)
 
 
-class _Recorder:
-    """An observer that keeps what it receives."""
-
-    def __init__(self) -> None:
-        """Start empty."""
-        self.events: list[Event] = []
-
-    def notify(self, event: Event) -> None:
-        """Keep *event*."""
-        self.events.append(event)
-
-
 def test_a_failing_observer_is_counted_and_the_next_still_receives_the_event() -> None:
     """Count the broken observer's failure by its class and still deliver to the observers after it."""
     before = OBSERVER_FAILURES[_Broken.__qualname__]
-    recorder = _Recorder()
+    recorder = Recorder()
     event = CallStarted(call=CallInfo(method="GET", url="https://a.test/x"))
 
     Emitter((_Broken(), recorder)).emit(event)

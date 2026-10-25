@@ -5,10 +5,23 @@
 
 Built on ``httpx2``; Python 3.14 or newer. A client subclasses :class:`AsyncBaseClient`, configures it with a
 :class:`Rate` (or a shared :class:`RateBudget`) and optionally :class:`TransportPolicy` and :class:`HttpOptions`, and
-picks a codec flavor by importing ``headgate.msgspec`` or ``headgate.pydantic``. The policy layers are subpackages
-with public paths of their own (:mod:`headgate.retry`, :mod:`headgate.breaker`, :mod:`headgate.ratelimit`,
-:mod:`headgate.cache`, :mod:`headgate.security`, :mod:`headgate.streaming`, :mod:`headgate.pagination`); their
-configuration values are re-exported here.
+picks a codec flavor by importing ``headgate.msgspec`` or ``headgate.pydantic``. Re-exported here:
+
+* the client and its options: :class:`AsyncBaseClient`, :data:`Method`, :class:`RequestOptions`,
+  :class:`TransportPolicy`, :class:`HttpOptions`, :class:`Timeouts`, :class:`IdempotencyKeys`, :class:`Route`,
+  :class:`Middleware`, :class:`Observer`;
+* declared responses: :class:`Expect`, :data:`Reader` and the readers, :data:`RefusalCheck`, :class:`RefusedError`;
+* auth: :class:`StaticHeaderAuth`, :class:`QueryParamAuth`, :class:`CachedTokenAuth`, :class:`Minted`;
+* the policy values: retry (:class:`RetryPolicy`, :class:`Backoff`, :class:`RetryBudget`, :class:`Hedge`,
+  :data:`NO_RETRY`), the breaker (:class:`BreakerPolicy`, :class:`BreakerRegistry`), rate limiting (:class:`Rate`,
+  :class:`RateBudget`, :class:`RateRule`, :class:`Adaptive`) and the cache (:class:`HttpCache`, its filters,
+  :class:`Partition`, :func:`conditional`);
+* streams and pages: :class:`Stream`, :meth:`AsyncBaseClient.paginate`'s :class:`Paginated` and its pagers;
+* the errors, all under :class:`ClientError`.
+
+The policy layers are subpackages with public paths of their own (:mod:`headgate.retry`, :mod:`headgate.breaker`,
+:mod:`headgate.ratelimit`, :mod:`headgate.cache`, :mod:`headgate.security`, :mod:`headgate.streaming`,
+:mod:`headgate.pagination`); events are in :mod:`headgate.events` and the testing kit in :mod:`headgate.testing`.
 """
 
 from headgate._auth import CachedTokenAuth, Minted, QueryParamAuth, StaticHeaderAuth
