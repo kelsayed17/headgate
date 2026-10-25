@@ -53,7 +53,7 @@ __all__ = [
     "reject_upstream_httpx",
 ]
 
-#: The connection pool of the default network transport: 10 connections, 5 kept alive. The rate limiter is the
+#: The connection pool of the default network transport: 10 connections, 5 kept alive. The rate budget is the
 #: throttle; the pool only has to be wide enough never to bind first, and at 300 ms per request 10 connections sustain
 #: ~33 req/s. A client budgeted above that passes wider ``limits``.
 DEFAULT_LIMITS: Final = httpx2.Limits(max_connections=10, max_keepalive_connections=5)

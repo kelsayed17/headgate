@@ -7,7 +7,7 @@
   uses it to keep them on trusted origins; the cache uses it to partition entries by credential and to keep
   credentials out of storage.
 * :data:`BREAKER_GATE`: set by the client on every call, read by the retry layer, so a retry sequence stops as soon as
-  the host's breaker opens without the retry layer knowing about breakers.
+  the origin's breaker opens without the retry layer knowing about breakers.
 """
 
 from __future__ import annotations

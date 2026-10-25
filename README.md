@@ -5,7 +5,7 @@ An async HTTP client base for API clients, built on [`httpx2`](https://pypi.org/
 **Requires Python 3.14 or newer and `httpx2`.** headgate does not support upstream `httpx`.
 
 A headgate controls how much water gets through. This library does the same for requests: every client you build on it
-gets retries, a rate budget, a per-host circuit breaker, a response size cap and an optional HTTP cache, all in one
+gets retries, a rate budget, a per-origin circuit breaker, a response size cap and an optional HTTP cache, all in one
 place, so the client methods themselves stay one line each.
 
 ## Install
@@ -63,7 +63,8 @@ on a body that does not match, which the client turns into `ResponseParseError`.
    raises a `ClientError` subtype carrying the status the wire sent. There is no raw mode.
 2. **Transport only.** A client does I/O and decoding. Retry, rate limiting and the breaker live in the transport stack;
    business decisions belong to the caller.
-3. **Wire types are data.** Responses decode into plain typed values with no behavior and no aliases invented by the client.
+3. **Wire types are data.** Responses decode into plain typed values with no behavior and no aliases invented by the
+   client.
 4. **No logging; typed events instead.** headgate emits no log records. A client reports its calls as frozen, typed
    events (`headgate.events`) to the observers installed with `HttpOptions(observers=...)`, carrying sanitized data
    only, and errors carry what a caller needs (client name, method, status, request id, attempt count, a bounded body
@@ -79,7 +80,7 @@ on a body that does not match, which the client turns into `ResponseParseError`.
 
 - Retries that re-send only when it is safe, within a budget and the call's deadline (see [Retries](#retries)).
 - A token-bucket rate limit per client (`Rate.per_second`, `Rate.per_minute`) with per-path override rules.
-- A per-host circuit breaker spanning the send and the body read.
+- A per-origin circuit breaker spanning the send and the body read.
 - A response body cap measured on decompressed bytes.
 - Auth helpers: `StaticHeaderAuth`, `QueryParamAuth`, `CachedTokenAuth`. A static credential header is withheld from any
   redirect hop that leaves the client's origin.
@@ -290,7 +291,7 @@ sends; a custom `transport=` (the curl transport, a `FakeTransport`) is not reco
   over a sliding 10 s window, plus a floor of 10 per second. The budget is shared by every call of a client, so an
   outage cannot multiply its traffic; a call that finds it spent raises with the note `retry budget exhausted`.
 - **Deadline and breaker.** Each attempt's timeouts are cut to the time left before the call's deadline, and no retry
-  or wait starts with less than `min_attempt_time` (0.05 s) left. A retry sequence stops as soon as the host's breaker
+  or wait starts with less than `min_attempt_time` (0.05 s) left. A retry sequence stops as soon as the origin's breaker
   opens, and counts once toward it.
 - **Hedging (opt-in).** `RetryPolicy(hedge=Hedge(after=0.5, max_extra=1))` sends a second copy of an idempotent request
   that has not answered after `after` seconds; the first answer wins and the other send is cancelled. Hedges count as

@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 __all__ = ["DEFAULT_MAX_EVENT_SIZE", "NetworkFailure", "Stream"]
 
 type NetworkFailure = Callable[[httpx2.HTTPError | OSError], ClientError]
-"""Turns a network failure mid-body into the ``ClientError`` to raise, charging the host's breaker."""
+"""Turns a network failure mid-body into the ``ClientError`` to raise, charging the origin's breaker."""
 
 #: The largest server-sent event :meth:`Stream.aiter_events` buffers by default: httpx2's own default, 1 MiB.
 DEFAULT_MAX_EVENT_SIZE: Final = 1024 * 1024

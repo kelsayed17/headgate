@@ -3,7 +3,7 @@
 
 """Construct a client with its transport policy switched off.
 
-``AsyncBaseClient`` wraps every request in retry with backoff, a per-host circuit breaker, and a rate limiter. All
+``AsyncBaseClient`` wraps every request in retry with backoff, a per-origin circuit breaker, and a rate budget. All
 three are right in production and wrong where the network is a fake (a mocked transport under a test) or where the job
 is to report the first failure (a connectivity probe).
 
@@ -34,8 +34,8 @@ What "off" means:
   instant sleep, which keeps the retries and makes them instant; a suite testing retry behaviour wants that instead.
 * ``TransportPolicy(breaker=None)``: the client never reads a breaker registry, so it cannot be refused by a breaker
   another client opened on the same host.
-* an effectively unlimited rate, enforced in the rate limiter itself, so it also covers the limiters a client's
-  ``rate_limits`` rules build.
+* an effectively unlimited rate, enforced where a budget is built, so it also covers the budgets a client's
+  ``rate_limits`` rules build, and a shared ``RateBudget`` passed in.
 """
 
 from headgate._core import policy_disabled, policy_is_disabled

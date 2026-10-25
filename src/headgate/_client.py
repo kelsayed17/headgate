@@ -655,7 +655,7 @@ class AsyncBaseClient:
         """Bound the block by the call's deadline, raising ``ClientTimeoutError`` when it passes.
 
         The deadline is absolute on the client's clock; the block is cancelled after the seconds that remained when it
-        began, so everything in it (limiter waits, every attempt and backoff, auth hops, the body read) counts.
+        began, so everything in it (rate-budget waits, every attempt and backoff, auth hops, the body read) counts.
         """
         remaining = prepared.context.remaining()
         if remaining is None:
@@ -831,7 +831,7 @@ def _effective_policy(policy: TransportPolicy, *, off: bool) -> TransportPolicy:
     """Return the policy a client built now runs: *policy*, less retries and the breaker when transport policy is *off*.
 
     The breaker's registry is the one a :func:`~headgate.testing.isolated_breakers` block substitutes for the default,
-    if any. The rate limiter checks for transport policy being off itself, when its budget is built.
+    if any. The rate budget checks for transport policy being off itself, when it is built.
     """
     if off:
         return replace(policy, retry=NO_RETRY, breaker=None)

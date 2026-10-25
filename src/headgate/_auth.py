@@ -186,7 +186,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     * :meth:`_mint_token`, a coroutine that makes the exchange on a client of its own and returns
       ``(token, lifetime)``. The usual shape.
     * :meth:`_mint_flow`, an async generator that yields the requests the exchange needs, so they travel through the
-      owning client's own stack (its transport, rate limiter, retries and error mapping), marked :data:`AUTH_HOP`. It
+      owning client's own stack (its transport, rate budget, retries and error mapping), marked :data:`AUTH_HOP`. It
       ends by yielding :class:`Minted`. A cookie-plus-crumb exchange has this shape.
 
     Supplying neither fails when the class is defined; with both, the flow runs :meth:`_mint_flow`. Two more hooks let a

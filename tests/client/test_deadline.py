@@ -3,7 +3,7 @@
 
 """The deadline: one bound on a whole logical call, from the policy, a route, or the call itself.
 
-A network that never answers stands in for every way a call can run long (a hung read, retries, limiter waits): the
+A network that never answers stands in for every way a call can run long (a hung read, retries, rate-budget waits): the
 deadline cancels whatever is in flight and the call raises ``ClientTimeoutError``. The cancellation is the caller's
 budget running out, not the host failing, so the breaker records nothing.
 """

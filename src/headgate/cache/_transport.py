@@ -4,7 +4,7 @@
 """The cache transport: hishel's, made safe to share between credentials and to fail.
 
 `hishel <https://hishel.com>`_'s :class:`hishel.httpx2.AsyncCacheTransport` sits below retry and above the rate
-limiter (see :mod:`headgate._stack`), so a cache hit short-circuits before the retry layer and spends no rate token.
+budget (see :mod:`headgate._stack`), so a cache hit short-circuits before the retry layer and spends no rate token.
 ``AsyncBaseClient`` marks a hit so the circuit breaker records neither a success nor a failure for it; admission is
 still decided before the fetch, so a hit is refused while the breaker is open.
 
