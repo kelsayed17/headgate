@@ -242,3 +242,22 @@ def test_a_decode_error_for_malformed_json_names_the_body() -> None:
     """Name the whole body as the location of a failure that has none, such as invalid JSON."""
     with pytest.raises(DecodeError, match=r"^1 validation error for _Model: <body>: Invalid JSON"):
         decode(b'{"x":', _Model)
+
+
+def test_decode_is_strict_by_default_whatever_the_type() -> None:
+    """Refuse a JSON string where an ``int`` is declared, for a bare type with no strict config of its own."""
+    with pytest.raises(DecodeError, match="1 validation error for int"):
+        decode(b'"1"', int)
+
+
+class _Pair(BaseModel):
+    a: int
+    b: int
+
+
+def test_each_failure_is_named_and_separated() -> None:
+    """Name each failing field with its message, separated by ``"; "``."""
+    with pytest.raises(DecodeError) as raised:
+        decode(b"{}", _Pair)
+
+    assert str(raised.value) == "2 validation errors for _Pair: a: Field required; b: Field required"

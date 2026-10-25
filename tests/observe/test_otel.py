@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import httpx2
 import pytest
+from opentelemetry import trace
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import HistogramDataPoint, InMemoryMetricReader
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
@@ -21,6 +22,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import SpanContext, SpanKind, StatusCode, format_span_id, format_trace_id
 
 from headgate import HttpOptions, QueryParamAuth, TransportPolicy, nothing
+from headgate._user_agent import headgate_version
 from headgate.errors import ResponseParseError, TransportError, UpstreamStatusError
 from headgate.events import AttemptFinished, CallFinished, CallInfo, CallStarted, RetryScheduled
 from headgate.msgspec import decoder
@@ -353,3 +355,62 @@ def test_the_global_providers_are_the_default() -> None:
     """Build on the global providers and the W3C propagator when given none."""
     observer = OpenTelemetryObserver()
     _finish(observer, CallInfo(method="GET", url="x"))
+
+
+async def test_a_400_is_the_first_error_status(telemetry: Telemetry) -> None:
+    """Report a 400 as ``error.type``: the conventions count every status from 400 as a client span's error."""
+    fake = FakeTransport().route("GET", "/v1/x", 400)
+    with pytest.raises(UpstreamStatusError):
+        await client(fake, http=telemetry.http).get("x", expect=nothing)
+
+    assert _attributes(telemetry.span())["error.type"] == "400"
+
+
+#: The bucket boundaries the HTTP semantic conventions advise for ``http.client.request.duration``, in seconds.
+_ADVISED_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0)
+
+
+async def test_spans_and_durations_are_reported_under_headgates_scope_and_the_conventions_names(
+    telemetry: Telemetry,
+) -> None:
+    """Name the instrumentation scope ``headgate`` at its version, and the histogram as the conventions do."""
+    await client(FakeTransport().route("GET", "/v1/x"), http=telemetry.http).get("x", expect=nothing)
+
+    scope = telemetry.span().instrumentation_scope
+    assert scope is not None
+    assert (scope.name, scope.version) == ("headgate", headgate_version())
+    data = telemetry.metrics.get_metrics_data()
+    assert data is not None
+    (scoped,) = [scoped for resource in data.resource_metrics for scoped in resource.scope_metrics]
+    assert (scoped.scope.name, scoped.scope.version) == ("headgate", headgate_version())
+    (metric,) = scoped.metrics
+    assert (metric.name, metric.unit, metric.description) == (
+        "http.client.request.duration",
+        "s",
+        "Duration of HTTP client requests.",
+    )
+    assert tuple(telemetry.duration().explicit_bounds) == _ADVISED_BUCKETS
+
+
+async def test_a_request_of_no_call_passes_through_with_no_trace_context(telemetry: Telemetry) -> None:
+    """Send a request that belongs to no call as it is, outside any span: nothing to propagate."""
+    sent: list[httpx2.Request] = []
+
+    async def call_next(request: httpx2.Request) -> httpx2.Response:
+        """Record *request* and answer it."""
+        sent.append(request)
+        return httpx2.Response(200, request=request)
+
+    response = await telemetry.observer(httpx2.Request("GET", "https://api.example.test/x"), call_next)
+
+    assert response.status_code == httpx2.codes.OK
+    assert "traceparent" not in sent[0].headers
+
+
+async def test_the_callers_span_is_current_again_after_the_call(telemetry: Telemetry) -> None:
+    """Restore the caller's current span once the call returns: the call's span is current only while it sends."""
+    built = client(FakeTransport().route("GET", "/v1/x"), http=telemetry.http)
+    with telemetry.tracer.start_as_current_span("caller") as caller:
+        await built.get("x", expect=nothing)
+
+        assert trace.get_current_span() is caller

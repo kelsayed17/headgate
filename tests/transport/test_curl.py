@@ -366,6 +366,49 @@ async def test_a_curl_error_becomes_the_httpx_error_a_native_transport_raises(
     assert raised.type is expected
 
 
+def test_by_default_the_profile_adds_no_headers_and_ten_connections_are_pooled(sessions: list[_Session]) -> None:
+    """Build the session without the profile's default headers and with ten pooled connections unless told otherwise."""
+    AsyncCurlTransport(impersonate="chrome")
+    session = sessions[-1]
+    assert (session.init["default_headers"], session.init["max_clients"]) == (False, 10)
+
+
+async def test_the_curl_response_and_its_infos_ride_the_extensions_and_the_reason_is_kept_as_ascii(
+    sessions: list[_Session],
+) -> None:
+    """Expose curl's response and timing infos, and keep a reason phrase's ASCII, dropping what is not."""
+    transport, session = _transport(sessions)
+    curl = _CurlResponse()
+    curl.reason = "OK ✓"
+    curl.infos = {"total_time": 0.5}
+    session.respond = lambda: curl
+
+    request = httpx2.Request("GET", _URL)
+    response = await transport.handle_async_request(request)
+
+    assert response.extensions["curl"] == {"response": curl, "infos": {"total_time": 0.5}}
+    assert response.extensions["reason_phrase"] == b"OK "
+    assert response.request is request
+    await response.aclose()
+
+
+async def test_a_curl_error_names_the_request_it_failed(sessions: list[_Session]) -> None:
+    """Attach the request to the httpx2 error a failure to send, or a failure mid-body, becomes."""
+    transport, session = _transport(sessions)
+    session.failure = RequestException("Failed to connect", CurlECode.COULDNT_CONNECT)
+    request = httpx2.Request("GET", _URL)
+    with pytest.raises(httpx2.ConnectError) as refused:
+        await transport.handle_async_request(request)
+    assert refused.value.request is request
+
+    session.failure = None
+    session.respond = lambda: _CurlResponse(failure=RequestException("Recv failure", CurlECode.RECV_ERROR))
+    response = await transport.handle_async_request(request)
+    with pytest.raises(httpx2.ReadError) as dropped:
+        await response.aread()
+    assert dropped.value.request is request
+
+
 async def test_a_method_curl_cannot_send_is_refused_before_any_request(sessions: list[_Session]) -> None:
     """Refuse a method outside curl_cffi's set without touching the session."""
     transport, session = _transport(sessions)
