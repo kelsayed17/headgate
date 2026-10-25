@@ -71,8 +71,8 @@ closed before the wait, so no connection is held through it.
 
 A 429's or 503's `retry-after-ms` or `Retry-After` (whole or fractional seconds, or an HTTP-date) replaces the backoff
 and is waited **exactly**, not capped by `max_wait`, when it is at most `max_retry_after`. A longer one is not waited:
-the call stops and raises `RateLimitError` (429) or `UpstreamStatusError` with `retry_after` set and `retryable=True`,
-so the caller can reschedule. The [rate budget](rate-budgets.md#server-feedback) reads the same header the same way,
+the call stops and raises `RateLimitError` (429) or `UpstreamStatusError` with `retry_after` set (and `retryable` as
+[below](#what-retryable-means)), so the caller can reschedule. The [rate budget](rate-budgets.md#server-feedback) reads the same header the same way,
 so the retry's wait and the budget's pause end together.
 
 ## The retry budget

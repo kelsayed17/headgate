@@ -35,6 +35,11 @@ Only what the origin itself showed:
 
 Every other response is a success: a 4xx says the origin is answering.
 
+A call's deadline usually ends in a timeout that **does** count. Each attempt's timeouts are cut to the time the
+deadline leaves, so near the deadline httpx2's own connect or read timeout fires first, and that is a network timeout
+like any other. Only when the deadline's timer cancels the call first (during a backoff or a rate-budget wait, say)
+does it record nothing.
+
 ## Sharing and keying
 
 Breakers live in a `BreakerRegistry`, by default the process-wide `headgate.breaker.DEFAULT_REGISTRY`. Every client

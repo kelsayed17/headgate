@@ -57,8 +57,9 @@ Every response is read for what it says about the quota, in this order of preced
 
 A response that names a pause **pauses the whole budget** until it ends, so every concurrent and later call queues
 behind it instead of spending a request on a certain refusal. A call whose deadline would pass before the pause ends
-does not wait: it raises `RateLimitError` at once, with `retry_after` set to the time left in the pause and
-`status_code` the status of the response that asked for it.
+does not wait: it raises `RateLimitError` at once, with `retry_after` set to the time left in the pause,
+`retryable=True`, and `status_code` the status of the response that asked for it: a 200 whose rate-limit headers said
+the quota was spent gives `RateLimitError(status_code=200)`.
 
 ## Adaptive throttling
 
