@@ -1,0 +1,448 @@
+# serializer version: 1
+# name: test_the_error_a_failure_raises_matches_the_snapshot[auth_401]
+  dict({
+    'attempts': 1,
+    'code': None,
+    'message': '[StubClient] http error for GET orders?api_key=%2A%2A%2A (status=401) — bad key',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: 401 Unauthorized after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': 'StubClient',
+    'status_code': 401,
+    'type': 'AuthError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[auth_403]
+  dict({
+    'attempts': 1,
+    'code': None,
+    'message': '[StubClient] http error for GET orders?api_key=%2A%2A%2A (status=403)',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: 403 Forbidden after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': 'StubClient',
+    'status_code': 403,
+    'type': 'AuthError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[deadline_exceeded]
+  dict({
+    'attempts': 1,
+    'message': '[StubClient] GET orders?api_key=%2A%2A%2A: deadline exceeded after 0s',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: cancelled after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': 'StubClient',
+    'type': 'ClientTimeoutError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[forbidden_destination]
+  dict({
+    'attempts': 0,
+    'message': '[StubClient] GET admin?api_key=%2A%2A%2A: refused to connect to 127.0.0.1: it is a loopback address',
+    'method': 'GET',
+    'notes': list([
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': 'StubClient',
+    'type': 'ForbiddenDestinationError',
+    'url': 'admin?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[host_check_refusal]
+  dict({
+    'attempts': 1,
+    'code': 'KEY',
+    'message': '[StubClient] key rejected (orders?api_key=%2A%2A%2A) (status=302, code=KEY)',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: 302 Found after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': 'StubClient',
+    'status_code': 302,
+    'type': 'AuthError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[mint_failure]
+  dict({
+    'attempts': None,
+    'code': None,
+    'message': '[_MintRejected] token mint failed for POST https://auth.example.test/token?client_secret=%2A%2A%2A (status=401) — invalid_client',
+    'method': 'POST',
+    'notes': list([
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': '_MintRejected',
+    'status_code': 401,
+    'type': 'AuthError',
+    'url': 'https://auth.example.test/token?client_secret=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[mint_unreachable]
+  dict({
+    'attempts': None,
+    'message': '[_MintUnreachable] POST https://auth.example.test/token?client_secret=%2A%2A%2A (token mint): connection refused',
+    'method': 'POST',
+    'notes': list([
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': True,
+    'source': '_MintUnreachable',
+    'type': 'TransportError',
+    'url': 'https://auth.example.test/token?client_secret=%2A%2A%2A (token mint)',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[mint_unreadable]
+  dict({
+    'attempts': None,
+    'content_type': None,
+    'message': "[_MintUnreadable] unreadable token response: 'access_token'",
+    'method': None,
+    'notes': list([
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': '_MintUnreadable',
+    'status_code': None,
+    'type': 'ResponseParseError',
+    'url': None,
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[open_breaker]
+  dict({
+    'attempts': 0,
+    'message': '[StubClient] circuit breaker open for https://api.example.test',
+    'method': 'GET',
+    'notes': list([
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': 30.0,
+    'retryable': False,
+    'source': 'StubClient',
+    'type': 'CircuitOpenError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[parse_error]
+  dict({
+    'attempts': 1,
+    'content_type': 'text/html',
+    'message': '[StubClient] unreadable 200 body for GET orders?api_key=%2A%2A%2A: Expecting value: line 1 column 1 (char 0)',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: 200 OK after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': 'StubClient',
+    'status_code': 200,
+    'type': 'ResponseParseError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[problem_json]
+  dict({
+    'attempts': 1,
+    'code': None,
+    'message': '[StubClient] http error for GET orders?api_key=%2A%2A%2A (status=409) — Out of stock: sku a',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: 409 Conflict after 0.0s',
+    ]),
+    'problem': dict({
+      'detail': 'sku a',
+      'extensions': dict({
+        'sku': 'a',
+      }),
+      'instance': None,
+      'status': 409,
+      'title': 'Out of stock',
+      'type': 'https://example.test/out-of-stock',
+    }),
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': 'StubClient',
+    'status_code': 409,
+    'type': 'UpstreamStatusError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[reader_refusal]
+  dict({
+    'attempts': 1,
+    'code': 'QUOTA',
+    'message': '[StubClient] quota exhausted (orders?api_key=%2A%2A%2A) (status=200, code=QUOTA) — {"error":"quota"}',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: 200 OK after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': 'StubClient',
+    'status_code': 200,
+    'type': 'RateLimitError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[redirect_loop]
+  dict({
+    'attempts': 3,
+    'message': '[StubClient] GET orders?api_key=%2A%2A%2A: Exceeded maximum allowed redirects.',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: 302 Found after 0.0s',
+      'attempt 1/1: 302 Found after 0.0s',
+      'attempt 1/1: 302 Found after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': 'StubClient',
+    'type': 'TransportError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[surviving_429_past_max_retry_after]
+  dict({
+    'attempts': 1,
+    'code': None,
+    'message': '[StubClient] transient 429 for GET orders?api_key=%2A%2A%2A (status=429)',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/3: 429 Too Many Requests (Retry-After 7.0s) after 0.0s',
+      'Retry-After 7.0s exceeds max_retry_after 1.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': 7.0,
+    'retryable': True,
+    'source': 'StubClient',
+    'status_code': 429,
+    'type': 'RateLimitError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[surviving_429_retry_after]
+  dict({
+    'attempts': 1,
+    'code': None,
+    'message': '[StubClient] transient 429 for GET orders?api_key=%2A%2A%2A (status=429) — slow down',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: 429 Too Many Requests (Retry-After 7.0s) after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': 7.0,
+    'retryable': True,
+    'source': 'StubClient',
+    'status_code': 429,
+    'type': 'RateLimitError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[surviving_501]
+  dict({
+    'attempts': 1,
+    'code': None,
+    'message': '[StubClient] upstream 501 for GET orders?api_key=%2A%2A%2A (status=501) — not implemented',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: 501 Not Implemented after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': 'StubClient',
+    'status_code': 501,
+    'type': 'UpstreamStatusError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[surviving_503_on_a_post]
+  dict({
+    'attempts': 1,
+    'code': None,
+    'message': '[StubClient] transient 503 for POST orders (status=503)',
+    'method': 'POST',
+    'notes': list([
+      'attempt 1/1: 503 Service Unavailable after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': 'StubClient',
+    'status_code': 503,
+    'type': 'UpstreamStatusError',
+    'url': 'orders',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[surviving_503_with_history]
+  dict({
+    'attempts': 3,
+    'code': None,
+    'message': '[StubClient] transient 503 for GET orders?api_key=%2A%2A%2A (status=503) — maintenance',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/3: 503 Service Unavailable after 0.0s',
+      'attempt 2/3: 503 Service Unavailable after 0.0s',
+      'attempt 3/3: 503 Service Unavailable after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': True,
+    'source': 'StubClient',
+    'status_code': 503,
+    'type': 'UpstreamStatusError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[surviving_505]
+  dict({
+    'attempts': 1,
+    'code': None,
+    'message': '[StubClient] upstream 505 for GET orders?api_key=%2A%2A%2A (status=505)',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: 505 HTTP Version Not Supported after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': 'StubClient',
+    'status_code': 505,
+    'type': 'UpstreamStatusError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[timeout]
+  dict({
+    'attempts': 1,
+    'message': '[StubClient] GET orders?api_key=%2A%2A%2A: timed out',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: ReadTimeout after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': True,
+    'source': 'StubClient',
+    'type': 'ClientTimeoutError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[too_large]
+  dict({
+    'attempts': 1,
+    'message': '[StubClient] declared response size 32 exceeds cap 16 for orders?api_key=%2A%2A%2A',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: 200 OK after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': False,
+    'source': 'StubClient',
+    'type': 'ResponseTooLargeError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[transport_error]
+  dict({
+    'attempts': 1,
+    'message': '[StubClient] GET orders?api_key=%2A%2A%2A: connection refused',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: ConnectError after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': True,
+    'source': 'StubClient',
+    'type': 'TransportError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[transport_error_without_message]
+  dict({
+    'attempts': 1,
+    'message': '[StubClient] GET orders?api_key=%2A%2A%2A: RemoteProtocolError',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: RemoteProtocolError after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': None,
+    'retry_after': None,
+    'retryable': True,
+    'source': 'StubClient',
+    'type': 'TransportError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
+# name: test_the_error_a_failure_raises_matches_the_snapshot[undeclared_4xx]
+  dict({
+    'attempts': 1,
+    'code': None,
+    'message': '[StubClient] http error for GET orders?api_key=%2A%2A%2A (status=404) — no such order',
+    'method': 'GET',
+    'notes': list([
+      'attempt 1/1: 404 Not Found after 0.0s',
+    ]),
+    'problem': None,
+    'request_id': 'req-404',
+    'retry_after': None,
+    'retryable': False,
+    'source': 'StubClient',
+    'status_code': 404,
+    'type': 'UpstreamStatusError',
+    'url': 'orders?api_key=%2A%2A%2A',
+  })
+# ---
