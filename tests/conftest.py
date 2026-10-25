@@ -4,8 +4,8 @@
 """Autouse fixtures that keep the transport policy (retry, breaker, throttle) real but instant and isolated.
 
 They apply to every test under ``tests/``: a mocked failure is retried as production retries it without sleeping
-through the backoff, no breaker state carries from one test to the next, and the rate limiter admits at once. A test
-whose subject is the throttle's own timing opts out of the no-op rate-limiter wait with
+through the backoff, no breaker state carries from one test to the next, and the rate budget admits at once. A test
+whose subject is the throttle's own timing opts out of the no-op budget wait with
 ``@pytest.mark.transport_policy``.
 """
 
@@ -18,10 +18,12 @@ import pytest
 
 from headgate._core import Timing, timing_override
 from headgate.breaker import DEFAULT_REGISTRY
-from headgate.ratelimit import AsyncRateLimiter
+from headgate.ratelimit import RateBudget
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from headgate._core import CallContext
 
 
 async def _yield_only(_seconds: float, /) -> None:
@@ -49,14 +51,14 @@ def reset_circuit_breakers() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def no_rate_limit(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make the rate limiter's wait a no-op, the one seam patched; which requests acquire a token is unchanged.
+    """Make the rate budget's wait a no-op, the one seam patched; which requests spend from which budget is unchanged.
 
     A test whose subject is the throttle's timing carries ``@pytest.mark.transport_policy`` and keeps the real wait.
     """
     if request.node.get_closest_marker("transport_policy"):
         return
 
-    async def admit_at_once(_limiter: AsyncRateLimiter) -> None:
-        """Admit the request without waiting for the bucket."""
+    async def admit_at_once(_budget: RateBudget, _context: CallContext) -> None:
+        """Admit the request without waiting for its turn or a server pause."""
 
-    monkeypatch.setattr(AsyncRateLimiter, "wait", admit_at_once)
+    monkeypatch.setattr(RateBudget, "wait", admit_at_once)

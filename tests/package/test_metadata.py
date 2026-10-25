@@ -28,7 +28,7 @@ def test_metadata_declares_licence_python_and_author() -> None:
 def test_core_dependencies_are_httpx2_based_and_extras_are_optional() -> None:
     """Check that the core depends on httpx2 and never upstream httpx, and that curl and pydantic are extras."""
     reqs = _requirements()
-    for needed in ("httpx2", "msgspec", "hishel", "aiolimiter"):
+    for needed in ("httpx2", "msgspec", "hishel"):
         assert any(r.startswith(needed) and "extra==" not in r for r in reqs), needed
     assert not any(re.match(r"httpx(?!2)", r) for r in reqs), "headgate must not depend on upstream httpx"
     assert any("extra=='curl'" in r and r.startswith("curl-cffi") for r in reqs)

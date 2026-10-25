@@ -15,11 +15,12 @@ __all__ = ["BreakerPolicy"]
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BreakerPolicy:
-    """When a host's breaker trips and when it tests the host again, and which registry holds the breakers.
+    """When an origin's breaker trips and when it tests the origin again, and which registry holds the breakers.
 
     ``failure_threshold`` consecutive failures open the breaker; ``recovery_timeout`` seconds later it admits one probe.
-    ``registry`` decides which clients share a host's breaker (see :class:`~headgate.breaker.BreakerRegistry`).
-    ``TransportPolicy(breaker=None)`` turns the breaker off for a client.
+    ``registry`` decides which clients share an origin's breaker: those whose policies name the same registry and the
+    same two thresholds (see :class:`~headgate.breaker.BreakerRegistry`). ``TransportPolicy(breaker=None)`` turns the
+    breaker off for a client.
     """
 
     failure_threshold: int = 5

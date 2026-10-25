@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 _THRESHOLD = 3
 _COOLDOWN = 10.0
-_OUTCOMES = ("success", "marked_failure", "unmarked_error", "cancelled", "untested")
+_OUTCOMES = ("success", "marked_failure", "marked_failure_caught", "unmarked_error", "cancelled", "untested")
 
 
 class _FetchError(Exception):
@@ -94,6 +94,17 @@ class BreakerMachine(RuleBasedStateMachine):
         elif outcome == "marked_failure":
             call.verdict.mark_failed()
             call.scope.__exit__(_FetchError, _FetchError("wire failed"), None)
+        elif outcome == "marked_failure_caught":
+            # The caller caught the failure inside the block and left it normally.
+            counted_before = self.breaker.failure_count
+            closed_before = self.breaker.state is BreakerState.CLOSED
+            call.verdict.mark_failed()
+            call.scope.__exit__(None, None, None)
+            if call.probe:
+                assert self.breaker.state is BreakerState.OPEN, "a probe whose failure was caught still re-opens"
+            elif closed_before:
+                counted = self.breaker.failure_count == counted_before + 1
+                assert counted or self.breaker.state is BreakerState.OPEN, "a caught failure still counts"
         elif outcome == "unmarked_error":
             call.scope.__exit__(_FetchError, _FetchError("not a host failure"), None)
         else:

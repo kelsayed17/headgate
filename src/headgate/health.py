@@ -27,10 +27,10 @@ __all__ = ["BreakerSnapshot", "BreakerState", "breaker_states", "cache_degradati
 
 
 class BreakerSnapshot(NamedTuple):
-    """One host breaker at one instant.
+    """One origin's breaker at one instant.
 
-    ``state`` alone is not enough to say whether the host is being refused: an OPEN breaker whose cooldown has
-    elapsed still reads OPEN until some call takes the probe, so a host called only by a daily cron would read
+    ``state`` alone is not enough to say whether the origin is being refused: an OPEN breaker whose cooldown has
+    elapsed still reads OPEN until some call takes the probe, so an origin called only by a daily cron would read
     OPEN all day. ``refusing`` is whether a call made now would be turned away.
     """
 
@@ -38,9 +38,29 @@ class BreakerSnapshot(NamedTuple):
     refusing: bool
 
 
+#: How degraded each state is, for choosing which of an origin's breakers its snapshot reports.
+_SEVERITY = {BreakerState.CLOSED: 0, BreakerState.HALF_OPEN: 1, BreakerState.OPEN: 2}
+
+
 def breaker_states(registry: BreakerRegistry = DEFAULT_REGISTRY) -> dict[str, BreakerSnapshot]:
-    """Return a snapshot of every host breaker *registry* has built; a host no client has called yet is absent."""
-    return {host: BreakerSnapshot(breaker.state, breaker.refusing) for host, breaker in registry.items()}
+    """Return a snapshot per origin (``scheme://host[:port]``) *registry* holds a breaker for.
+
+    Clients whose breaker policies differ in their thresholds keep separate breakers for one origin; the origin's
+    snapshot is then the most degraded of them (refusing first, then open, half-open, closed). An origin no client has
+    called yet is absent.
+    """
+    snapshots: dict[str, BreakerSnapshot] = {}
+    for breaker in registry.breakers():
+        snapshot = BreakerSnapshot(breaker.state, breaker.refusing)
+        seen = snapshots.get(breaker.name)
+        if seen is None or _rank(snapshot) > _rank(seen):
+            snapshots[breaker.name] = snapshot
+    return snapshots
+
+
+def _rank(snapshot: BreakerSnapshot) -> tuple[bool, int]:
+    """Order snapshots from healthy to degraded."""
+    return snapshot.refusing, _SEVERITY[snapshot.state]
 
 
 def cache_degradations() -> dict[str, int]:

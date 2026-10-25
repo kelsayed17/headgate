@@ -14,7 +14,6 @@ authors = [{ name = "Khaled Elsayed", email = "4119211+kelsayed17@users.noreply.
 dependencies = [
     "httpx2[http2]>=2.13.1",
     "hishel>=1.4.0",
-    "aiolimiter>=1.2.1",
     "msgspec>=0.22",
 ]
 

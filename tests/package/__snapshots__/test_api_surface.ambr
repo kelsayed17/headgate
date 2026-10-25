@@ -2,27 +2,33 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.breaker]
   '''
   module headgate.breaker
-  __all__ = ['DEFAULT_REGISTRY', 'BreakerOpenError', 'BreakerPolicy', 'BreakerRegistry', 'BreakerState', 'CircuitBreaker', 'Verdict']
+  __all__ = ['DEFAULT_MAX_HOSTS', 'DEFAULT_REGISTRY', 'BreakerOpenError', 'BreakerPolicy', 'BreakerRegistry', 'BreakerState', 'CircuitBreaker', 'Transition', 'Verdict']
+  DEFAULT_MAX_HOSTS = 1024
   DEFAULT_REGISTRY = <headgate.breaker._registry.BreakerRegistry object at 0x…>
   class BreakerOpenError(Exception)(message: 'str', *, retry_after: 'float | None') -> 'None'
   class BreakerPolicy(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0, registry: 'BreakerRegistry' = <headgate.breaker._registry.BreakerRegistry object at 0x…>) -> 'None'
       field failure_threshold: int = 5
       field recovery_timeout: float = 60.0
       field registry: BreakerRegistry = <headgate.breaker._registry.BreakerRegistry object at 0x…>
-  class BreakerRegistry(object)(*, clock: 'Clock' = <built-in function monotonic>) -> 'None'
-      def breaker_for(self, host: 'str', *, failure_threshold: 'int', recovery_timeout: 'float') -> 'CircuitBreaker'
+  class BreakerRegistry(object)(*, max_hosts: 'int' = 1024, clock: 'Clock' = <built-in function monotonic>) -> 'None'
+      def breaker_for(self, origin: 'httpx2.Origin | httpx2.URL | str', *, failure_threshold: 'int', recovery_timeout: 'float') -> 'CircuitBreaker'
+      def breakers(self, origin: 'httpx2.Origin | httpx2.URL | str | None' = None) -> 'tuple[CircuitBreaker, ...]'
       def clear(self) -> 'None'
-      def items(self) -> 'tuple[tuple[str, CircuitBreaker], ...]'
+      property max_hosts
   class BreakerState(StrEnum)(*values)
       CLOSED = 'closed'
       OPEN = 'open'
       HALF_OPEN = 'half_open'
   class CircuitBreaker(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0, name: 'str' = '', clock: 'Clock' = <built-in function monotonic>) -> 'None'
       property failure_count
+      property failure_threshold
+      property name
+      property recovery_timeout
       property refusing
       property state
-      def track(self) -> 'Generator[Verdict]'
-  class Verdict(object)() -> 'None'
+      def track(self, on_change: 'TransitionListener | None' = None) -> 'Generator[Verdict]'
+  class Transition(tuple)(previous: 'BreakerState', state: 'BreakerState', failures: 'int')
+  class Verdict(object)(*, probe: 'bool' = False) -> 'None'
       def mark_failed(self) -> 'None'
       def mark_untested(self) -> 'None'
   '''
@@ -183,25 +189,40 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.ratelimit]
   '''
   module headgate.ratelimit
-  __all__ = ['UNLIMITED', 'AsyncRateLimiter', 'PathLimiters', 'Rate', 'RateLimitTransport', 'RateRule']
+  __all__ = ['UNLIMITED', 'Adaptive', 'BudgetPausedError', 'PathBudgets', 'Rate', 'RateBudget', 'RateLimitTransport', 'RateRule']
   UNLIMITED = Rate(requests=1000000, period=1.0)
-  class AsyncRateLimiter(object)(rate: 'Rate') -> 'None'
-      property rate
-      def wait(self) -> 'None'
-  class PathLimiters(object)(*, default: 'Rate', rules: 'Sequence[RateRule]' = ()) -> 'None'
-      def for_request(self, request: 'httpx2.Request') -> 'AsyncRateLimiter'
+  class Adaptive(object)(*, decrease: 'float' = 0.5, increase: 'float' = 0.1, min_rate: 'float' = 0.1) -> 'None'
+      field decrease: float = 0.5
+      field increase: float = 0.1
+      field min_rate: float = 0.1
+  class BudgetPausedError(Exception)(message: 'str', *, retry_after: 'float', status_code: 'int') -> 'None'
+  class PathBudgets(object)(*, default: 'Rate | RateBudget', rules: 'Sequence[RateRule]' = (), timing: 'Timing' = Timing(clock=<built-in function monotonic>, sleep=<function asyncio_sleep at 0x…>)) -> 'None'
+      def for_request(self, request: 'httpx2.Request') -> 'RateBudget'
   class Rate(object)(requests: 'float', period: 'float') -> 'None'
       field requests: float
       field period: float
+      property burst
+      property interval
       classmethod per_minute(cls, requests: 'float') -> 'Rate'
       classmethod per_second(cls, requests: 'float') -> 'Rate'
-  class RateLimitTransport(AsyncBaseTransport)(*, limiters: 'PathLimiters', transport: 'httpx2.AsyncBaseTransport') -> 'None'
+  class RateBudget(object)(rate: 'Rate', *, max_in_flight: 'int | None' = None, adaptive: 'Adaptive | None' = Adaptive(decrease=0.5, increase=0.1, min_rate=0.1), timing: 'Timing' = Timing(clock=<built-in function monotonic>, sleep=<function asyncio_sleep at 0x…>), wall_clock: 'Clock' = <built-in function time>) -> 'None'
+      property adaptive
+      property effective_rate
+      property in_flight
+      property max_in_flight
+      def now(self) -> 'float'
+      def observe(self, response: 'httpx2.Response', *, sent_at: 'float') -> 'None'
+      def occupy(self) -> 'Callable[[], None]'
+      def pause_remaining(self) -> 'float'
+      property rate
+      def wait(self, context: 'CallContext') -> 'None'
+  class RateLimitTransport(AsyncBaseTransport)(*, budgets: 'PathBudgets', transport: 'httpx2.AsyncBaseTransport') -> 'None'
       def aclose(self) -> 'None'
+      property budgets
       def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
-      property limiters
-  class RateRule(object)(fragment: 'str', rate: 'Rate') -> 'None'
+  class RateRule(object)(fragment: 'str', rate: 'Rate | RateBudget') -> 'None'
       field fragment: str
-      field rate: Rate
+      field rate: Rate | RateBudget
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.retry]
@@ -226,9 +247,13 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['NO_RETRY', 'AsyncBaseClient', 'AuthError', 'Backoff', 'BreakerPolicy', 'BreakerRegistry', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'DecodeError', 'Expect', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'MethodFilter', 'Middleware', 'Minted', 'Observer', 'PathFragmentFilter', 'Problem', 'QueryParamAuth', 'Rate', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'StaticHeaderAuth', 'StatusCodeFilter', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'as_bytes', 'event_stream', 'json_reader', 'nothing']
+  __all__ = ['NO_RETRY', 'Adaptive', 'AsyncBaseClient', 'AuthError', 'Backoff', 'BreakerPolicy', 'BreakerRegistry', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'DecodeError', 'Expect', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'MethodFilter', 'Middleware', 'Minted', 'Observer', 'PathFragmentFilter', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'StaticHeaderAuth', 'StatusCodeFilter', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'as_bytes', 'event_stream', 'json_reader', 'nothing']
   NO_RETRY = RetryPolicy(attempts=1, backoff=Backoff(factor=0.5, max_wait=5.0))
-  class AsyncBaseClient(object)(*, base_url: 'str', rate: 'Rate', auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, backoff=Backoff(factor=0.5, max_wait=5.0)), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=<headgate.breaker._registry.BreakerRegistry object at 0x…>), rate_limits=(), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), timeout=Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, refusal_check=None, trusted_origins=frozenset(), allow_private_hosts=True, ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray'), observers=(), middleware=())) -> 'None'
+  class Adaptive(object)(*, decrease: 'float' = 0.5, increase: 'float' = 0.1, min_rate: 'float' = 0.1) -> 'None'
+      field decrease: float = 0.5
+      field increase: float = 0.1
+      field min_rate: float = 0.1
+  class AsyncBaseClient(object)(*, base_url: 'str', rate: 'Rate | RateBudget', auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, backoff=Backoff(factor=0.5, max_wait=5.0)), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=<headgate.breaker._registry.BreakerRegistry object at 0x…>), rate_limits=(), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), timeout=Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, refusal_check=None, trusted_origins=frozenset(), allow_private_hosts=True, ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray'), observers=(), middleware=())) -> 'None'
       def aclose(self) -> 'None'
       def delete(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
       def get(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
@@ -247,10 +272,11 @@
       field failure_threshold: int = 5
       field recovery_timeout: float = 60.0
       field registry: BreakerRegistry = <headgate.breaker._registry.BreakerRegistry object at 0x…>
-  class BreakerRegistry(object)(*, clock: 'Clock' = <built-in function monotonic>) -> 'None'
-      def breaker_for(self, host: 'str', *, failure_threshold: 'int', recovery_timeout: 'float') -> 'CircuitBreaker'
+  class BreakerRegistry(object)(*, max_hosts: 'int' = 1024, clock: 'Clock' = <built-in function monotonic>) -> 'None'
+      def breaker_for(self, origin: 'httpx2.Origin | httpx2.URL | str', *, failure_threshold: 'int', recovery_timeout: 'float') -> 'CircuitBreaker'
+      def breakers(self, origin: 'httpx2.Origin | httpx2.URL | str | None' = None) -> 'tuple[CircuitBreaker, ...]'
       def clear(self) -> 'None'
-      def items(self) -> 'tuple[tuple[str, CircuitBreaker], ...]'
+      property max_hosts
   class CachedTokenAuth(Auth, Generic)(*, refresh_margin_s: 'float' = 120.0) -> 'None'
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
       staticmethod reject_credential_rotation(returned: 'str | None', configured: 'str', *, provider: 'str', setting: 'str') -> 'None'
@@ -320,12 +346,25 @@
   class Rate(object)(requests: 'float', period: 'float') -> 'None'
       field requests: float
       field period: float
+      property burst
+      property interval
       classmethod per_minute(cls, requests: 'float') -> 'Rate'
       classmethod per_second(cls, requests: 'float') -> 'Rate'
+  class RateBudget(object)(rate: 'Rate', *, max_in_flight: 'int | None' = None, adaptive: 'Adaptive | None' = Adaptive(decrease=0.5, increase=0.1, min_rate=0.1), timing: 'Timing' = Timing(clock=<built-in function monotonic>, sleep=<function asyncio_sleep at 0x…>), wall_clock: 'Clock' = <built-in function time>) -> 'None'
+      property adaptive
+      property effective_rate
+      property in_flight
+      property max_in_flight
+      def now(self) -> 'float'
+      def observe(self, response: 'httpx2.Response', *, sent_at: 'float') -> 'None'
+      def occupy(self) -> 'Callable[[], None]'
+      def pause_remaining(self) -> 'float'
+      property rate
+      def wait(self, context: 'CallContext') -> 'None'
   class RateLimitError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
-  class RateRule(object)(fragment: 'str', rate: 'Rate') -> 'None'
+  class RateRule(object)(fragment: 'str', rate: 'Rate | RateBudget') -> 'None'
       field fragment: str
-      field rate: Rate
+      field rate: Rate | RateBudget
   type Reader[T] = Callable[[httpx2.Response], T]
   type RefusalCheck = Callable[[httpx2.Response], RefusedError | None]
   class RefusedError(Exception)(message: 'str', *, code: 'str | None' = None, kind: 'type[UpstreamStatusError]' = <class 'headgate.errors.UpstreamStatusError'>) -> 'None'

@@ -53,7 +53,7 @@ def run_batch(benchmark: BenchmarkFixture, runner: asyncio.Runner) -> Callable[[
             for _ in range(BATCH):
                 await operation()
 
-        runner.run(batch())  # warm up: connection setup, limiter creation, first-call caches
+        runner.run(batch())  # warm up: connection setup, first-call caches
         benchmark(lambda: runner.run(batch()))
 
     return measure
