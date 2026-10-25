@@ -272,8 +272,12 @@ class _Sequence:
             await _cancel_losers([*sends, *([] if timer is None else [timer])], keep=keep)
 
     def _admit_hedge(self, after: float) -> bool:
-        """Return whether a hedge may start now (time left, breaker closed, budget), emitting ``RetryScheduled``."""
-        if self._stop_reason() is not None:
+        """Return whether a hedge may start now (an attempt left, time left, breaker closed, budget).
+
+        Emits ``RetryScheduled`` when it may. The attempts are counted here as well as when the timer starts: a timer
+        started right after a hedge was created saw the count before that hedge's send began.
+        """
+        if self._sent >= self._policy.attempts or self._stop_reason() is not None:
             return False
         if self._ledger is not None and not self._ledger.try_spend():
             return False

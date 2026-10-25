@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import httpx2
@@ -110,3 +111,35 @@ def test_wait_after_waits_a_retry_after_exactly_and_backs_off_otherwise() -> Non
     assert policy.wait_after(asked, 1) == long_wait, "past the backoff's cap: max_retry_after governs instead"
     assert policy.wait_after(httpx2.Response(503), 1) == _FACTOR * 2
     assert policy.wait_after(httpx2.ConnectError("boom"), 1) == _FACTOR * 2
+
+
+@pytest.mark.parametrize(
+    ("build", "message"),
+    [
+        (lambda: Backoff(factor=-1), "factor must be >= 0 and finite (got -1)"),
+        (lambda: Backoff(max_wait=-1), "max_wait must be >= 0 and finite (got -1)"),
+        (lambda: RetryBudget(ratio=-1), "ratio must be >= 0 and finite (got -1)"),
+        (lambda: RetryBudget(min_per_second=-1), "min_per_second must be >= 0 and finite (got -1)"),
+        (lambda: RetryBudget(window=0), "window must be > 0 and finite (got 0)"),
+        (lambda: Hedge(after=0), "after must be > 0 and finite (got 0)"),
+        (lambda: RetryPolicy(max_retry_after=-1), "max_retry_after must be >= 0 and finite (got -1)"),
+        (lambda: RetryPolicy(min_attempt_time=-1), "min_attempt_time must be >= 0 and finite (got -1)"),
+        (
+            lambda: RetryPolicy(methods=frozenset({"post", "PATCH", "GET"}), hedge=Hedge()),
+            "a hedge may not be configured for non-idempotent methods (PATCH, POST)",
+        ),
+    ],
+)
+def test_a_bad_option_is_refused_by_name(build: Callable[[], object], message: str) -> None:
+    """Name the option and the value refused, so the message says what to fix."""
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        build()
+
+
+#: A backoff that waits its nominal delay exactly, uncapped for the retries tested.
+_EXACT = Backoff(factor=1.0, max_wait=1000.0, jitter=lambda: 1.0)
+
+
+def test_the_backoff_doubles_with_each_retry() -> None:
+    """Wait ``factor · 2^n`` before retry *n*: 2, 4, 8, 16 seconds for a factor of 1."""
+    assert [_EXACT.delay(retry) for retry in range(1, 5)] == [2.0, 4.0, 8.0, 16.0]

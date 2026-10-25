@@ -130,6 +130,8 @@ layer. Code written against the 0.1.0 source needs the migrations below; there a
   raising `httpx2.ResponseNotRead`; an oversized or dropped token response, an `httpx2.StreamError` and an
   `httpx2.CookieConflict` map onto the `ClientError` tree. Every hop gets the call's timeouts, cut to its deadline,
   unless it sets its own.
+- A hedged request no longer sends one more attempt than `RetryPolicy.attempts` when `Hedge.max_extra` allows more
+  hedges than the attempts left.
 - A redirect chain past `max_redirects` is not retryable and not charged to the origin's breaker: the same request
   would loop the same way, and the origin answered every hop.
 - A surviving 5xx the retry policy does not re-send (a 501, a 505) is worded `upstream 501 ...`; `transient` is kept for
