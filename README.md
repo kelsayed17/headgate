@@ -115,12 +115,12 @@ from headgate.testing import FakeTransport, TestClock, isolated_breakers
 
 fake = FakeTransport().route("GET", "/v1/series", 503, httpx2.Response(200, content=b"ok"))
 clock = TestClock()
-with clock.install(), isolated_breakers():           # the clients built in the block use them
+with clock.install(), isolated_breakers():  # the clients built in the block use them
     client = AsyncBaseClient(
         base_url="https://api.example.test/v1", rate=Rate.per_second(5), http=HttpOptions(transport=fake)
     )
 assert await client.get("series", expect=as_bytes) == b"ok"
-assert len(fake.calls) == 2 and clock.sleeps          # the retry waited, on the test clock
+assert len(fake.calls) == 2 and clock.sleeps  # the retry waited, on the test clock
 ```
 
 `FakeTransport` answers from a method-and-path route table and logs every request; `TestClock` is a manual clock whose

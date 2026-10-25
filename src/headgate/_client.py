@@ -189,6 +189,7 @@ class AsyncBaseClient:
     (placing an order) needs, since every method is retried by default; ``retry=RetryPolicy(...)`` replaces the
     client's policy for the call. ``follow_redirects=False`` makes a redirect raise as its 3xx. ``cache_ttl=`` sets
     this request's cache lifetime. ``timeout=``, ``deadline=`` and ``idempotency_key=`` ride :class:`RequestOptions`.
+    :meth:`with_options` makes a view whose calls take other defaults for headers, timeouts, deadline and retry.
 
     **URLs.** A t-string URL (``t"series/{series_id}"``) is rendered by :func:`headgate._url.render_path`, which
     escapes every interpolation as one path segment and raises ``ValueError`` for a value no segment can hold (as
