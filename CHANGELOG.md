@@ -78,6 +78,8 @@ layer. Code written against the 0.1.0 source needs the migrations below; there a
   hishel's `AsyncSqliteStorage` needs.
 - Documentation: a guide per area in `docs/`, a design document, and tested examples.
 
+- `headgate.MAX_MINT_RESPONSE_BYTES`, the cap on the response to each hop of a token mint.
+
 ### Changed
 
 - **Only safe re-sends.** 0.1.0 retried every method, POST included, after any failure. A POST or PATCH is now re-sent
@@ -136,7 +138,6 @@ layer. Code written against the 0.1.0 source needs the migrations below; there a
   would loop the same way, and the origin answered every hop.
 - A surviving 5xx the retry policy does not re-send (a 501, a 505) is worded `upstream 501 ...`; `transient` is kept for
   the statuses the policy retries.
-- `MAX_MINT_RESPONSE_BYTES`, the cap on a mint hop's response, is exported from `headgate`.
 - A non-ASCII `Content-Length` no longer crashes; error snippets no longer decode a whole 32 MiB body.
 - Backoff no longer overflows past 1023 retries or produces a NaN wait; `Rate` refuses NaN and infinite values.
 - `sanitize_url` no longer rewrites untouched parts of a URL and never raises; `event_stream` skips data-less blocks;
@@ -159,6 +160,8 @@ layer. Code written against the 0.1.0 source needs the migrations below; there a
   traceback; parse errors no longer quote body values; URL userinfo is redacted whole, and the list of secret query
   parameters covers OAuth, session and signed-URL parameters; a cache backend's message, which can carry its DSN, is
   never repeated.
+- A URL an error names has its control characters percent-encoded, so a URL taken from a response (a cursor, a
+  redirect) cannot forge a line in a log that records the error.
 
 ## [0.1.0] - 2026-10-24
 

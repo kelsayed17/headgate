@@ -28,6 +28,8 @@ from headgate.testing import (
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from headgate.testing import Step
+
 #: The body the tests send.
 _BODY = b"0123456789"
 
@@ -220,3 +222,82 @@ async def test_a_synchronous_body_stream_is_not_read() -> None:
     await (await network.handle_async_request(request)).aclose()
 
     assert network.calls[0].bytes_sent == head_size(request)
+
+
+# --- What each fault raises, exactly ---
+
+
+@pytest.mark.parametrize(
+    ("step", "error", "message"),
+    [
+        (ConnectFail(), httpx2.ConnectError, "scheduled connect failure"),
+        (ConnectFail(timeout=True), httpx2.ConnectTimeout, "scheduled connect failure"),
+        (PoolFull(), httpx2.PoolTimeout, "scheduled pool timeout"),
+        (DropMidBody(after_bytes=3), httpx2.WriteError, "scheduled connection drop while writing"),
+        (
+            DropMidBody(after_bytes=10_000),
+            httpx2.RemoteProtocolError,
+            "Server disconnected without sending a response.",
+        ),
+        (Slow(seconds=_READ_TIMEOUT + 1), httpx2.ReadTimeout, "scheduled read timeout"),
+    ],
+    ids=["connect", "connect-timeout", "pool", "drop-writing", "drop-after", "read-timeout"],
+)
+async def test_each_fault_raises_its_httpx2_error_on_the_request(
+    step: Step, error: type[httpx2.RequestError], message: str
+) -> None:
+    """Raise the httpx2 error each fault stands for, with its message and the request it failed."""
+    network = FaultyTransport(schedule=[step], sleep=TestClock().sleep)
+    request, _ = _request(timeout={"read": _READ_TIMEOUT})
+
+    with pytest.raises(error) as raised:
+        await network.handle_async_request(request)
+
+    assert raised.type is error
+    assert str(raised.value) == message
+    assert raised.value.request is request
+
+
+async def test_a_drop_after_exactly_the_head_is_a_disconnect_for_a_bodyless_request() -> None:
+    """Count a request with no body as sent whole once its head is written."""
+    request = httpx2.Request("GET", "https://api.test/orders")
+    network = FaultyTransport(schedule=[DropMidBody(after_bytes=head_size(request))])
+
+    with pytest.raises(httpx2.RemoteProtocolError):
+        await network.handle_async_request(request)
+
+
+async def test_a_refused_stream_names_stream_one_and_its_request() -> None:
+    """Build the reset as httpcore2 reports it: the h2 event for stream 1, its text, and the request."""
+    network = FaultyTransport(schedule=[RefusedStream()])
+    request, _ = _request()
+
+    with pytest.raises(httpx2.RemoteProtocolError) as raised:
+        await network.handle_async_request(request)
+
+    cause = raised.value.__cause__
+    assert cause is not None
+    assert cause.args[0].stream_id == 1
+    assert str(raised.value) == str(cause)
+    assert raised.value.request is request
+
+
+async def test_slow_exactly_at_the_read_timeout_still_answers() -> None:
+    """Answer a wait exactly as long as the read timeout: only a longer one times out."""
+    clock = TestClock()
+    network = FaultyTransport(schedule=[Slow(seconds=_READ_TIMEOUT)], sleep=clock.sleep)
+    request, _ = _request(timeout={"read": _READ_TIMEOUT})
+
+    response = await network.handle_async_request(request)
+
+    assert response.status_code == httpx2.codes.OK
+    assert response.request is request
+    await response.aclose()
+
+
+def test_respond_declares_its_json_and_its_retry_after() -> None:
+    """Add ``Content-Type: application/json`` for a JSON body and ``Retry-After`` for a delay, after the step's own."""
+    headers, body = Respond(json={"a": 1}, headers={"X-Id": "7"}, retry_after=2.0).response()
+
+    assert headers == [("X-Id", "7"), ("Retry-After", "2"), ("Content-Type", "application/json")]
+    assert body == b'{"a": 1}'
