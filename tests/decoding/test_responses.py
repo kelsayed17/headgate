@@ -9,6 +9,7 @@ import dataclasses
 from collections.abc import MutableMapping
 from typing import Protocol
 
+import httpx2
 import msgspec
 import pytest
 
@@ -242,3 +243,9 @@ def test_an_expect_is_not_a_reader() -> None:
     expect = Expect(decoder(_Ok)).on(404, nothing)
     assert not isinstance(expect.answers, MutableMapping)
     assert not callable(expect)
+
+
+def test_the_lowest_status_may_be_declared() -> None:
+    """Accept 100, the first HTTP status, as a declared answer; only below it is not a status."""
+    lowest = httpx2.codes.CONTINUE
+    assert lowest in Expect(nothing).on(lowest, nothing).answers

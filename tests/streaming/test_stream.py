@@ -402,10 +402,11 @@ async def test_a_stream_without_a_content_type_is_named_as_such() -> None:
 
 async def test_an_event_past_the_size_limit_names_the_limit_and_the_call() -> None:
     """Refuse an event past ``max_event_size``, naming the limit and the call."""
-    handler = _answer(httpx2.Response(200, headers=_SSE, content=b"data: " + b"x" * 64 + b"\n\n"))
+    headers = {**_SSE, "x-request-id": "req-7"}
+    handler = _answer(httpx2.Response(200, headers=headers, content=b"data: " + b"x" * 64 + b"\n\n"))
     with pytest.raises(ResponseTooLargeError) as raised:
         await _drain_events(_client(handler), max_event_size=16)
 
     error = raised.value
     assert str(error) == "[StubClient] server-sent event over 16 bytes from GET events"
-    assert (error.method, error.url) == ("GET", "events")
+    assert (error.method, error.url, error.request_id) == ("GET", "events", "req-7")

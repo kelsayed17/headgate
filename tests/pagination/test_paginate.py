@@ -351,3 +351,9 @@ def test_pagination_terminates_for_any_page_graph(links: list[int | None]) -> No
     else:
         assert asyncio.run(walk()) == path
     assert graph.fetched == len(path) + (following == 0)
+
+
+def test_a_cursor_needs_a_parameter_name() -> None:
+    """Refuse a cursor pager with no query parameter to send the cursor in, saying so."""
+    with pytest.raises(ValueError, match=r"^param must name a query parameter$"):
+        Cursor(items=items_of, next=cursor_of, param="")
