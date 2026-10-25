@@ -118,17 +118,22 @@ class Expect[T]:
 
     The constructor refuses exactly what :meth:`on` refuses, since an ``Expect`` built with ``answers`` makes the same
     claim, and then freezes ``answers`` into a read-only copy that neither the caller's dict nor the default can change.
+
+    ``headers`` are request headers the declaration needs sent (a conditional read's preconditions, see
+    :func:`headgate.cache.conditional`); a header the call sets itself wins.
     """
 
     ok: Reader[T]
     answers: Mapping[int, Reader[T]] = field(default_factory=dict)
+    headers: Mapping[str, str] = field(default_factory=dict, kw_only=True)
 
     def __post_init__(self) -> None:
-        """Refuse every unclaimable status in ``answers``, then replace it with a read-only copy."""
+        """Refuse every unclaimable status in ``answers``, then replace it and ``headers`` with read-only copies."""
         for status in self.answers:
             _refuse_unclaimable(status)
         # A frozen, slotted dataclass refuses plain assignment even here; object.__setattr__ is the documented route.
         object.__setattr__(self, "answers", MappingProxyType(dict(self.answers)))
+        object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
 
     def on[E](self, status: int, read: Reader[E]) -> Expect[T | E]:
         """Return a new ``Expect`` that also reads *status* with *read*, widening the result type to ``T | E``.
@@ -145,7 +150,7 @@ class Expect[T]:
             msg = f"{status} is already declared on this Expect"
             raise ValueError(msg)
         widened: dict[int, Reader[T | E]] = {**self.answers, status: read}
-        return Expect(self.ok, widened)
+        return Expect(self.ok, widened, headers=self.headers)
 
 
 def json_reader[T](

@@ -16,9 +16,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, NamedTuple
 
-from headgate._cache import CACHE_DEGRADATIONS
 from headgate._core import OBSERVER_FAILURES, BreakerState
 from headgate.breaker import DEFAULT_REGISTRY
+from headgate.cache._transport import CACHE_DEGRADATIONS
 
 if TYPE_CHECKING:
     from headgate.breaker import BreakerRegistry

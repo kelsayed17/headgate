@@ -36,7 +36,6 @@ import httpx2
 
 from headgate._auth import failed_on_auth_hop
 from headgate._body import read_capped, read_head
-from headgate._cache import host_untested
 from headgate._core import SILENT, CallContext, CallFinished, CallInfo, CallStarted, Emitter, current_timing
 from headgate._core import policy_is_disabled as _policy_is_disabled
 from headgate._failures import (
@@ -65,6 +64,7 @@ from headgate._stack import build_http_client, build_transport_stack
 from headgate._url import render_path, route_template
 from headgate.breaker import BreakerOpenError
 from headgate.breaker._registry import NO_BREAKER
+from headgate.cache._transport import host_untested
 from headgate.errors import CircuitOpenError, ClientError, ClientTimeoutError
 from headgate.retry import NO_RETRY, RetryPolicy
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
@@ -213,6 +213,8 @@ class AsyncBaseClient:
         redirects, the body cap, cookies, observers and middleware (:class:`~headgate.HttpOptions`).
 
         :raises TypeError: for an upstream ``httpx`` *auth*.
+        :raises ClientConfigurationError: for a cache partitioned by credential with an *auth* that does not declare
+            its credentials (see :class:`~headgate.cache.Partition`).
         """
         reject_upstream_httpx(auth, what="auth")
         # Transport policy off (headgate.policy): no retries and no breaker. The rate limiter checks for itself.
@@ -227,7 +229,7 @@ class AsyncBaseClient:
         self._request_id_headers = http.request_id_headers
         self._timeout = http.timeout
         self._emitter = Emitter(http.observers) if http.observers else SILENT
-        stack = build_transport_stack(rate, policy, http, self._timing)
+        stack = build_transport_stack(rate, policy, http, self._timing, auth)
         self._http_client = build_http_client(base_url=base_url, auth=auth, http=http, transport=stack)
 
     async def __aenter__(self) -> Self:
@@ -514,9 +516,9 @@ class AsyncBaseClient:
         The breaker is driven here rather than by a transport layer because this is the only scope that spans both the
         send and the body read. It is keyed on the host the request is addressed to, so a followed redirect's hops are
         charged to that host. A transport failure and a surviving 429/5xx are host failures. A cache hit, and an
-        outcome the cache marked :data:`~headgate._cache.HOST_UNTESTED` (one another identical GET fetched), tested
-        nothing, so only the request that fetched counts. Anything else that escapes (an auth flow failing to mint, a
-        body over the cap, a cancellation, the deadline) records nothing (see ``CircuitBreaker.track``).
+        outcome the cache marked :data:`~headgate.cache._transport.HOST_UNTESTED` (one another identical GET fetched),
+        tested nothing, so only the request that fetched counts. Anything else that escapes (an auth flow failing to
+        mint, a body over the cap, a cancellation, the deadline) records nothing (see ``CircuitBreaker.track``).
         """
         try:
             with self._breaker_for(prepared.request.url.host).track() as verdict:
@@ -582,6 +584,8 @@ class AsyncBaseClient:
         """
         spec: Expect[T] = expect if isinstance(expect, Expect) else Expect(expect)
         prepared = self._prepare(call)
+        for name, value in spec.headers.items():
+            prepared.request.headers.setdefault(name, value)
         async with self._reported(prepared.context) as report:
             async with self._deadline(prepared), self._exchange(prepared) as streamed:
                 resp = await read_capped(streamed, self._max_response_bytes, self._site(prepared))

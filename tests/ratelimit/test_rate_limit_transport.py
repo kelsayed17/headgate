@@ -29,7 +29,7 @@ import pytest
 from hishel import AsyncSqliteStorage, FilterPolicy
 
 from headgate import HttpOptions, TransportPolicy
-from headgate._cache import HttpCache, PathFragmentFilter, StatusCodeFilter
+from headgate.cache import HttpCache, PathFragmentFilter, StatusCodeFilter
 from headgate.ratelimit import AsyncRateLimiter, PathLimiters, Rate, RateLimitTransport, RateRule
 from headgate.retry import RetryPolicy
 from tests.support.clients import StubClient

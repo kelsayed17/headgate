@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 _PUBLIC_MODULES = (
     "headgate",
     "headgate.breaker",
+    "headgate.cache",
     "headgate.curl",
     "headgate.errors",
     "headgate.events",

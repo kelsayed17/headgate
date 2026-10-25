@@ -33,11 +33,12 @@ import httpx2
 
 from headgate._attempts import AttemptTransport
 from headgate._auth import StaticHeaderAuth
-from headgate._cache import ResilientCacheTransport
 from headgate._middleware import MiddlewareTransport
 from headgate._options import httpx_timeout
 from headgate._redirects import credential_header_guard, drop_followed_redirect_body
 from headgate._user_agent import user_agent
+from headgate.cache._credentials import credential_scope
+from headgate.cache._transport import ResilientCacheTransport
 from headgate.ratelimit import PathLimiters, RateLimitTransport
 from headgate.retry import RetryTransport
 
@@ -72,20 +73,17 @@ def build_http_client(
 
 
 def build_transport_stack(
-    rate: Rate, policy: TransportPolicy, http: HttpOptions, timing: Timing
+    rate: Rate, policy: TransportPolicy, http: HttpOptions, timing: Timing, auth: httpx2.Auth | None = None
 ) -> httpx2.AsyncBaseTransport:
-    """Build the layers under ``httpx2.AsyncClient``, bottom-up: each statement wraps the layer before it."""
+    """Build the layers under ``httpx2.AsyncClient``, bottom-up: each statement wraps the layer before it.
+
+    *auth* is the client's, which the cache partitions its entries by.
+    """
     layer = _network(http)
     layer = RateLimitTransport(limiters=PathLimiters(default=rate, rules=policy.rate_limits), transport=layer)
-    cache = policy.cache
-    if cache is not None and cache.storage is not None:
-        layer = ResilientCacheTransport(
-            next_transport=layer,
-            storage=cache.storage,
-            policy=cache.policy,
-            max_body_bytes=http.max_response_bytes,
-            ttl=cache.ttl,
-        )
+    if (cache := policy.cache) is not None:
+        scope = credential_scope(cache, auth)
+        layer = ResilientCacheTransport(layer, cache, max_body_bytes=http.max_response_bytes, scope=scope)
     if http.middleware:
         layer = MiddlewareTransport(transport=layer, middleware=http.middleware)
     if http.observers:

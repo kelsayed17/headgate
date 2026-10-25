@@ -24,9 +24,10 @@ import pytest
 from hishel import FilterPolicy
 
 from headgate import HttpCache, HttpOptions, TransportError, TransportPolicy, UpstreamStatusError
-from headgate._cache import CACHE_DEGRADED_EXT, MethodFilter, host_untested
 from headgate._core import CallContext, CallInfo
 from headgate._responses import as_bytes
+from headgate.cache import MethodFilter
+from headgate.cache._transport import CACHE_DEGRADED_EXT, host_untested
 from headgate.ratelimit import UNLIMITED
 from headgate.retry import NO_RETRY, RetryPolicy
 from headgate.retry._policy import RETRY_POLICY
@@ -39,7 +40,7 @@ if TYPE_CHECKING:
 
     from hishel import AsyncSqliteStorage
 
-    from headgate._cache import ResilientCacheTransport
+    from headgate.cache._transport import ResilientCacheTransport
 
 _URL = "https://example.test/files/2025.zip"
 _BODY = b"the whole file"
