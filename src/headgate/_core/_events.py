@@ -78,11 +78,18 @@ class BreakerState(StrEnum):
 
 
 class CacheOutcome(StrEnum):
-    """What the HTTP cache did for one request."""
+    """What the HTTP cache did for one request.
+
+    * ``HIT``: a stored response answered it;
+    * ``MISS``: it went to the network (and its response may have been stored);
+    * ``SHARED``: it waited on an identical request's download and got a copy of its response, or its failure;
+    * ``DEGRADED``: the storage failed, so it went to the network uncached.
+
+    The cache is TTL-only and never revalidates an entry with the origin, so there is no revalidated outcome.
+    """
 
     HIT = "hit"
     MISS = "miss"
-    REVALIDATED = "revalidated"
     SHARED = "shared"
     DEGRADED = "degraded"
 

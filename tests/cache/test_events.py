@@ -142,3 +142,8 @@ async def test_a_client_without_observers_emits_nothing(storage: AsyncSqliteStor
 
     assert hit.extensions.get("hishel_from_cache") is True
     assert network.calls == 1
+
+
+def test_every_outcome_is_one_the_cache_emits() -> None:
+    """Offer only the outcomes the cache reports: it never revalidates, so there is no revalidated outcome."""
+    assert {outcome.value for outcome in CacheOutcome} == {"hit", "miss", "shared", "degraded"}

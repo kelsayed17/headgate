@@ -141,7 +141,6 @@
   class CacheOutcome(StrEnum)(*values)
       HIT = 'hit'
       MISS = 'miss'
-      REVALIDATED = 'revalidated'
       SHARED = 'shared'
       DEGRADED = 'degraded'
   class CacheResult(CallEvent)(*, call: 'CallInfo', outcome: 'CacheOutcome') -> 'None'
