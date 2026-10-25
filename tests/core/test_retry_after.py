@@ -33,6 +33,7 @@ _ASKED = 7.0
         ("Sun, 25 Oct 2026 12:00:30 GMT", 30.0),
         ("Sun, 25 Oct 2026 11:00:00 GMT", 0.0),
         ("Sun, 25 Oct 2026 12:00:10 -0000", 10.0),
+        ("9" * 400, None),
     ],
 )
 def test_retry_after_parses_seconds_fractions_and_dates(value: str, expected: float | None) -> None:

@@ -34,3 +34,12 @@ def test_the_silent_emitter_has_no_listeners() -> None:
     """Report no listeners, so the client can skip building events."""
     assert not SILENT.active
     SILENT.emit(CallStarted(call=CallInfo(method="GET", url="https://a.test/x")))
+
+
+def test_an_observer_that_takes_the_event_is_not_counted_as_failing() -> None:
+    """Count nothing for an observer whose ``notify`` returns normally."""
+    before = OBSERVER_FAILURES[Recorder.__qualname__]
+
+    Emitter((Recorder(),)).emit(CallStarted(call=CallInfo(method="GET", url="https://a.test/x")))
+
+    assert OBSERVER_FAILURES[Recorder.__qualname__] == before

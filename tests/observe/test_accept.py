@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx2
 import pytest
 
-from headgate import Expect, HttpOptions, as_bytes, nothing
+from headgate import Expect, HttpOptions, as_bytes, json_reader, nothing
 from headgate.errors import ResponseParseError, UpstreamStatusError
 from headgate.testing import FakeTransport
 from tests.observe._support import client
@@ -25,7 +27,13 @@ def _answering(content_type: str | None, *, status: int = 200, content: bytes = 
 
 @pytest.mark.parametrize(
     "content_type",
-    ["application/json", "application/json; charset=utf-8", "Application/JSON", "application/problem+json"],
+    [
+        "application/json",
+        "application/json; charset=utf-8",
+        "Application/JSON",
+        "application/problem+json",
+        "application/vnd.api+v2+json",
+    ],
 )
 async def test_a_matching_media_type_is_decoded(content_type: str) -> None:
     """Read a body whose type matches, its parameters ignored and a ``+json`` suffix accepted."""
@@ -36,7 +44,7 @@ async def test_a_matching_media_type_is_decoded(content_type: str) -> None:
     assert fake.calls[0].headers["accept"] == _JSON
 
 
-@pytest.mark.parametrize("content_type", ["text/html", None, "not a media type"])
+@pytest.mark.parametrize("content_type", ["text/html", None, "not a media type", "text/json", "application/xml"])
 async def test_another_media_type_raises_before_the_reader_runs(content_type: str | None) -> None:
     """Raise ``ResponseParseError`` with the status and the declared type, never calling the reader."""
 
@@ -113,3 +121,9 @@ def test_a_malformed_accept_is_refused_where_it_is_written(accept: str) -> None:
 def test_without_accept_every_response_is_accepted() -> None:
     """Accept any response when ``accept`` is not given."""
     assert Expect(as_bytes).accepts(httpx2.Response(200, content=b"<html>", headers={"content-type": "text/html"}))
+
+
+def test_json_reader_refuses_an_empty_body_unless_allowed() -> None:
+    """Refuse an empty body by default: an empty 200 is corruption for every provider but a list-shaped one."""
+    with pytest.raises(json.JSONDecodeError):
+        json_reader(json.loads)(httpx2.Response(200, content=b""))

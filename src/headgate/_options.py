@@ -209,7 +209,7 @@ def _is_bare_origin(url: httpx2.URL) -> bool:
     return (
         url.scheme in _ORIGIN_SCHEMES
         and bool(url.host)
-        and url.path in {"", "/"}
+        and url.path == "/"
         and not (url.query or url.fragment or url.userinfo)
     )
 
@@ -226,14 +226,18 @@ def _normalized_origin(text: str) -> str:
     return origin_text(origin_of(url))
 
 
+#: What a proxy URL's error calls a URL httpx2 cannot parse, or one with no scheme.
+_MALFORMED = "malformed"
+
+
 def _check_proxy(proxy: str) -> None:
     """Raise ``ValueError`` for a proxy URL httpx2 cannot use."""
     try:
-        scheme = httpx2.URL(proxy).scheme
+        scheme = httpx2.URL(proxy).scheme or _MALFORMED
     except httpx2.InvalidURL:
-        scheme = ""
+        scheme = _MALFORMED
     if scheme not in _PROXY_SCHEMES:
-        msg = f"proxy must be an http, https or socks5 URL (got a {scheme or 'malformed'} URL)"
+        msg = f"proxy must be an http, https or socks5 URL (got a {scheme} URL)"
         raise ValueError(msg)
 
 

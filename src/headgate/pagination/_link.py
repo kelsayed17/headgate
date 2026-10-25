@@ -58,7 +58,7 @@ def parse_link_header(value: str) -> list[Link]:
             i = _after_link(value, i)
             continue
         close = value.find(">", i + 1)
-        if close < 0:
+        if close == -1:
             break
         target = value[i + 1 : close]
         params, i = _params(value, close + 1)

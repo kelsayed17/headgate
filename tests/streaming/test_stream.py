@@ -360,3 +360,52 @@ async def test_a_stream_honours_the_policys_breaker() -> None:
     with pytest.raises(ClientError, match="circuit breaker open"):
         async with client.stream("GET", "f"):
             pass
+
+
+# --- Exact shapes ---
+
+#: The chunk size a caller asks for.
+_CHUNK = 4
+
+
+async def test_bytes_come_in_the_chunk_size_asked_for() -> None:
+    """Re-chunk the body to *chunk_size* bytes when the caller asks for it."""
+    client = _client(_answer(httpx2.Response(200, content=b"0123456789")))
+    async with client.stream("GET", "f") as stream:
+        chunks = [chunk async for chunk in stream.aiter_bytes(_CHUNK)]
+    assert chunks == [b"0123", b"4567", b"89"]
+
+
+async def test_a_connection_dropping_mid_lines_is_a_transport_error() -> None:
+    """Map a network failure while lines arrive to ``TransportError``, as for bytes."""
+    body = _Body(b"first\n", then=httpx2.ReadError("connection dropped"))
+    with pytest.raises(TransportError):
+        async with _client(_streaming(body)).stream("GET", "f") as stream:
+            _ = [line async for line in stream.aiter_lines()]
+
+
+async def test_an_event_stream_with_parameters_is_an_event_stream() -> None:
+    """Read events from a ``text/event-stream`` that names a charset."""
+    handler = _answer(
+        httpx2.Response(200, headers={"content-type": "text/event-stream; charset=utf-8"}, content=b"data: a\n\n")
+    )
+    async with _client(handler).stream("GET", "events") as stream:
+        assert [event.data async for event in stream.aiter_events()] == ["a"]
+
+
+async def test_a_stream_without_a_content_type_is_named_as_such() -> None:
+    """Say ``'none'`` when a stream read as events declares no content type."""
+    async with _client(_answer(httpx2.Response(200, content=b"data: a\n\n"))).stream("GET", "events") as stream:
+        with pytest.raises(ResponseParseError, match=r"got content type 'none'$"):
+            stream.aiter_events()
+
+
+async def test_an_event_past_the_size_limit_names_the_limit_and_the_call() -> None:
+    """Refuse an event past ``max_event_size``, naming the limit and the call."""
+    handler = _answer(httpx2.Response(200, headers=_SSE, content=b"data: " + b"x" * 64 + b"\n\n"))
+    with pytest.raises(ResponseTooLargeError) as raised:
+        await _drain_events(_client(handler), max_event_size=16)
+
+    error = raised.value
+    assert str(error) == "[StubClient] server-sent event over 16 bytes from GET events"
+    assert (error.method, error.url) == ("GET", "events")

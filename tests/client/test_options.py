@@ -11,6 +11,7 @@ else is observed on the requests a scripted network receives.
 from __future__ import annotations
 
 import importlib.metadata
+import re
 import ssl
 import uuid
 from dataclasses import replace
@@ -112,6 +113,30 @@ def test_an_upstream_httpx_object_is_refused_by_name(build: Callable[[], object]
 def _ok(request: httpx2.Request) -> httpx2.Response:
     """Answer 200."""
     return httpx2.Response(200, request=request)
+
+
+@pytest.mark.parametrize(
+    ("build", "message"),
+    [
+        (
+            lambda: HttpOptions(proxy="ftp://proxy.example.test"),
+            "proxy must be an http, https or socks5 URL (got a ftp URL)",
+        ),
+        (lambda: HttpOptions(proxy="http://[::1"), "proxy must be an http, https or socks5 URL (got a malformed URL)"),
+        (
+            lambda: HttpOptions(proxy="//p.test:8080"),
+            "proxy must be an http, https or socks5 URL (got a malformed URL)",
+        ),
+        (lambda: Route(""), "fragment must not be empty"),
+        (lambda: Route("/x", deadline=0.0), "deadline must be > 0 (got 0.0)"),
+        (lambda: IdempotencyKeys(header=""), "header must name a header"),
+    ],
+    ids=["other-scheme", "unparseable", "no-scheme", "empty-route", "route-deadline", "empty-header"],
+)
+def test_a_bad_option_says_exactly_what_is_wrong(build: Callable[[], object], message: str) -> None:
+    """Refuse a bad option with a message naming the option and what it got."""
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        build()
 
 
 @pytest.mark.parametrize(
@@ -419,3 +444,8 @@ async def test_a_custom_transport_is_used_as_it_is() -> None:
     network = _CountingNetwork()
     await StubClient(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=network)).get("a", expect=nothing)
     assert network.sends == 1
+
+
+def test_an_installed_copy_reports_its_distributions_version() -> None:
+    """Report the version the installed ``headgate`` distribution declares."""
+    assert headgate_version() == importlib.metadata.version("headgate")

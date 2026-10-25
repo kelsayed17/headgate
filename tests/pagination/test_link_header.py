@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import httpx2
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -60,6 +61,33 @@ def test_malformed_link_values_are_skipped() -> None:
     assert _pairs('<u>; title="never closed') == [("u", {"title": "never closed"})]
     assert _pairs("<u>; a==b; =c") == [("u", {"a": ""})]
     assert _pairs(" , ,") == []
+
+
+def test_junk_before_a_link_drops_the_link_up_to_the_next_comma() -> None:
+    """Skip junk to the comma after it, quoted text included, and never read a link out of the junk."""
+    assert _pairs('X<https://a/>; rel="next"') == []
+    assert _pairs("j,<x>; rel=next") == [("x", {"rel": "next"})]
+    assert _pairs('junk "a, <y>; rel=next", <x>; rel=next') == [("x", {"rel": "next"})]
+
+
+def test_links_need_no_space_after_their_separators() -> None:
+    """Split links at a bare comma and read a parameter right after its semicolon."""
+    assert _pairs("<a>;rel=prev,<b>;rel=next") == [("a", {"rel": "prev"}), ("b", {"rel": "next"})]
+
+
+@pytest.mark.parametrize(
+    ("header", "params"),
+    [
+        ("<u>; rel", {"rel": ""}),
+        ("<u>; rel=", {"rel": ""}),
+        ('<u>; title="trailing \\', {"title": "trailing \\"}),
+        ('<u>; title="ends in a quote\\"', {"title": 'ends in a quote"'}),
+    ],
+    ids=["bare-name-at-the-end", "empty-value-at-the-end", "lone-backslash-at-the-end", "escaped-final-quote"],
+)
+def test_a_header_cut_short_keeps_what_it_says(header: str, params: dict[str, str]) -> None:
+    """Read a header that ends mid-parameter as far as it goes, never failing on its last character."""
+    assert _pairs(header) == [("u", params)]
 
 
 def test_the_next_link_is_found_across_several_link_fields() -> None:

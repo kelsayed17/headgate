@@ -110,5 +110,5 @@ async def test_closing_the_client_closes_the_transport() -> None:
     """Record that the client closed it."""
     fake = FakeTransport()
     async with _client(fake):
-        assert not fake.closed
-    assert fake.closed
+        assert fake.closed is False
+    assert fake.closed is True

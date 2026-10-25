@@ -255,6 +255,10 @@ async def test_a_page_that_leads_back_raises_instead_of_looping() -> None:
         _ = [item async for item in paginated]
     assert raised.value.url == f"{_BASE}/items"
     assert raised.value.source == "StubClient"
+    assert raised.value.method == "GET"
+    assert str(raised.value) == (
+        f"[StubClient] pagination loop: the page after page 2 repeats an earlier page's request ({_BASE}/items)"
+    )
 
 
 async def test_a_repeating_cursor_on_a_template_url_raises() -> None:
@@ -268,6 +272,7 @@ async def test_a_repeating_cursor_on_a_template_url_raises() -> None:
     with pytest.raises(ClientError, match="pagination loop") as raised:
         _ = [page async for page in paginated.pages()]
     assert raised.value.url is None
+    assert str(raised.value) == "[StubClient] pagination loop: the page after page 2 repeats an earlier page's request"
 
 
 #: One request body of each kind.

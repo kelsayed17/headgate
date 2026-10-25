@@ -263,3 +263,62 @@ async def test_an_unfollowed_redirect_body_is_still_capped() -> None:
             await c.get("start", expect=RESPONSE, follow_redirects=False)
     finally:
         await c.aclose()
+
+
+class _Chunks(httpx2.AsyncByteStream):
+    """A chunked body (no ``Content-Length``) of *count* chunks of *size* bytes, counting pulls; its close may fail."""
+
+    def __init__(self, count: int, size: int, *, close_fails: bool = False) -> None:
+        """Stream *count* chunks of *size* bytes."""
+        self._count = count
+        self._size = size
+        self._close_fails = close_fails
+        self.pulled = 0
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for _ in range(self._count):
+            self.pulled += 1
+            yield b"x" * self._size
+
+    @override
+    async def aclose(self) -> None:
+        if self._close_fails:
+            msg = "connection reset while closing"
+            raise httpx2.ReadError(msg)
+
+
+class _Serving(httpx2.AsyncBaseTransport):
+    """Answer every request with *body*, streamed, and a request id."""
+
+    def __init__(self, body: _Chunks) -> None:
+        """Serve *body*."""
+        self.body = body
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, stream=self.body, headers={"x-request-id": "req-9"}, request=request)
+
+
+async def test_a_chunked_body_past_the_cap_is_refused_as_soon_as_it_passes() -> None:
+    """Stop reading a chunked body one chunk past the cap, naming the call, without reading the rest."""
+    body = _Chunks(count=100, size=_KIB)
+    client = _Client(max_response_bytes=_CAP, transport=_Serving(body))
+
+    with pytest.raises(ResponseTooLargeError) as raised:
+        await client.get("thing", expect=RESPONSE)
+    await client.aclose()
+
+    assert body.pulled == _CAP // _KIB + 1
+    error = raised.value
+    assert str(error) == f"[_Client] response body exceeded cap {_CAP} bytes for thing"
+    assert (error.method, error.url, error.request_id) == ("GET", "thing", "req-9")
+
+
+async def test_a_close_that_fails_after_the_cap_does_not_hide_the_refusal() -> None:
+    """Raise the size refusal, not the failure closing the abandoned body."""
+    client = _Client(max_response_bytes=_CAP, transport=_Serving(_Chunks(count=100, size=_KIB, close_fails=True)))
+
+    with pytest.raises(ResponseTooLargeError):
+        await client.get("thing", expect=RESPONSE)
+    await client.aclose()

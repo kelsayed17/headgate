@@ -77,7 +77,6 @@ class Paginated[P, I]:
 
 
 def _key(request: PageRequest) -> str:
-    """Return a text key identifying *request*'s URL and query."""
-    url = request.url if isinstance(request.url, str) else None
+    """Return a text key identifying *request*'s URL (a string or a template, by its parts) and query."""
     query = None if request.params is None else tuple(request.params.items())
-    return repr((url, query))
+    return repr((request.url, query))
