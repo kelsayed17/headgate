@@ -29,6 +29,7 @@ Only what the origin itself showed:
 | --- | --- |
 | a 5xx the call fetched itself, retryable or not: a 501 or 505, which the retry policy does not re-send, still means the origin could not serve the request | a 429: the origin is up and asked us to slow down, which the rate budget handles |
 | a network failure or timeout, in the send or the body read | our own side's failures: an unencodable header, an unsupported scheme, an invalid URL, our pool running out of connections |
+| | a redirect loop past `max_redirects`: the origin answered every hop, and the loop is one URL's configuration, as a 4xx is |
 | | a failure on a hop an auth flow made to mint a credential (that is the token host's failure) |
 | | a cache hit, a stored 5xx, or an outcome shared from another identical request's fetch |
 | | a call cancelled (by its caller, or by the deadline's own timer), a body over the size cap, a refused SSRF destination |

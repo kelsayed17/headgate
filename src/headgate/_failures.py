@@ -41,7 +41,7 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
-from headgate.retry._policy import RETRY_STATUSES
+from headgate.retry._policy import UNRETRYABLE_ERRORS
 
 if TYPE_CHECKING:
     from headgate._responses import RefusedError
@@ -115,9 +115,6 @@ _PROBLEM_MEDIA_TYPE = "application/problem+json"
 #: limit.
 _PROBLEM_ERRORS = (ValueError, RecursionError)
 
-#: Failures that are our own request's fault, so sending it again cannot succeed.
-_LOCAL_FAILURES = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol)
-
 
 @dataclass(frozen=True, slots=True)
 class CallSite:
@@ -165,6 +162,14 @@ class CallSite:
             retryable=retryable,
             retry_after=retry_after,
         )
+
+    def retries_status(self, resp: httpx2.Response) -> bool:
+        """Return whether the call's retry policy counts *resp*'s status as a failure to re-send, not an answer.
+
+        That is a status in its ``statuses``, or the server's ``x-should-retry: true``. Method safety plays no part: a
+        503 to a POST is a failure the policy would re-send were the POST safe to send again.
+        """
+        return self.retry is not None and self.retry.about(resp).failure
 
     def _request_id(self, resp: httpx2.Response) -> str | None:
         """Return the first request-id header *resp* carries, bounded, or ``None``."""
@@ -319,7 +324,7 @@ def transport_error(exc: httpx2.HTTPError | OSError, site: CallSite) -> Transpor
     else:
         detail = shorten(redact_secrets(str(exc))) or type(exc).__name__
     message = f"{site.method} {site.url}: {detail}"
-    details = site.details(failure=exc, retryable=not isinstance(exc, _LOCAL_FAILURES))
+    details = site.details(failure=exc, retryable=not isinstance(exc, UNRETRYABLE_ERRORS))
     if isinstance(exc, httpx2.TimeoutException):
         return ClientTimeoutError(message, **details)
     return TransportError(message, **details)
@@ -344,23 +349,26 @@ def _unsendable_detail(exc: httpx2.LocalProtocolError) -> str:
 
 
 def transient_status_error(resp: httpx2.Response, site: CallSite) -> UpstreamStatusError:
-    """Build the ``ClientError`` for a 429 or 5xx that outlasted the retry transport's attempts.
+    """Build the ``ClientError`` for a 429 or 5xx that reached the client, past whatever retries the policy made.
 
     A 429 becomes :class:`~headgate.errors.RateLimitError`, anything else
     :class:`~headgate.errors.UpstreamStatusError`. *resp* carries a bounded head of the body, which becomes the
-    summary, as it does for :func:`status_error`. The error is retryable when the retry policy would re-send after
-    *resp* (see :meth:`CallSite.details`): a 5xx outside its ``statuses`` (a 501, a 505) is not, nor is a 503 on a POST
-    without an idempotency key. A 429's or 503's ``retry-after-ms`` or ``Retry-After`` is its ``retry_after``.
+    summary, as it does for :func:`status_error`. The message calls the status ``transient`` when the retry policy
+    counts it as a failure to re-send (:meth:`CallSite.retries_status`), and ``upstream`` otherwise (a 501, a 505). The
+    error is retryable when the retry policy would re-send after *resp* (see :meth:`CallSite.details`): a 5xx outside
+    its ``statuses`` is not, nor is a 503 on a POST without an idempotency key. A 429's or 503's ``retry-after-ms`` or
+    ``Retry-After`` is its ``retry_after``.
     """
     code = resp.status_code
     kind = RateLimitError if code == httpx2.codes.TOO_MANY_REQUESTS else UpstreamStatusError
     problem = problem_of(resp)
+    wording = "transient" if site.retries_status(resp) else "upstream"
     return kind(
-        f"transient {code} for {site.method} {site.url}",
+        f"{wording} {code} for {site.method} {site.url}",
         status_code=code,
         body=_summary(resp, problem),
         problem=problem,
-        **site.details(resp, retryable=code in RETRY_STATUSES, retry_after=retry_after_of(resp)),
+        **site.details(resp, retry_after=retry_after_of(resp)),
     )
 
 

@@ -40,8 +40,9 @@ policy = TransportPolicy(
 Each attempt's result is classified, in this order:
 
 1. **An answer** (any status not in `statuses`, unless the server says `x-should-retry: true`) is returned.
-2. **A local mistake** (`LocalProtocolError`, such as a header value that cannot be encoded; `UnsupportedProtocol`;
-   `InvalidURL`) is never re-sent: the same request would fail the same way.
+2. **A failure re-sending cannot cure** is never re-sent: a local mistake (`LocalProtocolError`, such as a header
+   value that cannot be encoded; `UnsupportedProtocol`; `InvalidURL`), and a redirect chain past `max_redirects`
+   (`TooManyRedirects`), which the same request follows the same way again.
 3. **The server's word** decides when it sends `x-should-retry: true` or `false`.
 4. **Not processed** is retryable for every method: a `425 Too Early` (RFC 8470), and an HTTP/2 stream the server
    reset with `REFUSED_STREAM` (RFC 9113). A GOAWAY covering streams the server never started is retried inside the
@@ -116,14 +117,16 @@ retried like an idempotent one.
 
 `ClientError.retryable` is the retry policy's own verdict on the outcome that ended the call, by the rules above: it is
 `True` exactly when the call's `RetryPolicy` would re-send after it. So a surviving 503 on a GET is retryable, while a
-501 or 505 (outside `statuses`), a 503 the server marked `x-should-retry: false`, and a 503 on a POST without an
-idempotency key are not. A network failure while reading the body is judged as one in the send would be: retryable for
+501 or 505 (outside `statuses`), a 503 the server marked `x-should-retry: false`, a 503 on a POST without an
+idempotency key, and a redirect loop are not. The message follows the same rule for a surviving 429 or 5xx: it calls
+the status `transient` when the policy counts it as a failure to retry (`transient 503 for GET orders`), and `upstream`
+when it does not (`upstream 501 for GET orders`). A network failure while reading the body is judged as one in the send would be: retryable for
 an idempotent or keyed request, not for a POST that was written in full. The flag ignores what stopped the sequence
 (spent attempts, the budget, the deadline), since it answers whether sending again later could help.
 
 Two errors set it otherwise: a `RateLimitError` from a [rate budget](rate-budgets.md) paused past the deadline is
 retryable after its `retry_after`, and a token mint on a client of its own, which no retry layer judged, is retryable for
-any network failure that is not a local mistake.
+any network failure but those re-sending cannot cure.
 
 ## Attempt history
 

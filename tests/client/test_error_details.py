@@ -155,6 +155,45 @@ async def test_a_surviving_status_the_policy_does_not_retry_is_not_retryable(sta
     assert failures("api.example.test") == 1
 
 
+@pytest.mark.parametrize("status", [501, 505])
+async def test_a_surviving_status_the_policy_does_not_retry_is_not_called_transient(status: int) -> None:
+    """Word a 5xx outside ``RetryPolicy.statuses`` as the upstream's status, keeping "transient" for what is retried."""
+    error = await _raised(_client(Script(status)))
+
+    assert str(error).startswith(f"[StubClient] upstream {status} for GET orders")
+
+
+async def test_a_status_the_server_says_to_retry_is_called_transient() -> None:
+    """Word a 501 the server marks ``x-should-retry: true`` as transient: the policy counts it as a failure to retry."""
+    error = await _raised(_client(Script(httpx2.Response(501, headers={"x-should-retry": "true"}))))
+
+    assert str(error).startswith("[StubClient] transient 501 for GET orders")
+    assert error.retryable is True
+
+
+#: The redirect hops a loop is followed for before it is refused.
+_LOOP_HOPS = 2
+
+
+async def test_a_redirect_loop_is_not_retried_nor_charged_to_the_breaker() -> None:
+    """Refuse a redirect loop once, not retryable and not charged: the origin answered every hop, as it would again."""
+    script = Script(httpx2.Response(302, headers={"location": f"{_BASE}/orders"}))
+    breaker = BreakerPolicy(failure_threshold=1, registry=BreakerRegistry())
+    client = StubClient(
+        base_url=_BASE,
+        rate=Rate.per_second(1000),
+        policy=TransportPolicy(breaker=breaker),
+        http=HttpOptions(transport=script.transport(), max_redirects=_LOOP_HOPS),
+    )
+
+    for _ in range(2):
+        error = await _raised(client)
+        assert type(error) is TransportError
+        assert (error.retryable, error.attempts) == (False, _LOOP_HOPS + 1)
+
+    assert len(script.sent) == 2 * (_LOOP_HOPS + 1), "each call followed the chain once; neither was re-sent"
+
+
 async def test_a_post_without_a_key_that_survived_a_503_is_not_retryable() -> None:
     """Mark a surviving 503 on a POST without an idempotency key not retryable: sending it again is not safe."""
     with pytest.raises(UpstreamStatusError) as raised:

@@ -7,7 +7,8 @@ The rules, in order:
 
 * A response whose status is not in the policy's ``statuses`` is an answer (unless ``x-should-retry: true`` says
   otherwise). Only network failures (:data:`~headgate.retry._policy.NETWORK_ERRORS`) are classified at all; anything
-  else propagates at once, and a local mistake (:data:`~headgate.retry._policy.LOCAL_ERRORS`) is never retried.
+  else propagates at once, and a failure re-sending cannot cure (:data:`~headgate.retry._policy.UNRETRYABLE_ERRORS`: a
+  local mistake, a redirect loop) is never retried.
 * ``x-should-retry: true|false`` decides when the policy respects it: the server knows whether a re-send is safe.
 * A failure that proves the request was not processed is retryable for every method: 425 Too Early (RFC 8470), and an
   HTTP/2 stream the server reset with ``REFUSED_STREAM`` (RFC 9113 §8.7).
@@ -31,7 +32,7 @@ from typing import TYPE_CHECKING, Final
 import httpx2
 
 from headgate._core import retry_after_of
-from headgate.retry._policy import LOCAL_ERRORS, NEVER_SENT_ERRORS
+from headgate.retry._policy import NEVER_SENT_ERRORS, UNRETRYABLE_ERRORS
 
 if TYPE_CHECKING:
     from headgate._core import SendProgress
@@ -117,9 +118,9 @@ def _classify_response(response: httpx2.Response, attempted: Attempted, policy: 
 
 
 def _classify_error(exc: Exception, attempted: Attempted, policy: RetryPolicy) -> Verdict:
-    """Classify a network failure: a local mistake never, a refused stream always, otherwise by safety."""
+    """Classify a network failure: a futile one never, a refused stream always, otherwise by safety."""
     reason = type(exc).__name__
-    if isinstance(exc, LOCAL_ERRORS):
+    if isinstance(exc, UNRETRYABLE_ERRORS):
         return Verdict(failure=True, retryable=False, reason=reason)
     if refused_stream(exc):
         return Verdict(failure=True, retryable=True, reason="REFUSED_STREAM")

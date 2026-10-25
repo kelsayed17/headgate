@@ -120,9 +120,10 @@ type _QueryValue = str | int | float | bool | None
 #: How much of a refused or failed streamed response is read, for the ``ClientError``'s body snippet.
 _STREAM_ERROR_HEAD_BYTES = 4096
 
-#: Network errors that are our own side's doing, so the origin's breaker is not charged with them: a request httpx2
-#: refused to write, a scheme it cannot speak, and our own connection pool running out of connections.
-_LOCAL_FAILURES = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2.PoolTimeout)
+#: Network errors that say nothing of the origin's health, so its breaker is not charged with them: a request httpx2
+#: refused to write, a scheme it cannot speak, our own connection pool running out of connections, and a redirect chain
+#: past ``max_redirects`` (the origin answered every hop; the loop is one URL's configuration, as a 4xx is).
+_LOCAL_FAILURES = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2.PoolTimeout, httpx2.TooManyRedirects)
 
 #: The request options that make a body, which a page (a GET) cannot carry.
 _BODY_OPTIONS = ("json", "data", "content", "files")
@@ -728,11 +729,11 @@ class AsyncBaseClient:
         * **a failure**: a 5xx this request fetched, whether or not the retry policy re-sends it (a 501 is the origin
           failing to serve the request as surely as a 503), and a network failure or timeout;
         * **nothing**: a 429 (the origin is up and asked us to slow down, which the rate budget handles); a network
-          error of our own side's making (:data:`_LOCAL_FAILURES`, and an invalid URL); a failure on a hop an auth flow
-          made to mint a credential (that is the credential host's failure); and an outcome another request's attempt
-          produced (a cache hit, a stored 5xx served from the cache, or a download or failure the cache shared from an
-          identical GET, :data:`~headgate.cache._transport.HOST_UNTESTED`), since only the request that fetched tested
-          the origin.
+          error of our own side's making, or a redirect loop (:data:`_LOCAL_FAILURES`, and an invalid URL); a failure
+          on a hop an auth flow made to mint a credential (that is the credential host's failure); and an outcome
+          another request's attempt produced (a cache hit, a stored 5xx served from the cache, or a download or failure
+          the cache shared from an identical GET, :data:`~headgate.cache._transport.HOST_UNTESTED`), since only the
+          request that fetched tested the origin.
         """
         request = prepared.request
         try:
@@ -883,8 +884,8 @@ def _charge_response(response: httpx2.Response, verdict: Verdict) -> None:
 def _network_failure_charges_origin(exc: Exception) -> bool:
     """Return whether a network failure is the origin's, to charge its breaker with (see :meth:`AsyncBaseClient._sent`).
 
-    Not when it is of our own side's making (:data:`_LOCAL_FAILURES`), happened on a hop an auth flow made to mint a
-    credential, or was shared by the cache from another request's attempt.
+    Not when it is of our own side's making or a redirect loop (:data:`_LOCAL_FAILURES`), happened on a hop an auth
+    flow made to mint a credential, or was shared by the cache from another request's attempt.
     """
     return not (isinstance(exc, _LOCAL_FAILURES) or failed_on_auth_hop(exc) or host_untested(exc))
 

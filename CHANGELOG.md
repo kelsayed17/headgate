@@ -130,6 +130,11 @@ layer. Code written against the 0.1.0 source needs the migrations below; there a
   raising `httpx2.ResponseNotRead`; an oversized or dropped token response, an `httpx2.StreamError` and an
   `httpx2.CookieConflict` map onto the `ClientError` tree. Every hop gets the call's timeouts, cut to its deadline,
   unless it sets its own.
+- A redirect chain past `max_redirects` is not retryable and not charged to the origin's breaker: the same request
+  would loop the same way, and the origin answered every hop.
+- A surviving 5xx the retry policy does not re-send (a 501, a 505) is worded `upstream 501 ...`; `transient` is kept for
+  the statuses the policy retries.
+- `MAX_MINT_RESPONSE_BYTES`, the cap on a mint hop's response, is exported from `headgate`.
 - A non-ASCII `Content-Length` no longer crashes; error snippets no longer decode a whole 32 MiB body.
 - Backoff no longer overflows past 1023 retries or produces a NaN wait; `Rate` refuses NaN and infinite values.
 - `sanitize_url` no longer rewrites untouched parts of a URL and never raises; `event_stream` skips data-less blocks;

@@ -30,7 +30,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "IDEMPOTENT_METHODS",
-    "LOCAL_ERRORS",
     "NETWORK_ERRORS",
     "NEVER_SENT_ERRORS",
     "NO_RETRY",
@@ -38,6 +37,7 @@ __all__ = [
     "RETRY_OUTCOME",
     "RETRY_POLICY",
     "RETRY_STATUSES",
+    "UNRETRYABLE_ERRORS",
     "Backoff",
     "Hedge",
     "RetryBudget",
@@ -64,8 +64,15 @@ NEVER_SENT_ERRORS: tuple[type[httpx2.TransportError], ...] = (
     httpx2.PoolTimeout,
 )
 
-#: Failures that are the request's own fault, so sending it again cannot succeed: never retried.
-LOCAL_ERRORS: tuple[type[Exception], ...] = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2.InvalidURL)
+#: Failures that sending the request again cannot cure, so they are never retried: the request's own fault (a header
+#: httpx2 refused to encode, a scheme it cannot speak, an invalid URL), and a redirect chain past ``max_redirects``,
+#: which the same request follows the same way again.
+UNRETRYABLE_ERRORS: tuple[type[Exception], ...] = (
+    httpx2.LocalProtocolError,
+    httpx2.UnsupportedProtocol,
+    httpx2.InvalidURL,
+    httpx2.TooManyRedirects,
+)
 
 #: The methods a hedge may never be configured for: RFC 9110 does not define them as idempotent.
 _UNHEDGEABLE_METHODS: Final = frozenset({"POST", "PATCH"})
@@ -216,15 +223,18 @@ class RetryPolicy:
 class RetryOutcome:
     """What the retry layer concluded about a call's last attempt: whether it was retryable, and any delay asked.
 
-    ``retryable`` is the policy's verdict: the failure is one of its retryable kinds (a status in ``statuses``, the
-    server's ``x-should-retry: true``, or a network failure that is not a local mistake), and sending the request again
-    is safe for its method. *judge*, when the retry layer supplies it, applies the same rules to another result of the
-    call (a failure reading the body, which happens after the retry layer has returned): see :meth:`about`.
+    ``failure`` says whether the policy counts the result as a failure at all (a status in ``statuses``, the server's
+    ``x-should-retry: true``, or a network failure), as opposed to an answer it passes on. ``retryable`` is the
+    policy's verdict: the result is a failure re-sending can cure (not one of :data:`UNRETRYABLE_ERRORS`), and sending
+    the request again is safe for its method. *judge*, when the retry layer supplies it, applies the same rules to
+    another result of the call (a failure reading the body, which happens after the retry layer has returned): see
+    :meth:`about`.
     """
 
     retryable: bool
     retry_after: float | None = None
     judge: Callable[[httpx2.Response | Exception], RetryOutcome] | None = field(default=None, compare=False, repr=False)
+    failure: bool = True
 
     def about(self, result: httpx2.Response | Exception) -> RetryOutcome:
         """Return the policy's verdict on *result*: judged by :attr:`judge` when there is one, else this verdict."""
