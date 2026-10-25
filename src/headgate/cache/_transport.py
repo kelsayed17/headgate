@@ -422,7 +422,8 @@ def _sharing_key(request: httpx2.Request) -> _SharingKey:
     """
     timeout = request.extensions.get("timeout")
     # Sorted by name, which is unique, so the values (a float or None) are never compared.
-    timeouts: tuple[tuple[str, object], ...] = tuple(sorted(timeout.items())) if timeout else ()
+    named: list[tuple[str, object]] = sorted((str(name), value) for name, value in timeout.items()) if timeout else []
+    timeouts = tuple(named)
     retry = CallContext.of(request).get(RETRY_POLICY)
     return str(request.url), tuple(sorted(request.headers.multi_items())), timeouts, retry
 

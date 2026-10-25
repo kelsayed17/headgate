@@ -175,10 +175,10 @@ class _Recording(_Names):
         self.asked: list[tuple[str, int]] = []
 
     @override
-    async def __call__(self, host: str, port: int) -> Sequence[str]:
+    async def __call__(self, host: str, _port: int) -> Sequence[str]:
         """Record the lookup, then resolve *host*."""
-        self.asked.append((host, port))
-        return await super().__call__(host, port)
+        self.asked.append((host, _port))
+        return await super().__call__(host, _port)
 
 
 #: A port no scheme defaults to, so the resolver can only have learned it from the URL.

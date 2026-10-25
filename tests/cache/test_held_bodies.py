@@ -229,6 +229,18 @@ async def test_a_close_that_fails_while_a_body_past_the_cap_is_abandoned_is_quie
     assert streams[0].closed
 
 
+async def test_a_get_with_no_read_timeout_is_fetched(storage: AsyncSqliteStorage) -> None:
+    """Fetch a GET whose timeouts mix a number and ``None`` (no read timeout), which the sharing key must order."""
+    network = _Gated()
+    network.gate.set()
+    timeout = {"connect": 1.0, "read": None, "write": 1.0, "pool": 1.0}
+    request = httpx2.Request("GET", _URL, extensions={"timeout": timeout})
+
+    response = await cache_transport(storage, network).handle_async_request(request)
+
+    assert await response.aread() == _BODY
+
+
 # Validator.of
 
 
