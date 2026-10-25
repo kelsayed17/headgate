@@ -246,7 +246,7 @@ class FaultyTransport(httpx2.AsyncBaseTransport):
                     raise httpx2.ReadTimeout(msg, request=request)
                 await self._sleep(seconds)
                 return _respond(then, request, call)
-            case Respond():
+            case _:
                 await _write(request, call)
                 return _respond(step, request, call)
 

@@ -239,8 +239,6 @@
   class RetryTransport(AsyncBaseTransport)(*, transport: 'httpx2.AsyncBaseTransport', policy: 'RetryPolicy', sleep: 'Sleep' = <function asyncio_sleep at 0x…>, clock: 'Clock' = <built-in function monotonic>) -> 'None'
       def aclose(self) -> 'None'
       def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
-      def ledger(self, budget: 'RetryBudget') -> 'RetryLedger'
-      def sleep_for(self, seconds: 'float') -> 'None'
   class SendTrackingTransport(AsyncBaseTransport)(*, transport: 'httpx2.AsyncBaseTransport') -> 'None'
       def aclose(self) -> 'None'
       def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'

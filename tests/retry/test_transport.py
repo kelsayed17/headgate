@@ -323,6 +323,32 @@ async def test_a_retry_after_past_the_ceiling_stops_at_once() -> None:
     await response.aclose()
 
 
+async def test_a_long_failure_body_is_parked_in_part() -> None:
+    """Keep a bounded head of a long failure body through the wait, closing the original."""
+    clock = FakeClock()
+    retry, network = _transport(
+        [Respond(503, content=b"x" * 100_000), Respond(503)], clock, RetryPolicy(attempts=2, budget=None)
+    )
+    request, _ = _request(clock=clock)
+
+    response = await retry.handle_async_request(request)
+
+    assert network.calls[0].response_closed is True
+    await response.aclose()
+
+
+async def test_the_default_sleep_is_asyncio_sleep() -> None:
+    """Wait through ``asyncio.sleep`` when no sleep is injected."""
+    network = FaultyTransport(schedule=[Respond(503, retry_after=0), Respond(200)])
+    retry = RetryTransport(transport=network, policy=RetryPolicy(budget=None))
+    request = httpx2.Request("GET", "https://api.test/x")
+
+    response = await retry.handle_async_request(request)
+
+    assert response.status_code == httpx2.codes.OK
+    await response.aclose()
+
+
 # --- The deadline ---
 
 
@@ -716,6 +742,21 @@ async def test_when_every_hedged_send_fails_the_retry_loop_takes_over() -> None:
     assert response.status_code == httpx2.codes.OK
     assert len(network.calls) == context.attempt == _THREE_SENDS
     assert all(call.response_closed for call in network.calls[:2])
+    await response.aclose()
+
+
+async def test_an_answer_before_the_hedge_delay_cancels_the_timer() -> None:
+    """Return a quick answer without hedging, cancelling the hedge timer still waiting."""
+    changes = _Changes()
+    gate = _Gate(changes)
+    network = FaultyTransport(schedule=[Respond(200)])
+    retry = RetryTransport(transport=network, policy=RetryPolicy(hedge=Hedge(), budget=None), sleep=gate.sleep)
+    request, _ = _request(clock=FakeClock())
+
+    response = await retry.handle_async_request(request)
+
+    assert len(network.calls) == 1
+    assert not gate.opened.is_set()
     await response.aclose()
 
 

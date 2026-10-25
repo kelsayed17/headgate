@@ -254,3 +254,41 @@ async def test_a_keyed_post_whose_head_reached_the_server_is_resent_end_to_end()
         await client.aclose()
 
     assert connections == len(("first", "second", "third"))
+
+
+class _ClosesBody(httpx2.AsyncBaseTransport):
+    """A transport that closes the request's body stream, as one that gives up on a body would, and answers 200."""
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        stream = request.stream
+        if isinstance(stream, httpx2.AsyncByteStream):
+            await stream.aclose()
+        return httpx2.Response(200)
+
+
+class _RecordsClose(httpx2.AsyncByteStream):
+    """A body stream that records whether it was closed."""
+
+    def __init__(self) -> None:
+        """Start unclosed."""
+        self.closed = False
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"x"
+
+    @override
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+async def test_closing_the_counted_body_closes_the_callers_stream() -> None:
+    """Pass a close of the counting wrapper on to the stream it wraps."""
+    stream = _RecordsClose()
+    request = httpx2.Request("POST", "https://api.test/x", stream=stream)
+    _tracked(request)
+
+    await SendTrackingTransport(transport=_ClosesBody()).handle_async_request(request)
+
+    assert stream.closed is True

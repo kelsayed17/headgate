@@ -159,3 +159,14 @@ def test_only_a_refused_stream_counts_as_not_processed() -> None:
     assert refused_stream(cancelled) is False
     assert refused_stream(httpx2.RemoteProtocolError("Server disconnected")) is False
     assert refused_stream(_refused()) is True
+
+
+def test_a_stream_reset_deeper_than_the_cause_chain_searched_is_not_found() -> None:
+    """Stop looking a few causes down, so an unrelated deep chain is not walked to its end."""
+    error: BaseException = _refused()
+    for depth in range(8):
+        outer = httpx2.RemoteProtocolError(f"wrapped {depth}")
+        outer.__cause__ = error
+        error = outer
+
+    assert refused_stream(error) is False
