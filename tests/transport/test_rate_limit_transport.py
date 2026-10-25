@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The rate limiter is a TRANSPORT, and where it sits in the stack is the behaviour under test.
 
 ``AsyncBaseClient`` paces requests from inside its transport stack::
@@ -132,7 +135,8 @@ async def test_every_retry_takes_a_token(acquired: dict[int, int]) -> None:
 async def test_the_token_is_taken_before_the_request_is_sent(acquired: dict[int, int]) -> None:
     """Acquire, THEN send. The final tally cannot tell the order apart: a transport that sent first and acquired
     afterwards spends the same tokens, but paces nothing, because the request is already on the wire by the time
-    the limiter is consulted. So the inner transport records the tally as each request reaches it."""
+    the limiter is consulted. So the inner transport records the tally as each request reaches it.
+    """
     base = _CountingTransport(acquired=acquired)
     client = StubClient(base_url="https://x", transport=base, rate=Rate.per_second(_INSTANT))
 

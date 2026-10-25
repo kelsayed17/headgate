@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """headgate: an async HTTP base client with retry, rate limiting, circuit breaking and declared responses.
 
 Built on ``httpx2``; Python 3.14 or newer. A client subclasses :class:`AsyncBaseClient` and picks a codec flavor by

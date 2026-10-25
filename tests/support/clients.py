@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """A bare client for tests: the base client's policy and nothing of its own."""
 
 from __future__ import annotations

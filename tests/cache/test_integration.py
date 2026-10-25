@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``AsyncBaseClient``'s cache: where it sits in the transport stack, HIT/MISS behaviour, and TTL threading.
 
 The cache is opt-in per client (``cache=HttpCache(policy=, storage=, ttl=)``) and sits below retry and above the rate
@@ -203,7 +206,7 @@ async def _network_hits_for_two_gets(
 
 
 async def test_a_short_client_ttl_expires_the_entry(storage: AsyncSqliteStorage) -> None:
-    """hishel APPLIES the client's TTL: past it, the entry is gone and the second GET goes back to the network."""
+    """Hishel APPLIES the client's TTL: past it, the entry is gone and the second GET goes back to the network."""
     hits = await _network_hits_for_two_gets(storage, client_ttl=0.5, call_ttl=None, gap=2.0)
 
     assert hits == 2

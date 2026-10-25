@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``StaticHeaderAuth`` and ``QueryParamAuth``: a fixed credential merged into every request.
 
 The invariant both pin is explicit-value precedence: a caller's ``headers=`` / ``params=`` wins a clash with the auth

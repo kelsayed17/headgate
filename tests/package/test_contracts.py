@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The README's contracts that a grep can check: no logging, no environment reads, no upstream ``httpx``."""
 
 from __future__ import annotations

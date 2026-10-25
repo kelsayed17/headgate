@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``headgate.health``: the read surface an application exports transport degradation through.
 
 headgate neither logs nor emits metrics, so these snapshots are the only way an open breaker or a broken
@@ -42,9 +45,9 @@ def _clean_registries() -> Iterator[None]:
 def _trip(breaker: CircuitBreaker) -> None:
     """Record five marked failures: the default threshold."""
     for _ in range(5):
-        with pytest.raises(OSError), breaker.track() as verdict:
+        with pytest.raises(ConnectionError), breaker.track() as verdict:  # noqa: PT012  # the raise is the subject
             verdict.mark_failed()
-            raise OSError
+            raise ConnectionError
 
 
 def test_breaker_states_reports_a_tripped_host_as_open() -> None:
@@ -77,7 +80,8 @@ class _LookupFails(AsyncSqliteStorage):
 
     @override
     async def get_entries(self, key: str) -> list[Entry]:
-        raise ValueError("corrupt cache entry")
+        msg = "corrupt cache entry"
+        raise ValueError(msg)
 
 
 class _Network(httpx2.AsyncBaseTransport):

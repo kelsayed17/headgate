@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The built distribution's metadata: licence, Python floor, dependencies and extras."""
 
 from __future__ import annotations

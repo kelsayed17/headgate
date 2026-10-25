@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``sanitize_url``: what every ``ClientError`` message does to a URL before naming it."""
 
 from __future__ import annotations

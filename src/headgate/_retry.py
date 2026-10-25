@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Retry: the policy a request is re-sent under, and the transport that re-sends it.
 
 :class:`RetryTransport` is the top layer of every client's transport stack (see :mod:`headgate._stack`). It retries
@@ -46,7 +49,7 @@ _RETRY_AFTER_ERRORS = (TypeError, ValueError)
 
 
 def _retry_after_seconds(value: str) -> float | None:
-    """A ``Retry-After`` value in seconds, or ``None`` when it is neither whole seconds nor an HTTP-date.
+    """Parse a ``Retry-After`` value into seconds; ``None`` when it is neither whole seconds nor an HTTP-date.
 
     A zone-less date is read as UTC; a past date is 0.
     """
@@ -98,12 +101,12 @@ class Retry:
         if self.attempts_made == 0 or self.backoff_factor == 0:
             return 0.0
         backoff = self.backoff_factor * (2.0**self.attempts_made)
-        backoff *= random.uniform(0.0, 1)
+        backoff *= random.uniform(0.0, 1)  # noqa: S311  # jitter, not cryptography
         return min(backoff, _MAX_BACKOFF_WAIT)
 
 
 def build_retry(max_attempts: int) -> Retry:
-    """The retry policy for a client that makes at most ``max_attempts`` sends per request.
+    """Build the retry policy for a client that makes at most ``max_attempts`` sends per request.
 
     ``total`` counts RETRIES, so it is one less: the default 3 means one send and up to two re-sends, and
     ``max_attempts<=1`` means a single attempt.

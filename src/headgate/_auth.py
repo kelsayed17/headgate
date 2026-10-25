@@ -1,4 +1,7 @@
-"""Provider-agnostic ``httpx2.Auth`` classes: :class:`StaticHeaderAuth`, :class:`QueryParamAuth`, :class:`CachedTokenAuth`.
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
+"""Provider-agnostic ``httpx2.Auth`` classes: static headers, query parameters, and a cached minted token.
 
 ``httpx2.AsyncClient`` runs ``auth.async_auth_flow(request)`` once per logical request, ABOVE the transport stack, so
 a re-send the retry transport makes re-sends the same, already-signed request. Only a re-send the flow itself yields
@@ -84,9 +87,9 @@ class QueryParamAuth(httpx2.Auth):
     """Merge a fixed set of query params into the request URL (setdefault).
 
     **The key rides the URL, and URLs are not secret to observability.** A tracing integration that records the full
-    request URL (OpenTelemetry's httpx instrumentation, for one) will record the key in cleartext, so exclude the host of
-    any client using this class from URL capture. Error messages and the HTTP cache are safe regardless: the well-known
-    secret parameter names and the names given here are redacted from both.
+    request URL (OpenTelemetry's httpx instrumentation, for one) will record the key in cleartext, so exclude the host
+    of any client using this class from URL capture. Error messages and the HTTP cache are safe regardless: the
+    well-known secret parameter names and the names given here are redacted from both.
     """
 
     def __init__(self, params: dict[str, str]) -> None:
@@ -125,11 +128,11 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     * **one forced re-mint on a 401**, never a loop, for a token revoked server-side before its stated lifetime — and
       **none for a token minted in the last** ``_FRESH_TOKEN_S`` **seconds**. A 401 on a token that new is a
       permissions problem, not staleness, and re-minting cannot fix it. Without that exception a gateway that rejects
-      valid tokens (a revoked scope, a changed entitlement) would cost one mint PER REQUEST. Now it costs at most one mint
-      per ``_FRESH_TOKEN_S``, and the 401 reaches the caller as the ``AuthError`` it is.
+      valid tokens (a revoked scope, a changed entitlement) would cost one mint PER REQUEST. Now it costs at most one
+      mint per ``_FRESH_TOKEN_S``, and the 401 reaches the caller as the ``AuthError`` it is.
 
-    What is deliberately NOT here: the exchange itself. That is where providers genuinely differ (form-encoded or JSON, a
-    separate sign-in host, their own field names). A subclass supplies it in one of two ways:
+    What is deliberately NOT here: the exchange itself. That is where providers genuinely differ (form-encoded or JSON,
+    a separate sign-in host, their own field names). A subclass supplies it in one of two ways:
 
     * :meth:`_mint_token`, a coroutine that makes the exchange itself (on a client of its own) and returns
       ``(token, lifetime)``. The usual shape.
@@ -191,6 +194,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         *request* is the call that needs the credential, for a hop to copy its extensions from (timeout, retry
         policy). Called with the lock held, like :meth:`_mint_token`, and the default delegates to it.
         """
+        del request  # only a flow that yields its own requests needs the call it is minting for
         token, lifetime = await self._mint_token()
         yield Minted(token, lifetime)
 
@@ -217,18 +221,21 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         operator configured the credential, for the error message.
         """
         if returned and returned != configured:
-            raise ClientConfigurationError(
+            msg = (
                 f"{provider} returned a NEW long-lived credential, which means this key is configured for "
                 f"ROTATING credentials. This client cannot use that: the replacement would have to be persisted "
                 f"durably on every exchange, and the configured {setting} is now dead. Re-authorise with a "
-                f"non-rotating key and set {setting} to the new value.",
+                f"non-rotating key and set {setting} to the new value."
+            )
+            raise ClientConfigurationError(
+                msg,
                 source=provider,
             )
 
     # -- Cache ---------------------------------------------------------------
 
     def _usable(self, rejected: TokenT | None) -> TokenT | None:
-        """The cached token if it is present, not the one a 401 just rejected, and not within the refresh margin."""
+        """Return the cached token if present, not the one a 401 just rejected, and not within the refresh margin."""
         cached = self._token
         if cached is not None and cached != rejected and time.monotonic() < self._expires_at - self._margin_s:
             return cached
@@ -244,7 +251,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         return token
 
     async def _access_token(self, *, rejected: TokenT | None = None) -> TokenT:
-        """The cached token, minting one when absent, near expiry, or just rejected (by :meth:`_mint_token`).
+        """Return the cached token, minting one when absent, near expiry, or just rejected (by :meth:`_mint_token`).
 
         ``rejected`` is the token a 401 just came back for. Passing it — rather than a bare ``force`` flag — is what
         makes concurrent 401s collapse: each waiter re-checks under the lock, sees that the cached token is no longer
@@ -294,6 +301,6 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
                     token = self._remember(step.token, step.lifetime)
             self._attach(request, token)
             response = yield request
-            if response.status_code != 401 or attempt or self._is_fresh(token):
+            if response.status_code != httpx2.codes.UNAUTHORIZED or attempt or self._is_fresh(token):
                 return
             rejected = token

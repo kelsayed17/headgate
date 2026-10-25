@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """What the per-host circuit breaker counts, and who it lets through, tested through ``AsyncBaseClient``.
 
 The breaker stops calling a host that is failing and finds out cheaply when it has recovered. These properties depend
@@ -35,7 +38,7 @@ from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Iterator
+    from collections.abc import AsyncGenerator, AsyncIterator
 
 _HOST = "api.example"
 _URL = f"https://{_HOST}"
@@ -64,7 +67,8 @@ class _TruncatedBodyStream(httpx2.AsyncByteStream):
     @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         yield b"{"
-        raise httpx2.ReadError("connection dropped mid-body")
+        msg = "connection dropped mid-body"
+        raise httpx2.ReadError(msg)
 
 
 class _TruncatedBodyTransport(httpx2.AsyncBaseTransport):
@@ -74,7 +78,7 @@ class _TruncatedBodyTransport(httpx2.AsyncBaseTransport):
 
 
 @pytest.fixture
-def breaker() -> Iterator[CircuitBreaker]:
+def breaker() -> CircuitBreaker:
     """Register a fast-recovering breaker for the test host (the registry default is 60s).
 
     The autouse ``reset_circuit_breakers`` clears the registry around the test. The cooldown is 50 ms rather than the
@@ -83,7 +87,7 @@ def breaker() -> Iterator[CircuitBreaker]:
     """
     installed = CircuitBreaker(failure_threshold=5, recovery_timeout=0.05, name=_HOST)
     HOST_BREAKERS[_HOST] = installed
-    yield installed
+    return installed
 
 
 async def _fail(client: StubClient, times: int) -> None:
@@ -178,7 +182,8 @@ class _RefusingAuth(httpx2.Auth):
 
     @override
     async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
-        raise ClientConfigurationError("rotated credential refused", source="test")
+        msg = "rotated credential refused"
+        raise ClientConfigurationError(msg, source="test")
         yield request  # pragma: no cover - makes this an async generator
 
 

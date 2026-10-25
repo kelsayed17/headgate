@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Response helpers for tests.
 
 ``response`` builds a complete ``httpx2.Response`` to hand a reader directly. ``RESPONSE`` is a reader that hands a

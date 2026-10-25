@@ -1,7 +1,11 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """URL handling: path-segment escaping, and redacting a credential from a URL.
 
-Two of its functions escape: :func:`render_path` renders a whole t-string URL path, and :func:`escape_segment` — which it calls —
-escapes one value as a single segment. They exist because interpolating a caller's value straight into an f-string
+Two of its functions escape: :func:`render_path` renders a whole t-string URL path, and :func:`escape_segment` — which
+it calls — escapes one value as a single segment. They exist because interpolating a caller's value straight into an
+f-string
 path lets that value control the URL's STRUCTURE rather than occupying one segment of it::
 
     f"/v2/positions/{symbol}"        symbol = "../../v2/account"
@@ -22,9 +26,12 @@ PATH.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
 from string.templatelib import Template
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 #: Query-string parameter NAMES that carry a credential, compared by :func:`_fold`: case-insensitive, ``_`` and ``-``
 #: ignored. Redacted from every URL a ``ClientError`` message names (:func:`sanitize_url`) and stripped before a
@@ -87,7 +94,7 @@ def _fold(name: str) -> str:
 
 
 def register_secret_params(names: Iterable[str]) -> None:
-    """Treat *names* as credential parameters from now on. Process-global, add-only: over-redacting is the safe error."""
+    """Treat *names* as credential parameters from now on. Process-global and add-only: over-redacting is safe."""
     _registered.update(_fold(n) for n in names)
 
 
@@ -135,8 +142,8 @@ def escape_segment(value: object) -> str:
 def render_path(template: Template) -> str:
     """Render a t-string URL path, escaping every interpolation BY DEFAULT.
 
-    :func:`escape_segment` is a convention and works only where the author remembered it. This is the mechanism that replaces
-    it: an f-string is already one flat ``str`` by the time anything sees it, but a
+    :func:`escape_segment` is a convention and works only where the author remembered it. This is the mechanism that
+    replaces it: an f-string is already one flat ``str`` by the time anything sees it, but a
     :class:`~string.templatelib.Template` keeps its literals and its holes apart, so the escaping decision is made
     HERE. ``t"/v2/positions/{symbol}"`` yields ``BTC%2FUSD`` with the author doing nothing — there is nothing to
     forget.
@@ -159,8 +166,8 @@ def render_path(template: Template) -> str:
 
     **That greppability is narrower than it looks, in two ways.** A format spec may itself be interpolated and is
     evaluated eagerly, so ``t"/x/{v:{spec}}"`` with ``spec = "raw"`` renders UNESCAPED while matching no grep for
-    ``:raw}``, and this function cannot tell. A nested ``Template`` also splices unescaped and greps as neither; that one
-    is by design.
+    ``:raw}``, and this function cannot tell. A nested ``Template`` also splices unescaped and greps as neither; that
+    one is by design.
 
     ``raw`` is IGNORED on a ``Template``: the ``Template`` branch is tested first, so ``t"{inner:raw}"`` recurses
     exactly as ``t"{inner}"`` does. Of the two readings that is the safer one — the alternative would let ``:raw`` on
@@ -180,7 +187,8 @@ def render_path(template: Template) -> str:
     # branch, so ``render_path(f"/v2/positions/{sym}")`` would otherwise return the f-string's ALREADY-INTERPOLATED,
     # UNESCAPED text — a silent no-op on a security primitive. Static checks catch it; this makes it loud anyway.
     if not isinstance(template, Template):
-        raise TypeError(f"render_path() takes a t-string Template, got {type(template).__name__}")
+        msg = f"render_path() takes a t-string Template, got {type(template).__name__}"
+        raise TypeError(msg)
 
     out: list[str] = []
     for part in template:
@@ -188,7 +196,8 @@ def render_path(template: Template) -> str:
             out.append(part)
             continue
         if part.conversion is not None:
-            raise ValueError(f"conversion !{part.conversion} is not supported in a URL path: {part.expression!r}")
+            msg = f"conversion !{part.conversion} is not supported in a URL path: {part.expression!r}"
+            raise ValueError(msg)
         if isinstance(part.value, Template):
             out.append(render_path(part.value))
         elif part.format_spec == "raw":
@@ -200,8 +209,10 @@ def render_path(template: Template) -> str:
 
 
 def sanitize_url(url: str) -> str:
-    """*url* with its credentials replaced by ``***``: secret query parameters, a userinfo password, and secret
-    ``name=value`` pairs in the fragment (an OAuth implicit-flow ``#access_token=``).
+    """Return *url* with its credentials replaced by ``***``.
+
+    That is secret query parameters, a userinfo password, and secret ``name=value`` pairs in the fragment (an OAuth
+    implicit-flow ``#access_token=``).
 
     Every URL a ``ClientError`` message names goes through here first, because those messages may reach an API
     response or a log, and some providers authenticate by query parameter. A URL with none of these is returned

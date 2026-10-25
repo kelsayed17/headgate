@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Pre-mint a ``CachedTokenAuth`` so an endpoint test makes no token exchange.
 
 Seeding the cache with a token that never expires keeps a client's endpoint suites about the endpoint, not about the

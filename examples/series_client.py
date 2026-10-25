@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """A minimal client in both codec flavors: same shape, only the import and the model type differ."""
 
 from __future__ import annotations

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The msgspec codec flavor: strict JSON decode into ``msgspec.Struct``s, and request-body preparation.
 
 A client picks its flavor by import, ``from headgate.msgspec import decoder, to_builtins``, and the base client stays a
@@ -75,7 +78,7 @@ def decoder[T](
     allow_empty_body: bool = False,
     check: Callable[[T], Refused | None] | None = None,
 ) -> Reader[T] | Reader[Any]:
-    """A reader that decodes the body as strict msgspec JSON into the type expression ``type_``.
+    """Build a reader that decodes the body as strict msgspec JSON into the type expression ``type_``.
 
     ``type_`` carries the whole wire shape, so one function serves every JSON body:
 
@@ -100,8 +103,8 @@ def decoder[T](
 def to_builtins(value: object, *, drop_none: bool = False) -> Any:  # JSON builtins for httpx2 json=/data=
     """Convert a msgspec struct (or sequence of structs) to ``json=``-ready builtins.
 
-    A thin ``msgspec.to_builtins`` delegate that applies the struct's ``field(name=…)`` renames, preserves field-declaration order (dict order is wire key order once
-    httpx2 serializes), and honors ``omit_defaults``.
+    A thin ``msgspec.to_builtins`` delegate that applies the struct's ``field(name=…)`` renames, preserves
+    field-declaration order (dict order is wire key order once httpx2 serializes), and honors ``omit_defaults``.
 
     ``drop_none=True`` additionally removes ``None``-valued fields recursively, for outbound bodies whose unset
     optionals must be OMITTED rather than serialized as ``null``. The drop keeps ``False`` (unlike ``omit_defaults``).

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The transport stack every client is built on, assembled in one place.
 
 :func:`build_http_client` returns the ``httpx2.AsyncClient`` an ``AsyncBaseClient`` holds, built over::
@@ -43,7 +46,7 @@ _WRITE_TIMEOUT = 10.0
 _POOL_TIMEOUT = 15.0
 
 
-def build_http_client(
+def build_http_client(  # noqa: PLR0913  # keyword-only: AsyncBaseClient's configuration
     *,
     base_url: str,
     rate: Rate,

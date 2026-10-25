@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The ``ClientError`` tree: this distribution's public failure contract.
 
 ``headgate.errors`` is imported by nearly every module, so its pickling behaviour and its subclass shape are a

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """A malformed URL raises as a ``ClientError``, not as httpx2's ``InvalidURL``.
 
 httpx2's ``InvalidURL`` is not an ``HTTPError``, so the client maps it explicitly; without that it would escape the

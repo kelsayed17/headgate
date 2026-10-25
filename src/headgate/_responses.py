@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """What a client call declares about the responses it can get back.
 
 A client method is one provider endpoint, and it returns that endpoint's documented outcome as a typed value or raises
@@ -49,19 +52,25 @@ _COULD_NOT_ASK: Final = frozenset(
 )
 
 
+#: The status range RFC 9110 defines.
+_MIN_STATUS, _MAX_STATUS = 100, 599
+
+
 def _refuse_unclaimable(status: int) -> None:
     """Raise ``ValueError`` for a status no call may declare as an answer. The ONE check both :class:`Expect` paths run.
 
     The constructor runs it over every key of ``answers`` and :meth:`Expect.on` over the status it adds, so the two
     paths refuse the same statuses with the same message and cannot drift apart.
     """
-    if not 100 <= status <= 599:
-        raise ValueError(f"{status} is not an HTTP status")
-    if status in _COULD_NOT_ASK or status >= 500:
-        raise ValueError(f"{status} means we could not ask; it is never a documented answer")
+    if not _MIN_STATUS <= status <= _MAX_STATUS:
+        msg = f"{status} is not an HTTP status"
+        raise ValueError(msg)
+    if status in _COULD_NOT_ASK or status >= httpx2.codes.INTERNAL_SERVER_ERROR:
+        msg = f"{status} means we could not ask; it is never a documented answer"
+        raise ValueError(msg)
 
 
-class Refused(Exception):
+class Refused(Exception):  # noqa: N818  # a signal a reader raises, like StopIteration; not an error class
     """A provider's refusal, as its reader (or a host check) saw it. The base client builds the ``ClientError``.
 
     Raised by a reader for a refusal written inside a body: an error envelope, a ``REQUEST_NOT_PROCESSED`` status, a
@@ -109,7 +118,7 @@ class Expect[T]:
     Separate from :data:`Reader` on purpose. A verb takes ``Reader[T] | Expect[T]``, and that union is unambiguous
     only because an ``Expect`` is not callable.
 
-    The constructor refuses exactly what :meth:`on` refuses (a status outside 100–599, 401, 407, 429 or any 5xx),
+    The constructor refuses exactly what :meth:`on` refuses (a status outside 100-599, 401, 407, 429 or any 5xx),
     because an ``Expect`` built directly with ``answers`` is the same claim. It then freezes ``answers`` into a
     read-only copy, so neither the caller's dict nor the default can be changed afterwards.
     """
@@ -128,7 +137,7 @@ class Expect[T]:
 
         Refused at construction with ``ValueError``, so a bad claim fails when its module is imported:
 
-        * a status outside 100–599;
+        * a status outside 100-599;
         * 401, 407, 429 or any 5xx. By fiat these mean we could not ask: the credentials are ours, and the transport
           owns 429 and 5xx through retry and the breaker;
         * a status already declared.
@@ -138,7 +147,8 @@ class Expect[T]:
         """
         _refuse_unclaimable(status)
         if status in self.answers:
-            raise ValueError(f"{status} is already declared on this Expect")
+            msg = f"{status} is already declared on this Expect"
+            raise ValueError(msg)
         widened: dict[int, Reader[T | E]] = {**self.answers, status: read}
         return Expect(self.ok, widened)
 
@@ -160,8 +170,8 @@ def json_reader[T](
 
     ``check`` runs on the DECODED value and returns a :class:`Refused` for a refusal written inside a 2xx body, or
     ``None``. The reader raises what it returns. A check is typed over a small structural ``Protocol`` naming only the
-    envelope fields it reads. It raises only for codes EVERY consumer of the endpoint would read as failure: auth, quota,
-    rate limit, server, a malformed request, and any undocumented code. A code about the subject (an unknown
+    envelope fields it reads. It raises only for codes EVERY consumer of the endpoint would read as failure: auth,
+    quota, rate limit, server, a malformed request, and any undocumented code. A code about the subject (an unknown
     instrument, a rejected order) is left in the value for the caller.
     """
 
@@ -178,7 +188,7 @@ def json_reader[T](
 
 
 def as_bytes(resp: httpx2.Response, /) -> bytes:
-    """The body, undecoded: a wire that is not a *format* from the client's point of view.
+    """Return the body undecoded: a wire that is not a *format* from the client's point of view.
 
     A CSV/TXT/ZIP/PDF/XML dump a parser reads later, or an opaque blob. It never raises. Named ``as_bytes`` rather than
     ``body`` because ``body`` is the commonest parameter name in a client, and any of them would shadow the import.
@@ -203,13 +213,13 @@ _UNSENT_URL: Final = "https://sse.invalid/"
 
 
 def event_stream(resp: httpx2.Response, /) -> list[bytes]:
-    """The ``data`` of each server-sent event in the body, in order.
+    """Return the ``data`` of each server-sent event in the body, in order.
 
     httpx2's ``EventSource`` parses the grammar (multi-line ``data``, CRLF, comments) but requires a response that
-    declares ``text/event-stream``, so the body is framed into an ``httpx2.Response`` of its own first. ``max_event_size=None``:
-    the body is already buffered and capped by the client, and a large reply is legitimately one event, which
-    httpx2's 1 MiB default would refuse. Choosing WHETHER a body is an event stream is the caller's job, usually by
-    reading the ``content-type``.
+    declares ``text/event-stream``, so the body is framed into an ``httpx2.Response`` of its own first.
+    ``max_event_size=None``: the body is already buffered and capped by the client, and a large reply is legitimately
+    one event, which httpx2's 1 MiB default would refuse. Choosing WHETHER a body is an event stream is the caller's
+    job, usually by reading the ``content-type``.
     """
     framed = httpx2.Response(
         200,

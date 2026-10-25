@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Cache policies shared by the cache suite."""
 
 from __future__ import annotations

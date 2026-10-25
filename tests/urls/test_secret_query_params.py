@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """A secret query parameter never appears in a raised ``ClientError``'s message."""
 
 from __future__ import annotations
@@ -63,7 +66,8 @@ async def test_a_name_the_auth_declares_is_redacted_even_if_unlisted(httpx2_mock
 
 async def test_a_transport_message_that_echoes_the_url_is_redacted() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
-        raise httpx2.RemoteProtocolError(f"bad response from {request.url}")
+        msg = f"bad response from {request.url}"
+        raise httpx2.RemoteProtocolError(msg)
 
     client = StubClient(
         rate=Rate.per_second(100),

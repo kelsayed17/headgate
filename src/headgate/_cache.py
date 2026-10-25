@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The opt-in HTTP response cache: hishel's transport, made safe to share and to fail.
 
 `hishel <https://hishel.com>`_'s :class:`hishel.httpx2.AsyncCacheTransport` sits below retry and above the rate
@@ -57,8 +60,8 @@ class HttpCache:
     """A client's opt-in HTTP response cache: which responses to keep, where, and for how long by default.
 
     ``policy`` (the allowlist) decides what is stored; ``storage`` is the shared hishel store, ``None`` when caching is
-    off, in which case the client does not cache at all; ``ttl`` is the client's default lifetime, stamped on each request
-    as ``hishel_ttl`` by :class:`ResilientCacheTransport` (a per-call ``cache_ttl=`` wins).
+    off, in which case the client does not cache at all; ``ttl`` is the client's default lifetime, stamped on each
+    request as ``hishel_ttl`` by :class:`ResilientCacheTransport` (a per-call ``cache_ttl=`` wins).
     """
 
     policy: FilterPolicy
@@ -236,12 +239,14 @@ class _RestoreRequestExtensions(httpx2.AsyncBaseTransport):
 
     **It also puts back the credential query params** the cache layer stripped before hishel saw the request. hishel
     persists the full request URL with every entry and matches a hit by comparing it, so a key left on the URL (an
-    ``api_key=`` parameter) would be written in plaintext into the cache. Stripped above and restored here, the key never
-    reaches storage, a hit still matches (both sides are the stripped URL), and the network request still carries it.
+    ``api_key=`` parameter) would be written in plaintext into the cache. Stripped above and restored here, the key
+    never reaches storage, a hit still matches (both sides are the stripped URL), and the network request still carries
+    it.
 
     **And it records every response it hands up**, so the cache layer's fallback can close one hishel abandoned. hishel
     sends first and stores second; when the store raised, the network response was never read or closed, and its pooled
-    connection stayed checked out. After ``max_connections`` storage faults every cache MISS waited out the pool timeout.
+    connection stayed checked out. After ``max_connections`` storage faults every cache MISS waited out the pool
+    timeout.
 
     This sits directly below the cache transport rather than inside it: hishel's own
     conversion helpers are private, and a transport of our own asserts nothing about their
@@ -302,7 +307,7 @@ class _Unshared(enum.Enum):
 
 
 def _sharing_key(request: httpx2.Request) -> str:
-    """What two in-flight GETs must agree on to share one download: the URL and every request header.
+    """Return what two in-flight GETs must agree on to share one download: the URL and every request header.
 
     Headers, not just the URL: two GETs that differ in ``Range``, ``Accept`` or a credential ask for different
     responses.
@@ -331,9 +336,9 @@ class ResilientCacheTransport(AsyncCacheTransport):
 
     **The body is read INSIDE this layer**, up to the client's size cap. A network-backed hishel storage touches its
     backend while the body streams, which would otherwise happen in ``read_capped``, after this method had
-    returned, so a storage fault would escape as a raw backend exception rather than a ``ClientError``. Reading here puts
-    that fault inside the fallback. Every response abandoned on the way (hishel's, and the network response it had not
-    closed) is closed before the request is redone.
+    returned, so a storage fault would escape as a raw backend exception rather than a ``ClientError``. Reading here
+    puts that fault inside the fallback. Every response abandoned on the way (hishel's, and the network response it had
+    not closed) is closed before the request is redone.
 
     **It never closes the storage.** One storage is meant to be shared by many clients, so whoever created it closes
     it; ``aclose()`` closes only the transport below.
@@ -346,10 +351,10 @@ class ResilientCacheTransport(AsyncCacheTransport):
     arrives while the first is still fetching finds nothing in storage and goes to the network too, so five concurrent
     lookups of one large file on a cold cache would make five downloads. So the first GET for a URL fetches, and every
     identical GET that arrives while it is in flight waits for it and gets its own copy of that response: a hit or a
-    miss, cached or not, since the body is held whole here anyway. A network failure fails every waiting request from the
-    one attempt; each caller's retry layer, above this one, then retries, and those retries share again. A first request
-    that is cancelled hands the fetch to the next waiting one. A body past the cap is not held, so each waiting request
-    fetches its own. POSTs are never shared, since a POST's body is part of what it asks for.
+    miss, cached or not, since the body is held whole here anyway. A network failure fails every waiting request from
+    the one attempt; each caller's retry layer, above this one, then retries, and those retries share again. A first
+    request that is cancelled hands the fetch to the next waiting one. A body past the cap is not held, so each waiting
+    request fetches its own. POSTs are never shared, since a POST's body is part of what it asks for.
     """
 
     def __init__(

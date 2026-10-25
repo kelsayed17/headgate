@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Every ``httpx2.Auth`` in the package runs one kind of flow, and declares nothing httpx2 will ignore.
 
 Two rules:

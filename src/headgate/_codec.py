@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Codec-neutral helpers for preparing request bodies: shared by every flavor's ``to_builtins``."""
 
 from __future__ import annotations

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``policy_disabled()``: build a client with its transport policy (breaker, retries, pacing) switched off.
 
 The tests pin each of the three behaviours switched off, plus the properties that make it a construction-time

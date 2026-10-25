@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """What importing headgate pulls in: never upstream ``httpx``, and no codec unless a flavor module is imported."""
 
 from __future__ import annotations

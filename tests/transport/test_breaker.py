@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The circuit breaker's state machine, driven directly.
 
 The seam it is driven through (one ``with breaker.track()`` block per fetch inside ``AsyncBaseClient._send``,
@@ -36,9 +39,10 @@ class _Boom(Exception):
 def _fail(cb: CircuitBreaker, times: int = 1) -> None:
     """Record *times* host failures: a MARKED raise, which is what ``AsyncBaseClient._send`` does for a wire failure."""
     for _ in range(times):
-        with pytest.raises(_Boom), cb.track() as verdict:
+        with pytest.raises(_Boom), cb.track() as verdict:  # noqa: PT012  # the raise inside track() is the subject
             verdict.mark_failed()
-            raise _Boom("nope")
+            msg = "nope"
+            raise _Boom(msg)
 
 
 def test_threshold_trips_breaker() -> None:
@@ -145,8 +149,9 @@ def test_an_unmarked_exception_records_nothing() -> None:
     """An auth flow failing to mint, a body over the cap: nothing the wire said about the host."""
     cb = CircuitBreaker(failure_threshold=2, recovery_timeout=10.0, name="t")
     for _ in range(5):
-        with pytest.raises(_Boom), cb.track():
-            raise _Boom("not a host failure")
+        with pytest.raises(_Boom), cb.track():  # noqa: PT012  # the raise inside track() is the subject
+            msg = "not a host failure"
+            raise _Boom(msg)
 
     assert cb.failure_count == 0
     assert cb.state is BreakerState.CLOSED
@@ -227,7 +232,8 @@ async def test_a_stale_failure_does_not_reopen_over_the_probe_in_flight() -> Non
             stale_started.set()
             await fail_now.wait()
             verdict.mark_failed()
-            raise _Boom("late")
+            msg = "late"
+            raise _Boom(msg)
 
     stale = asyncio.create_task(_stale())
     await stale_started.wait()

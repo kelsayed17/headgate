@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """What a redirect may do to a request: the two hooks every client installs.
 
 :func:`drop_followed_redirect_body` is a response hook and :func:`credential_header_guard` a request hook; both are
@@ -25,7 +28,7 @@ FOLLOW_REDIRECTS_EXT = "headgate.follow_redirects"
 
 
 async def drop_followed_redirect_body(response: httpx2.Response) -> None:
-    """A response hook discarding the body of a redirect httpx2 is about to follow.
+    """Discard the body of a redirect httpx2 is about to follow (a response hook).
 
     httpx2 reads a followed redirect's body in full inside its own redirect loop, before the next hop — below
     :func:`~headgate._body.read_capped`, which only ever sees the FINAL response. So a 302 whose body decompressed
@@ -42,7 +45,7 @@ async def drop_followed_redirect_body(response: httpx2.Response) -> None:
 def credential_header_guard(
     auth: StaticHeaderAuth, base_url: httpx2.URL
 ) -> Callable[[httpx2.Request], Awaitable[None]]:
-    """A request hook withholding *auth*'s headers from any hop that leaves *base_url*'s origin.
+    """Build a request hook withholding *auth*'s headers from any hop that leaves *base_url*'s origin.
 
     httpx2 strips only ``Authorization`` and ``Cookie`` when a redirect crosses origins, so a credential in any other
     header followed the redirect wherever it pointed. The guard withholds a ``StaticHeaderAuth``'s headers from any hop

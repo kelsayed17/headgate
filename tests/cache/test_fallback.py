@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """:class:`ResilientCacheTransport`: a storage fault never fails a fetch.
 
 The HTTP cache is an optimization, so a fault inside the storage degrades to an uncached fetch. Driven through the real
@@ -172,7 +175,7 @@ async def test_store_fault_still_serves_the_request(storage: AsyncSqliteStorage)
     [httpx2.ConnectTimeout("network down"), httpx2.ConnectError("dns")],
 )
 async def test_genuine_httpx_error_is_reraised_and_not_refetched(exc: Exception, storage: AsyncSqliteStorage) -> None:
-    """A transport failure is not the cache's fault: it surfaces unchanged, for retry and the breaker, after one fetch."""
+    """A transport failure is not the cache's fault: it surfaces unchanged, after one fetch."""
     network = _Network(exc=exc)
     faulty = _Faulty(storage, RuntimeError("unused"), failing=_NEVER)
 
@@ -228,7 +231,7 @@ class _TrackingNetwork(httpx2.AsyncBaseTransport):
 
 
 async def test_a_store_fault_closes_the_network_response_it_abandoned(storage: AsyncSqliteStorage) -> None:
-    """hishel sends first and stores second, so a store fault abandons an unread network response.
+    """Hishel sends first and stores second, so a store fault abandons an unread network response.
 
     That response is closed before the fallback fetch; left open it would hold its pooled connection, and after
     ``max_connections`` store faults every cache MISS would wait out the pool timeout.
@@ -281,7 +284,7 @@ async def test_a_fault_while_the_body_streams_degrades_to_network(storage: Async
 
 
 async def test_credential_query_params_never_reach_storage(storage: AsyncSqliteStorage) -> None:
-    """hishel persists the full request URL with every entry, so a key on the query string would be stored in plaintext.
+    """Hishel persists the full request URL with every entry, so a key on the query string would be stored in plaintext.
 
     The key is stripped before hishel and restored below it: storage never sees it, the network does, and a hit still
     matches.

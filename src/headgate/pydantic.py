@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The pydantic codec flavor: strict JSON decode into ``pydantic`` models, and request-body preparation.
 
 The same surface as :mod:`headgate.msgspec`, so switching flavor is changing one import:
@@ -78,7 +81,7 @@ def decoder[T](
     allow_empty_body: bool = False,
     check: Callable[[T], Refused | None] | None = None,
 ) -> Reader[T] | Reader[Any]:
-    """A reader that validates the body as strict JSON against the type expression ``type_``.
+    """Build a reader that validates the body as strict JSON against the type expression ``type_``.
 
     Accepts the same shapes as :func:`headgate.msgspec.decoder` (an enveloped model, ``list[Row]``, ``dict[str, Row]``,
     a union of shapes). One malformed element fails the whole validation. ``allow_empty_body`` and ``check`` are

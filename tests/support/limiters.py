@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Find a client's rate limiters in its transport stack.
 
 The limiters live in the stack's :class:`~headgate._rate_limit.RateLimitTransport`, under retry and, when the client
@@ -25,7 +28,8 @@ def rate_limit_transport(client: AsyncBaseClient) -> RateLimitTransport:
         if isinstance(layer, RateLimitTransport):
             return layer
         layer = next((getattr(layer, a) for a in _NEXT if hasattr(layer, a)), None)
-    raise AssertionError(f"no RateLimitTransport in {type(client).__name__}'s stack")
+    msg = f"no RateLimitTransport in {type(client).__name__}'s stack"
+    raise AssertionError(msg)
 
 
 def default_limiter(client: AsyncBaseClient) -> AsyncRateLimiter:

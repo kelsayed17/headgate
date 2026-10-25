@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Read-only snapshots of the transport tier's degradation state, for an application to export.
 
 This package neither logs nor emits metrics. Two pieces of state that say a host or the cache is degraded live here

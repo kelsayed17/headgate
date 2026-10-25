@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``AsyncRateLimiter``'s pacing, ``Rate``'s units, and the limiter a ``PathLimiters`` rule selects."""
 
 from __future__ import annotations

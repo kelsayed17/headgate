@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Unit tests for :mod:`headgate.msgspec`: the strict msgspec codec flavor.
 
 - ``decoder``: a reader that decodes the body strictly (a coerced token is drift) and raises the neutral

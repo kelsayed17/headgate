@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """A cache-enabled client keeps its timeout, and every other request extension, below the cache.
 
 hishel does not forward the request it was given: it converts it to its own ``Request``, keeps only the metadata it

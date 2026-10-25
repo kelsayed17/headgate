@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``AsyncCurlTransport``: a curl response comes back as the httpx2 response a native transport would give."""
 
 from __future__ import annotations

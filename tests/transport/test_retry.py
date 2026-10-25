@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``RetryTransport`` and ``build_retry``, tested directly: attempt-count mapping, per-request override, teardown.
 
 End-to-end retry behaviour (backoff, ``Retry-After``) is covered through ``AsyncBaseClient`` in
@@ -49,7 +52,8 @@ async def test_retry_transport_honours_per_request_override() -> None:
 
 class _RecordsClose(httpx2.AsyncBaseTransport):
     """A transport that records whether it was closed. ``AsyncBaseTransport.aclose`` is a no-op, so only an override
-    that reaches this one can set the flag."""
+    that reaches this one can set the flag.
+    """
 
     def __init__(self) -> None:
         self.closed = False

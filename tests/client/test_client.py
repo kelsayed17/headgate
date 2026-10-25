@@ -1,5 +1,9 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``AsyncBaseClient``: construction, the transport stack, retries, the breaker, request bodies, auth, and the
-declared-response pipeline."""
+declared-response pipeline.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import msgspec
 import pytest
+from pydantic import BaseModel, ConfigDict, Field
 
 from headgate._auth import StaticHeaderAuth
 from headgate._breaker import HOST_BREAKERS
@@ -26,7 +31,6 @@ from tests.support.responses import RESPONSE
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
-    from pydantic import BaseModel
     from pytest_httpx2 import HTTPXMock
 
 
@@ -175,8 +179,6 @@ async def test_circuit_breaker_resets_on_success(httpx2_mock: HTTPXMock) -> None
 
 
 def _req_body_model() -> Callable[..., BaseModel]:
-    from pydantic import BaseModel, ConfigDict, Field
-
     class _ReqBody(BaseModel):
         model_config = ConfigDict(populate_by_name=True)
         order_side: str = Field(serialization_alias="orderSide")
@@ -266,7 +268,7 @@ async def test_403_raises_auth_error_after_one_request(httpx2_mock: HTTPXMock) -
 # --- The reported failure reflects the actual last attempt ---
 
 
-async def test_reported_failure_reflects_the_LAST_attempt_kind(httpx2_mock: HTTPXMock) -> None:
+async def test_reported_failure_reflects_the_last_attempt_kind(httpx2_mock: HTTPXMock) -> None:
     """Mixed transient-then-network failure: the raised error describes the final failure, not an earlier 503.
 
     The retry layer records each attempt's outcome; the ConnectError that ended the call must not be overwritten by
@@ -293,7 +295,8 @@ async def test_reported_failure_reflects_the_LAST_attempt_kind(httpx2_mock: HTTP
 
 async def test_an_undeclared_4xx_folds_its_body_into_the_message(httpx2_mock: HTTPXMock) -> None:
     """A non-transient 4xx the call did not declare folds the response body into the error message: the
-    upstream's own reason is the diagnosis, and without it the failure has to be reproduced just to read it."""
+    upstream's own reason is the diagnosis, and without it the failure has to be reproduced just to read it.
+    """
 
     class M(msgspec.Struct):
         a: int
@@ -324,7 +327,8 @@ async def test_an_undeclared_403_folds_its_body_into_the_message(httpx2_mock: HT
 
 async def test_4xx_body_snippet_is_bounded_and_single_line(httpx2_mock: HTTPXMock) -> None:
     """The folded body is a bounded, whitespace-collapsed snippet — a 4xx HTML
-    error page must not turn the message into a payload."""
+    error page must not turn the message into a payload.
+    """
 
     class M(msgspec.Struct):
         a: int
@@ -370,7 +374,8 @@ async def test_explicit_headers_win_over_auth(httpx2_mock: HTTPXMock) -> None:
 
 async def test_auth_param_threaded_to_async_client(httpx2_mock: HTTPXMock) -> None:
     """A ``httpx2.Auth`` passed as ``auth=`` runs at send time and stamps the
-    request — proving the base threads it into the underlying AsyncClient."""
+    request — proving the base threads it into the underlying AsyncClient.
+    """
 
     class _StampAuth(httpx2.Auth):
         @override
@@ -390,7 +395,8 @@ async def test_auth_param_threaded_to_async_client(httpx2_mock: HTTPXMock) -> No
 
 def test_async_base_client_is_abstract_async_context_manager() -> None:
     """AsyncBaseClient inherits the stdlib protocol — ``async with``
-    works without us writing the methods, and isinstance checks pass."""
+    works without us writing the methods, and isinstance checks pass.
+    """
     client = StubClient(rate=Rate.per_second(2), base_url="https://a.example")
     assert isinstance(client, AbstractAsyncContextManager)
 
@@ -400,7 +406,8 @@ def test_async_base_client_is_abstract_async_context_manager() -> None:
 
 async def test_struct_decode_lax_optin_coerces_strings() -> None:
     """strict=False (an explicit opt-out; the default is strict) coerces string-quoted numbers on the wire into
-    number-typed struct fields."""
+    number-typed struct fields.
+    """
 
     class _Px(msgspec.Struct):
         price: float | None = None
@@ -417,7 +424,8 @@ async def test_struct_decode_lax_optin_coerces_strings() -> None:
 
 async def test_struct_decode_strict_rejects_string_quoted_numbers() -> None:
     """strict=True makes number-typed wires exact-or-fail: a string-quoted
-    number raises ResponseParseError instead of coercing."""
+    number raises ResponseParseError instead of coercing.
+    """
 
     class _Px(msgspec.Struct):
         price: float | None = None
@@ -436,7 +444,8 @@ async def test_struct_decode_strict_rejects_string_quoted_numbers() -> None:
 
 async def test_struct_decode_strict_accepts_integer_tokens_for_float_fields() -> None:
     """strict=True still decodes JSON *integer* tokens into float fields —
-    a number is a number."""
+    a number is a number.
+    """
 
     class _Px(msgspec.Struct):
         oi: float | None = None
@@ -547,7 +556,8 @@ async def test_the_host_check_runs_before_a_declared_answer() -> None:
 
     def declared_reader(resp: httpx2.Response) -> _Answer:
         seen.append(resp.status_code)
-        raise Refused("a different refusal, if this ever runs", kind=RateLimitError)
+        msg = "a different refusal, if this ever runs"
+        raise Refused(msg, kind=RateLimitError)
 
     def refusal(resp: httpx2.Response) -> Refused | None:
         return Refused("host refused", kind=AuthError) if resp.status_code == 400 else None
@@ -628,7 +638,8 @@ async def test_a_refused_reader_becomes_its_kind_with_the_real_status_and_code()
 
 async def test_a_refusal_from_a_declared_non_2xx_reader_keeps_that_status() -> None:
     def refusing(resp: httpx2.Response) -> _Answer:
-        raise Refused("the provider refused, in its own words", code="E42")
+        msg = "the provider refused, in its own words"
+        raise Refused(msg, code="E42")
 
     client = _serving(httpx2.Response(409, content=b"{}"))
     with pytest.raises(UpstreamStatusError) as ei:
@@ -652,10 +663,12 @@ async def test_a_status_error_never_carries_a_query_string_secret() -> None:
 
 async def test_a_refused_reader_never_carries_a_query_string_secret() -> None:
     """Mirrors the ladder's own secret-redaction test above: ``refusal_error`` builds its message from
-    ``sanitize_url`` too, not from the raw URL."""
+    ``sanitize_url`` too, not from the raw URL.
+    """
 
     def refusing(resp: httpx2.Response) -> _Value:
-        raise Refused("the provider refused")
+        msg = "the provider refused"
+        raise Refused(msg)
 
     client = _serving(httpx2.Response(200, content=b"{}"))
     with pytest.raises(UpstreamStatusError) as ei:
@@ -667,7 +680,8 @@ async def test_a_refused_reader_never_carries_a_query_string_secret() -> None:
 async def test_a_declared_403_in_an_unrecognised_shape_raises_auth_error() -> None:
     """The fall-through goes through the real ladder (``status_error``), not a bare ``UpstreamStatusError`` —
     a declared 403 that doesn't decode still raises ``AuthError``, the 401/403 branch of the same ladder the
-    default layer uses."""
+    default layer uses.
+    """
     client = _serving(httpx2.Response(403, content=b"<html>denied</html>"))
     with pytest.raises(AuthError) as ei:
         await client.post("x", expect=Expect(decoder(_Value)).on(403, decoder(_Answer)))

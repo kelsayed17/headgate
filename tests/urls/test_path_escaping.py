@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Caller-supplied path segments are URL-escaped before they reach the wire.
 
 A client that interpolates a caller's value straight into an f-string path lets that value control the URL's
@@ -7,8 +10,8 @@ STRUCTURE, not just one segment of it:
       -> httpx2 resolves the dot segments
       -> DELETE https://api.example.test/v2/account
 
-That is reachable wherever a route forwards a user-supplied identifier into a path: a validator that permits `.` and `/`,
-plus a normalizer that only uppercases, leaves nothing between the route and the client to remove the traversal.
+That is reachable wherever a route forwards a user-supplied identifier into a path: a validator that permits `.` and
+`/`, plus a normalizer that only uppercases, leaves nothing between the route and the client to remove the traversal.
 
 The same lack of escaping is an ordinary correctness bug wherever a legitimate identifier contains a slash: a pair
 symbol like ``BTC/USD`` builds ``/v2/positions/BTC/USD``, a different endpoint that simply 404s.
@@ -169,7 +172,7 @@ class TestRenderPathRejectsAmbiguousInput:
             render_path(t"{inner}/y")
 
     def test_f_string_raises(self) -> None:
-        """An f-string is already interpolated, UNESCAPED text; ``render_path`` refuses it rather than pass it through."""
+        """An f-string is already-interpolated, UNESCAPED text; ``render_path`` refuses it instead of passing it on."""
         sym = "BTC/USD"
         with pytest.raises(TypeError, match=r"takes a t-string Template, got str"):
             render_path(f"/v2/positions/{sym}")  # ty: ignore[invalid-argument-type]  # the TypeError IS the test

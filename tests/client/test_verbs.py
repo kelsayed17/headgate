@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The verb methods on ``AsyncBaseClient``: get/post/put/patch/delete/head.
 
 A ``MockTransport`` captures the outgoing ``httpx2.Request``, so each test asserts the verb maps to the right HTTP
@@ -77,7 +80,8 @@ class _Body(msgspec.Struct):
 @pytest.mark.parametrize(("verb", "http_method"), [("put", "PUT"), ("patch", "PATCH")])
 async def test_body_verb_maps_to_http_method(verb: str, http_method: str) -> None:
     """put/patch take ``expect`` keyword-only (the body itself rides ``json=``/``content=`` in
-    ``**kwargs``), so a bodyless decode is the natural keyword form: ``verb(url, expect=...)``."""
+    ``**kwargs``), so a bodyless decode is the natural keyword form: ``verb(url, expect=...)``.
+    """
     seen: dict[str, Any] = {}
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -92,7 +96,7 @@ async def test_body_verb_maps_to_http_method(verb: str, http_method: str) -> Non
 
 
 async def test_delete_maps_to_http_method_and_decodes() -> None:
-    """delete carries no request body — ``expect`` is keyword-only."""
+    """Delete carries no request body — ``expect`` is keyword-only."""
     seen: dict[str, Any] = {}
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -165,7 +169,8 @@ async def test_head_maps_to_head_method() -> None:
         out = await c.head("thing", expect=RESPONSE)
 
     assert seen["method"] == "HEAD"
-    assert isinstance(out, httpx2.Response) and out.status_code == 200
+    assert isinstance(out, httpx2.Response)
+    assert out.status_code == 200
 
 
 @pytest.mark.parametrize("status", [404, 500, 503])

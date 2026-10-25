@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """A response's body, read up to a size cap, and the response rebuilt around it.
 
 Every buffered call reads the whole body before a reader sees it, so an unbounded response is an OOM vector.
@@ -43,15 +46,15 @@ async def read_capped(streamed: httpx2.Response, cap: int, *, source: str, url: 
     try:
         declared = streamed.headers.get("content-length")
         if declared is not None and declared.isdigit() and int(declared) > cap:
-            raise ResponseTooLargeError(
-                f"declared response size {int(declared)} exceeds cap {cap} for {url}", source=source
-            )
+            msg = f"declared response size {int(declared)} exceeds cap {cap} for {url}"
+            raise ResponseTooLargeError(msg, source=source)
         chunks: list[bytes] = []
         total = 0
         async for chunk in streamed.aiter_bytes():
             total += len(chunk)
             if total > cap:
-                raise ResponseTooLargeError(f"response body exceeded cap {cap} bytes for {url}", source=source)
+                msg = f"response body exceeded cap {cap} bytes for {url}"
+                raise ResponseTooLargeError(msg, source=source)
             chunks.append(chunk)
     finally:
         with contextlib.suppress(httpx2.HTTPError):
@@ -81,7 +84,7 @@ async def read_head(streamed: httpx2.Response, limit: int) -> httpx2.Response:
 
 
 def _rebuilt(streamed: httpx2.Response, content: bytes) -> httpx2.Response:
-    """A fully read copy of *streamed* carrying *content*, so readers can use ``.content`` / ``.text`` / ``.json()``.
+    """Return a fully read copy of *streamed* carrying *content*, for readers that use ``.content`` or ``.json()``.
 
     Built on ``streamed.request``, not the request that was sent: httpx2 derives ``Response.url`` from the request,
     and after a followed redirect the two differ. A consumer that detects a bad key by the redirect it causes needs

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """An empty URL path segment is refused.
 
 ``t"/v2/positions/{symbol}"`` with ``symbol=""`` would render ``DELETE /v2/positions/``: one trailing slash from a

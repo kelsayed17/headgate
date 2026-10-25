@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The cache's ``hishel.BaseFilter`` subclasses, which compose into a client's :class:`hishel.FilterPolicy`.
 
 Each inspects only the request line or the status code, never the body, so ``needs_body()`` is always ``False`` and

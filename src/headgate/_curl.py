@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+#
 # This file is derived from httpx-curl-cffi 0.1.5 (https://github.com/vgavro/httpx-curl-cffi), under its license:
 #
 # BSD 3-Clause License
@@ -37,8 +40,8 @@ so this copy speaks ``httpx2``, the one HTTP library headgate is built on.
 
 **What was cut.** The sync transport, the ``CurlTransportParams`` bag (``cert``, ``ja3``, ``akamai``, ``extra_fp``,
 ``curl_infos``, ``proxy``, ``local_address``, ``debug``, ``http_version``), the ``loop`` / ``async_curl`` arguments and
-the compatibility shims for ``curl_cffi`` older than the 0.16.2 floor headgate declares. The surface kept is ``impersonate``, ``default_headers`` and ``curl_options``
-(for example ``{CurlOpt.FRESH_CONNECT: True}``).
+the compatibility shims for ``curl_cffi`` older than the 0.16.2 floor headgate declares. The surface kept is
+``impersonate``, ``default_headers`` and ``curl_options`` (for example ``{CurlOpt.FRESH_CONNECT: True}``).
 
 **What was kept, because it is behaviour.**
 
@@ -62,17 +65,18 @@ import httpx2
 
 try:
     from curl_cffi import CurlECode, CurlHttpVersion, CurlOpt
-    from curl_cffi.requests import Response as _Response
     from curl_cffi.requests.exceptions import RequestException as _RequestError
     from curl_cffi.requests.session import AsyncSession as _AsyncSession
     from curl_cffi.requests.session import HttpMethod
 except ImportError as exc:  # pragma: no cover - exercised in a subprocess
-    raise ImportError("AsyncCurlTransport needs the curl extra: pip install 'headgate[curl]'") from exc
+    msg = "AsyncCurlTransport needs the curl extra: pip install 'headgate[curl]'"
+    raise ImportError(msg) from exc
 from httpx2._decoders import IdentityDecoder
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from curl_cffi.requests import Response as _Response
     from curl_cffi.requests.impersonate import BrowserTypeLiteral
 
 __all__ = ["AsyncCurlTransport"]
@@ -103,7 +107,7 @@ _METHODS: dict[str, HttpMethod] = {method: method for method in get_args(HttpMet
 
 @functools.cache
 def _httpx_default_headers() -> tuple[tuple[str, str], ...]:
-    """The headers httpx2 adds to a request the caller gave none, read from a client rather than hard-coded."""
+    """Return the headers httpx2 adds to a request the caller gave none, read from a client, not hard-coded."""
     return tuple(httpx2.Client(trust_env=False).headers.items())
 
 
@@ -177,7 +181,8 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
         timeout = request.extensions["timeout"]
         method = _METHODS.get(request.method)
         if method is None:
-            raise httpx2.UnsupportedProtocol(f"curl cannot send an HTTP {request.method} request", request=request)
+            msg = f"curl cannot send an HTTP {request.method} request"
+            raise httpx2.UnsupportedProtocol(msg, request=request)
         try:
             response = await self._session.request(
                 method=method,
@@ -209,7 +214,7 @@ def _httpx_response(request: httpx2.Request, response: _Response) -> httpx2.Resp
         extensions={"curl": {"response": response, "infos": response.infos}},
     )
     # curl has already decompressed the body and exposes no raw one (issue 438), so httpx2 must not decode it again.
-    out._decoder = IdentityDecoder()
+    out._decoder = IdentityDecoder()  # noqa: SLF001  # httpx2 has no public hook for this
     http_version = CurlHttpVersion(response.http_version)
     if http_version in _CURL_HTTP_VERSIONS:
         out.extensions["http_version"] = _CURL_HTTP_VERSIONS[http_version]

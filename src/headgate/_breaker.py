@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The per-host circuit breaker: stop calling a host that is failing, find out cheaply when it recovers.
 
 One breaker per HOST, shared by every client in the process through :data:`HOST_BREAKERS`, so two clients addressing
@@ -68,11 +71,11 @@ class Verdict:
         self.neutral = False
 
     def mark_failed(self) -> None:
-        """The wire failed: a transport error or timeout, or a 429/5xx that survived retries."""
+        """Record that the wire failed: a transport error or timeout, or a 429/5xx that survived retries."""
         self.failed = True
 
     def mark_untested(self) -> None:
-        """The fetch reached no network (a cache hit), so its success says nothing about the host."""
+        """Record that the fetch reached no network (a cache hit), so its success says nothing about the host."""
         self.neutral = True
 
 
@@ -157,7 +160,8 @@ class CircuitBreaker:
         failure must not re-open the breaker while the real probe is still out.
         """
         if not self._admits():
-            raise CircuitOpenError(f"circuit breaker open for {self._name}")
+            msg = f"circuit breaker open for {self._name}"
+            raise CircuitOpenError(msg)
         probing = self._state is not BreakerState.CLOSED
         if probing:
             # The cooldown has elapsed and this caller is the canary: take the slot so

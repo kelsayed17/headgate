@@ -33,6 +33,7 @@ dev = [
     "ruff",
     "ty",
     "headgate[pydantic,curl]",
+    "pytest-cov>=7",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -45,7 +46,7 @@ include = ["src/headgate", "examples", "README.md", "LICENSE", "pyproject.toml"]
 asyncio_mode = "auto"
 asyncio_default_test_loop_scope = "session"
 asyncio_default_fixture_loop_scope = "session"
-addopts = "--import-mode=importlib"
+addopts = "--import-mode=importlib --strict-markers"
 markers = ["transport_policy: the test's subject is the retry/breaker/throttle, so it keeps the real rate-limiter wait"]
 testpaths = ["tests"]
 pythonpath = ["examples"]
@@ -54,8 +55,40 @@ pythonpath = ["examples"]
 line-length = 120
 target-version = "py314"
 
+[tool.ruff.lint]
+select = ["ALL"]
+# Only rules that cannot be satisfied by construction: COM812 fights the formatter, and pydocstyle's
+# D203/D213 are the mutually exclusive alternatives to the D211/D212 this project follows.
+ignore = ["COM812", "D203", "D213"]
+
+[tool.ruff.lint.per-file-ignores]
+# pytest's assertions are plain ``assert`` statements.
+"tests/**" = ["S101"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+mark-parentheses = false
+
 [tool.uv.sources]
 headgate = { workspace = true }
 
 [tool.ty.environment]
 extra-paths = ["examples"]
+
+[tool.ty.rules]
+all = "error"
+
+[tool.ty.analysis]
+respect-type-ignore-comments = false
+
+[tool.coverage.run]
+branch = true
+source = ["headgate"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true

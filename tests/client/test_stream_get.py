@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``AsyncBaseClient.stream_get`` — a body yielded as it arrives, through the same stack and failure ladder."""
 
 from __future__ import annotations
@@ -51,11 +54,9 @@ async def test_a_refusal_check_runs_on_the_head_before_any_chunk(httpx2_mock: HT
             )
 
     httpx2_mock.add_response(content=b"data")
-    got: list[bytes] = []
+    stream = Refusing().stream_get("f")
     with pytest.raises(ClientError):
-        async for chunk in Refusing().stream_get("f"):
-            got.append(chunk)
-    assert got == []
+        await anext(stream)
 
 
 async def test_following_redirects_is_refused_for_a_client_with_a_refusal_check() -> None:

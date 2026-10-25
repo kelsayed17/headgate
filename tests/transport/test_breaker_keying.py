@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Which host the circuit breaker is keyed on, what a redirect to a bad URL becomes, and what precedes the breaker."""
 
 from __future__ import annotations

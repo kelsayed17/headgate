@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The failure taxonomy: raised by clients, caught by their callers.
 
 This module imports only ``typing``: every layer above a client catches these, so anything imported here is imported

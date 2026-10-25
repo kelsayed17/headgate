@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The base client: :class:`AsyncBaseClient`, a policy layer over ``httpx2.AsyncClient``.
 
 httpx2 does the URL joining, headers, timeouts and connection pooling. This adds retries, rate limiting, a per-host
@@ -25,7 +28,13 @@ import httpx2
 from headgate._auth import failed_on_auth_hop
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES, read_capped, read_head
 from headgate._breaker import HOST_BREAKERS, NO_BREAKERS, CircuitOpenError
-from headgate._failures import refusal_error, status_error, transient_status_error, transport_error
+from headgate._failures import (
+    is_transient_status,
+    refusal_error,
+    status_error,
+    transient_status_error,
+    transport_error,
+)
 from headgate._redirects import FOLLOW_REDIRECTS_EXT
 from headgate._responses import Expect, Reader, RefusalCheck, Refused
 from headgate._retry import ZERO_RETRY
@@ -95,7 +104,7 @@ class AsyncBaseClient:
     sustain ~33 req/s. A client budgeted above that should pass its own ``transport=`` with a wider pool.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913  # keyword-only configuration
         self,
         *,
         base_url: str,
@@ -118,9 +127,8 @@ class AsyncBaseClient:
         # A refusal check sees only the FINAL response, so a client following redirects would skip one written on a
         # hop. The per-call half is in _prepare.
         if refusal_check is not None and follow_redirects:
-            raise ValueError(
-                f"{type(self).__name__}: a client with a refusal_check= must be built with follow_redirects=False"
-            )
+            msg = f"{type(self).__name__}: a client with a refusal_check= must be built with follow_redirects=False"
+            raise ValueError(msg)
         self._source = type(self).__name__
         self._refusal_check = refusal_check
         # NO_BREAKERS never reads the shared registry, so a breaker another client opened cannot refuse this one.
@@ -284,12 +292,14 @@ class AsyncBaseClient:
             url = render_path(url)
         log_url = sanitize_url(url)
         if self._refusal_check is not None and follow_redirects is True:
-            raise ValueError(f"{self._source} has a refusal_check=, so no call may follow redirects")
+            msg = f"{self._source} has a refusal_check=, so no call may follow redirects"
+            raise ValueError(msg)
         try:
             # httpx2 types ``params`` as primitive-valued; ours is Mapping[str, object] (see RequestOptions).
             request = self._http_client.build_request(method, url, **options)  # ty: ignore[invalid-argument-type]
         except httpx2.InvalidURL as exc:
-            raise ClientError(f"invalid URL {log_url}: {exc}", source=self._source) from exc
+            msg = f"invalid URL {log_url}: {exc}"
+            raise ClientError(msg, source=self._source) from exc
         if not retry:
             request.extensions["retry"] = ZERO_RETRY
         # A per-call TTL; the cache transport's setdefault of the client's own TTL then leaves it alone.
@@ -329,7 +339,7 @@ class AsyncBaseClient:
                     try:
                         if streamed.extensions.get("hishel_from_cache"):
                             verdict.mark_untested()
-                        if streamed.status_code == 429 or streamed.status_code >= 500:
+                        if is_transient_status(streamed.status_code):
                             verdict.mark_failed()
                             raise transient_status_error(streamed, source=self._source)
                         yield streamed
@@ -346,9 +356,10 @@ class AsyncBaseClient:
             raise TransportError(str(exc), source=self._source) from None
         except httpx2.InvalidURL as exc:
             # A redirect joined past httpx2's length limit. Not an HTTPError, and not a host failure.
-            raise ClientError(f"invalid URL {log_url}: {exc}", source=self._source) from exc
+            msg = f"invalid URL {log_url}: {exc}"
+            raise ClientError(msg, source=self._source) from exc
 
-    async def _request[T](
+    async def _request[T](  # noqa: PLR0913  # the verbs' keyword-only options, forwarded
         self,
         method: _Method,
         url: str | Template,
@@ -392,5 +403,6 @@ class AsyncBaseClient:
             raise refusal_error(refused, resp, log_url, source=self._source) from None
         except DecodeError as exc:
             if resp.is_success:
-                raise ResponseParseError(f"{log_url}: {exc}", source=self._source) from exc
+                msg = f"{log_url}: {exc}"
+                raise ResponseParseError(msg, source=self._source) from exc
             raise status_error(resp, log_url, source=self._source) from exc

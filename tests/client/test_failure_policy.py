@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``AsyncBaseClient``'s failure ladder: every failure raises the matching ``ClientError`` subtype.
 
 Every call declares its ``expect=`` reader, and an undeclared non-success status always raises rather than returning
@@ -40,7 +43,8 @@ async def test_raises_upstream_status_on_server_error() -> None:
 
 async def test_raises_transport_on_network_error() -> None:
     def boom(req: httpx2.Request) -> httpx2.Response:
-        raise httpx2.ConnectError("refused", request=req)
+        msg = "refused"
+        raise httpx2.ConnectError(msg, request=req)
 
     transport = httpx2.MockTransport(boom)
     async with _client(transport) as c:
@@ -61,7 +65,8 @@ async def test_a_network_error_with_an_empty_message_still_names_what_failed(
     """
 
     def boom(req: httpx2.Request) -> httpx2.Response:
-        raise raised("", request=req)
+        msg = ""
+        raise raised(msg, request=req)
 
     async with _client(httpx2.MockTransport(boom)) as c:
         with pytest.raises(expected) as ei:
@@ -149,7 +154,8 @@ async def test_timeout_raises_client_timeout_error() -> None:
     """
 
     def _timeout(request: httpx2.Request) -> httpx2.Response:
-        raise httpx2.TimeoutException("upstream timeout", request=request)
+        msg = "upstream timeout"
+        raise httpx2.TimeoutException(msg, request=request)
 
     async with _client(httpx2.MockTransport(_timeout)) as c:
         with pytest.raises(ClientTimeoutError) as ei:

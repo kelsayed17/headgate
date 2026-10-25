@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The ``ClientError`` a failed exchange becomes: pure builders.
 
 Each builder RETURNS its error rather than raising it, so the caller raises it with the right cause (``from exc`` for
@@ -19,7 +22,14 @@ from headgate.errors import AuthError, ClientTimeoutError, RateLimitError, Trans
 if TYPE_CHECKING:
     from headgate._responses import Refused
 
-__all__ = ["body_snippet", "refusal_error", "status_error", "transient_status_error", "transport_error"]
+__all__ = [
+    "body_snippet",
+    "is_transient_status",
+    "refusal_error",
+    "status_error",
+    "transient_status_error",
+    "transport_error",
+]
 
 #: Cap on the error-body snippet folded into a ClientError message: enough for a provider's structured reason, not
 #: enough to turn an HTML error page into a payload.
@@ -27,7 +37,7 @@ _BODY_SNIPPET_LIMIT = 300
 
 
 def body_snippet(resp: httpx2.Response) -> str | None:
-    """A bounded, single-line view of an error response body.
+    """Return a bounded, single-line view of an error response body.
 
     The upstream's own reason for a 4xx IS the diagnosis (a 400 that names the missing field), so it is folded into the
     ``ClientError`` message, bounded and whitespace-collapsed because that message may reach an API response.
@@ -40,8 +50,13 @@ def body_snippet(resp: httpx2.Response) -> str | None:
     return text
 
 
+def is_transient_status(status: int) -> bool:
+    """Whether *status* is one the retry transport re-sends and the breaker counts: 429 or any 5xx."""
+    return status == httpx2.codes.TOO_MANY_REQUESTS or status >= httpx2.codes.INTERNAL_SERVER_ERROR
+
+
 def status_error(resp: httpx2.Response, log_url: str, *, source: str) -> UpstreamStatusError:
-    """The status ladder: the ``ClientError`` for a non-success status the call did not declare.
+    """Build the ``ClientError`` for a non-success status the call did not declare: the status ladder.
 
     401/403 → :class:`~headgate.errors.AuthError` (a bad credential is OUR configuration failing against the
     upstream, not the caller's request). Any other non-success → :class:`~headgate.errors.UpstreamStatusError`.
@@ -52,7 +67,7 @@ def status_error(resp: httpx2.Response, log_url: str, *, source: str) -> Upstrea
 
 
 def refusal_error(refused: Refused, resp: httpx2.Response, log_url: str, *, source: str) -> UpstreamStatusError:
-    """The ``ClientError`` for a provider's :class:`Refused`: a reader's, or the host ``refusal_check=`` check's.
+    """Build the ``ClientError`` for a provider's :class:`Refused`, from a reader or the client's ``refusal_check``.
 
     A reader raises its ``Refused`` and the host check returns one; both paths build the error here, so both carry
     the provider's code, the client's name and the body snippet. ``refused.kind`` names the kind (credential, rate
@@ -69,7 +84,7 @@ def refusal_error(refused: Refused, resp: httpx2.Response, log_url: str, *, sour
 
 
 def transport_error(exc: httpx2.HTTPError | OSError, method: str, log_url: str, *, source: str) -> TransportError:
-    """The ``ClientError`` for a network, protocol or timeout failure: nothing usable came back.
+    """Build the ``ClientError`` for a network, protocol or timeout failure: nothing usable came back.
 
     httpx2 names the URL in most of its own messages but a bare ``OSError`` names nothing, so the request is stated
     explicitly rather than hoped for. Many httpx2 exceptions stringify to "" (a dropped connection, a read timeout),
@@ -83,12 +98,12 @@ def transport_error(exc: httpx2.HTTPError | OSError, method: str, log_url: str, 
 
 
 def transient_status_error(resp: httpx2.Response, *, source: str) -> UpstreamStatusError:
-    """The ``ClientError`` for a 429 or 5xx that outlasted the retry transport's attempts.
+    """Build the ``ClientError`` for a 429 or 5xx that outlasted the retry transport's attempts.
 
     Rate limit vs generic upstream failure; 401/403 are non-transient and belong to :func:`status_error`. The URL is
     ``resp.url`` put through :func:`~headgate._url.sanitize_url`, not ``resp.url`` itself: providers that
     authenticate by QUERY PARAM would otherwise leak the key into the message.
     """
     code = resp.status_code
-    kind = RateLimitError if code == 429 else UpstreamStatusError
+    kind = RateLimitError if code == httpx2.codes.TOO_MANY_REQUESTS else UpstreamStatusError
     return kind(f"transient {code} {sanitize_url(str(resp.url))}", status_code=code, source=source)

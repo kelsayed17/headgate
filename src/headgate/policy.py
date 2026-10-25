@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Construct a client with its transport policy switched off.
 
 ``AsyncBaseClient`` wraps every request in retry with backoff, a per-host circuit breaker, and a rate limiter. All

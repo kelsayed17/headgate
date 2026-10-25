@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """A capped response reports the URL that ANSWERED, not the one that was sent.
 
 ``AsyncBaseClient`` rebuilds every response after capping its body (``read_capped``), and httpx2 derives

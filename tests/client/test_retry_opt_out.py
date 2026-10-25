@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``retry=False``, the escape hatch for non-idempotent writes, disables retries entirely.
 
 The flag is on every verb and installs a zero-retry policy (one send, no re-send) for that one request. It is a

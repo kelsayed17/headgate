@@ -1,14 +1,20 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The two codec flavors drive the same client shape and agree on success and on drift."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 import httpx2
 import pytest
 import series_client as example
 
 from headgate import ResponseParseError
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 def _transport(body: Mapping[str, object]) -> httpx2.MockTransport:

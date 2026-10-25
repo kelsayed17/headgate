@@ -1,8 +1,11 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The retry matrix: every input the retry transport decides on, and the golden outcome of each.
 
 ``headgate._retry.RetryTransport`` reproduces httpx-retries 0.6.0, as ``build_retry`` configures it, EXACTLY. This
 module is the matrix httpx-retries was driven through, once, to write the golden table, and that headgate's transport
-is driven through on every run: attempt budget × method × status × exception × every ``Retry-After`` form. The golden
+is driven through on every run: attempt budget x method x status x exception x every ``Retry-After`` form. The golden
 table beside it (``retry_golden.json``) holds httpx-retries' own outcome for every case, and
 ``tests/transport/test_retry_golden.py`` replays it.
 
@@ -86,7 +89,8 @@ class Outcome:
 
 class _UnreadStream(httpx2.AsyncByteStream):
     """A response body httpx2 leaves unread. ``httpx2.ByteStream`` is read, and so closed, at construction; this is not,
-    so the response's ``is_closed`` reports whether anything called ``aclose()`` on it."""
+    so the response's ``is_closed`` reports whether anything called ``aclose()`` on it.
+    """
 
     @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
@@ -167,7 +171,7 @@ RETRY_AFTER_EDGE_FORMS = (
     "1e3",  # ``float()`` accepts an exponent; the library does not
     "inf",  # ``float()`` accepts it (and would then be capped to 5 s); the library does not
     "   ",  # whitespace only: stripped to empty, so no header
-    "１２",  # fullwidth digits: ``str.isdigit()`` is true, ``isascii()`` is not, so they are not whole seconds
+    "１２",  # noqa: RUF001  # fullwidth digits: ``str.isdigit()`` is true, ``isascii()`` is not, so they are not whole seconds
     _offset_date(3, hours=1),  # a date in a zone ahead of UTC, 3 s from now: the offset is honoured
     _offset_date(3, hours=-5),  # ...and behind it
     _rfc850_date(3),  # the obsolete RFC 850 date, 3 s from now
@@ -178,7 +182,7 @@ OUTCOMES = (*(Step(status=status) for status in STATUSES), *(Step(raises=name) f
 FAILURES = tuple(step for step in OUTCOMES if step.raises is not None or (step.status or 0) >= 400)
 
 
-def _build_cases() -> tuple[Case, ...]:
+def _build_cases() -> tuple[Case, ...]:  # noqa: C901  # one loop per matrix axis
     ok = Step(status=200)
     shapes: list[tuple[int, str, tuple[Step, ...]]] = []
     # One outcome, then a success: the retry decision for each outcome, method and budget.

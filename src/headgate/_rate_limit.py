@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Rate limiting: a client's budget (:class:`Rate`), the limiter that enforces it, and the transport that applies it.
 
 :class:`RateLimitTransport` is the bottom layer of every client's transport stack (see :mod:`headgate._stack`). Below
@@ -36,9 +39,11 @@ class Rate:
 
     def __post_init__(self) -> None:
         if self.requests <= 0:
-            raise ValueError(f"requests must be > 0 (got {self.requests})")
+            msg = f"requests must be > 0 (got {self.requests})"
+            raise ValueError(msg)
         if self.period <= 0:
-            raise ValueError(f"period must be > 0 (got {self.period})")
+            msg = f"period must be > 0 (got {self.period})"
+            raise ValueError(msg)
 
     @classmethod
     def per_second(cls, requests: float) -> Rate:

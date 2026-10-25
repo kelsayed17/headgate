@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``AsyncBaseClient``'s response-body size cap (``max_response_bytes``).
 
 The client buffers the whole response into memory before decoding, so an unbounded body is an OOM vector. The cap
@@ -62,7 +65,7 @@ class TestResponseSizeCap:
         finally:
             await c.aclose()
 
-    async def test_gzip_bomb_is_capped_on_DECOMPRESSED_size(self) -> None:
+    async def test_gzip_bomb_is_capped_on_decompressed_size(self) -> None:
         """A tiny wire body that explodes when decoded; a ``Content-Length``-only check would let it through.
 
         Driven through ``httpx2.MockTransport`` with a real ``ByteStream`` rather than ``httpx2_mock``:

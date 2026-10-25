@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """A ``StaticHeaderAuth`` credential never leaves the client's origin, but the redirect is still followed."""
 
 from __future__ import annotations

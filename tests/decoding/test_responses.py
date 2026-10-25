@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The declared-responses contract (``headgate._responses``): ``Expect``, ``Refused``, and the stock readers."""
 
 from __future__ import annotations
@@ -164,9 +167,9 @@ def test_the_constructor_refuses_a_bad_status_beside_a_legal_one() -> None:
 
 @pytest.mark.parametrize("status", [401, 99])
 def test_the_constructor_and_on_refuse_with_the_same_message(status: int) -> None:
-    with pytest.raises(ValueError) as built:
+    with pytest.raises(ValueError, match=str(status)) as built:
         Expect(decoder(_Ok), {status: nothing})
-    with pytest.raises(ValueError) as declared:
+    with pytest.raises(ValueError, match=str(status)) as declared:
         Expect(decoder(_Ok)).on(status, nothing)
     assert str(built.value) == str(declared.value)
 

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Fixtures for the suites whose SUBJECT is the transport policy: retry, breaker, throttle.
 
 These monkeypatch the policy stack so a suite can exercise real retry and breaker behaviour without sleeping through
@@ -19,14 +22,13 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(autouse=True)
-def no_retry_backoff(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Zero the retry backoff, so a mocked connection failure is retried the way production retries it, without sleeping.
+def no_retry_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Zero the retry backoff, so a mocked failure is retried the way production retries it, without sleeping.
 
     ``_BACKOFF_FACTOR`` is read at client construction (``build_retry`` inside ``AsyncBaseClient.__init__``), so as an
     autouse fixture this patches before any client is built.
     """
     monkeypatch.setattr("headgate._retry._BACKOFF_FACTOR", 0.0)
-    yield
 
 
 @pytest.fixture(autouse=True)
@@ -39,7 +41,7 @@ def reset_circuit_breakers() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def no_rate_limit(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Zero out the async rate limiter's wait, which is the one seam patched (which requests acquire a token is unchanged).
+    """Zero out the rate limiter's wait, the one seam patched; which requests acquire a token is unchanged.
 
     A test whose SUBJECT is the throttle's timing carries ``@pytest.mark.transport_policy`` and keeps the real wait.
     """

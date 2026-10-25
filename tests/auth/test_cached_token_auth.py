@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``CachedTokenAuth``: the shared token-cache policy, tested without a provider.
 
 A counting fake stands in for the token exchange, so caching, the expiry margin, the single 401 re-mint and the
@@ -376,7 +379,8 @@ class TestAMintThatYieldsRequests:
 
         def handle(request: httpx2.Request) -> httpx2.Response:
             if request.url.path == "/seed" and failing["on"]:
-                raise httpx2.ConnectError("down", request=request)
+                msg = "down"
+                raise httpx2.ConnectError(msg, request=request)
             return self._handler(seen)(request)
 
         client = client_factory(auth, handle)

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """``headgate._retry.RetryTransport`` reproduces httpx-retries 0.6.0 exactly, case for case.
 
 The in-house transport replaced httpx-retries, and the library's behaviour is kept as an oracle.

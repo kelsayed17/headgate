@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """:class:`ResilientCacheTransport`: simultaneous identical GETs share one download.
 
 hishel has no request coalescing: while one request for a file is on its way to the network, an identical request finds
@@ -141,7 +144,7 @@ async def test_requests_for_different_urls_do_not_share(storage: AsyncSqliteStor
 
 
 async def test_requests_that_differ_only_in_their_query_do_not_share(storage: AsyncSqliteStorage) -> None:
-    """One path asked for a different ``reportDate`` each day is two requests: the query is part of what is asked for."""
+    """One path with a different ``reportDate`` each day is two requests: the query is part of what is asked for."""
     network = _GatedNetwork()
     transport = _transport(storage, network)
 

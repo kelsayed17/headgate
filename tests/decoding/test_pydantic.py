@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """Unit tests for :mod:`headgate.pydantic`: the strict pydantic codec flavor, held to the msgspec flavor's contract.
 
 Strictness parity is the acceptance test: a JSON string where an ``int`` is declared fails loud, an unknown field is
