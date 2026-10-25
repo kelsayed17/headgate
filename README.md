@@ -115,8 +115,10 @@ from headgate.cache import Fresh, NotModified, Validator, conditional
 
 result = await self.get(t"docs/{doc_id}", expect=conditional(decoder(Doc), validator=held))
 match result:
-    case Fresh(value=doc, validator=held): ...  # new representation; keep its validator
-    case NotModified(): ...                      # 304: what you hold is current
+    case Fresh(value=doc, validator=held):
+        ...  # new representation; keep its validator
+    case NotModified():
+        ...  # 304: what you hold is current
 ```
 
 ## Errors
