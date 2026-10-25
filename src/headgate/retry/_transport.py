@@ -19,6 +19,11 @@ For each request :class:`RetryTransport` runs a sequence of attempts under the c
    ``"retry budget exhausted"``.
 4. **Wait**: a ``Retry-After`` exactly, else the backoff; a failed response is first read (a bounded head of its body)
    and closed, so no connection is held through the wait. ``RetryScheduled`` is emitted for every retry and hedge.
+   The deadline and the breaker are checked again after the wait, before the next attempt starts.
+
+A hedge is sent as a copy of the request (its own headers and extensions, the same replayable body) on the same call
+context, so concurrent sends share the context's send progress. That is sound because only idempotent methods are
+hedged, and their retry decisions never depend on send progress.
 
 Every attempt adds a history line to the call's notes, which the client attaches to the error it raises, for example
 ``attempt 2/3: 503 Service Unavailable (Retry-After 2.0s) after 0.41s`` or ``attempt 1/3: ReadTimeout after 30.0s``.
