@@ -40,7 +40,7 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
-from headgate.retry._policy import parse_retry_after
+from headgate.retry._policy import retry_after_of
 
 if TYPE_CHECKING:
     from headgate._responses import RefusedError
@@ -109,9 +109,6 @@ _PROBLEM_MEDIA_TYPE = "application/problem+json"
 #: What a malformed problem document raises while it is parsed: bad JSON, bad UTF-8, or nesting past the recursion
 #: limit.
 _PROBLEM_ERRORS = (ValueError, RecursionError)
-
-#: The statuses whose ``Retry-After`` an error reports: a rate limit and a temporary outage.
-_RETRY_AFTER_STATUSES = frozenset({httpx2.codes.TOO_MANY_REQUESTS, httpx2.codes.SERVICE_UNAVAILABLE})
 
 #: Failures that are our own request's fault, so sending it again cannot succeed.
 _LOCAL_FAILURES = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol)
@@ -329,19 +326,18 @@ def transient_status_error(resp: httpx2.Response, site: CallSite) -> UpstreamSta
 
     A 429 becomes :class:`~headgate.errors.RateLimitError`, anything else
     :class:`~headgate.errors.UpstreamStatusError`. *resp* carries a bounded head of the body, which becomes the
-    summary, as it does for :func:`status_error`. The error is retryable, and a 429's or 503's ``Retry-After`` is its
-    ``retry_after``.
+    summary, as it does for :func:`status_error`. The error is retryable, and a 429's or 503's ``retry-after-ms`` or
+    ``Retry-After`` is its ``retry_after``.
     """
     code = resp.status_code
     kind = RateLimitError if code == httpx2.codes.TOO_MANY_REQUESTS else UpstreamStatusError
     problem = problem_of(resp)
-    header = resp.headers.get("Retry-After") if code in _RETRY_AFTER_STATUSES else None
     return kind(
         f"transient {code} for {site.method} {site.url}",
         status_code=code,
         body=_summary(resp, problem),
         problem=problem,
-        **site.details(resp, retryable=True, retry_after=None if header is None else parse_retry_after(header)),
+        **site.details(resp, retryable=True, retry_after=retry_after_of(resp)),
     )
 
 
