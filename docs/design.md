@@ -65,7 +65,7 @@ AsyncBaseClient.get(url, expect=..., **options)
       request hooks              every hop: the credential guard; the SSRF check over a custom transport
       RetryTransport             attempts, classification, backoff, Retry-After, budget, hedging
         AttemptTransport         AttemptFinished per send (only with observers)
-          MiddlewareTransport    HttpOptions.middleware, once per attempt (only with middleware)
+          MiddlewareTransport    HttpOptions.middleware, once per attempt, then the credential guard again
             ResilientCacheTransport   opt-in hishel cache; a hit stops here
               RateLimitTransport      the rate budget: pacing, in-flight slots, server feedback
                 SendTrackingTransport whether each send connected, and the request bytes it wrote

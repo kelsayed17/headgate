@@ -139,6 +139,9 @@ layer. Code written against the 0.1.0 source needs the migrations below; there a
 
 ### Security
 
+- A middleware that declares the credentials it stamps (`credential_headers`, `credential_params`) has them withheld
+  from any untrusted origin: the credential guard runs again below the last middleware, so a signer no longer signs a
+  cross-origin redirect hop.
 - Credentials stay on trusted origins on every hop: an absolute URL to another origin, a redirect, or a cursor URL no
   longer carries `Authorization`, an auth's declared headers or a `QueryParamAuth` key. 0.1.0 withheld only a static
   header, and only on a cross-origin redirect.

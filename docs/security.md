@@ -27,8 +27,14 @@ http = HttpOptions(trusted_origins=frozenset({"https://uploads.example.com", "ht
 The hops a [`CachedTokenAuth`](auth.md#cachedtokenauth) mint flow yields may carry the mint's credentials to the token
 endpoint its code addressed, and to the redirects that endpoint answers with on the same origin, and nowhere else.
 
-A third-party `httpx2.Auth` that is not a `CredentialStamper` and puts its credential in another header or in the query
-is not covered; implement the protocol to declare it. A cache refuses such an auth unless told the data is public (see
+A [middleware](configuration.md#middleware) that stamps a credential (a request signer) declares it the same way, with
+`credential_headers` and `credential_params`. A middleware runs inside the transport stack, after the request hook, so
+the guard runs a second time below the last middleware, on every attempt of every hop, and removes what it declares
+from any hop not addressed to `base_url`'s origin or a trusted one. An auth flow's token host is not trusted for a
+middleware's credentials: the middleware did not choose it.
+
+A third-party `httpx2.Auth` that is not a `CredentialStamper`, or a middleware that declares nothing, and puts its
+credential in another header or in the query is not covered; declare the names to have them withheld. A cache refuses such an auth unless told the data is public (see
 [caching](caching.md#partitions)).
 
 ## Redirects

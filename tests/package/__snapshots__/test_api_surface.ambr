@@ -367,7 +367,7 @@
   type AddressCheck = Callable[[str], str | None]
   class AddressGuard(object)(resolver: 'Resolver' = <function resolve_with_loop at 0x…>, *, check: 'AddressCheck' = <function forbidden_reason at 0x…>) -> 'None'
       def vet(self, host: 'str', port: 'int') -> 'tuple[str, ...]'
-  class CredentialGuard(object)(*, auth: 'httpx2.Auth | None', base_url: 'httpx2.URL', trusted_origins: 'Iterable[str]', cookie_jar: 'bool') -> 'None'
+  class CredentialGuard(object)(*, auth: 'httpx2.Auth | None', base_url: 'httpx2.URL', trusted_origins: 'Iterable[str]', cookie_jar: 'bool', middleware: 'Iterable[object]' = ()) -> 'None'
       def __call__(self, request: 'httpx2.Request') -> 'None'
       def trusts(self, request: 'httpx2.Request') -> 'bool'
   class PinnedHTTPTransport(AsyncHTTPTransport)(guard: 'AddressGuard', *, ssl_context: 'ssl.SSLContext | None', limits: 'httpx2.Limits') -> 'None'

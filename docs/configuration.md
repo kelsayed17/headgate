@@ -110,24 +110,29 @@ import httpx2
 
 
 class HmacSigner:
-    def __init__(self, secret: bytes, origin: str) -> None:
+    # What it stamps: withheld from any hop to an origin other than base_url's and the trusted ones.
+    credential_headers = frozenset({"X-Signature"})
+    credential_params = frozenset[str]()
+
+    def __init__(self, secret: bytes) -> None:
         self._secret = secret
-        self._origin = httpx2.URL(origin).origin
 
     async def __call__(
         self, request: httpx2.Request, call_next: Callable[[httpx2.Request], Awaitable[httpx2.Response]]
     ) -> httpx2.Response:
-        if request.url.origin == self._origin:  # sign only what goes to our own API
-            stamp = str(int(time.time()))
-            payload = b"\n".join((request.method.encode(), request.url.raw_path, stamp.encode(), request.content))
-            request.headers["X-Timestamp"] = stamp
-            request.headers["X-Signature"] = hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
+        stamp = str(int(time.time()))
+        payload = b"\n".join((request.method.encode(), request.url.raw_path, stamp.encode(), request.content))
+        request.headers["X-Timestamp"] = stamp
+        request.headers["X-Signature"] = hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
         return await call_next(request)
 ```
 
-A middleware runs below the [credential guard](security.md#credentials-stay-on-your-origin), which only knows what the
-auth declares, so a middleware that adds a credential checks the destination itself, as this one does. `request.content`
-is available for a buffered body; a streamed body is not readable there.
+A middleware runs inside the transport stack, below the [credential guard](security.md#credentials-stay-on-your-origin)
+the client runs as a request hook, so the guard runs again below the last middleware. The headers and query parameters a
+middleware declares in `credential_headers` and `credential_params` are removed there from any hop not addressed to
+`base_url`'s origin or a trusted one, a cross-origin redirect hop included. A middleware that declares nothing has its
+headers sent wherever the request goes, so it must check the destination itself. `request.content` is available for a
+buffered body; a streamed body is not readable there.
 
 ## Per-call options
 

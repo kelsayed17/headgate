@@ -76,7 +76,7 @@ from headgate._options import (
 )
 from headgate._request_body import check_one_body, request_content
 from headgate._responses import Expect, Reader, RefusedError
-from headgate._stack import build_http_client, build_transport_stack
+from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import render_path, route_template, sanitize_url
 from headgate._view import KEEP, ROOT_DEFAULTS, Keep, overlay_timeout
 from headgate.breaker import BreakerOpenError, CircuitBreaker
@@ -266,8 +266,9 @@ class AsyncBaseClient:
         self._emitter = Emitter(http.observers) if http.observers else SILENT
         self._view = ROOT_DEFAULTS
         self._owns_pool = True
-        stack = build_transport_stack(rate, policy, http, self._timing, auth)
-        self._http_client = build_http_client(base_url=base_url, auth=auth, http=http, transport=stack)
+        credentials = Credentials.of(base_url=base_url, auth=auth, http=http)
+        stack = build_transport_stack(rate, policy, http, self._timing, credentials)
+        self._http_client = build_http_client(base_url=base_url, credentials=credentials, http=http, transport=stack)
 
     async def __aenter__(self) -> Self:
         """Return the client; leaving the block closes it (a view's block closes nothing, see :meth:`with_options`)."""

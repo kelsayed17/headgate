@@ -30,7 +30,7 @@ from headgate._core._events import (
 )
 from headgate._core._origin import origin_of, origin_text, same_origin
 from headgate._core._retry_after import RETRY_AFTER_STATUSES, parse_retry_after, retry_after_of
-from headgate._core._seams import BREAKER_GATE, CredentialStamper
+from headgate._core._seams import BREAKER_GATE, CredentialCarrier, CredentialStamper
 from headgate._core._switch import policy_disabled, policy_is_disabled
 from headgate._core._time import (
     SYSTEM_TIMING,
@@ -61,6 +61,7 @@ __all__ = [
     "CallInfo",
     "CallStarted",
     "Clock",
+    "CredentialCarrier",
     "CredentialStamper",
     "Deprecated",
     "Emitter",

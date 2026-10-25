@@ -25,6 +25,8 @@ from tests.support.tokens import premint
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+    from headgate._middleware import Next
+
 
 class _Bearer(CachedTokenAuth):
     """A bearer auth whose exchange never runs: tests seed it."""
@@ -231,3 +233,55 @@ def test_a_chain_marker_trusts_only_its_own_origin(marker: object) -> None:
     assert guard.trusts(
         httpx2.Request("GET", "https://login.example/x", extensions={CHAIN_ORIGIN: "https://login.example"})
     )
+
+
+class _Signer:
+    """A signing middleware that signs every attempt, wherever it goes, and declares what it stamps."""
+
+    credential_headers: ClassVar = frozenset({"X-Signature"})
+    credential_params: ClassVar = frozenset({"sig"})
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        """Stamp a signature header and query parameter, then send."""
+        request.headers["X-Signature"] = "signed"
+        request.url = request.url.copy_merge_params({"sig": "s"})
+        return await call_next(request)
+
+
+def _signed(request: httpx2.Request) -> set[str]:
+    """Return which of :class:`_Signer`'s credentials *request* carries."""
+    return {name for name in ("X-Signature", "sig") if name in request.headers or name in request.url.params}
+
+
+async def test_a_middlewares_declared_credentials_stay_off_a_foreign_redirect_hop() -> None:
+    """Withhold what a middleware declares from a hop to another origin, though it signs the hop after the hook ran."""
+    web = Web({f"{BASE}/start": "https://files.example/signed"})
+    async with web.client(http=HttpOptions(middleware=(_Signer(),))) as client:
+        resp = await client.get("start", expect=RESPONSE)
+
+    first, hop = web.sent
+    assert resp.text == "ok"
+    assert _signed(first) == {"X-Signature", "sig"}
+    assert _signed(hop) == set()
+
+
+async def test_a_middlewares_credentials_reach_a_trusted_origin() -> None:
+    """Keep a middleware's credentials on a hop to an origin in ``trusted_origins``."""
+    web = Web({f"{BASE}/start": "https://files.example/signed"})
+    http = HttpOptions(middleware=(_Signer(),), trusted_origins=frozenset({"https://files.example"}))
+    async with web.client(http=http) as client:
+        await client.get("start", expect=RESPONSE)
+
+    assert all(_signed(request) == {"X-Signature", "sig"} for request in web.sent)
+
+
+async def test_a_middlewares_credentials_stay_off_a_mint_hops_token_host() -> None:
+    """Withhold a middleware's credentials from a mint hop, whose origin is trusted for the mint's credentials only."""
+    web = Web()
+    async with web.client(auth=_MintingAuth(), http=HttpOptions(middleware=(_Signer(),))) as client:
+        await client.get("data", expect=RESPONSE)
+
+    mint_hop, call = web.sent
+    assert "Authorization" in mint_hop.headers
+    assert _signed(mint_hop) == set()
+    assert _signed(call) == {"X-Signature", "sig"}

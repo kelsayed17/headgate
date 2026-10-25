@@ -8,7 +8,7 @@
 
     RetryTransport(                  # re-sends per the RetryPolicy; begins each attempt on the call's context
       AttemptTransport(              # AttemptFinished per send (only with observers)
-        MiddlewareTransport(         # HttpOptions.middleware, once per attempt (only with middleware)
+        MiddlewareTransport(         # HttpOptions.middleware, once per attempt, then the credential guard again
           ResilientCacheTransport(   # opt-in response cache; a hit stops here
             RateLimitTransport(      # the rate budget: every network send takes its turn and feeds back
               SendTrackingTransport( # records whether each send connected and how many request bytes it wrote
@@ -20,7 +20,8 @@ its place there, wrapping the layer below it.
 Above the stack, ``httpx2.AsyncClient`` runs the auth flow and the hooks, once per logical call and once per hop of a
 redirect or an auth flow:
 
-* request hooks: the credential guard (:class:`~headgate.security.CredentialGuard`), then, over a custom network
+* request hooks: the credential guard (:class:`~headgate.security.CredentialGuard`, which also runs below the last
+  middleware, where what a middleware stamps is visible), then, over a custom network
   transport with ``HttpOptions(allow_private_hosts=False)``, the SSRF guard's vetting
   (:func:`~headgate.security.address_hook`); the default transport pins vetted addresses itself
   (:class:`~headgate.security.PinnedHTTPTransport`);
@@ -36,6 +37,7 @@ cookie jar refuses every cookie unless ``HttpOptions(cookies=True)``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import TYPE_CHECKING
 
@@ -59,28 +61,51 @@ if TYPE_CHECKING:
     from headgate._options import HttpOptions, TransportPolicy
     from headgate.ratelimit import Rate, RateBudget
 
-__all__ = ["build_http_client", "build_transport_stack"]
+__all__ = ["Credentials", "build_http_client", "build_transport_stack"]
 
 #: The response hooks, in the order they run on every hop.
 _RESPONSE_HOOKS = (refuse_https_downgrade, refuse_unreplayable_redirect, drop_followed_redirect_body)
 
 
+@dataclass(frozen=True, slots=True)
+class Credentials:
+    """A client's credentials as its stack sees them: the auth, and the one guard that keeps them on trusted origins.
+
+    The same guard runs as the first request hook and below the last middleware (see :func:`build_transport_stack`).
+    """
+
+    auth: httpx2.Auth | None
+    guard: CredentialGuard
+
+    @classmethod
+    def of(cls, *, base_url: str, auth: httpx2.Auth | None, http: HttpOptions) -> Credentials:
+        """Return *auth*, with a guard withholding its and *http*'s middleware's credentials from untrusted origins."""
+        guard = CredentialGuard(
+            auth=auth,
+            base_url=httpx2.URL(base_url),
+            trusted_origins=http.trusted_origins,
+            cookie_jar=http.cookies,
+            middleware=http.middleware,
+        )
+        return cls(auth, guard)
+
+
 def build_http_client(
-    *, base_url: str, auth: httpx2.Auth | None, http: HttpOptions, transport: httpx2.AsyncBaseTransport
+    *, base_url: str, credentials: Credentials, http: HttpOptions, transport: httpx2.AsyncBaseTransport
 ) -> httpx2.AsyncClient:
     """Build a client's ``httpx2.AsyncClient`` over *transport*, the stack :func:`build_transport_stack` built."""
     # httpx2 joins a relative path onto base_url only when base_url ends with "/".
     base_url = base_url if base_url.endswith("/") else base_url + "/"
     return httpx2.AsyncClient(
         transport=transport,
-        auth=auth,
+        auth=credentials.auth,
         base_url=base_url,
         headers=_default_headers(http),
         cookies=None if http.cookies else _refusing_jar(),
         follow_redirects=http.follow_redirects,
         max_redirects=http.max_redirects,
         event_hooks={
-            "request": _request_hooks(auth, httpx2.URL(base_url), http),
+            "request": _request_hooks(credentials.guard, http),
             "response": list(_RESPONSE_HOOKS),
         },
         timeout=httpx_timeout(http.timeout),
@@ -93,20 +118,21 @@ def build_transport_stack(
     policy: TransportPolicy,
     http: HttpOptions,
     timing: Timing,
-    auth: httpx2.Auth | None = None,
+    credentials: Credentials,
 ) -> httpx2.AsyncBaseTransport:
     """Build the layers under ``httpx2.AsyncClient``, bottom-up: each statement wraps the layer before it.
 
-    *auth* is the client's, which the cache partitions its entries by.
+    The cache partitions its entries by *credentials*' auth, and its guard runs again below the last middleware, so a
+    middleware's declared credentials stay on trusted origins too.
     """
     layer = SendTrackingTransport(transport=_network(http))
     budgets = PathBudgets(default=rate, rules=policy.rate_limits, timing=timing)
     layer = RateLimitTransport(budgets=budgets, transport=layer)
     if (cache := policy.cache) is not None:
-        scope = credential_scope(cache, auth)
+        scope = credential_scope(cache, credentials.auth)
         layer = ResilientCacheTransport(layer, cache, max_body_bytes=http.max_response_bytes, scope=scope)
     if http.middleware:
-        layer = MiddlewareTransport(transport=layer, middleware=http.middleware)
+        layer = MiddlewareTransport(transport=layer, middleware=http.middleware, guard=credentials.guard)
     if http.observers:
         layer = AttemptTransport(transport=layer)
     return RetryTransport(transport=layer, policy=policy.retry, sleep=timing.sleep, clock=timing.clock)
@@ -136,15 +162,13 @@ def _address_guard(http: HttpOptions) -> AddressGuard | None:
 
 
 def _request_hooks(
-    auth: httpx2.Auth | None, base_url: httpx2.URL, http: HttpOptions
+    credentials: CredentialGuard, http: HttpOptions
 ) -> list[Callable[[httpx2.Request], Awaitable[None]]]:
     """Return the request hooks: the credential guard, then the SSRF guard when a custom transport cannot pin."""
-    hooks: list[Callable[[httpx2.Request], Awaitable[None]]] = [
-        CredentialGuard(auth=auth, base_url=base_url, trusted_origins=http.trusted_origins, cookie_jar=http.cookies)
-    ]
-    guard = _address_guard(http)
-    if guard is not None and http.transport is not None:
-        hooks.append(address_hook(guard))
+    hooks: list[Callable[[httpx2.Request], Awaitable[None]]] = [credentials]
+    addresses = _address_guard(http)
+    if addresses is not None and http.transport is not None:
+        hooks.append(address_hook(addresses))
     return hooks
 
 
