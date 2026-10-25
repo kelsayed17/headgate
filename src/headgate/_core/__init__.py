@@ -29,6 +29,7 @@ from headgate._core._events import (
     RetryScheduled,
 )
 from headgate._core._origin import origin_of, origin_text, same_origin
+from headgate._core._seams import BREAKER_GATE, CredentialStamper
 from headgate._core._switch import policy_disabled, policy_is_disabled
 from headgate._core._time import (
     SYSTEM_TIMING,
@@ -43,6 +44,7 @@ from headgate._core._time import (
 )
 
 __all__ = [
+    "BREAKER_GATE",
     "OBSERVER_FAILURES",
     "SILENT",
     "SYSTEM_TIMING",
@@ -57,6 +59,7 @@ __all__ = [
     "CallInfo",
     "CallStarted",
     "Clock",
+    "CredentialStamper",
     "Deprecated",
     "Emitter",
     "Event",
