@@ -44,6 +44,12 @@ class InFlightLimit:
         with self._lock:
             return self._count
 
+    @property
+    def waiting(self) -> int:
+        """How many callers are queued for a slot now."""
+        with self._lock:
+            return len(self._waiters)
+
     async def acquire(self) -> None:
         """Wait for a slot and take it; :meth:`release` gives it back."""
         with self._lock:

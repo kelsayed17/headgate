@@ -436,3 +436,13 @@ def test_one_budget_shared_by_clients_on_several_threads_books_every_turn_once()
 
     turns = _PER_THREAD * _THREADS - int(rate.burst)
     assert sorted(slept) == pytest.approx([rate.interval * turn for turn in range(1, turns + 1)])
+
+
+async def test_a_slot_given_back_twice_is_freed_once() -> None:
+    """Make a slot's release idempotent, so two closes of one body cannot free another holder's slot."""
+    budget = RateBudget(_RATE, max_in_flight=2)
+    first = await budget.occupy()
+    await budget.occupy()
+    first()
+    first()
+    assert budget.in_flight == 1
