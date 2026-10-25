@@ -78,8 +78,46 @@ on a body that does not match, which the client turns into `ResponseParseError`.
 - A response body cap measured on decompressed bytes.
 - Auth helpers: `StaticHeaderAuth`, `QueryParamAuth`, `CachedTokenAuth`. A static credential header is withheld from any
   redirect hop that leaves the client's origin.
-- An opt-in `HttpCache` (hishel) that degrades to the network when its storage fails.
+- An opt-in `HttpCache` (hishel), partitioned by credential, that degrades to the network when its storage fails.
 - t-string URL paths (`self.get(t"series/{series_id}", ...)`) that escape each interpolated segment.
+
+## Caching
+
+```python
+from hishel import AsyncSqliteStorage, FilterPolicy
+from headgate import HttpCache, PathFragmentFilter, StatusCodeFilter, TransportPolicy
+
+cache = HttpCache(
+    policy=FilterPolicy(
+        request_filters=[PathFragmentFilter(("/series",))],
+        response_filters=[StatusCodeFilter(frozenset({200}))],
+    ),
+    storage=AsyncSqliteStorage(),  # yours to close; many clients may share it
+    ttl=3600,
+)
+super().__init__(base_url=..., rate=..., auth=auth, policy=TransportPolicy(cache=cache))
+```
+
+- **Partitioned by credential.** An entry is visible only to requests made with the same credential: the partition is
+  an HMAC-SHA256, under a per-process random key, of the auth's `credential_identity()` and of any other credential
+  the request carries. Clients with different keys can share one storage. The auth must declare its credentials
+  (`headgate._core.CredentialStamper`); an auth that does not is refused at construction unless you opt into
+  `HttpCache(partition=Partition.SHARED)`, which is for public data only.
+- **Credentials are never stored.** `Authorization`, `Proxy-Authorization`, `Cookie`, every header and query parameter
+  the auth declares, well-known secret query parameters (`api_key`, `token`, ...) and URL userinfo are removed from
+  what hishel stores, and sent to the network unchanged.
+- **TTL, not revalidation.** A `FilterPolicy` cache serves an entry until its `ttl` (or a per-call `cache_ttl=`) ends,
+  and never revalidates it with the origin. Credential-partitioned entries are not found again by another process.
+- **Conditional reads** are the caller-driven alternative: keep the `Validator` and send it back.
+
+```python
+from headgate.cache import Fresh, NotModified, Validator, conditional
+
+result = await self.get(t"docs/{doc_id}", expect=conditional(decoder(Doc), validator=held))
+match result:
+    case Fresh(value=doc, validator=held): ...  # new representation; keep its validator
+    case NotModified(): ...                      # 304: what you hold is current
+```
 
 ## Errors
 
