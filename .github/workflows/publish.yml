@@ -3,6 +3,8 @@ name: publish
 on:
   release:
     types: [published]
+  # A rehearsal: builds the current ref and publishes it to TestPyPI.
+  workflow_dispatch:
 
 permissions:
   contents: read # checkout only
@@ -29,10 +31,10 @@ jobs:
           path: dist/
 
   publish:
+    # Enable by setting the repository variable PYPI_PUBLISHING=true once PyPI trusted publishing is configured for
+    # this repository, workflow and the `pypi` environment.
+    if: github.event_name == 'release' && vars.PYPI_PUBLISHING == 'true'
     name: Publish to PyPI
-    # Enable by setting the repository variable PYPI_PUBLISHING=true once PyPI trusted publishing is configured
-    # for this repository and the `pypi` environment.
-    if: vars.PYPI_PUBLISHING == 'true'
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -46,3 +48,25 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+
+  publish-testpypi:
+    # Enable by setting the repository variable TESTPYPI_PUBLISHING=true once TestPyPI trusted publishing is
+    # configured for this repository, workflow and the `testpypi` environment.
+    if: github.event_name == 'workflow_dispatch' && vars.TESTPYPI_PUBLISHING == 'true'
+    name: Publish to TestPyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/headgate
+    permissions:
+      id-token: write # TestPyPI trusted publishing and PEP 740 attestations
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true

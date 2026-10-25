@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "headgate"
-version = "0.1.0"
+version = "0.2.0"
 description = "The async API-client base on httpx2: safe retries, rate budgets, per-origin breakers, credential-safe caching, typed events and declared responses."
 readme = "README.md"
 requires-python = ">=3.14"
@@ -71,7 +71,18 @@ dev = [
 packages = ["src/headgate"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/headgate", "examples", "README.md", "LICENSE", "pyproject.toml"]
+# The source, plus what a downstream packager needs to run the test suite; never local caches.
+include = [
+    "src/headgate",
+    "tests",
+    "examples",
+    "docs",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "pyproject.toml",
+]
+exclude = [".hypothesis", "**/__pycache__", "**/*.pyc", "mutants", ".coverage*", ".codspeed"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
