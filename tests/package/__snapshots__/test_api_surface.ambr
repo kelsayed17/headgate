@@ -79,7 +79,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.errors]
   '''
   module headgate.errors
-  __all__ = ['AuthError', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'DecodeError', 'ErrorDetails', 'Problem', 'RateLimitError', 'ResponseParseError', 'ResponseTooLargeError', 'TransportError', 'UpstreamStatusError']
+  __all__ = ['AuthError', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'DecodeError', 'ErrorDetails', 'ForbiddenDestinationError', 'Problem', 'RateLimitError', 'ResponseParseError', 'ResponseTooLargeError', 'TransportError', 'UpstreamStatusError']
   class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
   class CircuitOpenError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class ClientConfigurationError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
@@ -100,6 +100,7 @@
       key attempts: int | None (optional)
       key retryable: bool (optional)
       key retry_after: float | None (optional)
+  class ForbiddenDestinationError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class Problem(object)(*, type: 'str' = 'about:blank', title: 'str | None' = None, status: 'int | None' = None, detail: 'str | None' = None, instance: 'str | None' = None, extensions: 'Mapping[str, object]' = <factory>) -> 'None'
       field type: str = 'about:blank'
       field title: str | None = None
@@ -359,6 +360,25 @@
       def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
   '''
 # ---
+# name: test_the_public_surface_matches_the_snapshot[headgate.security]
+  '''
+  module headgate.security
+  __all__ = ['CHAIN_ORIGIN', 'AddressCheck', 'AddressGuard', 'CredentialGuard', 'PinnedHTTPTransport', 'Resolver', 'address_hook', 'forbidden_reason', 'refuse_https_downgrade', 'resolve_with_loop']
+  CHAIN_ORIGIN = 'headgate.chain_origin'
+  type AddressCheck = Callable[[str], str | None]
+  class AddressGuard(object)(resolver: 'Resolver' = <function resolve_with_loop at 0x…>, *, check: 'AddressCheck' = <function forbidden_reason at 0x…>) -> 'None'
+      def vet(self, host: 'str', port: 'int') -> 'tuple[str, ...]'
+  class CredentialGuard(object)(*, auth: 'httpx2.Auth | None', base_url: 'httpx2.URL', trusted_origins: 'Iterable[str]', cookie_jar: 'bool') -> 'None'
+      def __call__(self, request: 'httpx2.Request') -> 'None'
+      def trusts(self, request: 'httpx2.Request') -> 'bool'
+  class PinnedHTTPTransport(AsyncHTTPTransport)(guard: 'AddressGuard', *, ssl_context: 'ssl.SSLContext | None', limits: 'httpx2.Limits') -> 'None'
+  type Resolver = Callable[[str, int], Awaitable[Sequence[str]]]
+  def address_hook(guard: 'AddressGuard') -> 'Callable[[httpx2.Request], Awaitable[None]]'
+  def forbidden_reason(address: 'str') -> 'str | None'
+  def refuse_https_downgrade(response: 'httpx2.Response') -> 'None'
+  def resolve_with_loop(host: 'str', port: 'int') -> 'list[str]'
+  '''
+# ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.streaming]
   '''
   module headgate.streaming
@@ -434,13 +454,13 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['NO_RETRY', 'Adaptive', 'AsyncBaseClient', 'AuthError', 'Backoff', 'BreakerPolicy', 'BreakerRegistry', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Cursor', 'DecodeError', 'Expect', 'Fresh', 'Hedge', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'LinkHeader', 'MethodFilter', 'Middleware', 'Minted', 'NextUrl', 'NotModified', 'Observer', 'Offset', 'PageRequest', 'Pager', 'Paginated', 'Partition', 'PathFragmentFilter', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryBudget', 'RetryPolicy', 'Route', 'StaticHeaderAuth', 'StatusCodeFilter', 'Stream', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'Validator', 'as_bytes', 'conditional', 'event_stream', 'json_reader', 'nothing']
+  __all__ = ['NO_RETRY', 'Adaptive', 'AsyncBaseClient', 'AuthError', 'Backoff', 'BreakerPolicy', 'BreakerRegistry', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Cursor', 'DecodeError', 'Expect', 'ForbiddenDestinationError', 'Fresh', 'Hedge', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'LinkHeader', 'MethodFilter', 'Middleware', 'Minted', 'NextUrl', 'NotModified', 'Observer', 'Offset', 'PageRequest', 'Pager', 'Paginated', 'Partition', 'PathFragmentFilter', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryBudget', 'RetryPolicy', 'Route', 'StaticHeaderAuth', 'StatusCodeFilter', 'Stream', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'Validator', 'as_bytes', 'conditional', 'event_stream', 'json_reader', 'nothing']
   NO_RETRY = RetryPolicy(attempts=1, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryBudget(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05)
   class Adaptive(object)(*, decrease: 'float' = 0.5, increase: 'float' = 0.1, min_rate: 'float' = 0.1) -> 'None'
       field decrease: float = 0.5
       field increase: float = 0.1
       field min_rate: float = 0.1
-  class AsyncBaseClient(object)(*, base_url: 'str', rate: 'Rate | RateBudget', auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryBudget(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=<headgate.breaker._registry.BreakerRegistry object at 0x…>), rate_limits=(), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), timeout=Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, refusal_check=None, trusted_origins=frozenset(), allow_private_hosts=True, ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray'), observers=(), middleware=())) -> 'None'
+  class AsyncBaseClient(object)(*, base_url: 'str', rate: 'Rate | RateBudget', auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryBudget(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=<headgate.breaker._registry.BreakerRegistry object at 0x…>), rate_limits=(), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), timeout=Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, refusal_check=None, trusted_origins=frozenset(), allow_private_hosts=True, resolver=None, ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray'), observers=(), middleware=())) -> 'None'
       def aclose(self) -> 'None'
       def delete(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
       def get(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
@@ -468,6 +488,9 @@
       property max_hosts
   class CachedTokenAuth(Auth, Generic)(*, refresh_margin_s: 'float' = 120.0) -> 'None'
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
+      property credential_headers
+      def credential_identity(self) -> 'bytes'
+      property credential_params
       staticmethod reject_credential_rotation(returned: 'str | None', configured: 'str', *, provider: 'str', setting: 'str') -> 'None'
       def seed(self, token: 'TokenT', lifetime: 'float') -> 'None'
   class CircuitOpenError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
@@ -495,6 +518,7 @@
       field accept: str | None = None
       def accepts(self, resp: 'httpx2.Response') -> 'bool'
       def on(self, status: 'int', read: 'Reader[E]') -> 'Expect[T | E]'
+  class ForbiddenDestinationError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class Fresh(Generic)(value: 'T', validator: 'Validator') -> 'None'
       field value: T
       field validator: Validator
@@ -506,7 +530,7 @@
       field storage: AsyncBaseStorage
       field ttl: float | None = None
       field partition: Partition = <Partition.CREDENTIAL: 'credential'>
-  class HttpOptions(object)(*, transport: 'httpx2.AsyncBaseTransport | None' = None, headers: 'Mapping[str, str]' = <factory>, timeout: 'Timeouts | float' = <factory>, follow_redirects: 'bool' = True, max_redirects: 'int' = 5, max_response_bytes: 'int' = 33554432, refusal_check: 'RefusalCheck | None' = None, trusted_origins: 'frozenset[str]' = frozenset(), allow_private_hosts: 'bool' = True, ssl_context: 'ssl.SSLContext | None' = None, limits: 'httpx2.Limits' = <factory>, proxy: 'str | None' = None, user_agent: 'str | None' = None, cookies: 'bool' = False, request_id_headers: 'tuple[str, ...]' = ('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray'), observers: 'tuple[Observer, ...]' = (), middleware: 'tuple[Middleware, ...]' = ()) -> 'None'
+  class HttpOptions(object)(*, transport: 'httpx2.AsyncBaseTransport | None' = None, headers: 'Mapping[str, str]' = <factory>, timeout: 'Timeouts | float' = <factory>, follow_redirects: 'bool' = True, max_redirects: 'int' = 5, max_response_bytes: 'int' = 33554432, refusal_check: 'RefusalCheck | None' = None, trusted_origins: 'frozenset[str]' = frozenset(), allow_private_hosts: 'bool' = True, resolver: 'Resolver | None' = None, ssl_context: 'ssl.SSLContext | None' = None, limits: 'httpx2.Limits' = <factory>, proxy: 'str | None' = None, user_agent: 'str | None' = None, cookies: 'bool' = False, request_id_headers: 'tuple[str, ...]' = ('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray'), observers: 'tuple[Observer, ...]' = (), middleware: 'tuple[Middleware, ...]' = ()) -> 'None'
       field transport: httpx2.AsyncBaseTransport | None = None
       field headers: Mapping[str, str] = <factory>
       field timeout: Timeouts | float = <factory>
@@ -516,6 +540,7 @@
       field refusal_check: RefusalCheck | None = None
       field trusted_origins: frozenset[str] = frozenset()
       field allow_private_hosts: bool = True
+      field resolver: Resolver | None = None
       field ssl_context: ssl.SSLContext | None = None
       field limits: httpx2.Limits = <factory>
       field proxy: str | None = None
@@ -583,6 +608,9 @@
       field extensions: Mapping[str, object] = <factory>
   class QueryParamAuth(Auth)(params: 'Mapping[str, str]') -> 'None'
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
+      property credential_headers
+      def credential_identity(self) -> 'bytes'
+      property credential_params
   class Rate(object)(requests: 'float', period: 'float') -> 'None'
       field requests: float
       field period: float
@@ -644,7 +672,9 @@
       field deadline: float | None = None
   class StaticHeaderAuth(Auth)(headers: 'Mapping[str, str]') -> 'None'
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
-      property header_names
+      property credential_headers
+      def credential_identity(self) -> 'bytes'
+      property credential_params
   class StatusCodeFilter(BaseFilter)(codes: 'frozenset[int]') -> 'None'
       def apply(self, item: 'Response', body: 'bytes | None') -> 'bool'
       def needs_body(self) -> 'bool'

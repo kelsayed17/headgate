@@ -81,7 +81,14 @@ from headgate._view import KEEP, ROOT_DEFAULTS, Keep, overlay_timeout
 from headgate.breaker import BreakerOpenError, CircuitBreaker
 from headgate.breaker._registry import NO_BREAKER
 from headgate.cache._transport import host_untested
-from headgate.errors import CircuitOpenError, ClientError, ClientTimeoutError, DecodeError, RateLimitError
+from headgate.errors import (
+    CircuitOpenError,
+    ClientError,
+    ClientTimeoutError,
+    DecodeError,
+    ForbiddenDestinationError,
+    RateLimitError,
+)
 from headgate.pagination import PageRequest, Paginated
 from headgate.ratelimit import BudgetPausedError
 from headgate.retry import NO_RETRY, REPLAYABLE_BODY, RetryPolicy
@@ -651,8 +658,8 @@ class AsyncBaseClient:
         The response yielded is anything but a 429 or 5xx: one of those means the retry transport ran out of
         attempts, and it is raised here, so no call can declare either as an answer. A network failure or timeout,
         in the send or in the caller's body read inside the block, becomes ``TransportError`` /
-        ``ClientTimeoutError``; an open breaker ``CircuitOpenError``; and a rate budget the server paused past the
-        call's deadline ``RateLimitError``.
+        ``ClientTimeoutError``; an open breaker ``CircuitOpenError``; a rate budget the server paused past the
+        call's deadline ``RateLimitError``; and a hop the SSRF guard refused ``ForbiddenDestinationError``.
 
         The breaker is driven here rather than by a transport layer because this is the only scope that spans both the
         send and the body read. It is keyed on the origin the request is addressed to, so a followed redirect's hops
@@ -677,6 +684,11 @@ class AsyncBaseClient:
         except httpx2.InvalidURL as exc:
             # A redirect joined past httpx2's length limit. Not an HTTPError, and not an origin failure.
             raise _invalid_url(exc, self._site(prepared)) from exc
+        except ForbiddenDestinationError as exc:
+            # The SSRF guard refused a hop before it was sent; it names the destination, the site names the call.
+            site = self._site(prepared)
+            msg = f"{site.method} {site.url}: {exc}"
+            raise ForbiddenDestinationError(msg, **site.details()) from None
 
     @staticmethod
     def _breaker_listener(breaker: Breaker, context: CallContext) -> Callable[[Transition], None] | None:

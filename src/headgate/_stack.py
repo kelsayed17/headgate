@@ -23,6 +23,11 @@ above the stack, once per logical call and once per redirect hop.
 
 Nothing here reads the environment: the client and the default transport are built with ``trust_env=False``, and the
 cookie jar refuses every cookie unless ``HttpOptions(cookies=True)``.
+
+The security hooks (:mod:`headgate.security`) are installed here too: the credential guard as the first request hook,
+the https-downgrade refusal as the first response hook, and, with ``HttpOptions(allow_private_hosts=False)``, the SSRF
+guard, as the network transport itself (:class:`~headgate.security.PinnedHTTPTransport`) or, over a custom transport,
+as a request hook.
 """
 
 from __future__ import annotations
@@ -33,15 +38,15 @@ from typing import TYPE_CHECKING
 import httpx2
 
 from headgate._attempts import AttemptTransport
-from headgate._auth import StaticHeaderAuth
 from headgate._middleware import MiddlewareTransport
 from headgate._options import httpx_timeout
-from headgate._redirects import credential_header_guard, drop_followed_redirect_body
+from headgate._redirects import drop_followed_redirect_body
 from headgate._user_agent import user_agent
 from headgate.cache._credentials import credential_scope
 from headgate.cache._transport import ResilientCacheTransport
 from headgate.ratelimit import PathBudgets, RateLimitTransport
 from headgate.retry import RetryTransport, SendTrackingTransport
+from headgate.security import AddressGuard, CredentialGuard, PinnedHTTPTransport, address_hook, refuse_https_downgrade
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -67,7 +72,10 @@ def build_http_client(
         cookies=None if http.cookies else _refusing_jar(),
         follow_redirects=http.follow_redirects,
         max_redirects=http.max_redirects,
-        event_hooks={"request": _request_hooks(auth, httpx2.URL(base_url)), "response": [drop_followed_redirect_body]},
+        event_hooks={
+            "request": _request_hooks(auth, httpx2.URL(base_url), http),
+            "response": [refuse_https_downgrade, drop_followed_redirect_body],
+        },
         timeout=httpx_timeout(http.timeout),
         trust_env=False,
     )
@@ -101,6 +109,9 @@ def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
     """Return the network transport: the caller's own, used as it is, or an HTTP/2 pool that reads no environment."""
     if http.transport is not None:
         return http.transport
+    guard = _address_guard(http)
+    if guard is not None:
+        return PinnedHTTPTransport(guard, ssl_context=http.ssl_context, limits=http.limits)
     return httpx2.AsyncHTTPTransport(
         verify=True if http.ssl_context is None else http.ssl_context,
         http2=True,
@@ -123,8 +134,21 @@ def _refusing_jar() -> CookieJar:
     return CookieJar(policy=DefaultCookiePolicy(allowed_domains=[]))
 
 
-def _request_hooks(auth: httpx2.Auth | None, base_url: httpx2.URL) -> list[Callable[[httpx2.Request], Awaitable[None]]]:
-    """Return the request hooks: a guard keeping a ``StaticHeaderAuth``'s headers on the client's own origin."""
-    if isinstance(auth, StaticHeaderAuth) and auth.header_names:
-        return [credential_header_guard(auth, base_url)]
-    return []
+def _address_guard(http: HttpOptions) -> AddressGuard | None:
+    """Return the SSRF guard *http* asks for, or ``None`` when it allows private hosts."""
+    if http.allow_private_hosts:
+        return None
+    return AddressGuard() if http.resolver is None else AddressGuard(http.resolver)
+
+
+def _request_hooks(
+    auth: httpx2.Auth | None, base_url: httpx2.URL, http: HttpOptions
+) -> list[Callable[[httpx2.Request], Awaitable[None]]]:
+    """Return the request hooks: the credential guard, then the SSRF guard when a custom transport cannot pin."""
+    hooks: list[Callable[[httpx2.Request], Awaitable[None]]] = [
+        CredentialGuard(auth=auth, base_url=base_url, trusted_origins=http.trusted_origins, cookie_jar=http.cookies)
+    ]
+    guard = _address_guard(http)
+    if guard is not None and http.transport is not None:
+        hooks.append(address_hook(guard))
+    return hooks

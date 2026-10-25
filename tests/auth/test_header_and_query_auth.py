@@ -54,13 +54,14 @@ class TestStaticHeaderAuth:
 
         assert "Authorization" not in req.headers
 
-    def test_the_header_names_are_what_the_redirect_guard_withholds(self) -> None:
-        """Expose the configured names, copied so a later change to the caller's mapping does not reach the auth."""
-        headers = {"x-api-key": "k"}
+    def test_the_credential_headers_are_the_configured_names(self) -> None:
+        """Declare the configured names, copied so a later change to the caller's mapping does not reach the auth."""
+        headers = {"X-Api-Key": "k"}
         auth = StaticHeaderAuth(headers)
         headers["x-other"] = "v"
 
-        assert auth.header_names == {"x-api-key"}
+        assert auth.credential_headers == {"x-api-key"}
+        assert auth.credential_params == frozenset()
 
 
 class TestQueryParamAuth:

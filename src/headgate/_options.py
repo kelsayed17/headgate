@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from headgate._responses import RefusalCheck
     from headgate.cache import HttpCache
     from headgate.ratelimit import RateRule
+    from headgate.security import Resolver
 
 __all__ = [
     "DEFAULT_LIMITS",
@@ -255,8 +256,14 @@ class HttpOptions:
     * ``refusal_check``: a per-host check run on every final response (see :data:`~headgate.RefusalCheck`). It sees
       only the final response, so a refusal written on a followed hop would be skipped, and it therefore requires
       ``follow_redirects=False``.
-    * ``trusted_origins``: origins besides ``base_url``'s that credentials may be sent to.
-    * ``allow_private_hosts``: ``False`` refuses requests to non-global addresses.
+    * ``trusted_origins``: origins besides ``base_url``'s that credentials may be sent to (``"https://host[:port]"``);
+      every other origin gets the request without them (see :mod:`headgate.security`).
+    * ``allow_private_hosts``: ``False`` turns on the SSRF guard: a request to a host that is, or resolves to, an
+      address that is not globally routable raises :class:`~headgate.errors.ForbiddenDestinationError`, on every hop,
+      and the default transport connects only to the address it checked. It cannot be combined with ``proxy``, since a
+      proxy resolves the target itself; over a custom ``transport`` every hop is checked but not pinned.
+    * ``resolver``: how the SSRF guard resolves names (:data:`~headgate.security.Resolver`), the event loop's
+      ``getaddrinfo`` by default; only with ``allow_private_hosts=False``.
     * ``user_agent``: a product token sent before headgate's own (``"<user_agent> headgate/<v> httpx2/<v>
       python/<v>"``); without one, headgate's alone.
     * ``cookies``: ``True`` keeps httpx2's cookie jar; by default no cookie a response sets is stored or sent back.
@@ -276,6 +283,7 @@ class HttpOptions:
     refusal_check: RefusalCheck | None = None
     trusted_origins: frozenset[str] = frozenset()
     allow_private_hosts: bool = True
+    resolver: Resolver | None = None
     ssl_context: ssl.SSLContext | None = None
     limits: httpx2.Limits = field(default_factory=lambda: DEFAULT_LIMITS)
     proxy: str | None = None
@@ -294,6 +302,7 @@ class HttpOptions:
         if self.max_redirects < 0:
             msg = f"max_redirects must be >= 0 (got {self.max_redirects})"
             raise ValueError(msg)
+        self._check_guard()
         if self.refusal_check is not None and self.follow_redirects:
             msg = "an HttpOptions with a refusal_check= must set follow_redirects=False"
             raise ValueError(msg)
@@ -311,6 +320,15 @@ class HttpOptions:
         object.__setattr__(self, "request_id_headers", names)
         object.__setattr__(self, "observers", tuple(self.observers))
         object.__setattr__(self, "middleware", tuple(self.middleware))
+
+    def _check_guard(self) -> None:
+        """Refuse a resolver without the SSRF guard, and the guard with a proxy, which would resolve past it."""
+        if self.allow_private_hosts and self.resolver is not None:
+            msg = "resolver= is used only by the SSRF guard, so it needs allow_private_hosts=False"
+            raise ValueError(msg)
+        if not self.allow_private_hosts and self.proxy is not None:
+            msg = "allow_private_hosts=False cannot be combined with proxy=: the proxy resolves the target itself"
+            raise ValueError(msg)
 
     def _check_transport(self) -> None:
         """Refuse an upstream-httpx transport, and default-transport settings next to a custom transport."""
