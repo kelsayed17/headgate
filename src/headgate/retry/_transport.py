@@ -200,17 +200,18 @@ class _Sequence:
         number = self._sent
         self._fit_timeout(request)
         started = context.clock()
+        prefix = f"attempt {number}/{self._policy.attempts}{' (hedge)' if hedge else ''}"
         result: httpx2.Response | Exception
         try:
             result = await self._transport.handle_async_request(request)
         except NETWORK_ERRORS as exc:
             result = exc
+        except asyncio.CancelledError:
+            # A losing hedge, or the whole call reaching its deadline: the history still accounts for the send.
+            context.add_note(f"{prefix}: cancelled after {_rounded(context.clock() - started)}")
+            raise
         verdict = classify(result, self._attempted(progress), self._policy)
-        label = " (hedge)" if hedge else ""
-        elapsed = _rounded(context.clock() - started)
-        context.add_note(
-            f"attempt {number}/{self._policy.attempts}{label}: {_describe(result, verdict)} after {elapsed}"
-        )
+        context.add_note(f"{prefix}: {_describe(result, verdict)} after {_rounded(context.clock() - started)}")
         return _Attempt(result, verdict, request)
 
     async def _round(self) -> _Attempt:
