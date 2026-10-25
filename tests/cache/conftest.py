@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 @pytest.fixture
 async def storage() -> AsyncIterator[AsyncSqliteStorage]:
-    """A real hishel storage on an in-memory SQLite database, closed after the test."""
+    """Yield a real hishel storage on an in-memory SQLite database, closed after the test."""
     conn = await anysqlite.connect(":memory:")
     store = AsyncSqliteStorage(connection=conn)
     try:

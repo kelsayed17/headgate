@@ -23,16 +23,22 @@ import httpx2
 import pytest
 from hishel import FilterPolicy
 
-from headgate._cache import MethodFilter, ResilientCacheTransport
-from tests.cache._helpers import every_get_policy
+from headgate._cache import CACHE_DEGRADED_EXT, MethodFilter
+from tests.cache._helpers import FaultyStorage, TrackingNetwork, cache_transport
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from hishel import AsyncSqliteStorage
 
+    from headgate._cache import ResilientCacheTransport
+
 _URL = "https://example.test/files/2025.zip"
 _BODY = b"the whole file"
+#: How many identical requests a sharing test sends at once.
+_CONCURRENT = 5
+#: How many requests wait on a first one that a test then cancels.
+_WAITING = 3
 
 
 class _GatedNetwork(httpx2.AsyncBaseTransport):
@@ -50,29 +56,16 @@ class _GatedNetwork(httpx2.AsyncBaseTransport):
         await self.gate.wait()
         if self._exc is not None:
             raise self._exc
-        return httpx2.Response(200, content=self._body, request=request)
+        return httpx2.Response(httpx2.codes.OK, content=self._body, request=request)
 
 
 def _cache_no_get() -> FilterPolicy:
+    """Cache only POSTs, so no GET in a test is stored."""
     return FilterPolicy(request_filters=[MethodFilter(frozenset({"POST"}))])
 
 
-def _transport(
-    storage: AsyncSqliteStorage,
-    network: httpx2.AsyncBaseTransport,
-    *,
-    policy: FilterPolicy | None = None,
-    cap: int = 1024 * 1024,
-) -> ResilientCacheTransport:
-    return ResilientCacheTransport(
-        next_transport=network,
-        storage=storage,
-        policy=policy or every_get_policy(),
-        max_body_bytes=cap,
-    )
-
-
 async def _get(transport: ResilientCacheTransport, url: str = _URL) -> bytes:
+    """GET *url* through *transport* and read the body."""
     response = await transport.handle_async_request(httpx2.Request("GET", url))
     return await response.aread()
 
@@ -94,19 +87,22 @@ async def _let_waiters_arrive() -> None:
 
 
 async def test_simultaneous_identical_gets_share_one_download(storage: AsyncSqliteStorage) -> None:
+    """Identical GETs in flight together make one fetch, and each gets a response object of its own."""
     network = _GatedNetwork()
-    transport = _transport(storage, network)
+    transport = cache_transport(storage, network)
 
-    tasks = [asyncio.create_task(transport.handle_async_request(httpx2.Request("GET", _URL))) for _ in range(5)]
+    tasks = [
+        asyncio.create_task(transport.handle_async_request(httpx2.Request("GET", _URL))) for _ in range(_CONCURRENT)
+    ]
     await _eventually(lambda: network.calls == 1)
     await _let_waiters_arrive()
     network.gate.set()
     responses = await asyncio.gather(*tasks)
 
     assert network.calls == 1
-    assert len({id(response) for response in responses}) == 5, "each request gets its own response"
-    assert [await response.aread() for response in responses] == [_BODY] * 5
-    assert {response.status_code for response in responses} == {200}
+    assert len({id(response) for response in responses}) == _CONCURRENT, "each request gets its own response"
+    assert [await response.aread() for response in responses] == [_BODY] * _CONCURRENT
+    assert {response.status_code for response in responses} == {httpx2.codes.OK}
 
 
 async def test_a_get_the_policy_does_not_cache_is_shared_too_and_only_while_in_flight(
@@ -118,68 +114,88 @@ async def test_a_get_the_policy_does_not_cache_is_shared_too_and_only_while_in_f
     twice.
     """
     network = _GatedNetwork()
-    transport = _transport(storage, network, policy=_cache_no_get())
+    transport = cache_transport(storage, network, policy=_cache_no_get())
 
-    tasks = [asyncio.create_task(_get(transport)) for _ in range(5)]
+    tasks = [asyncio.create_task(_get(transport)) for _ in range(_CONCURRENT)]
     await _eventually(lambda: network.calls == 1)
     await _let_waiters_arrive()
     network.gate.set()
 
-    assert await asyncio.gather(*tasks) == [_BODY] * 5
+    assert await asyncio.gather(*tasks) == [_BODY] * _CONCURRENT
     assert network.calls == 1
     assert await _get(transport) == _BODY
-    assert network.calls == 2
+    assert network.calls == len(("the shared download", "the later one"))
 
 
-async def test_requests_for_different_urls_do_not_share(storage: AsyncSqliteStorage) -> None:
+async def test_a_degraded_download_is_shared_too(storage: AsyncSqliteStorage) -> None:
+    """A request that found the storage broken is redone live and held whole, so the requests waiting on it share it."""
     network = _GatedNetwork()
-    transport = _transport(storage, network)
+    faulty = FaultyStorage(storage, ValueError("corrupt cache entry"), failing="get_entries")
+    transport = cache_transport(faulty, network)
 
-    tasks = [asyncio.create_task(_get(transport, url)) for url in (_URL, _URL.replace("2025", "2024"))]
-    await _eventually(lambda: network.calls == 2)
+    tasks = [
+        asyncio.create_task(transport.handle_async_request(httpx2.Request("GET", _URL))) for _ in range(_CONCURRENT)
+    ]
+    await _eventually(lambda: network.calls == 1)
+    await _let_waiters_arrive()
+    network.gate.set()
+    responses = await asyncio.gather(*tasks)
+
+    assert network.calls == 1
+    assert [await response.aread() for response in responses] == [_BODY] * _CONCURRENT
+    assert all(CACHE_DEGRADED_EXT in response.extensions for response in responses)
+
+
+@pytest.mark.parametrize(
+    "urls",
+    [
+        pytest.param((_URL, _URL.replace("2025", "2024")), id="different-paths"),
+        pytest.param(
+            (
+                "https://example.test/download?reportDate=20260917",
+                "https://example.test/download?reportDate=20260918",
+            ),
+            id="different-queries",
+        ),
+    ],
+)
+async def test_requests_for_different_urls_do_not_share(urls: tuple[str, str], storage: AsyncSqliteStorage) -> None:
+    """Two URLs are two requests, including one path with a different query each day."""
+    network = _GatedNetwork()
+    transport = cache_transport(storage, network)
+
+    tasks = [asyncio.create_task(_get(transport, url)) for url in urls]
+    await _eventually(lambda: network.calls == len(urls))
     network.gate.set()
 
-    assert await asyncio.gather(*tasks) == [_BODY, _BODY]
-    assert network.calls == 2
-
-
-async def test_requests_that_differ_only_in_their_query_do_not_share(storage: AsyncSqliteStorage) -> None:
-    """One path with a different ``reportDate`` each day is two requests: the query is part of what is asked for."""
-    network = _GatedNetwork()
-    transport = _transport(storage, network)
-
-    days = ("https://example.test/download?reportDate=20260917", "https://example.test/download?reportDate=20260918")
-    tasks = [asyncio.create_task(_get(transport, url)) for url in days]
-    await _eventually(lambda: network.calls == 2)
-    network.gate.set()
-
-    assert await asyncio.gather(*tasks) == [_BODY, _BODY]
-    assert network.calls == 2
+    assert await asyncio.gather(*tasks) == [_BODY] * len(urls)
+    assert network.calls == len(urls)
 
 
 async def test_posts_are_never_shared(storage: AsyncSqliteStorage) -> None:
     """A POST's body is part of what it asks for, so two identical-looking POSTs are two requests."""
     network = _GatedNetwork()
-    transport = _transport(storage, network)
+    transport = cache_transport(storage, network)
+    posts = 2
 
     async def post() -> bytes:
         response = await transport.handle_async_request(httpx2.Request("POST", _URL, content=b"{}"))
         return await response.aread()
 
-    tasks = [asyncio.create_task(post()) for _ in range(2)]
-    await _eventually(lambda: network.calls == 2)
+    tasks = [asyncio.create_task(post()) for _ in range(posts)]
+    await _eventually(lambda: network.calls == posts)
     network.gate.set()
 
-    assert await asyncio.gather(*tasks) == [_BODY, _BODY]
-    assert network.calls == 2
+    assert await asyncio.gather(*tasks) == [_BODY] * posts
+    assert network.calls == posts
 
 
 async def test_a_failed_download_fails_every_waiting_request_from_one_attempt(storage: AsyncSqliteStorage) -> None:
-    """Each caller's retry layer, above this one, then retries, and those retries share again."""
+    """A network failure fails every waiting request; each caller's retry layer, above this one, then retries."""
     network = _GatedNetwork(exc=httpx2.ConnectError("dns failure"))
-    transport = _transport(storage, network)
+    transport = cache_transport(storage, network)
 
-    tasks = [asyncio.create_task(_get(transport)) for _ in range(5)]
+    tasks = [asyncio.create_task(_get(transport)) for _ in range(_CONCURRENT)]
     await _eventually(lambda: network.calls == 1)
     await _let_waiters_arrive()
     network.gate.set()
@@ -190,37 +206,39 @@ async def test_a_failed_download_fails_every_waiting_request_from_one_attempt(st
 
 
 async def test_a_cancelled_first_request_hands_the_download_to_the_next(storage: AsyncSqliteStorage) -> None:
+    """When the request fetching for the others is cancelled, the next waiting one fetches for the rest."""
     network = _GatedNetwork()
-    transport = _transport(storage, network)
+    transport = cache_transport(storage, network)
 
     first = asyncio.create_task(_get(transport))
     await _eventually(lambda: network.calls == 1)
-    waiting = [asyncio.create_task(_get(transport)) for _ in range(3)]
+    waiting = [asyncio.create_task(_get(transport)) for _ in range(_WAITING)]
     await _let_waiters_arrive()
     first.cancel()
-    await _eventually(lambda: network.calls == 2)
+    await _eventually(lambda: network.calls == len(("the cancelled download", "the handed-over one")))
     network.gate.set()
 
-    assert await asyncio.gather(*waiting) == [_BODY] * 3
+    assert await asyncio.gather(*waiting) == [_BODY] * _WAITING
     with pytest.raises(asyncio.CancelledError):
         await first
-    assert network.calls == 2, "the three waiting requests shared the second download"
+    assert network.calls == len(("the cancelled download", "the one the waiting requests shared"))
 
 
 async def test_a_cancelled_waiting_request_does_not_cancel_the_download(storage: AsyncSqliteStorage) -> None:
+    """A waiting request that is cancelled leaves the download, and every other request waiting on it, untouched."""
     network = _GatedNetwork()
-    transport = _transport(storage, network)
+    transport = cache_transport(storage, network)
 
     first = asyncio.create_task(_get(transport))
     await _eventually(lambda: network.calls == 1)
-    waiting = [asyncio.create_task(_get(transport)) for _ in range(3)]
+    waiting = [asyncio.create_task(_get(transport)) for _ in range(_WAITING)]
     await _let_waiters_arrive()
     waiting[0].cancel()
     await _let_waiters_arrive()
     network.gate.set()
 
     assert await first == _BODY
-    assert await asyncio.gather(*waiting[1:]) == [_BODY, _BODY]
+    assert await asyncio.gather(*waiting[1:]) == [_BODY] * (_WAITING - 1)
     with pytest.raises(asyncio.CancelledError):
         await waiting[0]
     assert network.calls == 1
@@ -240,10 +258,10 @@ class _OverCapNetwork(httpx2.AsyncBaseTransport):
         self.calls += 1
         if self.calls > 1:
             self._later += 1
-            if self._later == 2:
+            if self._later == len(("one later fetch", "another")):
                 self._together.set()
             await self._together.wait()
-        return httpx2.Response(200, content=self._body, request=request)
+        return httpx2.Response(httpx2.codes.OK, content=self._body, request=request)
 
 
 async def test_a_response_too_large_to_hold_is_not_shared(storage: AsyncSqliteStorage) -> None:
@@ -252,14 +270,44 @@ async def test_a_response_too_large_to_hold_is_not_shared(storage: AsyncSqliteSt
     The requests that waited each fetch their own, at the same time, and each client then raises its own too-large
     error, as it would without sharing.
     """
-    network = _OverCapNetwork(b"0123456789")
-    transport = _transport(storage, network, cap=4)
+    body = b"0123456789"
+    network = _OverCapNetwork(body)
+    transport = cache_transport(storage, network, cap=len(body) // 2)
 
-    tasks = [asyncio.create_task(_get(transport)) for _ in range(3)]
+    tasks = [asyncio.create_task(_get(transport)) for _ in range(_WAITING)]
     bodies = await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
 
-    assert bodies == [b"0123456789"] * 3
-    assert network.calls == 3
+    assert bodies == [body] * _WAITING
+    assert network.calls == _WAITING
+
+
+#: A body that arrives in several chunks, so a cap can fall between them.
+_CHUNKS = (b"0123456789",) * 4
+
+
+async def test_a_body_past_the_cap_is_replayed_whole(storage: AsyncSqliteStorage) -> None:
+    """A body past the cap is handed back as the part already read followed by the unread rest."""
+    network = TrackingNetwork(_CHUNKS)
+    transport = cache_transport(storage, network, cap=len(_CHUNKS[0]) + 1)
+
+    assert await _get(transport) == b"".join(_CHUNKS)
+
+
+async def test_closing_a_body_past_the_cap_closes_the_network_response(storage: AsyncSqliteStorage) -> None:
+    """A client that stops reading at its cap closes the response, and with it the network response under hishel's.
+
+    hishel's own response does not close the network response it streams from, so a replay that closed only hishel's
+    would keep the pooled connection checked out.
+    """
+    network = TrackingNetwork(_CHUNKS)
+    transport = cache_transport(storage, network, cap=len(_CHUNKS[0]) + 1)
+
+    response = await transport.handle_async_request(httpx2.Request("GET", _URL))
+    async for _ in response.aiter_raw():
+        break
+    await response.aclose()
+
+    assert network.streams[0].closed
 
 
 class _Unreachable(httpx2.AsyncBaseTransport):
@@ -274,8 +322,8 @@ class _Unreachable(httpx2.AsyncBaseTransport):
 async def test_a_failure_no_request_waited_on_is_not_reported_as_never_retrieved(
     storage: AsyncSqliteStorage, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A lone failed GET leaves no future whose exception nobody retrieved, which asyncio would log when collected."""
-    transport = _transport(storage, _Unreachable())
+    """A lone failed GET leaves nothing whose exception nobody retrieved, which asyncio would log when collected."""
+    transport = cache_transport(storage, _Unreachable())
 
     with caplog.at_level(logging.ERROR, logger="asyncio"):
         with pytest.raises(httpx2.ConnectError):
@@ -288,12 +336,12 @@ async def test_a_failure_no_request_waited_on_is_not_reported_as_never_retrieved
 async def test_gets_for_one_url_with_different_headers_do_not_share(storage: AsyncSqliteStorage) -> None:
     """A ``Range``, an ``Accept`` or a credential changes what a GET asks for, so it gets its own download."""
     network = _GatedNetwork()
-    transport = _transport(storage, network, policy=_cache_no_get())
+    transport = cache_transport(storage, network, policy=_cache_no_get())
 
     requests = [httpx2.Request("GET", _URL, headers={"Range": f"bytes={start}-"}) for start in (0, 100)]
     tasks = [asyncio.create_task(transport.handle_async_request(request)) for request in requests]
-    await _eventually(lambda: network.calls == 2)
+    await _eventually(lambda: network.calls == len(requests))
     network.gate.set()
     await asyncio.gather(*tasks)
 
-    assert network.calls == 2
+    assert network.calls == len(requests)

@@ -8,16 +8,43 @@ from __future__ import annotations
 import headgate
 
 _NAMES = [
-    "AsyncBaseClient", "Rate", "Expect", "Refused", "nothing", "ClientError", "TransportError",
-    "ClientTimeoutError", "UpstreamStatusError", "RateLimitError", "AuthError", "ResponseParseError",
-    "StaticHeaderAuth", "QueryParamAuth", "CachedTokenAuth", "HttpCache", "Minted", "MethodFilter",
-    "PathFragmentFilter", "StatusCodeFilter", "Reader", "RefusalCheck", "as_bytes", "event_stream", "json_reader",
-    "RateRule", "ClientConfigurationError", "DecodeError", "ResponseTooLargeError",
-]  # fmt: skip
+    "AsyncBaseClient",
+    "AuthError",
+    "CachedTokenAuth",
+    "ClientConfigurationError",
+    "ClientError",
+    "ClientTimeoutError",
+    "DecodeError",
+    "Expect",
+    "HttpCache",
+    "HttpOptions",
+    "MethodFilter",
+    "Minted",
+    "PathFragmentFilter",
+    "QueryParamAuth",
+    "Rate",
+    "RateLimitError",
+    "RateRule",
+    "Reader",
+    "RefusalCheck",
+    "RefusedError",
+    "RequestOptions",
+    "ResponseParseError",
+    "ResponseTooLargeError",
+    "StaticHeaderAuth",
+    "StatusCodeFilter",
+    "TransportError",
+    "TransportPolicy",
+    "UpstreamStatusError",
+    "as_bytes",
+    "event_stream",
+    "json_reader",
+    "nothing",
+]
 
 
 def test_every_name_imports() -> None:
+    """Check that the package root exports exactly the promised names, each importable."""
     for name in _NAMES:
-        assert name in headgate.__all__
         assert getattr(headgate, name) is not None
     assert sorted(headgate.__all__) == sorted(_NAMES)

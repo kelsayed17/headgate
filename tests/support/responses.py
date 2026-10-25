@@ -19,11 +19,12 @@ if TYPE_CHECKING:
 
 
 def response(content: bytes = b"", *, status: int = 200, headers: dict[str, str] | None = None) -> httpx2.Response:
-    """A complete ``httpx2.Response`` for a reader under test."""
+    """Return a complete ``httpx2.Response`` to hand a reader under test."""
     return httpx2.Response(status, content=content, headers=headers)
 
 
 def _whole(resp: httpx2.Response, /) -> httpx2.Response:
+    """Return *resp* itself."""
     return resp
 
 

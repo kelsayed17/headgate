@@ -3,7 +3,7 @@
 
 """The retry matrix: every input the retry transport decides on, and the golden outcome of each.
 
-``headgate._retry.RetryTransport`` reproduces httpx-retries 0.6.0, as ``build_retry`` configures it, EXACTLY. This
+``headgate._retry.RetryTransport`` reproduces httpx-retries 0.6.0, as ``build_retry`` configures it, exactly. This
 module is the matrix httpx-retries was driven through, once, to write the golden table, and that headgate's transport
 is driven through on every run: attempt budget x method x status x exception x every ``Retry-After`` form. The golden
 table beside it (``retry_golden.json``) holds httpx-retries' own outcome for every case, and
@@ -12,12 +12,13 @@ table beside it (``retry_golden.json``) holds httpx-retries' own outcome for eve
 An outcome is everything a caller of the transport can observe:
 
 * how many sends reached the network;
-* every sleep, as an exact float (the jitter source is seeded per case, and the clock frozen);
+* every sleep, as an exact float (the clock is frozen, and the jitter is the ``random`` module's generator seeded with
+  the case's seed, which is what httpx-retries drew from when the table was recorded);
 * what came back: a status, or the exception's class name;
 * the attempt count on the returned response's ``retry`` extension;
 * which network responses were closed. Each is backed by a stream httpx2 does not pre-read, so ``is_closed`` flips only
   when the retry layer calls ``aclose()``: a response it retried past reads ``true``, the one it returned ``false``;
-* which were already closed when each sleep began, so closing the failed response BEFORE sleeping is pinned, and not
+* which were already closed when each sleep began, so closing the failed response before sleeping is pinned, and not
   only that it is closed by the end.
 
 Provenance, and changing the table. The table was generated from httpx-retries 0.6.0, configured as ``build_retry``
@@ -44,7 +45,7 @@ import msgspec
 import time_machine
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator, Callable, Iterator
 
 #: Where the golden outcomes live, one JSON row per case.
 GOLDEN = Path(__file__).with_name("retry_golden.json")
@@ -52,8 +53,9 @@ GOLDEN = Path(__file__).with_name("retry_golden.json")
 #: The instant every case runs at, so an HTTP-date ``Retry-After`` resolves to the same delay on every run.
 FROZEN_NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 
-#: Wraps the scripted network transport in a retry transport built for ``build_retry(attempts)``.
-type TransportFactory = Callable[[httpx2.AsyncBaseTransport, int], httpx2.AsyncBaseTransport]
+#: Wraps the scripted network transport in a retry transport built for ``build_retry(attempts)`` that draws its jitter
+#: from the given source.
+type TransportFactory = Callable[[httpx2.AsyncBaseTransport, int, Callable[[], float]], httpx2.AsyncBaseTransport]
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +69,7 @@ class Step:
 
 @dataclass(frozen=True, slots=True)
 class Case:
-    """``attempts`` is ``build_retry``'s argument. The script's last step repeats once the script runs out."""
+    """One matrix case: ``attempts`` is ``build_retry``'s argument; the script's last step repeats once it runs out."""
 
     attempts: int
     method: str
@@ -88,8 +90,9 @@ class Outcome:
 
 
 class _UnreadStream(httpx2.AsyncByteStream):
-    """A response body httpx2 leaves unread. ``httpx2.ByteStream`` is read, and so closed, at construction; this is not,
-    so the response's ``is_closed`` reports whether anything called ``aclose()`` on it.
+    """A response body httpx2 leaves unread, so the response's ``is_closed`` reports whether anything closed it.
+
+    ``httpx2.ByteStream`` is read, and so closed, at construction; this stream is not.
     """
 
     @override
@@ -106,24 +109,31 @@ _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 
-def _http_date(offset_seconds: int, *, naive: bool = False) -> str:
-    moment = FROZEN_NOW + timedelta(seconds=offset_seconds)
-    return format_datetime(moment.replace(tzinfo=None)) if naive else format_datetime(moment, usegmt=True)
+def _http_date(offset_seconds: int) -> str:
+    """Return the IMF-fixdate *offset_seconds* after ``FROZEN_NOW``."""
+    return format_datetime(FROZEN_NOW + timedelta(seconds=offset_seconds), usegmt=True)
+
+
+def _zoneless_date(offset_seconds: int) -> str:
+    """Return the RFC 5322 date *offset_seconds* after ``FROZEN_NOW`` with the ``-0000`` "no zone" marker."""
+    return format_datetime((FROZEN_NOW + timedelta(seconds=offset_seconds)).replace(tzinfo=None))
 
 
 def _offset_date(offset_seconds: int, *, hours: int) -> str:
-    """An RFC 5322 date naming the instant *offset_seconds* after ``FROZEN_NOW`` in the zone UTC+*hours*."""
+    """Return the RFC 5322 date naming the instant *offset_seconds* after ``FROZEN_NOW`` in the zone UTC+*hours*."""
     moment = (FROZEN_NOW + timedelta(seconds=offset_seconds)).astimezone(timezone(timedelta(hours=hours)))
     return format_datetime(moment)
 
 
 def _rfc850_date(offset_seconds: int) -> str:
+    """Return the obsolete RFC 850 date *offset_seconds* after ``FROZEN_NOW``."""
     moment = FROZEN_NOW + timedelta(seconds=offset_seconds)
     day, month = _WEEKDAYS[moment.weekday()], _MONTHS[moment.month - 1]
     return f"{day}, {moment.day:02d}-{month}-{moment.year % 100:02d} {moment:%H:%M:%S} GMT"
 
 
 def _asctime_date(offset_seconds: int) -> str:
+    """Return the asctime date *offset_seconds* after ``FROZEN_NOW``."""
     moment = FROZEN_NOW + timedelta(seconds=offset_seconds)
     day, month = _WEEKDAYS[moment.weekday()][:3], _MONTHS[moment.month - 1]
     return f"{day} {month} {moment.day:2d} {moment:%H:%M:%S} {moment.year}"
@@ -159,11 +169,11 @@ RETRY_AFTER_FORMS = (
     _http_date(3),  # a future date under the cap
     _http_date(30),  # a future date over the cap
     _http_date(-30),  # a past date: parses to 0, so the backoff applies
-    _http_date(3, naive=True),  # a zone-less date ("-0000"): read as UTC
+    _zoneless_date(3),  # a zone-less date ("-0000"): read as UTC
     "Mon, 32 Foo 2026 99:99:99 GMT",  # date-shaped garbage
 )
 
-#: The parser's edges, added after the first 875 cases. The library accepts a delay only as ASCII digits or an
+#: The parser's edges, appended after the first 875 cases. The library accepts a delay only as ASCII digits or an
 #: HTTP-date, so every lenient reading (``int()``, ``float()``, a fixed zone) is a way to differ from it.
 RETRY_AFTER_EDGE_FORMS = (
     "+3",  # ``int()`` and ``float()`` accept a sign; the library does not: garbage, so the backoff applies
@@ -171,69 +181,97 @@ RETRY_AFTER_EDGE_FORMS = (
     "1e3",  # ``float()`` accepts an exponent; the library does not
     "inf",  # ``float()`` accepts it (and would then be capped to 5 s); the library does not
     "   ",  # whitespace only: stripped to empty, so no header
-    "１２",  # noqa: RUF001  # fullwidth digits: ``str.isdigit()`` is true, ``isascii()`` is not, so they are not whole seconds
+    "\uff11\uff12",  # fullwidth "12": ``str.isdigit()`` is true, ``isascii()`` is not, so not whole seconds
     _offset_date(3, hours=1),  # a date in a zone ahead of UTC, 3 s from now: the offset is honoured
     _offset_date(3, hours=-5),  # ...and behind it
     _rfc850_date(3),  # the obsolete RFC 850 date, 3 s from now
     _asctime_date(3),  # the asctime date: zone-less, so read as UTC
 )
 
+#: Every single network outcome: each status, then each exception.
 OUTCOMES = (*(Step(status=status) for status in STATUSES), *(Step(raises=name) for name in EXCEPTIONS))
-FAILURES = tuple(step for step in OUTCOMES if step.raises is not None or (step.status or 0) >= 400)
+
+#: The outcomes that are not a success or a redirect: every exception and every 4xx/5xx.
+FAILURES = tuple(step for step in OUTCOMES if step.raises is not None or (step.status or 0) >= httpx2.codes.BAD_REQUEST)
+
+#: A successful send, the step most scripts end on.
+_OK = Step(status=200)
+
+#: A case before it is seeded: ``(attempts, method, script)``.
+type _Shape = tuple[int, str, tuple[Step, ...]]
 
 
-def _build_cases() -> tuple[Case, ...]:  # noqa: C901  # one loop per matrix axis
-    ok = Step(status=200)
-    shapes: list[tuple[int, str, tuple[Step, ...]]] = []
-    # One outcome, then a success: the retry decision for each outcome, method and budget.
+def _decision_shapes() -> Iterator[_Shape]:
+    """Yield one outcome, then a success: the retry decision for each outcome, method and budget."""
     for attempts in (1, 2, 3):
         for method in ("GET", "POST", "PATCH", "OPTIONS", "TRACE"):
-            shapes.extend((attempts, method, (step, ok)) for step in OUTCOMES)
-    # The same failure every time: exhaustion, for each budget (0 is clamped like 1).
+            yield from ((attempts, method, (step, _OK)) for step in OUTCOMES)
+
+
+def _exhaustion_shapes() -> Iterator[_Shape]:
+    """Yield the same failure every time: exhaustion, for each budget (0 is clamped like 1)."""
     for attempts in (0, 1, 2, 3, 5):
         for method in ("GET", "POST", "TRACE"):
-            shapes.extend((attempts, method, (step,)) for step in FAILURES)
-    # Every Retry-After form on a retried status, twice (so the second wait is on attempt 2), then a success.
+            yield from ((attempts, method, (step,)) for step in FAILURES)
+
+
+def _retry_after_shapes(forms: tuple[str, ...]) -> Iterator[_Shape]:
+    """Yield every form on a retried status twice (the second wait is on attempt 2), then once on a 404."""
     for status in (429, 500, 501, 503):
-        for value in RETRY_AFTER_FORMS:
+        for value in forms:
             step = Step(status=status, retry_after=value)
-            shapes.append((3, "GET", (step, step, ok)))
-    # ...and on a status that is not retried, where the header must change nothing.
-    shapes.extend((3, "GET", (Step(status=404, retry_after=value), ok)) for value in RETRY_AFTER_FORMS)
-    # Everything below was appended to the first 875 cases, so those keep their seeds and their rows.
-    # The parser's edges, on the same retried statuses, and once more on one that is not retried.
-    for status in (429, 500, 501, 503):
-        for value in RETRY_AFTER_EDGE_FORMS:
-            step = Step(status=status, retry_after=value)
-            shapes.append((3, "GET", (step, step, ok)))
-    shapes.extend((3, "GET", (Step(status=404, retry_after=value), ok)) for value in RETRY_AFTER_EDGE_FORMS)
-    # The method boundary: all seven allowed methods and both that are not, on a retried status, a Retry-After, a
-    # retried exception, and a success.
+            yield (3, "GET", (step, step, _OK))
+    # On a status that is not retried, the header must change nothing.
+    yield from ((3, "GET", (Step(status=404, retry_after=value), _OK)) for value in forms)
+
+
+def _method_boundary_shapes() -> Iterator[_Shape]:
+    """Yield all seven retried methods and two that are not, on each kind of outcome."""
+    scripts = (
+        (Step(status=503), _OK),
+        (Step(status=429, retry_after="2"), _OK),
+        (Step(raises="ConnectError"), _OK),
+        (_OK,),
+    )
     for method in ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE", "CONNECT"):
-        shapes.extend(
-            (3, method, script)
-            for script in (
-                (Step(status=503), ok),
-                (Step(status=429, retry_after="2"), ok),
-                (Step(raises="ConnectError"), ok),
-                (ok,),
-            )
-        )
-    # Scripts whose steps differ: each sleep must read ITS OWN response's headers (none after an exception), and a
-    # retried failure followed by a not-retried one stops there.
+        yield from ((3, method, script) for script in scripts)
+
+
+def _mixed_shapes() -> Iterator[_Shape]:
+    """Yield scripts whose steps differ.
+
+    Each sleep must read its own response's headers (none after an exception), and a retried failure followed by a
+    not-retried one stops there.
+    """
     mixed = (
-        (Step(status=429, retry_after="7"), Step(raises="ConnectError"), Step(raises="ConnectError"), ok),
-        (Step(raises="ConnectError"), Step(status=429, retry_after="2"), ok),
-        (Step(status=503, retry_after="7"), Step(status=503), Step(status=503, retry_after=" 3 "), ok),
-        (Step(status=503), Step(raises="ConnectError"), Step(status=503, retry_after="7"), ok),
+        (Step(status=429, retry_after="7"), Step(raises="ConnectError"), Step(raises="ConnectError"), _OK),
+        (Step(raises="ConnectError"), Step(status=429, retry_after="2"), _OK),
+        (Step(status=503, retry_after="7"), Step(status=503), Step(status=503, retry_after=" 3 "), _OK),
+        (Step(status=503), Step(raises="ConnectError"), Step(status=503, retry_after="7"), _OK),
         (Step(raises="ConnectError"), Step(raises="ValueError")),
         (Step(status=503), Step(status=404)),
-        (Step(status=429, retry_after=_http_date(-30)), Step(status=503, retry_after="7"), ok),
-        (Step(raises="ReadTimeout"), Step(status=503), Step(raises="OSError"), ok),
+        (Step(status=429, retry_after=_http_date(-30)), Step(status=503, retry_after="7"), _OK),
+        (Step(raises="ReadTimeout"), Step(status=503), Step(raises="OSError"), _OK),
     )
     for attempts in (3, 5):
         for method in ("GET", "POST"):
-            shapes.extend((attempts, method, script) for script in mixed)
+            yield from ((attempts, method, script) for script in mixed)
+
+
+def _build_cases() -> tuple[Case, ...]:
+    """Build the matrix, seeding each case with its index.
+
+    The first 875 cases come first so they keep their seeds and their rows; the parser's edges, the method boundary
+    and the mixed scripts were appended after them.
+    """
+    shapes = (
+        *_decision_shapes(),
+        *_exhaustion_shapes(),
+        *_retry_after_shapes(RETRY_AFTER_FORMS),
+        *_retry_after_shapes(RETRY_AFTER_EDGE_FORMS),
+        *_method_boundary_shapes(),
+        *_mixed_shapes(),
+    )
     return tuple(Case(attempts, method, script, seed=index) for index, (attempts, method, script) in enumerate(shapes))
 
 
@@ -274,13 +312,14 @@ async def run_case(make: TransportFactory, case: Case) -> Outcome:
         closed_at_sleep.append(tuple(r.is_closed for r in responses))
         return result
 
-    transport = make(httpx2.MockTransport(network), case.attempts)
-    request = httpx2.Request(case.method, "https://retry.test/x")
+    # The module-level generator, seeded per case, is the source the table was recorded against.
     random.seed(case.seed)
+    transport = make(httpx2.MockTransport(network), case.attempts, random.random)
+    request = httpx2.Request(case.method, "https://retry.test/x")
     with time_machine.travel(FROZEN_NOW, tick=False), patch.object(asyncio, "sleep", record_sleep):
         try:
             response = await transport.handle_async_request(request)
-        except Exception as exc:  # the exception's class IS the observed outcome, if the script raised it
+        except Exception as exc:  # the exception's class is the observed outcome, if the script raised it
             if type(exc).__name__ not in {step.raises for step in case.script}:
                 raise  # a harness or transport bug, not a retry outcome: fail, do not write it into the table
             result, attempts_made = f"raise:{type(exc).__name__}", None
@@ -293,14 +332,15 @@ async def run_case(make: TransportFactory, case: Case) -> Outcome:
 
 
 def case_json(case: Case) -> dict[str, object]:
-    """*case* as the golden table stores it (tuples become lists)."""
+    """Return *case* as the golden table stores it (tuples become lists)."""
     return msgspec.json.decode(json.dumps(asdict(case)), type=dict[str, object])
 
 
 def outcome_json(outcome: Outcome) -> dict[str, object]:
-    """*outcome* as the golden table stores it. Floats round-trip exactly: ``json`` writes their ``repr``."""
+    """Return *outcome* as the golden table stores it; floats round-trip exactly, as ``json`` writes their ``repr``."""
     return msgspec.json.decode(json.dumps(asdict(outcome)), type=dict[str, object])
 
 
 def load_golden() -> list[dict[str, object]]:
+    """Load the golden table: one ``{"case": ..., "outcome": ...}`` row per case, in matrix order."""
     return msgspec.json.decode(GOLDEN.read_bytes(), type=list[dict[str, object]])

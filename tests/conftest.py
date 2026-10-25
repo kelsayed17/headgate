@@ -1,11 +1,12 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Fixtures for the suites whose SUBJECT is the transport policy: retry, breaker, throttle.
+"""Autouse fixtures that keep the transport policy (retry, breaker, throttle) real but instant and isolated.
 
-These monkeypatch the policy stack so a suite can exercise real retry and breaker behaviour without sleeping through
-it. They are autouse for every test under ``tests/``. A test whose subject is the throttle's own timing opts out of the
-no-op rate-limiter wait with ``@pytest.mark.transport_policy``.
+They apply to every test under ``tests/``: a mocked failure is retried as production retries it without sleeping
+through the backoff, no breaker state carries from one test to the next, and the rate limiter admits at once. A test
+whose subject is the throttle's own timing opts out of the no-op rate-limiter wait with
+``@pytest.mark.transport_policy``.
 """
 
 from __future__ import annotations
@@ -25,8 +26,8 @@ if TYPE_CHECKING:
 def no_retry_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
     """Zero the retry backoff, so a mocked failure is retried the way production retries it, without sleeping.
 
-    ``_BACKOFF_FACTOR`` is read at client construction (``build_retry`` inside ``AsyncBaseClient.__init__``), so as an
-    autouse fixture this patches before any client is built.
+    ``build_retry`` reads the factor when a client is built, so as an autouse fixture this patches before any client
+    in the test exists.
     """
     monkeypatch.setattr("headgate._retry._BACKOFF_FACTOR", 0.0)
 
@@ -41,14 +42,14 @@ def reset_circuit_breakers() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def no_rate_limit(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Zero out the rate limiter's wait, the one seam patched; which requests acquire a token is unchanged.
+    """Make the rate limiter's wait a no-op, the one seam patched; which requests acquire a token is unchanged.
 
-    A test whose SUBJECT is the throttle's timing carries ``@pytest.mark.transport_policy`` and keeps the real wait.
+    A test whose subject is the throttle's timing carries ``@pytest.mark.transport_policy`` and keeps the real wait.
     """
     if request.node.get_closest_marker("transport_policy"):
         return
 
-    async def _noop(self: AsyncRateLimiter) -> None:
-        return None
+    async def admit_at_once(_limiter: AsyncRateLimiter) -> None:
+        """Admit the request without waiting for the bucket."""
 
-    monkeypatch.setattr(AsyncRateLimiter, "wait", _noop)
+    monkeypatch.setattr(AsyncRateLimiter, "wait", admit_at_once)

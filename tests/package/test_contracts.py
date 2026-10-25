@@ -22,6 +22,7 @@ _FORBIDDEN = {
 
 @pytest.mark.parametrize("contract", sorted(_FORBIDDEN))
 def test_shipped_code_keeps_the_contract(contract: str) -> None:
+    """Check that no shipped line logs, reads the environment, or imports upstream ``httpx``."""
     pattern = _FORBIDDEN[contract]
     offenders = [
         f"{path.relative_to(_ROOT)}:{n}: {line.strip()}"

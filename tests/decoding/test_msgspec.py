@@ -1,12 +1,11 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Unit tests for :mod:`headgate.msgspec`: the strict msgspec codec flavor.
+"""Unit tests for :mod:`headgate.msgspec`, the strict msgspec codec flavor.
 
-- ``decoder``: a reader that decodes the body strictly (a coerced token is drift) and raises the neutral
-  :class:`DecodeError` on any failure.
-- ``to_builtins``: the encode side, struct -> ``json=``-ready builtins (httpx2 owns the JSON serialization);
-  ``drop_none=True`` recursively removes None-valued fields.
+``decoder`` builds a reader that decodes the body strictly (a coerced token is drift) and raises the shared
+:class:`DecodeError` on any failure. ``to_builtins`` is the encode side, struct to ``json=``-ready builtins, and
+``drop_none=True`` recursively removes ``None``-valued fields.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import msgspec
 import pytest
 
 from headgate.errors import DecodeError
-from headgate.msgspec import decoder, to_builtins
+from headgate.msgspec import decode, decoder, to_builtins
 from tests.support.responses import response
 
 
@@ -27,169 +26,133 @@ class _Struct(msgspec.Struct, frozen=True):
 
 
 def test_decode_decodes_good_bytes() -> None:
-    dec = decoder(_Struct)
-    result = dec(response(b'{"x": 3}'))
-    assert result == _Struct(x=3)
+    """Decode a matching body into the struct."""
+    assert decoder(_Struct)(response(b'{"x": 3}')) == _Struct(x=3)
 
 
 def test_decode_strict_by_default_rejects_coerced_token() -> None:
-    # strict=True is the DEFAULT: a coerced token (string where an int is declared) is wire drift and fails loud.
-    dec = decoder(_Struct)
+    """Reject a string where an ``int`` is declared, since strict is the default."""
     with pytest.raises(DecodeError):
-        dec(response(b'{"x": "3"}'))
+        decoder(_Struct)(response(b'{"x": "3"}'))
 
 
 def test_decode_lax_optin_coerces_string_to_int() -> None:
-    # strict=False is the explicit opt-out for wires that genuinely quote numerics.
-    dec = decoder(_Struct, strict=False)
-    result = dec(response(b'{"x": "3"}'))
-    assert result == _Struct(x=3)
+    """Coerce a quoted number with ``strict=False``, the opt-out for wires that quote numerics."""
+    assert decoder(_Struct, strict=False)(response(b'{"x": "3"}')) == _Struct(x=3)
 
 
 def test_decode_raises_decode_error_on_bad_bytes() -> None:
-    dec = decoder(_Struct)
+    """Raise ``DecodeError`` for a body that is not JSON."""
     with pytest.raises(DecodeError):
-        dec(response(b"not json"))
+        decoder(_Struct)(response(b"not json"))
+
+
+def test_decode_is_the_bytes_level_primitive() -> None:
+    """Decode bytes directly, with the same strictness and error as the reader."""
+    assert decode(b'{"x": 1}', _Struct) == _Struct(x=1)
+    assert decode(b"[]", list[_Struct] | _Struct) == []
+    with pytest.raises(DecodeError):
+        decode(b'{"x": "1"}', _Struct)
 
 
 # --- decoder(list[cls]): a bare top-level JSON array ---
 
 
 def test_decode_list_decodes_array() -> None:
-    dec = decoder(list[_Struct])
-    result = dec(response(b'[{"x": 1}, {"x": 2}]'))
-    assert result == [_Struct(x=1), _Struct(x=2)]
+    """Decode a bare array of objects."""
+    assert decoder(list[_Struct])(response(b'[{"x": 1}, {"x": 2}]')) == [_Struct(x=1), _Struct(x=2)]
 
 
 def test_decode_list_empty_array_decodes_to_empty_list() -> None:
-    dec = decoder(list[_Struct])
-    assert dec(response(b"[]")) == []
+    """Decode ``[]`` to an empty list."""
+    assert decoder(list[_Struct])(response(b"[]")) == []
 
 
 @pytest.mark.parametrize("body", [b"", b"   ", b"\n", b"  \r\n "])
 def test_decode_list_empty_body_raises_by_default(body: bytes) -> None:
-    # By default a 200 with no body is corruption (a list endpoint sends at least b"[]"), so it fails loud.
-    dec = decoder(list[_Struct])
+    """Fail on an empty 200 by default: a list endpoint sends at least ``[]``, so no body is corruption."""
     with pytest.raises(DecodeError):
-        dec(response(body))
+        decoder(list[_Struct])(response(body))
 
 
 @pytest.mark.parametrize("body", [b"", b"   ", b"\n", b"  \r\n "])
 def test_decode_list_empty_body_allowed_when_opted_in(body: bytes) -> None:
-    # Opt-in for endpoints that answer no-data with a ZERO-BYTE 200 (not b"[]"), which msgspec on its own rejects as
-    # "Input data was truncated".
-    dec = decoder(list[_Struct], allow_empty_body=True)
-    assert dec(response(body)) == []
+    """Read an empty body as ``[]`` for an endpoint whose no-data answer is a zero-byte 200."""
+    assert decoder(list[_Struct], allow_empty_body=True)(response(body)) == []
 
 
 @pytest.mark.parametrize("allow", [False, True])
-def test_decode_list_truncated_nonempty_body_still_raises(allow: bool) -> None:
-    # A truncated NON-empty body is corruption, not no-data: it fails loud under BOTH settings, so transport
-    # truncation is never masked as [].
-    dec = decoder(list[_Struct], allow_empty_body=allow)
+def test_decode_list_truncated_nonempty_body_still_raises(*, allow: bool) -> None:
+    """Fail on a truncated non-empty body either way, so transport truncation is never masked as ``[]``."""
     with pytest.raises(DecodeError):
-        dec(response(b'[{"x": 1}, {"x":'))
+        decoder(list[_Struct], allow_empty_body=allow)(response(b'[{"x": 1}, {"x":'))
 
 
 def test_decode_list_strict_rejects_coerced_element() -> None:
-    # One coerced token in one element fails the whole atomic decode under strict.
-    dec = decoder(list[_Struct], strict=True)
+    """Fail the whole decode for one coerced token in one element."""
     with pytest.raises(DecodeError):
-        dec(response(b'[{"x": 1}, {"x": "2"}]'))
+        decoder(list[_Struct], strict=True)(response(b'[{"x": 1}, {"x": "2"}]'))
 
 
 def test_decode_list_raises_decode_error_on_object_body() -> None:
-    # A top-level object where an array is expected is drift, not no-data.
-    dec = decoder(list[_Struct])
+    """Fail on a top-level object where an array is declared: that is drift, not no-data."""
     with pytest.raises(DecodeError):
-        dec(response(b'{"x": 1}'))
+        decoder(list[_Struct])(response(b'{"x": 1}'))
 
 
 # --- decoder(dict[str, cls]): a bare top-level JSON object map ---
 
 
 def test_decode_map_decodes_object() -> None:
-    dec = decoder(dict[str, _Struct])
-    result = dec(response(b'{"AAPL": {"x": 1}, "MSFT": {"x": 2}}'))
+    """Decode a bare object map."""
+    result = decoder(dict[str, _Struct])(response(b'{"AAPL": {"x": 1}, "MSFT": {"x": 2}}'))
     assert result == {"AAPL": _Struct(x=1), "MSFT": _Struct(x=2)}
 
 
 def test_decode_map_empty_object_decodes_to_empty_dict() -> None:
-    dec = decoder(dict[str, _Struct])
-    assert dec(response(b"{}")) == {}
+    """Decode ``{}`` to an empty dict."""
+    assert decoder(dict[str, _Struct])(response(b"{}")) == {}
 
 
 def test_decode_map_strict_rejects_coerced_value() -> None:
-    # One coerced token in one value fails the whole atomic decode under strict.
-    dec = decoder(dict[str, _Struct], strict=True)
+    """Fail the whole decode for one coerced token in one value."""
     with pytest.raises(DecodeError):
-        dec(response(b'{"AAPL": {"x": 1}, "MSFT": {"x": "2"}}'))
+        decoder(dict[str, _Struct], strict=True)(response(b'{"AAPL": {"x": 1}, "MSFT": {"x": "2"}}'))
 
 
 def test_decode_map_raises_decode_error_on_array_body() -> None:
-    # A top-level array where an object map is expected is drift, not no-data.
-    dec = decoder(dict[str, _Struct])
+    """Fail on a top-level array where an object map is declared."""
     with pytest.raises(DecodeError):
-        dec(response(b'[{"x": 1}]'))
+        decoder(dict[str, _Struct])(response(b'[{"x": 1}]'))
 
 
-# --- decoder(dict[str, str]): a bare top-level JSON object of strings ---
+# --- decoder(dict[str, str]) and decoder(list[list[str]]) ---
 
 
 def test_decode_str_map_decodes_string_map() -> None:
+    """Decode a bare object of strings."""
     result = decoder(dict[str, str], strict=True)(response(b'{"AUD": "Australian Dollar", "EUR": "Euro"}'))
     assert result == {"AUD": "Australian Dollar", "EUR": "Euro"}
 
 
-def test_decode_str_map_empty_object_decodes_to_empty_dict() -> None:
-    assert decoder(dict[str, str], strict=True)(response(b"{}")) == {}
-
-
-def test_decode_str_map_strict_rejects_non_string_value() -> None:
-    # A non-string value fails the strict dict[str, str] decode (drift, not no-data).
+@pytest.mark.parametrize("body", [b'{"AUD": 1}', b'["AUD", "EUR"]', b"not json"])
+def test_decode_str_map_rejects_drift(body: bytes) -> None:
+    """Fail on a non-string value, an array body, or a body that is not JSON."""
     with pytest.raises(DecodeError):
-        decoder(dict[str, str], strict=True)(response(b'{"AUD": 1}'))
-
-
-def test_decode_str_map_raises_decode_error_on_array_body() -> None:
-    # A top-level array where an object map is expected is drift.
-    with pytest.raises(DecodeError):
-        decoder(dict[str, str], strict=True)(response(b'["AUD", "EUR"]'))
-
-
-def test_decode_str_map_raises_decode_error_on_bad_bytes() -> None:
-    with pytest.raises(DecodeError):
-        decoder(dict[str, str], strict=True)(response(b"not json"))
-
-
-# --- decoder(list[list[str]]): a bare top-level JSON array of string arrays ---
+        decoder(dict[str, str], strict=True)(response(body))
 
 
 def test_decode_str_matrix_decodes_array_of_arrays() -> None:
+    """Decode a bare array of string arrays."""
     result = decoder(list[list[str]], strict=True)(response(b'[["cell_value", "time"], ["317.6", "2024-01"]]'))
     assert result == [["cell_value", "time"], ["317.6", "2024-01"]]
 
 
-def test_decode_str_matrix_empty_array_decodes_to_empty_list() -> None:
-    assert decoder(list[list[str]], strict=True)(response(b"[]")) == []
-
-
-def test_decode_str_matrix_strict_rejects_non_string_cell() -> None:
-    # A bare JSON number cell fails the strict list[list[str]] decode (drift) —
-    # the "every cell is a string" fidelity contract.
+@pytest.mark.parametrize("body", [b'[["cell_value"], [317.6]]', b'{"cell_value": "317.6"}', b"not json"])
+def test_decode_str_matrix_rejects_drift(body: bytes) -> None:
+    """Fail on a number cell, an object body, or a body that is not JSON: every cell is a string."""
     with pytest.raises(DecodeError):
-        decoder(list[list[str]], strict=True)(response(b'[["cell_value"], [317.6]]'))
-
-
-def test_decode_str_matrix_raises_decode_error_on_object_body() -> None:
-    # A top-level object where an array-of-arrays is expected is drift.
-    with pytest.raises(DecodeError):
-        decoder(list[list[str]], strict=True)(response(b'{"cell_value": "317.6"}'))
-
-
-def test_decode_str_matrix_raises_decode_error_on_bad_bytes() -> None:
-    with pytest.raises(DecodeError):
-        decoder(list[list[str]], strict=True)(response(b"not json"))
+        decoder(list[list[str]], strict=True)(response(body))
 
 
 # --- to_builtins: struct -> json=-ready builtins ---
@@ -202,7 +165,7 @@ class _RenamedOmit(msgspec.Struct, frozen=True, omit_defaults=True):
 
 
 def test_to_builtins_applies_renames_and_honors_omit_defaults() -> None:
-    # A wire name may be any string (here a bracketed form key), and an unset default is omitted from the body.
+    """Use the wire name, which may be any string, and omit an unset default."""
     assert to_builtins(_RenamedOmit(plain="x")) == {"plain": "x"}
     assert to_builtins(_RenamedOmit(plain="x", bracketed="9", unset="u")) == {
         "plain": "x",
@@ -212,7 +175,7 @@ def test_to_builtins_applies_renames_and_honors_omit_defaults() -> None:
 
 
 def test_to_builtins_handles_struct_sequences() -> None:
-    # A bare top-level array body is encoded element by element.
+    """Encode a bare top-level array element by element."""
     assert to_builtins([_Struct(x=1), _Struct(x=2)]) == [{"x": 1}, {"x": 2}]
 
 
@@ -231,9 +194,13 @@ class _DropOuter(msgspec.Struct, frozen=True, kw_only=True):
     trailing: str | None = None
 
 
+class _DropContainers(msgspec.Struct, frozen=True):
+    listed: list[_DropInner]
+    tupled: tuple[_DropInner, ...]
+
+
 def test_to_builtins_drop_none_drops_none_keeps_false_and_preserves_order() -> None:
-    # None fields (maybe, trailing, inner.b) are dropped; the bool False is KEPT (dropping None is not omitting
-    # defaults); field declaration order is preserved, and dict order is wire key order once httpx2 serializes it.
+    """Drop ``None`` fields at every depth, keep ``False``, and keep declaration order (the wire key order)."""
     body = to_builtins(
         _DropOuter(keep_false=False, maybe=None, inner=_DropInner(a="x"), trailing=None),
         drop_none=True,
@@ -243,5 +210,11 @@ def test_to_builtins_drop_none_drops_none_keeps_false_and_preserves_order() -> N
 
 
 def test_to_builtins_drop_none_keeps_set_fields() -> None:
-    body = to_builtins(_DropOuter(maybe="present"), drop_none=True)
-    assert body == {"keep_false": False, "maybe": "present"}
+    """Keep every field that has a value."""
+    assert to_builtins(_DropOuter(maybe="present"), drop_none=True) == {"keep_false": False, "maybe": "present"}
+
+
+def test_to_builtins_drop_none_walks_lists_and_tuples() -> None:
+    """Drop ``None`` fields inside list and tuple fields: msgspec keeps a tuple field as a tuple."""
+    body = to_builtins(_DropContainers([_DropInner(a="x")], (_DropInner(b="y"),)), drop_none=True)
+    assert body == {"listed": [{"a": "x"}], "tupled": ({"b": "y"},)}

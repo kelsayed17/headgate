@@ -34,6 +34,7 @@ dev = [
     "ty",
     "headgate[pydantic,curl]",
     "pytest-cov>=7",
+    "pytest-codspeed>=5.0.3",
 ]
 
 [tool.hatch.build.targets.wheel]

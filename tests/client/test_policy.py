@@ -3,9 +3,9 @@
 
 """``policy_disabled()``: build a client with its transport policy (breaker, retries, pacing) switched off.
 
-The tests pin each of the three behaviours switched off, plus the properties that make it a construction-time
-switch rather than a global one. They assert on the assembled transport stack and on the limiters' effective rates
-rather than on timing, so they cannot flake on a slow machine.
+The tests pin each of the three behaviours switched off, plus the properties that make it a construction-time switch
+rather than a global one. They observe what a client does (how many sends a 503 gets, whether an open breaker refuses
+it, the rate each limiter is built at) rather than timing, so they cannot flake on a slow machine.
 """
 
 from __future__ import annotations
@@ -14,105 +14,157 @@ import asyncio
 from typing import TYPE_CHECKING
 
 import httpx2
+import pytest
+from aiolimiter import AsyncLimiter
 
-from headgate._breaker import HOST_BREAKERS, NO_BREAKERS
+from headgate import HttpOptions, TransportPolicy
+from headgate._breaker import HOST_BREAKERS
 from headgate._client import AsyncBaseClient
-from headgate._rate_limit import Rate, RateRule
-from headgate._retry import RetryTransport
+from headgate._rate_limit import UNLIMITED, Rate, RateRule
+from headgate._responses import nothing
+from headgate.errors import TransportError, UpstreamStatusError
 from headgate.policy import policy_disabled, policy_is_disabled
-from tests.support.limiters import default_limiter, rate_limit_transport
 
 if TYPE_CHECKING:
-    from headgate._rate_limit import AsyncRateLimiter
+    from collections.abc import Callable
+
+_HOST = "example.test"
+_RATE = Rate.per_second(2.0)
+_RULE_RATE = Rate.per_second(8.0)
+_MAX_ATTEMPTS = 3
+
+#: More consecutive failures than any breaker threshold, so the loop that opens one always terminates.
+_ENOUGH_FAILURES = 50
+
+
+class _Wire:
+    """A transport handler that counts requests and answers each with one fixed status."""
+
+    def __init__(self, status: int) -> None:
+        """Answer every request with *status*."""
+        self.status = status
+        self.sends = 0
+
+    def __call__(self, _request: httpx2.Request) -> httpx2.Response:
+        """Count the request and answer it."""
+        self.sends += 1
+        return httpx2.Response(self.status)
 
 
 class _Client(AsyncBaseClient):
     """A typical subclass: it fixes its own policy in ``super().__init__()`` and exposes none of it."""
 
-    def __init__(self) -> None:
-        # The ``rate_limits`` rule gives this client a SECONDARY limiter, built from the rule's own ``Rate``. It is
-        # why the switch is enforced inside ``AsyncRateLimiter`` rather than by overriding the client's ``rate=``,
-        # which would leave the secondary limiter throttled.
+    def __init__(self, wire: Callable[[httpx2.Request], httpx2.Response]) -> None:
+        """Build over *wire*, with a secondary limiter for ``/r``.
+
+        The ``rate_limits`` rule is why the switch is enforced inside the rate limiter rather than by overriding the
+        client's ``rate=``, which would leave the secondary limiter throttled.
+        """
         super().__init__(
-            base_url="https://example.test",
-            rate=Rate.per_second(2.0),
-            max_attempts=3,
-            rate_limits=[RateRule("/r", Rate.per_second(8.0))],
+            base_url=f"https://{_HOST}",
+            rate=_RATE,
+            policy=TransportPolicy(max_attempts=_MAX_ATTEMPTS, rate_limits=[RateRule("/r", _RULE_RATE)]),
+            http=HttpOptions(transport=httpx2.MockTransport(wire)),
         )
 
 
-def _rule_limiter(client: AsyncBaseClient) -> AsyncRateLimiter:
-    """The limiter ``_Client``'s one ``rate_limits`` rule routes ``/r`` to (not the default's)."""
-    limiters = rate_limit_transport(client)._limiters
-    limiter = limiters.for_request(httpx2.Request("GET", "https://example.test/r"))
-    assert limiter is not limiters.default, "the rule must route its own path to its own limiter"
-    return limiter
+async def _sends_for_a_503(client_factory: Callable[[_Wire], _Client]) -> int:
+    """Return how many sends one call through a fresh client gets when every attempt answers 503."""
+    wire = _Wire(httpx2.codes.SERVICE_UNAVAILABLE)
+    with pytest.raises(UpstreamStatusError):
+        await client_factory(wire).get("x", expect=nothing)
+    return wire.sends
 
 
-def _stack_has_breaker(client: AsyncBaseClient) -> bool:
-    """Whether this client consults the shared breaker registry (``HOST_BREAKERS``) rather than ``NO_BREAKERS``."""
-    return client._breakers is HOST_BREAKERS
+async def _open_the_breaker() -> None:
+    """Fail a normally built client against the host until the shared breaker refuses it."""
+    failing = _Client(_Wire(httpx2.codes.SERVICE_UNAVAILABLE))
+    for _ in range(_ENOUGH_FAILURES):
+        if HOST_BREAKERS[_HOST].refusing:
+            return
+        with pytest.raises(UpstreamStatusError):
+            await failing.get("x", expect=nothing)
+    msg = "the breaker never opened"
+    raise AssertionError(msg)
+
+
+def _built_off(wire: _Wire) -> _Client:
+    with policy_disabled():
+        return _Client(wire)
 
 
 class TestPolicyOff:
-    def test_breaker_is_not_consulted(self) -> None:
-        """A policy-off client reads ``NO_BREAKERS``, not the process-global registry.
+    """With ``policy_disabled()`` around construction, a client keeps none of its transport policy."""
 
-        Not recording failures is not enough: the registry is shared, so a client that still read it would be
-        REFUSED by a breaker some other client opened on the same host. This pins the registry choice; the refusal
-        itself is pinned end to end in ``tests/transport/test_breaker_integration.py``.
+    async def test_an_open_breaker_does_not_refuse_it(self) -> None:
+        """Check that a policy-off client is not refused by a breaker another client opened on the same host.
+
+        Not recording failures is not enough: the registry is shared, so a client that still read it would be refused.
         """
-        with policy_disabled():
-            off = _Client()
-        on = _Client()
-        assert _stack_has_breaker(on), "control: a normally-built client consults its breaker"
-        assert off._breakers is NO_BREAKERS
+        await _open_the_breaker()
+        with pytest.raises(TransportError, match="circuit"):
+            await _Client(_Wire(httpx2.codes.OK)).get("x", expect=nothing)
+        wire = _Wire(httpx2.codes.OK)
+        await _built_off(wire).get("x", expect=nothing)
+        assert wire.sends == 1
 
-    def test_retries_are_zero_not_merely_instant(self) -> None:
-        """Policy-off removes the retries themselves, not just the backoff between them.
+    async def test_retries_are_zero_not_merely_instant(self) -> None:
+        """Check that policy-off removes the retries themselves, not just the backoff between them."""
+        assert await _sends_for_a_503(_Client) == _MAX_ATTEMPTS, "control: a normally built client retries"
+        assert await _sends_for_a_503(_built_off) == 1
 
-        ``build_retry`` takes the ATTEMPT count and sets the retry policy's ``total`` (a RETRY count) to
-        ``max(n - 1, 0)``, so policy-off is ``total == 0``: one attempt, never repeated.
-        ``TestPolicyOnIsUnchanged`` pins the other end of that mapping.
-        """
-        with policy_disabled():
-            off = _Client()
-        transport = off._http_client._transport
-        assert isinstance(transport, RetryTransport)
-        assert transport.retry.total == 0
+    @pytest.mark.transport_policy
+    async def test_primary_and_secondary_limiters_are_both_unthrottled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Check that both the default limiter and a rule's limiter are built unlimited, not at the client's rates."""
+        built: list[tuple[float, float]] = []
+        real_init = AsyncLimiter.__init__
 
-    def test_primary_and_secondary_limiters_are_both_unthrottled(self) -> None:
-        with policy_disabled():
-            off = _Client()
-        on = _Client()
-        assert default_limiter(on)._max_rate == 2.0, "control"
-        assert _rule_limiter(on)._max_rate == 8.0, "control"
-        assert default_limiter(off)._max_rate == 1_000_000.0
-        assert _rule_limiter(off)._max_rate == 1_000_000.0, "a secondary limiter must be covered too"
+        def recording_init(limiter: AsyncLimiter, max_rate: float, time_period: float = 60) -> None:
+            real_init(limiter, max_rate, time_period)
+            built.append((max_rate, time_period))
+
+        monkeypatch.setattr(AsyncLimiter, "__init__", recording_init)
+
+        async def rates(client: _Client) -> list[tuple[float, float]]:
+            built.clear()
+            await client.get("x", expect=nothing)
+            await client.get("r", expect=nothing)
+            return list(built)
+
+        assert await rates(_Client(_Wire(httpx2.codes.OK))) == [
+            (_RATE.requests, _RATE.period),
+            (_RULE_RATE.requests, _RULE_RATE.period),
+        ], "control"
+        assert await rates(_built_off(_Wire(httpx2.codes.OK))) == [(UNLIMITED.requests, UNLIMITED.period)] * 2
 
 
 class TestItIsReadAtConstruction:
+    """The switch is a task-local setting read when a client is built."""
+
     def test_the_flag_does_not_leak_past_the_block(self) -> None:
+        """Check that leaving the block switches policy back on."""
         assert not policy_is_disabled()
         with policy_disabled():
             assert policy_is_disabled()
         assert not policy_is_disabled()
 
     def test_nesting_restores_the_enclosing_value_not_the_default(self) -> None:
+        """Check that leaving an inner block restores the outer block's setting."""
         with policy_disabled():
             with policy_disabled():
                 assert policy_is_disabled()
             assert policy_is_disabled(), "the inner exit must not switch policy back on"
 
-    def test_an_already_built_client_is_unaffected(self) -> None:
-        """Entering the block around an existing client changes nothing, by design."""
-        on = _Client()
-        with policy_disabled():
-            assert _stack_has_breaker(on)
-            assert on._breakers is HOST_BREAKERS
+    async def test_an_already_built_client_is_unaffected(self) -> None:
+        """Check that entering the block around an existing client changes nothing, by design."""
+        wire = _Wire(httpx2.codes.SERVICE_UNAVAILABLE)
+        client = _Client(wire)
+        with policy_disabled(), pytest.raises(UpstreamStatusError):
+            await client.get("x", expect=nothing)
+        assert wire.sends == _MAX_ATTEMPTS
 
     async def test_the_setting_is_task_local(self) -> None:
-        """A ContextVar, not a module global: a sibling task cannot see the setting."""
+        """Check that the setting is a ContextVar: a sibling task cannot see it."""
         seen: list[bool] = []
 
         async def sibling() -> None:
@@ -127,16 +179,3 @@ class TestItIsReadAtConstruction:
         await asyncio.gather(holder(), sibling())
         assert seen.count(True) == 1, "exactly the holding task sees it"
         assert seen.count(False) == 1
-
-
-class TestPolicyOnIsUnchanged:
-    """Without ``policy_disabled()`` a client keeps every policy."""
-
-    def test_default_construction_keeps_every_policy(self) -> None:
-        client = _Client()
-        assert _stack_has_breaker(client)
-        # max_attempts=3 attempts ⇒ total=2 retries (see build_retry).
-        transport = client._http_client._transport
-        assert isinstance(transport, RetryTransport)
-        assert transport.retry.total == 2
-        assert default_limiter(client)._max_rate == 2.0

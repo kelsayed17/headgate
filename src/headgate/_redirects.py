@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 __all__ = ["FOLLOW_REDIRECTS_EXT", "credential_header_guard", "drop_followed_redirect_body"]
 
-#: Request extension naming whether THIS request's redirects will be followed. ``AsyncBaseClient`` sets it;
+#: Request extension naming whether this request's redirects will be followed. ``AsyncBaseClient`` sets it, and
 #: httpx2 copies a request's extensions onto every redirect hop, so :func:`drop_followed_redirect_body` sees it on each
 #: response.
 FOLLOW_REDIRECTS_EXT = "headgate.follow_redirects"
@@ -30,15 +30,21 @@ FOLLOW_REDIRECTS_EXT = "headgate.follow_redirects"
 async def drop_followed_redirect_body(response: httpx2.Response) -> None:
     """Discard the body of a redirect httpx2 is about to follow (a response hook).
 
-    httpx2 reads a followed redirect's body in full inside its own redirect loop, before the next hop — below
-    :func:`~headgate._body.read_capped`, which only ever sees the FINAL response. So a 302 whose body decompressed
-    far past ``max_response_bytes`` would be held in memory anyway, kept alive in the response history. Nothing reads a
-    followed redirect's body, so it is replaced with an empty stream rather than capped. A redirect that is NOT followed
+    httpx2 reads a followed redirect's body in full inside its own redirect loop, before the next hop, and so below
+    :func:`~headgate._body.read_capped`, which only ever sees the final response. A 302 whose body decompressed far
+    past ``max_response_bytes`` would otherwise be held in memory, kept alive in the response history. Nothing reads a
+    followed redirect's body, so it is replaced with an empty stream rather than capped. A redirect that is not followed
     is the final response, and keeps its body for ``read_capped``.
+
+    An ``AsyncClient`` always hands its hooks an async stream; the ``isinstance`` check only narrows the type.
     """
-    if response.has_redirect_location and response.request.extensions.get(FOLLOW_REDIRECTS_EXT):
-        if isinstance(response.stream, httpx2.AsyncByteStream):
-            await response.stream.aclose()
+    stream = response.stream
+    if (
+        response.has_redirect_location
+        and response.request.extensions.get(FOLLOW_REDIRECTS_EXT)
+        and isinstance(stream, httpx2.AsyncByteStream)
+    ):
+        await stream.aclose()
         response.stream = httpx2.ByteStream(b"")
 
 
@@ -48,10 +54,9 @@ def credential_header_guard(
     """Build a request hook withholding *auth*'s headers from any hop that leaves *base_url*'s origin.
 
     httpx2 strips only ``Authorization`` and ``Cookie`` when a redirect crosses origins, so a credential in any other
-    header followed the redirect wherever it pointed. The guard withholds a ``StaticHeaderAuth``'s headers from any hop
-    that leaves the client's origin. httpx2 runs request hooks before EVERY hop, redirects included, so the redirect is
-    still followed (a provider may legitimately redirect to a signed file URL on another host) and only the credential
-    stays behind.
+    header would follow the redirect wherever it pointed. httpx2 runs request hooks before every hop, redirects
+    included, so the redirect is still followed (a provider may legitimately redirect to a signed file URL on another
+    host) and only the credential stays behind.
     """
     names = auth.header_names
     home = base_url.origin

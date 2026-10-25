@@ -6,7 +6,7 @@
 hishel does not forward the request it was given: it converts it to its own ``Request``, keeps only the metadata it
 recognises (``hishel_ttl`` and friends), and rebuilds an ``httpx2.Request`` from that for the transport below. The rest
 of ``request.extensions`` is dropped, including httpx2's ``timeout``: the per-request extension httpx2 builds from
-``AsyncClient(timeout=...)`` and the only place httpcore reads a timeout from. Without it a cache MISS to a host that
+``AsyncClient(timeout=...)`` and the only place httpcore reads a timeout from. Without it a cache miss to a host that
 accepts and never answers waits forever.
 
 ``ResilientCacheTransport`` restores the original request's extensions below the cache. These tests pin the mechanism
@@ -23,15 +23,23 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
+from headgate import HttpOptions, TransportPolicy
 from headgate._cache import HttpCache
 from headgate._rate_limit import UNLIMITED
 from headgate.errors import ClientTimeoutError
-from tests.cache._helpers import series_policy
+from tests.cache._helpers import series_policy, stub_client
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
     from hishel import AsyncSqliteStorage
+
+_CLIENT_TIMEOUT = 7.0
+_CALL_TIMEOUT = 1.5
+_CLIENT_TTL = 3600.0
+#: A timeout a black-holing host must hit, and a bound well past it that only a missing timeout would reach.
+_SHORT_TIMEOUT = 0.25
+_HANG_BOUND = 5.0
 
 
 class _RecordingTransport(httpx2.AsyncBaseTransport):
@@ -43,56 +51,48 @@ class _RecordingTransport(httpx2.AsyncBaseTransport):
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         self.extensions.append(dict(request.extensions))
-        return httpx2.Response(200, content=b"{}", headers={"Cache-Control": "max-age=3600"})
+        return httpx2.Response(httpx2.codes.OK, content=b"{}", headers={"Cache-Control": "max-age=3600"})
 
 
 async def test_the_timeout_survives_the_cache_layer(storage: AsyncSqliteStorage) -> None:
+    """The client's timeout extension reaches the network transport below the cache."""
     base = _RecordingTransport()
-    client = StubClient(
-        base_url="https://x",
+    client = stub_client(
         transport=base,
-        rate=UNLIMITED,
-        timeout=7.0,
+        http=HttpOptions(timeout=_CLIENT_TIMEOUT),
         cache=HttpCache(policy=series_policy(), storage=storage),
     )
 
     await client.get("/series?id=A", expect=RESPONSE)
 
-    assert base.extensions, "the request must reach the network on a MISS"
+    assert base.extensions, "the request must reach the network on a miss"
     timeout = base.extensions[0].get("timeout")
     assert timeout is not None, "httpcore reads its timeout only from the request extensions"
-    assert timeout == {"connect": 10.0, "read": 7.0, "write": 10.0, "pool": 15.0}
+    assert timeout == {"connect": 10.0, "read": _CLIENT_TIMEOUT, "write": 10.0, "pool": 15.0}
 
 
 async def test_a_per_call_timeout_still_wins_through_the_cache(storage: AsyncSqliteStorage) -> None:
-    """Restoring must replay THIS request's extensions, not a value captured at construction."""
+    """The extensions put back are this request's own, not a value captured at construction."""
     base = _RecordingTransport()
-    client = StubClient(
-        base_url="https://x",
+    client = stub_client(
         transport=base,
-        rate=UNLIMITED,
-        timeout=7.0,
+        http=HttpOptions(timeout=_CLIENT_TIMEOUT),
         cache=HttpCache(policy=series_policy(), storage=storage),
     )
 
-    await client.get("/series?id=B", expect=RESPONSE, timeout=1.5)
+    await client.get("/series?id=B", expect=RESPONSE, timeout=_CALL_TIMEOUT)
 
-    assert base.extensions[0]["timeout"] == {"connect": 1.5, "read": 1.5, "write": 1.5, "pool": 1.5}
+    assert base.extensions[0]["timeout"] == dict.fromkeys(("connect", "read", "write", "pool"), _CALL_TIMEOUT)
 
 
 async def test_the_cache_layer_keeps_its_own_extension(storage: AsyncSqliteStorage) -> None:
-    """Restoring the original must not clobber what hishel computed for itself."""
+    """Putting the extensions back leaves what hishel computed for itself in place."""
     base = _RecordingTransport()
-    client = StubClient(
-        base_url="https://x",
-        transport=base,
-        rate=UNLIMITED,
-        cache=HttpCache(policy=series_policy(), storage=storage, ttl=3600.0),
-    )
+    client = stub_client(transport=base, cache=HttpCache(policy=series_policy(), storage=storage, ttl=_CLIENT_TTL))
 
     await client.get("/series?id=C", expect=RESPONSE)
 
-    assert base.extensions[0].get("hishel_ttl") == 3600.0
+    assert base.extensions[0].get("hishel_ttl") == _CLIENT_TTL
 
 
 async def test_a_black_holing_host_times_out_through_the_cache(storage: AsyncSqliteStorage) -> None:
@@ -105,9 +105,8 @@ async def test_a_black_holing_host_times_out_through_the_cache(storage: AsyncSql
     client = StubClient(
         base_url=f"http://127.0.0.1:{port}",
         rate=UNLIMITED,
-        timeout=0.25,
-        max_attempts=1,
-        cache=HttpCache(policy=series_policy(), storage=storage),
+        policy=TransportPolicy(max_attempts=1, cache=HttpCache(policy=series_policy(), storage=storage)),
+        http=HttpOptions(timeout=_SHORT_TIMEOUT),
     )
     started = time.monotonic()
     try:
@@ -117,4 +116,4 @@ async def test_a_black_holing_host_times_out_through_the_cache(storage: AsyncSql
         await client.aclose()
         listener.close()
 
-    assert time.monotonic() - started < 5.0, "the client's own 0.25s timeout must be what ends this"
+    assert time.monotonic() - started < _HANG_BOUND, "the client's own short timeout must be what ends this"

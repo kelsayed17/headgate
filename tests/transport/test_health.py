@@ -32,9 +32,16 @@ if TYPE_CHECKING:
 
 _HOST = "health.example.test"
 
+#: The registry's breakers trip after this many consecutive failures.
+_DEFAULT_THRESHOLD = 5
+
+#: How many requests the cache-fault test sends.
+_REQUESTS = 2
+
 
 @pytest.fixture(autouse=True)
 def _clean_registries() -> Iterator[None]:
+    """Drop the test host from both process-global registries around each test."""
     HOST_BREAKERS.pop(_HOST, None)
     CACHE_DEGRADATIONS.pop(_HOST, None)
     yield
@@ -42,15 +49,22 @@ def _clean_registries() -> Iterator[None]:
     CACHE_DEGRADATIONS.pop(_HOST, None)
 
 
+def _fail_once(breaker: CircuitBreaker) -> None:
+    """Run one tracked fetch that marks a wire failure and raises."""
+    with breaker.track() as verdict:
+        verdict.mark_failed()
+        raise ConnectionError
+
+
 def _trip(breaker: CircuitBreaker) -> None:
-    """Record five marked failures: the default threshold."""
-    for _ in range(5):
-        with pytest.raises(ConnectionError), breaker.track() as verdict:  # noqa: PT012  # the raise is the subject
-            verdict.mark_failed()
-            raise ConnectionError
+    """Record the default threshold's worth of marked failures."""
+    for _ in range(_DEFAULT_THRESHOLD):
+        with pytest.raises(ConnectionError):
+            _fail_once(breaker)
 
 
 def test_breaker_states_reports_a_tripped_host_as_open() -> None:
+    """Report a host's breaker as closed and admitting, then open and refusing once it trips."""
     breaker = HOST_BREAKERS[_HOST]
     assert breaker_states()[_HOST] == (BreakerState.CLOSED, False)
 
@@ -60,7 +74,7 @@ def test_breaker_states_reports_a_tripped_host_as_open() -> None:
 
 
 def test_a_tripped_breaker_past_its_cooldown_is_open_but_not_refusing() -> None:
-    """``state`` stays OPEN until some call takes the probe; ``refusing`` goes false once the cooldown elapses."""
+    """Report open but not refusing: ``state`` waits for a probe, ``refusing`` follows the cooldown."""
     breaker = CircuitBreaker(name=_HOST, recovery_timeout=0.0)
     HOST_BREAKERS[_HOST] = breaker
     _trip(breaker)
@@ -69,6 +83,7 @@ def test_a_tripped_breaker_past_its_cooldown_is_open_but_not_refusing() -> None:
 
 
 def test_breaker_states_is_a_copy() -> None:
+    """Return a fresh mapping each call, so clearing a snapshot leaves the registry intact."""
     HOST_BREAKERS[_HOST]  # the registry is a defaultdict: reading the host builds its breaker
     snapshot = breaker_states()
     snapshot.clear()
@@ -85,12 +100,15 @@ class _LookupFails(AsyncSqliteStorage):
 
 
 class _Network(httpx2.AsyncBaseTransport):
+    """A network that answers every request with a 200."""
+
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(200, text="from-network")
 
 
 async def test_a_cache_fault_counts_one_degradation_for_its_host() -> None:
+    """Count one degradation per request that found the cache broken, keyed by host."""
     storage = _LookupFails(connection=await anysqlite.connect(":memory:"))
     transport = ResilientCacheTransport(
         next_transport=_Network(),
@@ -102,8 +120,11 @@ async def test_a_cache_fault_counts_one_degradation_for_its_host() -> None:
         max_body_bytes=1024 * 1024,
     )
 
-    for _ in range(2):
-        response = await transport.handle_async_request(httpx2.Request("GET", f"https://{_HOST}/x?api_key=secret"))
-        assert response.extensions[CACHE_DEGRADED_EXT]
+    try:
+        for _ in range(_REQUESTS):
+            response = await transport.handle_async_request(httpx2.Request("GET", f"https://{_HOST}/x?api_key=secret"))
+            assert response.extensions[CACHE_DEGRADED_EXT]
+    finally:
+        await storage.close()
 
-    assert cache_degradations()[_HOST] == 2
+    assert cache_degradations()[_HOST] == _REQUESTS

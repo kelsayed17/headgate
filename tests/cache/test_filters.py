@@ -10,12 +10,14 @@ here in the shape hishel hands a filter at runtime.
 
 from __future__ import annotations
 
+import httpx2
 from hishel import Request, Response
 
 from headgate._cache import MethodFilter, PathFragmentFilter, StatusCodeFilter
 
 
 def test_path_fragment_filter_matches_any_fragment() -> None:
+    """A request whose path contains any one of the fragments is cached, and one containing none is not."""
     f = PathFragmentFilter(("series/observations", "releases/dates"))
 
     assert f.needs_body() is False
@@ -30,7 +32,8 @@ def test_path_fragment_filter_matches_any_fragment() -> None:
     assert f.apply(quote, None) is False
 
 
-def test_method_filter() -> None:
+def test_method_filter_matches_only_the_allowed_methods() -> None:
+    """A request is cached only when its method is in the allowed set."""
     f = MethodFilter(frozenset({"POST"}))
 
     assert f.needs_body() is False
@@ -42,11 +45,12 @@ def test_method_filter() -> None:
     assert f.apply(get, None) is False
 
 
-def test_status_code_filter_only_200() -> None:
-    f = StatusCodeFilter(frozenset({200}))
+def test_status_code_filter_stores_only_the_allowed_statuses() -> None:
+    """Only a response whose status is allowed is stored, so an error body never reaches the cache."""
+    f = StatusCodeFilter(frozenset({httpx2.codes.OK}))
 
     assert f.needs_body() is False
 
-    assert f.apply(Response(status_code=200), None) is True
-    assert f.apply(Response(status_code=404), None) is False
-    assert f.apply(Response(status_code=500), None) is False
+    assert f.apply(Response(status_code=httpx2.codes.OK), None) is True
+    assert f.apply(Response(status_code=httpx2.codes.NOT_FOUND), None) is False
+    assert f.apply(Response(status_code=httpx2.codes.INTERNAL_SERVER_ERROR), None) is False

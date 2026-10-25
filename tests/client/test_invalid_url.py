@@ -20,12 +20,15 @@ from headgate.errors import ClientError
 
 
 class _Client(AsyncBaseClient):
+    """A client against ``example.test``."""
+
     def __init__(self) -> None:
+        """Build with the defaults."""
         super().__init__(base_url="https://example.test", rate=Rate.per_second(1000))
 
 
 async def test_a_malformed_url_is_a_client_error_and_not_a_host_failure() -> None:
-    HOST_BREAKERS.clear()
+    """Check that a URL httpx2 cannot parse raises ``ClientError`` and charges no breaker."""
     client = _Client()
     try:
         with pytest.raises(ClientError, match="invalid URL"):
@@ -33,4 +36,3 @@ async def test_a_malformed_url_is_a_client_error_and_not_a_host_failure() -> Non
     finally:
         await client.aclose()
     assert HOST_BREAKERS["example.test"].failure_count == 0, "a malformed URL is not a host failure"
-    HOST_BREAKERS.clear()

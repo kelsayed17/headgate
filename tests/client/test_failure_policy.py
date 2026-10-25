@@ -9,11 +9,10 @@ Every call declares its ``expect=`` reader, and an undeclared non-success status
 
 from __future__ import annotations
 
-from typing import Any
-
 import httpx2
 import pytest
 
+from headgate import HttpOptions, TransportPolicy
 from headgate._client import AsyncBaseClient
 from headgate._rate_limit import Rate
 from headgate.errors import (
@@ -26,30 +25,41 @@ from headgate.errors import (
 )
 from headgate.msgspec import decoder
 
+_POLICY = TransportPolicy(max_attempts=1)
+
 
 def _client(transport: httpx2.MockTransport) -> AsyncBaseClient:
+    """Return a client over *transport* that sends each request once."""
     return AsyncBaseClient(
-        base_url="https://example.test", rate=Rate.per_second(2), max_attempts=1, transport=transport
+        base_url="https://example.test", rate=Rate.per_second(2), policy=_POLICY, http=HttpOptions(transport=transport)
     )
 
 
+def _answering(status: int, content: bytes = b"") -> httpx2.MockTransport:
+    """Return a transport answering every request with *status* and *content*."""
+    return httpx2.MockTransport(lambda _request: httpx2.Response(status, content=content))
+
+
 async def test_raises_upstream_status_on_server_error() -> None:
-    transport = httpx2.MockTransport(lambda req: httpx2.Response(500))
+    """Check that a 5xx raises ``UpstreamStatusError`` with its status."""
+    transport = _answering(500)
     async with _client(transport) as c:
         with pytest.raises(UpstreamStatusError) as ei:
-            await c.get("/x", expect=decoder(dict[str, Any]))
-        assert ei.value.status_code == 500
+            await c.get("/x", expect=decoder(dict[str, int]))
+        assert ei.value.status_code == httpx2.codes.INTERNAL_SERVER_ERROR
 
 
 async def test_raises_transport_on_network_error() -> None:
-    def boom(req: httpx2.Request) -> httpx2.Response:
+    """Check that a connection failure raises ``TransportError``."""
+
+    def boom(request: httpx2.Request) -> httpx2.Response:
         msg = "refused"
-        raise httpx2.ConnectError(msg, request=req)
+        raise httpx2.ConnectError(msg, request=request)
 
     transport = httpx2.MockTransport(boom)
     async with _client(transport) as c:
         with pytest.raises(TransportError):
-            await c.get("/x", expect=decoder(dict[str, Any]))
+            await c.get("/x", expect=decoder(dict[str, int]))
 
 
 @pytest.mark.parametrize(
@@ -59,95 +69,96 @@ async def test_raises_transport_on_network_error() -> None:
 async def test_a_network_error_with_an_empty_message_still_names_what_failed(
     raised: type[httpx2.TransportError], expected: type[TransportError]
 ) -> None:
-    """httpx2's exceptions often stringify to ``""``, so the message names the exception type instead.
+    """Check that an exception that stringifies to ``""`` is named by its type in the message.
 
     Otherwise the message would end ``GET /x: `` with nothing after the colon, dropping what failed.
     """
 
-    def boom(req: httpx2.Request) -> httpx2.Response:
+    def boom(request: httpx2.Request) -> httpx2.Response:
         msg = ""
-        raise raised(msg, request=req)
+        raise raised(msg, request=request)
 
     async with _client(httpx2.MockTransport(boom)) as c:
         with pytest.raises(expected) as ei:
-            await c.get("/x", expect=decoder(dict[str, Any]))
+            await c.get("/x", expect=decoder(dict[str, int]))
     assert raised.__name__ in str(ei.value)
 
 
 async def test_raises_parse_error_on_bad_json() -> None:
-    transport = httpx2.MockTransport(lambda req: httpx2.Response(200, content=b"not json"))
+    """Check that an undecodable 2xx raises ``ResponseParseError``."""
+    transport = _answering(httpx2.codes.OK, b"not json")
     async with _client(transport) as c:
         with pytest.raises(ResponseParseError):
-            await c.get("/x", expect=decoder(dict[str, Any]))
+            await c.get("/x", expect=decoder(dict[str, int]))
 
 
 # --- non-success statuses raise ---
 
 
-@pytest.mark.parametrize("status", [404, 410])
+@pytest.mark.parametrize("status", [httpx2.codes.NOT_FOUND, httpx2.codes.GONE])
 async def test_missing_resource_raises(status: int) -> None:
-    """A 404/410 on a read is a missing resource; it raises rather than returning ``None``."""
-    transport = httpx2.MockTransport(lambda req: httpx2.Response(status))
+    """Check that a 404/410 raises rather than returning ``None``."""
+    transport = _answering(status)
     async with _client(transport) as c:
         with pytest.raises(UpstreamStatusError) as ei:
-            await c.get("/x", expect=decoder(dict[str, Any]))
+            await c.get("/x", expect=decoder(dict[str, int]))
         assert ei.value.status_code == status
 
 
-@pytest.mark.parametrize("status", [401, 403])
+@pytest.mark.parametrize("status", [httpx2.codes.UNAUTHORIZED, httpx2.codes.FORBIDDEN])
 async def test_auth_status_raises_auth_error(status: int) -> None:
-    """401/403 are auth failures (our creds) — a more specific AuthError."""
-    transport = httpx2.MockTransport(lambda req: httpx2.Response(status))
+    """Check that 401/403 raise ``AuthError``: they name this client's credential."""
+    transport = _answering(status)
     async with _client(transport) as c:
         with pytest.raises(AuthError) as ei:
-            await c.get("/x", expect=decoder(dict[str, Any]))
+            await c.get("/x", expect=decoder(dict[str, int]))
         assert ei.value.status_code == status
 
 
 async def test_bad_request_raises_upstream_status() -> None:
-    """A 400 is a malformed request (a bug): it surfaces."""
-    transport = httpx2.MockTransport(lambda req: httpx2.Response(400))
+    """Check that a 400, a malformed request, surfaces as ``UpstreamStatusError``."""
+    transport = _answering(400)
     async with _client(transport) as c:
         with pytest.raises(UpstreamStatusError) as ei:
-            await c.get("/x", expect=decoder(dict[str, Any]))
-        assert ei.value.status_code == 400
+            await c.get("/x", expect=decoder(dict[str, int]))
+        assert ei.value.status_code == httpx2.codes.BAD_REQUEST
 
 
 async def test_the_error_names_the_client_class_that_raised_it() -> None:
-    """``source`` is ``type(self).__name__``, so it names the SUBCLASS, not the base.
+    """Check that ``source`` names the subclass that raised, not the base.
 
     That attribution is how a caller tells which upstream failed from the error alone, so it is pinned on a
     subclass rather than on ``AsyncBaseClient`` itself.
     """
 
     class NamedClient(AsyncBaseClient):
-        pass
+        """A subclass whose name the error must carry."""
 
-    transport = httpx2.MockTransport(lambda req: httpx2.Response(500))
+    transport = _answering(500)
     async with NamedClient(
-        rate=Rate.per_second(2), base_url="https://example.test", max_attempts=1, transport=transport
+        rate=Rate.per_second(2), base_url="https://example.test", policy=_POLICY, http=HttpOptions(transport=transport)
     ) as c:
         with pytest.raises(UpstreamStatusError) as ei:
-            await c.get("/x", expect=decoder(dict[str, Any]))
+            await c.get("/x", expect=decoder(dict[str, int]))
         assert ei.value.source == "NamedClient"
 
 
 async def test_rate_limited_raises_rate_limit_error() -> None:
-    """429 after retries is its own subtype, not a bare UpstreamStatusError.
+    """Check that a 429 after retries raises ``RateLimitError``, a subtype of ``UpstreamStatusError``.
 
     Callers branch on it — a rate limit is a back-off signal, where a 400 or a 500 is not. It is a subclass, so a
     handler catching UpstreamStatusError still sees it.
     """
-    transport = httpx2.MockTransport(lambda req: httpx2.Response(429))
+    transport = _answering(429)
     async with _client(transport) as c:
         with pytest.raises(RateLimitError) as ei:
-            await c.get("/x", expect=decoder(dict[str, Any]))
-        assert ei.value.status_code == 429
+            await c.get("/x", expect=decoder(dict[str, int]))
+        assert ei.value.status_code == httpx2.codes.TOO_MANY_REQUESTS
         assert isinstance(ei.value, UpstreamStatusError), "must stay catchable as the parent"
 
 
 async def test_timeout_raises_client_timeout_error() -> None:
-    """A timeout is a TransportError subtype, distinguishable from a connection failure.
+    """Check that a timeout raises ``ClientTimeoutError``, a ``TransportError`` subtype.
 
     A caller can then treat the two differently (an HTTP gateway would answer 504 for one and 502 for the other)
     while still catching both as ``TransportError``.
@@ -159,7 +170,7 @@ async def test_timeout_raises_client_timeout_error() -> None:
 
     async with _client(httpx2.MockTransport(_timeout)) as c:
         with pytest.raises(ClientTimeoutError) as ei:
-            await c.get("/x", expect=decoder(dict[str, Any]))
+            await c.get("/x", expect=decoder(dict[str, int]))
         assert isinstance(ei.value, TransportError), "must stay catchable as the parent"
 
 
@@ -167,8 +178,8 @@ async def test_timeout_raises_client_timeout_error() -> None:
 
 
 async def test_returns_value_on_success() -> None:
-    """A successful read returns the decoded payload."""
-    transport = httpx2.MockTransport(lambda req: httpx2.Response(200, json={"a": 1}))
+    """Check that a successful read returns the decoded payload."""
+    transport = _answering(httpx2.codes.OK, b'{"a": 1}')
     async with _client(transport) as c:
-        result = await c.get("/x", expect=decoder(dict[str, Any]))
+        result = await c.get("/x", expect=decoder(dict[str, int]))
         assert result == {"a": 1}

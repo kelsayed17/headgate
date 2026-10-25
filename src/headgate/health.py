@@ -34,10 +34,10 @@ class BreakerSnapshot(NamedTuple):
 
 
 def breaker_states() -> dict[str, BreakerSnapshot]:
-    """Every host breaker built so far. A host no client has called yet is absent."""
+    """Return a snapshot of every host breaker built so far; a host no client has called yet is absent."""
     return {host: BreakerSnapshot(breaker.state, breaker.refusing) for host, breaker in tuple(HOST_BREAKERS.items())}
 
 
 def cache_degradations() -> dict[str, int]:
-    """Per host, how many requests found the HTTP cache broken and were handed to the live transport."""
+    """Return, per host, how many requests found the HTTP cache broken and were handed to the live transport."""
     return dict(CACHE_DEGRADATIONS)

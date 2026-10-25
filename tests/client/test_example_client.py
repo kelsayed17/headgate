@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
 
 def _transport(body: Mapping[str, object]) -> httpx2.MockTransport:
+    """Return a transport that checks the call's query and answers with *body*."""
+
     def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.params["api_key"] == "k"
         assert request.url.params["id"] == "GDP"
@@ -27,6 +29,7 @@ def _transport(body: Mapping[str, object]) -> httpx2.MockTransport:
 
 
 async def test_msgspec_and_pydantic_clients_agree() -> None:
+    """Check that both flavors decode the same body to the same values."""
     body = {"series_id": "GDP", "values": [1.0, 2.5]}
     a = await example.MsgspecClient("k", transport=_transport(body)).get_series("GDP")
     b = await example.PydanticClient("k", transport=_transport(body)).get_series("GDP")
@@ -37,6 +40,7 @@ async def test_msgspec_and_pydantic_clients_agree() -> None:
 async def test_both_flavors_raise_on_a_drifted_body(
     client: type[example.MsgspecClient | example.PydanticClient],
 ) -> None:
+    """Check that both flavors raise ``ResponseParseError`` on a body that drifted from the model."""
     drifted = {"series_id": "GDP", "values": "not-a-list"}
     with pytest.raises(ResponseParseError):
         await client("k", transport=_transport(drifted)).get_series("GDP")
