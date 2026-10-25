@@ -1,0 +1,22 @@
+name: Feature request
+description: A concern every API client faces that headgate should handle.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What an endpoint author has to write or work around today, and why it is a common concern.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed shape
+      description: How it would look from an endpoint method or a client's configuration (one-line endpoints stay one line).
+      render: python
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: RFCs, provider documentation or other libraries that handle it.

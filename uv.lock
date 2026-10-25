@@ -261,6 +261,7 @@ dependencies = [
     { name = "hishel" },
     { name = "httpx2", extra = ["http2"] },
     { name = "msgspec" },
+    { name = "typing-extensions", marker = "python_full_version < '3.15'" },
 ]
 
 [package.optional-dependencies]
@@ -295,12 +296,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "curl-cffi", marker = "extra == 'curl'", specifier = ">=0.16.2" },
+    { name = "curl-cffi", marker = "extra == 'curl'", specifier = ">=0.16.3" },
     { name = "hishel", specifier = ">=1.4.0" },
-    { name = "httpx2", extras = ["http2"], specifier = ">=2.13.1" },
-    { name = "msgspec", specifier = ">=0.22" },
+    { name = "httpx2", extras = ["http2"], specifier = ">=2.16.0" },
+    { name = "msgspec", specifier = ">=0.22.0" },
     { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.45.1" },
-    { name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.12" },
+    { name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.14.1" },
+    { name = "typing-extensions", marker = "python_full_version < '3.15'", specifier = ">=4.15" },
 ]
 provides-extras = ["pydantic", "curl", "otel"]
 

@@ -5,22 +5,48 @@ build-backend = "hatchling.build"
 [project]
 name = "headgate"
 version = "0.1.0"
-description = "An httpx2 client base with retries, rate limiting, a circuit breaker, caching and a declared-response contract."
+description = "The async API-client base on httpx2: safe retries, rate budgets, per-origin breakers, credential-safe caching, typed events and declared responses."
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Khaled Elsayed", email = "4119211+kelsayed17@users.noreply.github.com" }]
+keywords = [
+    "http", "http-client", "api-client", "async", "asyncio", "httpx", "httpx2",
+    "retry", "rate-limiting", "circuit-breaker", "caching", "opentelemetry",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
-    "httpx2[http2]>=2.13.1",
+    "httpx2[http2]>=2.16.0",
     "hishel>=1.4.0",
-    "msgspec>=0.22",
+    "msgspec>=0.22.0",
+    # TypeForm (PEP 747) is imported only for type checking; type checkers of client code need it to resolve it.
+    "typing-extensions>=4.15; python_version < '3.15'",
 ]
 
 [project.optional-dependencies]
-pydantic = ["pydantic>=2.12"]
-curl = ["curl_cffi>=0.16.2"]
+pydantic = ["pydantic>=2.14.1"]
+curl = ["curl_cffi>=0.16.3"]
 otel = ["opentelemetry-api>=1.45.1"]
+
+[project.urls]
+Homepage = "https://github.com/kelsayed17/headgate"
+Documentation = "https://github.com/kelsayed17/headgate/tree/main/docs"
+Repository = "https://github.com/kelsayed17/headgate"
+Issues = "https://github.com/kelsayed17/headgate/issues"
+Changelog = "https://github.com/kelsayed17/headgate/blob/main/CHANGELOG.md"
+Security = "https://github.com/kelsayed17/headgate/security/policy"
 
 [dependency-groups]
 dev = [
@@ -101,5 +127,13 @@ skip_covered = true
 [tool.mutmut]
 source_paths = ["src/"]
 pytest_add_cli_args_test_selection = ["tests/"]
-pytest_add_cli_args = ["-p", "no:cacheprovider", "-x", "-q"]
+# Tests of the source's own shape (the API-surface snapshot, the import boundary, the no-logging/no-environment
+# contracts) read the files mutmut rewrites with its trampolines, so mutation runs leave them out; they check structure,
+# not behaviour, and the regular suite still runs them.
+pytest_add_cli_args = [
+    "-p", "no:cacheprovider", "-x", "-q",
+    "--deselect", "tests/package/test_api_surface.py",
+    "--deselect", "tests/package/test_boundaries.py",
+    "--deselect", "tests/package/test_contracts.py",
+]
 also_copy = ["tests/", "examples/"]

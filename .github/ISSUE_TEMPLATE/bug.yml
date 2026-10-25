@@ -1,0 +1,33 @@
+name: Bug report
+description: headgate behaves differently from its documentation.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Thanks for reporting. For a security problem (a credential reaching another host, a cache leak, a size-cap
+        bypass), do not open an issue: use private vulnerability reporting instead (see SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: >
+        A short client and call that shows it, ideally against headgate.testing.FakeTransport or FaultyTransport so it
+        runs without a network. Remove any credentials.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `uv pip list | grep -iE "headgate|httpx2|hishel|msgspec|pydantic"` and `python --version`.
+      render: text
+    validations:
+      required: true

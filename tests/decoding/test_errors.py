@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import inspect
 import pickle
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -20,6 +21,9 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _UNAVAILABLE = 503
 _OK = 200
@@ -92,25 +96,27 @@ def test_an_unnamed_source_adds_no_prefix(source: str | None) -> None:
     assert err.source == source
 
 
-@pytest.mark.parametrize(
-    "err",
-    [
-        ClientError("boom", source="X"),
-        TransportError("net down", source="Y"),
-        ClientTimeoutError("slow", source="Z"),
-        UpstreamStatusError("order rejected: INVALID_SIZE_PRECISION", status_code=400, source="C"),
-        RateLimitError("429", status_code=429, source="P"),
-        AuthError("bad creds", status_code=403, code="FAILED", source="Q", body="denied"),
-        ResponseParseError("truncated", source="R"),
-    ],
-)
-def test_client_errors_survive_a_reduce_round_trip(err: ClientError) -> None:
+#: Builders rather than instances: the test adds a note, and a shared instance would carry it into the next run.
+_ERRORS: list[Callable[[], ClientError]] = [
+    lambda: ClientError("boom", source="X"),
+    lambda: TransportError("net down", source="Y"),
+    lambda: ClientTimeoutError("slow", source="Z"),
+    lambda: UpstreamStatusError("order rejected: INVALID_SIZE_PRECISION", status_code=400, source="C"),
+    lambda: RateLimitError("429", status_code=429, source="P"),
+    lambda: AuthError("bad creds", status_code=403, code="FAILED", source="Q", body="denied"),
+    lambda: ResponseParseError("truncated", source="R"),
+]
+
+
+@pytest.mark.parametrize("build", _ERRORS)
+def test_client_errors_survive_a_reduce_round_trip(build: Callable[[], ClientError]) -> None:
     """Rebuild every ``ClientError`` exactly through its reduce protocol, as an unpickler does.
 
     ``copy.deepcopy`` replays ``__reduce_ex__`` (here :meth:`ClientError.__reduce__`) just as ``pickle.loads`` would,
     without deserializing bytes. ``pickle.dumps`` succeeding shows that the rebuild function is importable by name,
     which is the one extra thing unpickling needs.
     """
+    err = build()
     err.add_note("context")
     restored = copy.deepcopy(err)
     assert type(restored) is type(err)
