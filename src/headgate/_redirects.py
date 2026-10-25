@@ -1,27 +1,20 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""What a redirect may do to a request: the two hooks every client installs.
+"""What a followed redirect may keep: its body is dropped (a response hook every client installs).
 
-:func:`drop_followed_redirect_body` is a response hook and :func:`credential_header_guard` a request hook; both are
-installed by :func:`headgate._stack.build_http_client`. The call's :class:`~headgate._core.CallContext` tells the first
-one whether this request's redirects are being followed.
+:func:`drop_followed_redirect_body` is installed by :func:`headgate._stack.build_http_client`; the call's
+:class:`~headgate._core.CallContext` tells it whether this request's redirects are being followed. Where a redirect may
+take a request, and what it may carry there, is :mod:`headgate.security`'s.
 """
 
 from __future__ import annotations
-
-from typing import TYPE_CHECKING
 
 import httpx2
 
 from headgate._core import CallContext
 
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
-    from headgate._auth import StaticHeaderAuth
-
-__all__ = ["credential_header_guard", "drop_followed_redirect_body"]
+__all__ = ["drop_followed_redirect_body"]
 
 
 async def drop_followed_redirect_body(response: httpx2.Response) -> None:
@@ -46,24 +39,3 @@ async def drop_followed_redirect_body(response: httpx2.Response) -> None:
     ):
         await stream.aclose()
         response.stream = httpx2.ByteStream(b"")
-
-
-def credential_header_guard(
-    auth: StaticHeaderAuth, base_url: httpx2.URL
-) -> Callable[[httpx2.Request], Awaitable[None]]:
-    """Build a request hook withholding *auth*'s headers from any hop that leaves *base_url*'s origin.
-
-    httpx2 strips only ``Authorization`` and ``Cookie`` when a redirect crosses origins, so a credential in any other
-    header would follow the redirect wherever it pointed. httpx2 runs request hooks before every hop, redirects
-    included, so the redirect is still followed (a provider may legitimately redirect to a signed file URL on another
-    host) and only the credential stays behind.
-    """
-    names = auth.header_names
-    home = base_url.origin
-
-    async def guard(request: httpx2.Request) -> None:
-        if request.url.origin != home:
-            for name in names:
-                request.headers.pop(name, None)
-
-    return guard

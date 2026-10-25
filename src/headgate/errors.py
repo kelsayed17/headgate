@@ -36,6 +36,7 @@ __all__ = [
     "ClientTimeoutError",
     "DecodeError",
     "ErrorDetails",
+    "ForbiddenDestinationError",
     "Problem",
     "RateLimitError",
     "ResponseParseError",
@@ -312,4 +313,16 @@ class ResponseTooLargeError(ClientError):
     Raised before the body is fully buffered, so an upstream cannot exhaust memory. The decompressed byte count is what
     is measured, since ``Content-Length`` reports the compressed size and a gzip bomb clears any header check. A plain
     ``ClientError``, so a boundary treats it as the upstream misbehaving.
+    """
+
+
+class ForbiddenDestinationError(ClientError):
+    """A request was refused before it was sent, because of where it was going.
+
+    Raised by the SSRF guard (``HttpOptions(allow_private_hosts=False)``) for a host that is, or resolves to, an address
+    that is not globally routable: loopback, private, link-local, multicast, reserved or unspecified, IPv4-mapped and
+    NAT64 forms included. The destination usually comes from data (a redirect, a cursor URL, a URL a user supplied)
+    rather than from configuration, so it is its own subtype rather than a :class:`ClientConfigurationError`: a
+    boundary can answer it as the caller's bad input. Nothing was sent, so it is never retried and never charged to a
+    circuit breaker.
     """

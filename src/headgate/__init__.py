@@ -6,8 +6,8 @@
 Built on ``httpx2``; Python 3.14 or newer. A client subclasses :class:`AsyncBaseClient`, configures it with a
 :class:`Rate` and optionally :class:`TransportPolicy` and :class:`HttpOptions`, and picks a codec flavor by importing
 ``headgate.msgspec`` or ``headgate.pydantic``. The policy layers are subpackages with public paths of their own
-(:mod:`headgate.retry`, :mod:`headgate.breaker`, :mod:`headgate.ratelimit`); their configuration values are
-re-exported here.
+(:mod:`headgate.retry`, :mod:`headgate.breaker`, :mod:`headgate.ratelimit`, :mod:`headgate.security`); their
+configuration values are re-exported here.
 """
 
 from headgate._auth import CachedTokenAuth, Minted, QueryParamAuth, StaticHeaderAuth
@@ -25,6 +25,7 @@ from headgate.errors import (
     ClientError,
     ClientTimeoutError,
     DecodeError,
+    ForbiddenDestinationError,
     Problem,
     RateLimitError,
     ResponseParseError,
@@ -49,6 +50,7 @@ __all__ = [
     "ClientTimeoutError",
     "DecodeError",
     "Expect",
+    "ForbiddenDestinationError",
     "HttpCache",
     "HttpOptions",
     "IdempotencyKeys",

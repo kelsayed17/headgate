@@ -65,7 +65,7 @@ from headgate._stack import build_http_client, build_transport_stack
 from headgate._url import render_path, route_template
 from headgate.breaker import BreakerOpenError
 from headgate.breaker._registry import NO_BREAKER
-from headgate.errors import CircuitOpenError, ClientError, ClientTimeoutError
+from headgate.errors import CircuitOpenError, ClientError, ClientTimeoutError, ForbiddenDestinationError
 from headgate.retry import NO_RETRY, RetryPolicy
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
 
@@ -509,7 +509,8 @@ class AsyncBaseClient:
         The response yielded is anything but a 429 or 5xx: one of those means the retry transport ran out of
         attempts, and it is raised here, so no call can declare either as an answer. A network failure or timeout,
         in the send or in the caller's body read inside the block, becomes ``TransportError`` /
-        ``ClientTimeoutError``, and an open breaker ``CircuitOpenError``.
+        ``ClientTimeoutError``, an open breaker ``CircuitOpenError``, and a hop the SSRF guard refused
+        ``ForbiddenDestinationError``.
 
         The breaker is driven here rather than by a transport layer because this is the only scope that spans both the
         send and the body read. It is keyed on the host the request is addressed to, so a followed redirect's hops are
@@ -528,6 +529,11 @@ class AsyncBaseClient:
         except httpx2.InvalidURL as exc:
             # A redirect joined past httpx2's length limit. Not an HTTPError, and not a host failure.
             raise _invalid_url(exc, self._site(prepared)) from exc
+        except ForbiddenDestinationError as exc:
+            # The SSRF guard refused a hop before it was sent; it names the destination, the site names the call.
+            site = self._site(prepared)
+            msg = f"{site.method} {site.url}: {exc}"
+            raise ForbiddenDestinationError(msg, **site.details()) from None
 
     @contextlib.asynccontextmanager
     async def _sent(self, prepared: _Prepared, verdict: Verdict) -> AsyncGenerator[httpx2.Response]:
