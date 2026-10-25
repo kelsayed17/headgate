@@ -19,8 +19,15 @@ The recipe, with pytest-recording::
         return CASSETTES.vcr_config()
 
 and ``HttpOptions(middleware=(CASSETTES,))`` on the client under test. A skipped mint is not replayed, so seed the
-auth with a token when replaying (``CachedTokenAuth.seed``). Recording needs a vcrpy that patches ``httpx2``; the
-filter itself depends on neither vcrpy nor pytest-recording, only on the shape of their hooks.
+auth with a token when replaying (``CachedTokenAuth.seed``).
+
+vcrpy 8.3 and later patch httpx2's own transports (``httpx2.AsyncHTTPTransport``, which headgate's default network
+transport is, and ``httpx2.MockTransport``), below headgate's whole stack: a cassette holds each send as it went on
+the wire, once per attempt, and replays it there, so retries, the cache and the rate budget run over a replay as they
+do over the network. A custom network transport (``headgate.curl.AsyncCurlTransport``, a
+:class:`~headgate.testing.FakeTransport`) is not patched, and is neither recorded nor replayed. headgate's own tests
+record and replay through real vcrpy. The filter itself depends on neither vcrpy nor pytest-recording, only on the
+shape of their hooks.
 """
 
 from __future__ import annotations

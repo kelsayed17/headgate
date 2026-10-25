@@ -38,6 +38,7 @@ dev = [
     "pytest-codspeed>=5.0.3",
     "hypothesis>=6.170",
     "mutmut>=3.8",
+    "vcrpy>=8.3",
 ]
 
 [tool.hatch.build.targets.wheel]

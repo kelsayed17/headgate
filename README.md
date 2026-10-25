@@ -262,7 +262,9 @@ assert len(fake.calls) == 2 and clock.sleeps  # the retry waited, on the test cl
 `FakeTransport` answers from a method-and-path route table and logs every request; `TestClock` is a manual clock whose
 sleep advances it; `instant_retries()` retries without waiting; `isolated_breakers()` gives the clients built in its
 block a fresh breaker registry. `CassetteFilter` builds a vcrpy / pytest-recording `vcr_config` that filters
-headgate's credential headers and secret query parameters and, installed as middleware, skips token-mint requests.
+headgate's credential headers, secret query parameters and `Set-Cookie` and, installed as middleware, skips token-mint
+requests. vcrpy (8.3 and later) records httpx2's own transports, so it sees what headgate's default network transport
+sends; a custom `transport=` (the curl transport, a `FakeTransport`) is not recorded.
 
 ## Retries
 
