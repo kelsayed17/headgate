@@ -17,7 +17,7 @@ caching uses hishel's native ``FilterPolicy.use_body_key``. Filters run only INS
 URL, so no other layer re-evaluates a rule: :class:`ResilientCacheTransport` stamps the client's TTL and ``_base``
 stamps only a per-call ``cache_ttl=``.
 
-The two classes below carry their own rationale: :class:`_NoCloseStorage` (why one shared storage must not be closed by
+The two classes below carry their own rationale: :class:`NoCloseStorage` (why one shared storage must not be closed by
 the first adapter to tear down) and :class:`ResilientCacheTransport` (why a fault in the storage must never fail a
 request that would otherwise succeed).
 """
@@ -123,7 +123,7 @@ class StatusCodeFilter(BaseFilter[Response]):
 # The no-close storage wrapper (load-bearing for a shared storage).
 
 
-class _NoCloseStorage(AsyncBaseStorage):
+class NoCloseStorage(AsyncBaseStorage):
     """Delegate every storage method to a shared inner storage EXCEPT ``close``.
 
     ``AsyncCacheTransport.aclose()`` closes its ``storage``; with ONE storage shared across clients, the FIRST adapter
@@ -197,7 +197,7 @@ _NETWORK_RESPONSES: ContextVar[list[httpx2.Response] | None] = ContextVar(
 #: How many requests per host found the cache broken (and were handed to the live transport), since
 #: process start. Process-global like the breaker registry; read through
 #: :func:`headgate.health.cache_degradations`, never written outside :meth:`_handle`.
-_cache_degradations: Counter[str] = Counter()
+CACHE_DEGRADATIONS: Counter[str] = Counter()
 
 
 def _strip_secret_params(url: httpx2.URL) -> tuple[httpx2.URL, tuple[tuple[str, str], ...]]:
@@ -503,7 +503,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
             # then fails on the network too must not hide the cache outage behind the network one.
             # The extension reaches only this call's caller; the count is what a composition root
             # reads, through ``headgate.health``, to tell a dashboard the cache is down.
-            _cache_degradations[request.url.host] += 1
+            CACHE_DEGRADATIONS[request.url.host] += 1
             fallback = await self.next_transport.handle_async_request(request)
             fallback.extensions["headgate_cache_degraded"] = (
                 f"{request.url.copy_with(query=None, userinfo=b'')}: {type(exc).__name__}: {exc}"[:240]

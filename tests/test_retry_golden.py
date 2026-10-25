@@ -17,8 +17,8 @@ from typing import TYPE_CHECKING, override
 
 import httpx2
 
-from headgate import _transports
-from headgate._transports import RetryTransport, build_retry
+from headgate import _retry
+from headgate._retry import RetryTransport, build_retry
 from tests.support.retry_matrix import CASES, case_json, load_golden, outcome_json, run_case
 
 if TYPE_CHECKING:
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 #: Read at import, before the autouse ``no_retry_backoff`` fixture zeroes it, because the table holds production
 #: sleeps.
-_PRODUCTION_BACKOFF_FACTOR = _transports._BACKOFF_FACTOR
+_PRODUCTION_BACKOFF_FACTOR = _retry._BACKOFF_FACTOR
 
 
 def _in_house(inner: httpx2.AsyncBaseTransport, attempts: int) -> httpx2.AsyncBaseTransport:
@@ -42,7 +42,7 @@ def test_the_golden_table_covers_the_matrix() -> None:
 
 
 async def test_the_in_house_transport_reproduces_the_golden_table(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(_transports, "_BACKOFF_FACTOR", _PRODUCTION_BACKOFF_FACTOR)
+    monkeypatch.setattr(_retry, "_BACKOFF_FACTOR", _PRODUCTION_BACKOFF_FACTOR)
     golden = load_golden()
     mismatches = []
     for case, row in zip(CASES, golden, strict=True):
@@ -83,7 +83,7 @@ async def test_a_coroutine_sleeping_on_another_threads_loop_is_not_recorded_into
     and failed the table: handed a sleep that returns at once, its loop spun for the whole case. Every send here waits
     until the background loop has slept inside it; only the case's own sleeps may be recorded.
     """
-    monkeypatch.setattr(_transports, "_BACKOFF_FACTOR", _PRODUCTION_BACKOFF_FACTOR)
+    monkeypatch.setattr(_retry, "_BACKOFF_FACTOR", _PRODUCTION_BACKOFF_FACTOR)
     stop, in_case, slept = threading.Event(), threading.Event(), threading.Event()
 
     async def background() -> None:

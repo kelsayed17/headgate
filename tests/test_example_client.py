@@ -10,7 +10,7 @@ import httpx2
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "examples"))
-import fred_style_client as example
+import series_client as example
 
 from headgate import ResponseParseError
 

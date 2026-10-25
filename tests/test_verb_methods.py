@@ -19,7 +19,7 @@ import pytest
 
 from headgate import msgspec as flavor
 from headgate._base import AsyncBaseClient
-from headgate._rate_limiter import Rate
+from headgate._rate_limit import Rate
 from headgate._responses import as_bytes, nothing
 from headgate.errors import AuthError, UpstreamStatusError
 from headgate.msgspec import decoder

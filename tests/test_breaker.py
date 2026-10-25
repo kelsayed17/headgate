@@ -18,12 +18,12 @@ import contextlib
 
 import pytest
 
-from headgate._async_breaker import (
+from headgate._breaker import (
+    HOST_BREAKERS,
     NO_BREAKERS,
     AsyncCircuitBreaker,
     BreakerState,
     CircuitOpenError,
-    _host_breakers,
 )
 
 #: The half-open tests' cooldown, and a sleep that outlasts it. The breaker reads ``time.monotonic``, which
@@ -262,7 +262,7 @@ async def test_a_stale_failure_does_not_reopen_over_the_probe_in_flight() -> Non
 
 def test_no_breakers_admits_every_call_and_never_reads_the_shared_registry() -> None:
     """A client with no breaker records nothing, and is never refused by one another client opened on its host."""
-    _host_breakers.clear()
+    HOST_BREAKERS.clear()
     breaker = NO_BREAKERS["api.example"]
     for _ in range(10):
         with contextlib.suppress(RuntimeError), breaker.track() as verdict:
@@ -270,4 +270,4 @@ def test_no_breakers_admits_every_call_and_never_reads_the_shared_registry() -> 
             raise RuntimeError
     with breaker.track():
         pass  # still admitted after ten marked failures
-    assert "api.example" not in _host_breakers
+    assert "api.example" not in HOST_BREAKERS

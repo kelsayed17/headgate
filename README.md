@@ -41,7 +41,7 @@ class ExampleClient(AsyncBaseClient):
         return await self.get("series", expect=decoder(Series), params={"id": series_id})
 ```
 
-`examples/fred_style_client.py` shows the same client in both codec flavors.
+`examples/series_client.py` shows the same client in both codec flavors.
 
 ## Codec flavors
 
@@ -96,4 +96,4 @@ patches `httpx2`.
 
 ## Licence
 
-MIT. `src/headgate/_curl_transport.py` is derived from `httpx-curl-cffi` (BSD-3-Clause); its notice is kept in the file.
+MIT. `src/headgate/_curl.py` is derived from `httpx-curl-cffi` (BSD-3-Clause); its notice is kept in the file.

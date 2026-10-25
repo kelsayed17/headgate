@@ -8,12 +8,12 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate._async_breaker import _host_breakers
 from headgate._auth import StaticHeaderAuth
 from headgate._base import AsyncBaseClient
-from headgate._rate_limiter import Rate
+from headgate._breaker import HOST_BREAKERS
+from headgate._rate_limit import Rate
 from headgate._responses import Expect, Refusal, Refused, as_bytes, nothing
-from headgate._transports import Retry
+from headgate._retry import Retry
 from headgate.errors import AuthError, RateLimitError, ResponseParseError, UpstreamStatusError
 from headgate.msgspec import decoder
 from tests.support.responses import RESPONSE
@@ -33,7 +33,8 @@ class _StubClient(AsyncBaseClient):
 
 
 def test_client_builds_retry_over_the_paced_transport_stack() -> None:
-    from headgate._transports import RateLimitTransport, RetryTransport
+    from headgate._rate_limit import RateLimitTransport
+    from headgate._retry import RetryTransport
 
     client = _StubClient(rate=Rate.per_second(2), base_url="https://x", max_retries=3)
     # Retry is the outermost transport and the rate limiter the innermost. The breaker is
@@ -41,8 +42,8 @@ def test_client_builds_retry_over_the_paced_transport_stack() -> None:
     # send, which no transport wrapped around the send can do.
     stack = client._http_client._transport
     assert isinstance(stack, RetryTransport)
-    assert isinstance(stack._async_transport, RateLimitTransport)
-    assert client._breakers is _host_breakers
+    assert isinstance(stack._transport, RateLimitTransport)
+    assert client._breakers is HOST_BREAKERS
     # max_retries is the *attempt* count; the policy's total is the
     # number of *retries*, so it is one less (3 attempts -> 2 retries).
     assert stack.retry.total == 2
@@ -139,7 +140,7 @@ async def test_honors_retry_after_on_429(httpx_mock: HTTPXMock, monkeypatch: pyt
 
     monkeypatch.setattr(Retry, "sleep_seconds", _record)
     # Zeroed so the backoff fallback would be a visible 0.0, not a plausible-looking wait.
-    monkeypatch.setattr("headgate._transports._BACKOFF_FACTOR", 0.0)
+    monkeypatch.setattr("headgate._retry._BACKOFF_FACTOR", 0.0)
     httpx_mock.add_response(url="https://api.example/x", status_code=429, headers={"Retry-After": "7"})
     httpx_mock.add_response(url="https://api.example/x", json={"ok": True})
 
@@ -183,8 +184,8 @@ async def test_circuit_breaker_resets_on_success(httpx_mock: HTTPXMock) -> None:
     assert resp is not None
     # Breaker should be reset; counter back to 0.
     host = "api.example"
-    assert host in _host_breakers, "breaker should be registered for the host after a fetch"
-    assert _host_breakers[host].failure_count == 0
+    assert host in HOST_BREAKERS, "breaker should be registered for the host after a fetch"
+    assert HOST_BREAKERS[host].failure_count == 0
 
 
 # ---------- get: JSON + model decode paths ----------

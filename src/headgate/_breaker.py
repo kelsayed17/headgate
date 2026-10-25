@@ -1,32 +1,21 @@
 """The per-host circuit breaker: stop calling a host that is failing, find out cheaply when it recovers.
 
-One breaker per HOST, shared by every client in the process through :data:`_host_breakers`,
-so two clients addressing the same upstream cannot each spend their own quota of failures
-against it.
+One breaker per HOST, shared by every client in the process through :data:`HOST_BREAKERS`, so two clients addressing
+the same upstream cannot each spend their own quota of failures against it.
 
-**Why this is not the ``circuitbreaker`` library any more.** That package was
-driven by a ``with breaker:`` block wrapped around the transport, and three things followed
-from it that were wrong rather than merely different:
+Three design choices, each fixing a failure mode of the usual ``with breaker:`` wrapper:
 
-* its ``__exit__`` records a failure only for an ``Exception`` and calls ``reset()`` for
-  anything else — so an ``asyncio.CancelledError``, which is what every ``asyncio.wait_for``
-  around a client call raises when the caller's own timeout is shorter than the client's,
-  CLEARED the failure count. A hanging host could never trip the breaker.
-* half-open admitted every waiting caller at once, so a host that had just failed got the
-  full concurrent load as its recovery test.
-* wrapped around the transport it saw the response HEADERS, because the body is read
-  afterwards (``_send`` streams so it can cap the size). A connection dying mid-body was
-  invisible to it.
+* **Only a marked failure counts.** An ``asyncio.CancelledError`` (what ``asyncio.wait_for`` raises around a call when
+  the caller's timeout is shorter than the client's) records nothing, rather than clearing the failure count; so does
+  an auth flow failing to mint or a body over the size cap. See :meth:`AsyncCircuitBreaker.track`.
+* **Half-open admits one probe.** A host that has just failed gets one call as its recovery test, not the full
+  concurrent load.
+* **The breaker spans the body read.** It is driven from ``AsyncBaseClient``, around the send AND the body read, so a
+  connection dying mid-body is a failure of the fetch. A transport layer would see only the response headers, which is
+  why there is no breaker transport.
 
-The cure for the third is placement, not code: the breaker is driven from ``_send``, around
-the send AND the body read, which is also the only place that knows the whole fetch
-succeeded. That is why there is no breaker TRANSPORT any more.
-
-**What is deliberately unchanged:** the trip rule is still five CONSECUTIVE failures, so any
-success resets the count. A host failing half its calls therefore never trips — that is the
-classic consecutive-failure semantics, a policy question rather than a defect, and changing
-it changes when production stops calling a provider. A failure-rate window over the last N
-calls is the obvious alternative if that is ever wanted.
+The trip rule is five CONSECUTIVE failures, so any success resets the count, and a host failing half its calls never
+trips. A failure-rate window over the last N calls is the obvious alternative if that is ever wanted.
 """
 
 from __future__ import annotations
@@ -41,9 +30,16 @@ if TYPE_CHECKING:
     from collections.abc import Generator
     from contextlib import AbstractContextManager
 
-#: The registry every client shares, keyed by host. Module-level so concurrent clients to
-#: one host share a breaker, and so tests can clear or inspect it.
-_host_breakers: defaultdict[str, AsyncCircuitBreaker]
+__all__ = [
+    "HOST_BREAKERS",
+    "NO_BREAKERS",
+    "AsyncCircuitBreaker",
+    "Breaker",
+    "BreakerState",
+    "Breakers",
+    "CircuitOpenError",
+    "Verdict",
+]
 
 
 class BreakerState(StrEnum):
@@ -59,7 +55,7 @@ class CircuitOpenError(Exception):
 
 
 class Verdict:
-    """What one fetch established about its host, marked by ``_base._send`` inside :meth:`AsyncCircuitBreaker.track`.
+    """What one fetch established about its host, marked by ``AsyncBaseClient`` inside :meth:`AsyncCircuitBreaker.track`.
 
     Unmarked means "nothing": only an explicit mark makes a raise a host failure, and only a clean exit that was not
     marked neutral is a host success. See :meth:`AsyncCircuitBreaker.track` for why the default is not the reverse.
@@ -143,7 +139,7 @@ class AsyncCircuitBreaker:
         :class:`Verdict` the fetch marks as it goes, and what the call records on the way out is:
 
         * **a host FAILURE** — only when the fetch marked :meth:`Verdict.host_failed` before raising, which
-          ``_base._send`` does for a transport error or timeout and for a 429/5xx that survived retries. Those are
+          ``AsyncBaseClient`` does for a transport error or timeout and for a 429/5xx that survived retries. Those are
           what the WIRE said about this host;
         * **a SUCCESS** — a clean exit, unless the fetch marked :meth:`Verdict.not_a_host_test` (a cache hit, which
           reached no network). A success resets the consecutive-failure count;
@@ -151,15 +147,14 @@ class AsyncCircuitBreaker:
           body over the size cap, a programming error) and a ``BaseException`` such as ``CancelledError`` (the
           caller gave up). None of those says whether the host is up.
 
-        Previously every ``Exception`` counted and every clean exit was a success. So five token mints refused
-        for a CONFIGURATION reason opened the breaker for every client on that host, hiding the real error behind
-        ``circuit breaker open``, and a cache hit reset the failure count and could close a probe that never reached
-        the host.
+        The default is "nothing" rather than "failure" so that five token mints refused for a CONFIGURATION reason
+        cannot open the breaker for every client on that host, hiding the real error behind ``circuit breaker open``;
+        and a clean exit is not a success when it never reached the host, so a cache hit cannot close a probe.
 
         **Only the call that took the probe slot settles a probe.** A call admitted while the breaker was CLOSED that
         finishes after it tripped — realistic, since three 30s attempts plus backoff outlast the cooldown — changes no
-        state at all. Previously its cancellation freed the probe slot, admitting a second concurrent probe, and
-        its failure re-opened the breaker while the real probe was still out.
+        state at all: its cancellation must not free the probe slot (admitting a second concurrent probe), and its
+        failure must not re-open the breaker while the real probe is still out.
         """
         if not self._admits():
             raise CircuitOpenError(f"circuit breaker open for {self._name}")
@@ -219,7 +214,7 @@ class Breaker(Protocol):
 
 
 class Breakers(Protocol):
-    """Where a client looks up its host's breaker: :data:`_host_breakers`, or :data:`NO_BREAKERS`."""
+    """Where a client looks up its host's breaker: :data:`HOST_BREAKERS`, or :data:`NO_BREAKERS`."""
 
     def __getitem__(self, host: str, /) -> Breaker: ...
 
@@ -237,7 +232,7 @@ class _NoBreaker:
 class _NoBreakers:
     """The registry of a client built with no circuit breaker (``circuit_breaker=False``, or transport policy off).
 
-    Every host maps to the one :class:`_NoBreaker`. It never reads :data:`_host_breakers`, and that is half of what
+    Every host maps to the one :class:`_NoBreaker`. It never reads :data:`HOST_BREAKERS`, and that is half of what
     "no breaker" means: the registry is process-global, so a client that merely stopped RECORDING would still be
     refused by a breaker another client opened on the same host.
     """
@@ -264,16 +259,6 @@ class _BreakerRegistry(defaultdict[str, "AsyncCircuitBreaker"]):
         return breaker
 
 
-_host_breakers = _BreakerRegistry()
-
-
-__all__ = [
-    "NO_BREAKERS",
-    "AsyncCircuitBreaker",
-    "Breaker",
-    "BreakerState",
-    "Breakers",
-    "CircuitOpenError",
-    "Verdict",
-    "_host_breakers",
-]
+#: The registry every client shares, keyed by host. Module-level so concurrent clients to one host share a breaker,
+#: and so tests can clear or inspect it.
+HOST_BREAKERS = _BreakerRegistry()

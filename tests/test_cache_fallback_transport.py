@@ -34,9 +34,9 @@ from hishel import (
 
 from headgate._cache import (
     MethodFilter,
+    NoCloseStorage,
     ResilientCacheTransport,
     StatusCodeFilter,
-    _NoCloseStorage,
 )
 
 if TYPE_CHECKING:
@@ -159,7 +159,7 @@ def _policy() -> FilterPolicy:
 def _transport(inner: AsyncBaseStorage, network: httpx2.AsyncBaseTransport) -> ResilientCacheTransport:
     return ResilientCacheTransport(
         next_transport=network,
-        storage=_NoCloseStorage(inner),
+        storage=NoCloseStorage(inner),
         policy=_policy(),
         max_body_bytes=1024 * 1024,
     )

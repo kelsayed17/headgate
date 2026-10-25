@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from headgate._rate_limiter import UNLIMITED, AsyncRateLimiter, Rate
+from headgate._rate_limit import UNLIMITED, AsyncRateLimiter, Rate
 
 
 @pytest.mark.transport_policy  # the subject is the throttle's timing: keep the real wait (see no_rate_limit)

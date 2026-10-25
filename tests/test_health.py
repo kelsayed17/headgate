@@ -14,13 +14,13 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage, Entry, FilterPolicy
 
-from headgate._async_breaker import AsyncCircuitBreaker, _host_breakers
+from headgate._breaker import HOST_BREAKERS, AsyncCircuitBreaker
 from headgate._cache import (
+    CACHE_DEGRADATIONS,
     MethodFilter,
+    NoCloseStorage,
     ResilientCacheTransport,
     StatusCodeFilter,
-    _cache_degradations,
-    _NoCloseStorage,
 )
 from headgate.health import BreakerState, breaker_states, cache_degradations
 
@@ -32,15 +32,15 @@ _HOST = "health.example.test"
 
 @pytest.fixture(autouse=True)
 def _clean_registries() -> Iterator[None]:
-    _host_breakers.pop(_HOST, None)
-    _cache_degradations.pop(_HOST, None)
+    HOST_BREAKERS.pop(_HOST, None)
+    CACHE_DEGRADATIONS.pop(_HOST, None)
     yield
-    _host_breakers.pop(_HOST, None)
-    _cache_degradations.pop(_HOST, None)
+    HOST_BREAKERS.pop(_HOST, None)
+    CACHE_DEGRADATIONS.pop(_HOST, None)
 
 
 def test_breaker_states_reports_a_tripped_host_as_open() -> None:
-    breaker = _host_breakers[_HOST]
+    breaker = HOST_BREAKERS[_HOST]
     assert breaker_states()[_HOST] == (BreakerState.CLOSED, False)
 
     _trip(breaker)
@@ -51,7 +51,7 @@ def test_breaker_states_reports_a_tripped_host_as_open() -> None:
 def test_a_tripped_breaker_past_its_cooldown_is_open_but_not_refusing() -> None:
     """The latch ``state`` alone would show: OPEN stays OPEN until some call takes the probe."""
     breaker = AsyncCircuitBreaker(name=_HOST, recovery_timeout=0.0)
-    _host_breakers[_HOST] = breaker
+    HOST_BREAKERS[_HOST] = breaker
     _trip(breaker)
 
     assert breaker_states()[_HOST] == (BreakerState.OPEN, False)
@@ -65,7 +65,7 @@ def _trip(breaker: AsyncCircuitBreaker) -> None:
 
 
 def test_breaker_states_is_a_copy() -> None:
-    _host_breakers[_HOST]
+    HOST_BREAKERS[_HOST]
     snapshot = breaker_states()
     snapshot.clear()
     assert _HOST in breaker_states()
@@ -81,7 +81,7 @@ async def storage() -> AsyncIterator[AsyncSqliteStorage]:
         await store.close()
 
 
-class _LookupFails(_NoCloseStorage):
+class _LookupFails(NoCloseStorage):
     @override
     async def get_entries(self, key: str) -> list[Entry]:
         raise ValueError("corrupt cache entry")

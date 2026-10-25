@@ -33,7 +33,7 @@ from hishel import AsyncSqliteStorage, FilterPolicy
 
 from headgate._base import AsyncBaseClient
 from headgate._cache import HttpCache, PathFragmentFilter, StatusCodeFilter
-from headgate._rate_limiter import UNLIMITED
+from headgate._rate_limit import UNLIMITED
 from headgate.errors import ClientTimeoutError
 from tests.support.responses import RESPONSE
 

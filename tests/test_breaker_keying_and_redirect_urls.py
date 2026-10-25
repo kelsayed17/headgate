@@ -11,9 +11,9 @@ import contextlib
 import httpx2
 import pytest
 
-from headgate._async_breaker import AsyncCircuitBreaker, BreakerState, _host_breakers
 from headgate._base import AsyncBaseClient
-from headgate._rate_limiter import Rate
+from headgate._breaker import HOST_BREAKERS, AsyncCircuitBreaker, BreakerState
+from headgate._rate_limit import Rate
 from headgate._responses import nothing
 from headgate.errors import ClientError, TransportError
 from tests.support.responses import RESPONSE
@@ -46,7 +46,7 @@ async def test_an_unparseable_redirect_location_is_a_transport_failure_of_the_ho
     )
     with pytest.raises(TransportError, match="Invalid URL in location header"):
         await client.get("start", expect=RESPONSE)
-    assert _host_breakers[_HOST].failure_count == 1
+    assert HOST_BREAKERS[_HOST].failure_count == 1
 
 
 async def test_a_redirect_whose_joined_url_is_too_long_is_a_client_error_not_a_host_failure() -> None:
@@ -64,7 +64,7 @@ async def test_a_redirect_whose_joined_url_is_too_long_is_a_client_error_not_a_h
     with pytest.raises(ClientError, match="invalid URL") as caught:
         await client.get("start", expect=RESPONSE)
     assert not isinstance(caught.value, TransportError)
-    assert _host_breakers[_HOST].failure_count == 0
+    assert HOST_BREAKERS[_HOST].failure_count == 0
 
 
 async def test_an_absolute_url_keys_the_breaker_on_its_own_host() -> None:
@@ -76,8 +76,8 @@ async def test_an_absolute_url_keys_the_breaker_on_its_own_host() -> None:
     )
     with pytest.raises(ClientError):
         await client.get("https://other.example/x", expect=RESPONSE)
-    assert _host_breakers["other.example"].failure_count == 1
-    assert _HOST not in _host_breakers
+    assert HOST_BREAKERS["other.example"].failure_count == 1
+    assert _HOST not in HOST_BREAKERS
 
 
 # ---------- The three behaviours the refactor changes (spec §9) ----------
@@ -86,7 +86,7 @@ async def test_an_absolute_url_keys_the_breaker_on_its_own_host() -> None:
 def _open_breaker() -> None:
     """Trip the test host's breaker: one recorded failure against a threshold of one."""
     breaker = AsyncCircuitBreaker(failure_threshold=1, recovery_timeout=3600, name=_HOST)
-    _host_breakers[_HOST] = breaker
+    HOST_BREAKERS[_HOST] = breaker
     with contextlib.suppress(RuntimeError), breaker.track() as verdict:
         verdict.host_failed()
         raise RuntimeError
@@ -111,8 +111,8 @@ async def test_a_protocol_relative_path_keys_the_breaker_on_the_host_it_reaches(
     with pytest.raises(ClientError):
         await client.get("//other.example/x", expect=RESPONSE)
     assert reached == [_HOST]
-    assert _host_breakers[_HOST].failure_count == 1
-    assert "other.example" not in _host_breakers
+    assert HOST_BREAKERS[_HOST].failure_count == 1
+    assert "other.example" not in HOST_BREAKERS
 
 
 async def test_with_the_breaker_open_a_url_the_join_rejects_is_still_an_invalid_url() -> None:

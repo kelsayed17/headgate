@@ -8,7 +8,7 @@ import httpx2
 import pytest
 
 from headgate._base import AsyncBaseClient
-from headgate._rate_limiter import Rate
+from headgate._rate_limit import Rate
 from headgate._responses import Refused
 from headgate.errors import ClientError, UpstreamStatusError
 

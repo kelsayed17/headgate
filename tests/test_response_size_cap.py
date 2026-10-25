@@ -22,7 +22,7 @@ import pytest
 
 from headgate._base import AsyncBaseClient
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
-from headgate._rate_limiter import Rate
+from headgate._rate_limit import Rate
 from headgate.errors import ClientError, ResponseTooLargeError
 from tests.support.responses import RESPONSE
 

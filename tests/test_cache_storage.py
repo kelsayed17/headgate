@@ -1,7 +1,7 @@
 """The no-close storage wrapper + the composition-owned storage wiring.
 
 The ONE process-shared ``hishel.AsyncBaseStorage`` is built at boot on
-the application and passed to each opt-in client as ``HttpCache(storage=...)``. ``_NoCloseStorage`` wraps the
+the application and passed to each opt-in client as ``HttpCache(storage=...)``. ``NoCloseStorage`` wraps the
 shared storage per adapter, delegating every method EXCEPT ``close()`` (a no-op)
 so a per-adapter ``AsyncCacheTransport.aclose()`` never closes the shared client.
 """
@@ -11,12 +11,12 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-from headgate._cache import _NoCloseStorage
+from headgate._cache import NoCloseStorage
 
 
 async def test_no_close_storage_delegates_but_skips_close() -> None:
     inner = AsyncMock(name="inner_storage")
-    wrapper = _NoCloseStorage(inner)
+    wrapper = NoCloseStorage(inner)
 
     entry_id = uuid.uuid4()
     req = MagicMock(name="request")
@@ -41,4 +41,4 @@ async def test_no_close_storage_delegates_but_skips_close() -> None:
     inner.close.assert_not_awaited()
 
 
-# The storage-sharing contract under test here is `_NoCloseStorage`: closing a client never closes a shared storage.
+# The storage-sharing contract under test here is `NoCloseStorage`: closing a client never closes a shared storage.

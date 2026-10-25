@@ -7,9 +7,8 @@ importing ``headgate.msgspec`` or ``headgate.pydantic``.
 from headgate._auth import CachedTokenAuth, Minted, QueryParamAuth, StaticHeaderAuth
 from headgate._base import AsyncBaseClient
 from headgate._cache import HttpCache, MethodFilter, PathFragmentFilter, StatusCodeFilter
-from headgate._rate_limiter import Rate
+from headgate._rate_limit import Rate, RateRule
 from headgate._responses import Expect, Reader, Refusal, Refused, as_bytes, event_stream, json_reader, nothing
-from headgate._transports import RateRule
 from headgate.errors import (
     AuthError,
     ClientConfigurationError,

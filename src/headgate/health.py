@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from headgate._async_breaker import BreakerState, _host_breakers
-from headgate._cache import _cache_degradations
+from headgate._breaker import HOST_BREAKERS, BreakerState
+from headgate._cache import CACHE_DEGRADATIONS
 
 
 class BreakerSnapshot(NamedTuple):
@@ -30,12 +30,12 @@ class BreakerSnapshot(NamedTuple):
 
 def breaker_states() -> dict[str, BreakerSnapshot]:
     """Every host breaker built so far. A host no client has called yet is absent."""
-    return {host: BreakerSnapshot(breaker.state, breaker.refusing) for host, breaker in tuple(_host_breakers.items())}
+    return {host: BreakerSnapshot(breaker.state, breaker.refusing) for host, breaker in tuple(HOST_BREAKERS.items())}
 
 
 def cache_degradations() -> dict[str, int]:
     """Per host, how many requests found the HTTP cache broken and were handed to the live transport."""
-    return dict(_cache_degradations)
+    return dict(CACHE_DEGRADATIONS)
 
 
 __all__ = ["BreakerSnapshot", "BreakerState", "breaker_states", "cache_degradations"]

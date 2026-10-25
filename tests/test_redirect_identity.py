@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from headgate._base import AsyncBaseClient
-from headgate._rate_limiter import Rate
+from headgate._rate_limit import Rate
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:

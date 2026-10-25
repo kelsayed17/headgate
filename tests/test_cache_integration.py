@@ -28,13 +28,13 @@ from hishel.httpx2 import AsyncCacheTransport
 from headgate._base import AsyncBaseClient
 from headgate._cache import (
     HttpCache,
+    NoCloseStorage,
     PathFragmentFilter,
     StatusCodeFilter,
-    _NoCloseStorage,
     _RestoreRequestExtensions,
 )
-from headgate._rate_limiter import UNLIMITED, Rate
-from headgate._transports import RateLimitTransport, RetryTransport
+from headgate._rate_limit import UNLIMITED, Rate, RateLimitTransport
+from headgate._retry import RetryTransport
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -57,7 +57,7 @@ def _base_of(client: AsyncBaseClient) -> httpx2.AsyncBaseTransport:
     """The transport directly below the retry layer (the cache transport, or the limiter)."""
     inner = client._http_client._transport
     assert isinstance(inner, RetryTransport)
-    below = inner._async_transport
+    below = inner._transport
     assert below is not None
     return below
 
@@ -117,9 +117,9 @@ def test_cache_with_storage_inserts_cache_transport_base_adjacent() -> None:
     assert isinstance(cache_transport, AsyncCacheTransport)
     # base-adjacent: below the cache sits only the rate limiter, then the network.
     assert _network_of(client) is base
-    # The storage handed to the transport is a _NoCloseStorage wrapper (so a
+    # The storage handed to the transport is a NoCloseStorage wrapper (so a
     # per-adapter teardown can't close the shared client).
-    assert isinstance(cache_transport.storage, _NoCloseStorage)
+    assert isinstance(cache_transport.storage, NoCloseStorage)
     assert cache_transport.storage._inner is storage
 
 
@@ -338,7 +338,7 @@ async def test_never_cache_client_has_no_cache_transport() -> None:
 
 async def test_multi_adapter_teardown_survives_shared_storage() -> None:
     """N AsyncBaseClient adapters sharing ONE storage tear down; the shared
-    storage survives until the composition root closes it (the _NoCloseStorage
+    storage survives until the composition root closes it (the NoCloseStorage
     wrapper is load-bearing — hishel's AsyncCacheTransport.aclose() closes its
     storage, so without the wrapper the FIRST adapter teardown would close the
     shared client and break the rest)."""
@@ -368,7 +368,7 @@ async def test_multi_adapter_teardown_survives_shared_storage() -> None:
         for c in clients:
             ct = _base_of(c)
             assert isinstance(ct, AsyncCacheTransport)
-            assert isinstance(ct.storage, _NoCloseStorage)
+            assert isinstance(ct.storage, NoCloseStorage)
             assert ct.storage._inner is shared
 
         # Tearing every adapter down must NOT close the shared storage.

@@ -9,15 +9,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from headgate._transports import RateLimitTransport
+from headgate._rate_limit import RateLimitTransport
 
 if TYPE_CHECKING:
     from headgate._base import AsyncBaseClient
-    from headgate._rate_limiter import AsyncRateLimiter
+    from headgate._rate_limit import AsyncRateLimiter
 
-#: The attributes one transport layer names the layer below it by: the retry transport (``_async_transport``), hishel
+#: The attributes one transport layer names the layer below it by: hishel
 #: (``next_transport``), the extension restorer (``_inner``) and the rate limiter (``_transport``).
-_NEXT = ("_async_transport", "next_transport", "_inner", "_transport")
+_NEXT = ("next_transport", "_inner", "_transport")
 
 
 def rate_limit_transport(client: AsyncBaseClient) -> RateLimitTransport:

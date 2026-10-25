@@ -28,9 +28,9 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate._async_breaker import AsyncCircuitBreaker, BreakerState, _host_breakers
 from headgate._base import AsyncBaseClient
-from headgate._rate_limiter import Rate
+from headgate._breaker import HOST_BREAKERS, AsyncCircuitBreaker, BreakerState
+from headgate._rate_limit import Rate
 from headgate.policy import policy_disabled
 from tests.support.responses import RESPONSE
 
@@ -82,11 +82,11 @@ def breaker() -> Iterator[AsyncCircuitBreaker]:
     """Register a fast-recovering breaker for the test host (the registry default is 60s).
 
     The tree-wide ``reset_circuit_breakers`` clears the registry around the test. The cooldown stays 50 ms rather
-    than the 1 ms ``test_async_breaker.py`` uses: ``test_an_auth_flow_failure_does_not_open_the_breaker_for_the_host``
+    than the 1 ms ``test_breaker.py`` uses: ``test_an_auth_flow_failure_does_not_open_the_breaker_for_the_host``
     asserts ``refusing`` inside it, and a shorter one would let that assertion pass on an opened breaker.
     """
     installed = AsyncCircuitBreaker(failure_threshold=5, recovery_timeout=0.05, name=_HOST)
-    _host_breakers[_HOST] = installed
+    HOST_BREAKERS[_HOST] = installed
     yield installed
 
 
@@ -182,7 +182,7 @@ async def test_a_retried_request_counts_one_failure(
     """
     from headgate.errors import UpstreamStatusError
 
-    monkeypatch.setattr("headgate._transports._BACKOFF_FACTOR", 0.0)
+    monkeypatch.setattr("headgate._retry._BACKOFF_FACTOR", 0.0)
     transport = _ScriptedTransport(503)
     client = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=transport, max_retries=3)
 
@@ -283,12 +283,12 @@ async def test_an_opted_out_client_is_not_refused_by_a_breaker_another_client_op
     """
     from headgate.errors import TransportError
 
-    _host_breakers.clear()
+    HOST_BREAKERS.clear()
     try:
         await _fail(
             _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(503), max_retries=1), 5
         )
-        assert _host_breakers[_HOST].state is BreakerState.OPEN
+        assert HOST_BREAKERS[_HOST].state is BreakerState.OPEN
 
         refused = _ScriptedTransport(200)
         with pytest.raises(TransportError):
@@ -309,4 +309,4 @@ async def test_an_opted_out_client_is_not_refused_by_a_breaker_another_client_op
         assert no_breaker.calls == 1, "circuit_breaker=False must reach the network"
         assert policy_off.calls == 1, "a policy-off client must reach the network"
     finally:
-        _host_breakers.clear()
+        HOST_BREAKERS.clear()

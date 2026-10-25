@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from headgate._async_breaker import _host_breakers
-from headgate._rate_limiter import AsyncRateLimiter
+from headgate._breaker import HOST_BREAKERS
+from headgate._rate_limit import AsyncRateLimiter
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -25,16 +25,16 @@ def no_retry_backoff(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     ``_BACKOFF_FACTOR`` is read at client construction (``build_retry`` inside ``AsyncBaseClient.__init__``), so as an
     autouse fixture this patches before any client is built.
     """
-    monkeypatch.setattr("headgate._transports._BACKOFF_FACTOR", 0.0)
+    monkeypatch.setattr("headgate._retry._BACKOFF_FACTOR", 0.0)
     yield
 
 
 @pytest.fixture(autouse=True)
 def reset_circuit_breakers() -> Iterator[None]:
     """Reset the process-global per-host breakers around every test, so failures never carry into a later test."""
-    _host_breakers.clear()
+    HOST_BREAKERS.clear()
     yield
-    _host_breakers.clear()
+    HOST_BREAKERS.clear()
 
 
 @pytest.fixture(autouse=True)

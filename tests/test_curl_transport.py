@@ -11,8 +11,8 @@ import pytest
 from curl_cffi import CurlECode, CurlHttpVersion, CurlOpt
 from curl_cffi.requests.exceptions import RequestException
 
-from headgate import _curl_transport
-from headgate._curl_transport import AsyncCurlTransport
+from headgate import _curl
+from headgate._curl import AsyncCurlTransport
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -82,7 +82,7 @@ def sessions(monkeypatch: pytest.MonkeyPatch) -> list[_Session]:
         made.append(_Session(**kwargs))
         return made[-1]
 
-    monkeypatch.setattr(_curl_transport, "_AsyncSession", build)
+    monkeypatch.setattr(_curl, "_AsyncSession", build)
     return made
 
 
@@ -211,7 +211,7 @@ def test_import_without_curl_cffi_names_the_extra() -> None:
     import subprocess
     import sys
 
-    script = "import sys\nsys.modules['curl_cffi'] = None\nimport headgate._curl_transport"
+    script = "import sys\nsys.modules['curl_cffi'] = None\nimport headgate._curl"
     result = subprocess.run([sys.executable, "-I", "-c", script], capture_output=True, text=True, check=False)
     assert result.returncode != 0
     assert "headgate[curl]" in result.stderr

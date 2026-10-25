@@ -16,8 +16,8 @@ from typing import override
 
 import httpx2
 
-from headgate._rate_limiter import Rate
-from headgate._transports import _ALL_METHODS, PathLimiters, RetryTransport, build_retry
+from headgate._rate_limit import PathLimiters, Rate, RateRule
+from headgate._retry import _ALL_METHODS, RetryTransport, build_retry
 
 # ---------- build_retry: attempt-count mapping ----------
 
@@ -88,7 +88,7 @@ async def test_path_limiters_pick_the_first_matching_rule_and_default_otherwise(
     # rule can match, and the second is declared after the first so a last-match scan picks the other limiter.
     limiters = PathLimiters(
         default=Rate.per_second(1000),
-        rules=[("candles", "/candles", Rate.per_second(1000)), ("api", "/api", Rate.per_second(1000))],
+        rules=[RateRule("/candles", Rate.per_second(1000)), RateRule("/api", Rate.per_second(1000))],
     )
     (_, candles), (_, api) = limiters._rules
 

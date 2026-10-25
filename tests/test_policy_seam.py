@@ -13,15 +13,15 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate._async_breaker import NO_BREAKERS, _host_breakers
 from headgate._base import AsyncBaseClient
-from headgate._rate_limiter import Rate
-from headgate._transports import RetryTransport
+from headgate._breaker import HOST_BREAKERS, NO_BREAKERS
+from headgate._rate_limit import Rate, RateRule
+from headgate._retry import RetryTransport
 from headgate.policy import policy_disabled, policy_is_disabled
 from tests.support.limiters import default_limiter, rate_limit_transport
 
 if TYPE_CHECKING:
-    from headgate._rate_limiter import AsyncRateLimiter
+    from headgate._rate_limit import AsyncRateLimiter
 
 
 class _Client(AsyncBaseClient):
@@ -35,7 +35,7 @@ class _Client(AsyncBaseClient):
             base_url="https://example.test",
             rate=Rate.per_second(2.0),
             max_retries=3,
-            rate_limits=[("r", "/r", Rate.per_second(8.0))],
+            rate_limits=[RateRule("/r", Rate.per_second(8.0))],
         )
 
 
@@ -53,7 +53,7 @@ def _stack_has_breaker(client: AsyncBaseClient) -> bool:
     It was ``isinstance(transport, BreakerTransport)`` while the breaker was a layer, then an instance flag;
     it is the registry the client reads now — the shared one, or ``NO_BREAKERS``, which never reads it.
     """
-    return client._breakers is _host_breakers
+    return client._breakers is HOST_BREAKERS
 
 
 class TestPolicyOff:
@@ -75,7 +75,7 @@ class TestPolicyOff:
         with policy_disabled():
             off = _Client()
         assert off._breakers is NO_BREAKERS
-        assert _Client()._breakers is _host_breakers
+        assert _Client()._breakers is HOST_BREAKERS
 
     def test_retries_are_zero_not_merely_instant(self) -> None:
         """Stronger than the fixtures it replaces, which kept the retries and zeroed backoff.
@@ -119,7 +119,7 @@ class TestItIsAConstructionSeam:
         on = _Client()
         with policy_disabled():
             assert _stack_has_breaker(on)
-            assert on._breakers is _host_breakers
+            assert on._breakers is HOST_BREAKERS
 
     async def test_the_setting_is_task_local(self) -> None:
         """A ContextVar, not a module global: a sibling task cannot see the setting."""
@@ -150,4 +150,4 @@ class TestPolicyOnIsUnchanged:
         assert isinstance(transport, RetryTransport)
         assert transport.retry.total == 2
         assert default_limiter(client)._max_rate == 2.0
-        assert client._breakers is _host_breakers
+        assert client._breakers is HOST_BREAKERS

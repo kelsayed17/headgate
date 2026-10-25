@@ -8,7 +8,7 @@ import pytest
 
 from headgate._auth import StaticHeaderAuth
 from headgate._base import AsyncBaseClient
-from headgate._rate_limiter import Rate
+from headgate._rate_limit import Rate
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:

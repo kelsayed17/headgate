@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from headgate._base import AsyncBaseClient
-from headgate._rate_limiter import Rate
+from headgate._rate_limit import Rate
 from headgate.errors import UpstreamStatusError
 from tests.support.responses import RESPONSE
 
