@@ -171,9 +171,10 @@ async def test_a_failing_observer_never_breaks_the_call() -> None:
 
 
 async def test_a_streamed_get_reports_its_start_and_end() -> None:
-    """Report a ``stream_get`` call like any other, its status included."""
+    """Report a ``stream`` call like any other, its status included."""
     recorder = _Recorder()
-    chunks = [chunk async for chunk in _client(Script(httpx2.Response(200, content=b"abc")), recorder).stream_get("f")]
+    async with _client(Script(httpx2.Response(200, content=b"abc")), recorder).stream("GET", "f") as stream:
+        chunks = [chunk async for chunk in stream.aiter_bytes()]
 
     assert b"".join(chunks) == b"abc"
     finished = recorder.events[-1]

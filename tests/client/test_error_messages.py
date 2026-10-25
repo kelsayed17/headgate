@@ -293,8 +293,8 @@ async def test_a_refusal_check_that_raises_is_treated_like_one_that_returns() ->
 
 
 async def test_a_refusal_check_that_raises_on_a_stream_is_treated_like_one_that_returns() -> None:
-    """Map a raised ``RefusedError`` the same way on ``stream_get``, before any chunk."""
+    """Map a raised ``RefusedError`` the same way on ``stream``, before the block is entered."""
     async with _client(_redirecting, refusal_check=_raising_check) as client:
         with pytest.raises(AuthError, match="bad key"):
-            async for _ in client.stream_get("big.csv"):
+            async with client.stream("GET", "big.csv"):
                 pass

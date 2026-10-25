@@ -170,12 +170,13 @@ def test_large_gzip_body(benchmark: BenchmarkFixture, runner: asyncio.Runner) ->
     benchmark(lambda: runner.run(client.get("file", expect=as_bytes)))
 
 
-def test_stream_get(benchmark: BenchmarkFixture, runner: asyncio.Runner) -> None:
+def test_stream(benchmark: BenchmarkFixture, runner: asyncio.Runner) -> None:
     """Measure streaming an 8 MiB body chunk by chunk."""
     payload = b"x" * _LARGE_BODY_BYTES
     client = _client(lambda request: httpx2.Response(_OK, content=payload, request=request))
 
     async def drain() -> int:
-        return sum([len(chunk) async for chunk in client.stream_get("file")])
+        async with client.stream("GET", "file") as stream:
+            return sum([len(chunk) async for chunk in stream.aiter_bytes()])
 
     benchmark(lambda: runner.run(drain()))

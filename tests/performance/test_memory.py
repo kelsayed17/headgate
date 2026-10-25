@@ -110,13 +110,14 @@ async def _growth_per_window(operation: Callable[[], Awaitable[object]]) -> int:
 
 
 async def test_streaming_a_large_body_holds_a_few_chunks_at_most() -> None:
-    """Stream 64 MiB through ``stream_get`` while holding no more than a few MiB at any moment."""
+    """Stream 64 MiB through ``stream()`` while holding no more than a few MiB at any moment."""
     client = _client(lambda request: httpx2.Response(httpx2.codes.OK, stream=_Chunks(_STREAMED_BYTES), request=request))
     tracemalloc.start()
     try:
         received = 0
-        async for chunk in client.stream_get("file"):
-            received += len(chunk)
+        async with client.stream("GET", "file") as stream:
+            async for chunk in stream.aiter_bytes():
+                received += len(chunk)
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
@@ -173,7 +174,8 @@ async def test_repeated_streams_retain_nothing() -> None:
     client = _client()
 
     async def drain() -> None:
-        async for _ in client.stream_get("file"):
-            pass
+        async with client.stream("GET", "file") as stream:
+            async for _ in stream.aiter_bytes():
+                pass
 
     assert await _growth_per_window(drain) < _GROWTH_LIMIT
