@@ -148,4 +148,8 @@ pytest_add_cli_args = [
     "--deselect", "tests/package/test_boundaries.py",
     "--deselect", "tests/package/test_contracts.py",
 ]
-also_copy = ["tests/", "examples/"]
+# The docs tests run the README's and the guides' examples and check their links, so the pages they read come along.
+also_copy = [
+    "tests/", "examples/", "docs/",
+    "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md", "LICENSE",
+]
