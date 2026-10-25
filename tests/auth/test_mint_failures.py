@@ -10,6 +10,7 @@ error rather than the status it was, and an unreadable token response escaped th
 
 from __future__ import annotations
 
+import gzip
 import math
 from typing import TYPE_CHECKING, override
 
@@ -316,8 +317,29 @@ async def test_an_oversized_token_response_is_refused_as_too_large() -> None:
     """Refuse a hop's body past ``MAX_MINT_RESPONSE_BYTES`` as ``ResponseTooLargeError`` naming the token mint."""
     chunk = b" " * (64 * 1024)
     chunks = [chunk] * (MAX_MINT_RESPONSE_BYTES // len(chunk) + 1)
-    with pytest.raises(ResponseTooLargeError, match=r"\(token mint\)"):
+    with pytest.raises(ResponseTooLargeError, match=r"\(token mint\)") as raised:
         await _call(_FlowReadsJson(), _token_host(_Streamed(*chunks)))
+
+    error = raised.value
+    assert (error.source, error.method, error.url) == (
+        "_FlowReadsJson",
+        "POST",
+        f"https://{_API_HOST}/token (token mint)",
+    )
+
+
+async def test_a_token_response_is_capped_after_decompression() -> None:
+    """Count a gzip hop's decompressed bytes, so a small compressed body that inflates past the cap is refused."""
+    bomb = gzip.compress(b"\0" * (MAX_MINT_RESPONSE_BYTES + 1))
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        """Answer the token hop with the compressed body."""
+        headers = {"Content-Type": "application/json", "Content-Encoding": "gzip"}
+        return httpx2.Response(httpx2.codes.OK, stream=_Streamed(bomb), headers=headers, request=request)
+
+    assert len(bomb) < MAX_MINT_RESPONSE_BYTES
+    with pytest.raises(ResponseTooLargeError, match=r"\(token mint\)"):
+        await _call(_FlowReadsJson(), handle)
 
 
 async def test_a_token_response_whose_connection_drops_is_a_transport_error() -> None:

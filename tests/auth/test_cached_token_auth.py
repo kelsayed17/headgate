@@ -147,6 +147,17 @@ class TestCaching:
         await client.get("/x")
         assert auth.mints == _MINT_AND_RE_MINT, "inside the margin and before expiry"
 
+    async def test_a_token_is_due_exactly_at_the_margin(self, client_factory: _Factory, clock: _Clock) -> None:
+        """Re-mint at the very instant the margin begins, not one tick later."""
+        auth = _CountingAuth()
+        client = client_factory(auth, _ok)
+
+        await client.get("/x")
+        clock.advance(_LIFETIME_S - _MARGIN_S)
+        await client.get("/x")
+
+        assert auth.mints == _MINT_AND_RE_MINT
+
     async def test_a_lifetime_inside_the_refresh_margin_is_reused_until_half_life(
         self, client_factory: _Factory, clock: _Clock
     ) -> None:
@@ -268,6 +279,17 @@ class TestAFreshTokenIsNotReMinted:
         assert second.headers["Authorization"] == "Bearer tok-2"
         assert auth.mints == _MINT_AND_RE_MINT
 
+    async def test_a_token_exactly_as_old_as_the_window_is_re_minted(self, clock: _Clock) -> None:
+        """Count a token minted exactly ``FRESH_TOKEN_S`` ago as stale: the window is open at its end."""
+        auth = _CountingAuth()
+        flow = auth.async_auth_flow(_get())
+        first = await anext(flow)
+        clock.advance(FRESH_TOKEN_S)
+
+        second = await flow.asend(httpx2.Response(httpx2.codes.UNAUTHORIZED, request=first))
+
+        assert second.headers["Authorization"] == "Bearer tok-2"
+
     async def test_a_late_401_for_an_already_replaced_token_retries_with_the_replacement(self, clock: _Clock) -> None:
         """Judge freshness on the token rejected, not on the cache: a replaced one is worth a mint-free retry."""
         auth = _CountingAuth()
@@ -343,6 +365,8 @@ class TestRotationRefusal:
             )
 
         assert "EXAMPLE_REFRESH_TOKEN" in str(exc.value)
+        assert exc.value.source == "Example"
+        assert str(exc.value).startswith("[Example] Example returned a new long-lived credential")
         assert "new-token" not in str(exc.value)
 
     @pytest.mark.parametrize("returned", [None, "", "same"], ids=["absent", "empty", "echoed"])

@@ -132,6 +132,42 @@ def test_an_undeclared_attach_fails_when_the_class_is_defined() -> None:
     assert _Bearer().credential_headers == {"authorization"}
 
 
+def test_the_declaration_is_checked_where_attach_is_overridden() -> None:
+    """Accept ``token_headers`` or ``credential_headers`` on the overriding class; refuse it only on a parent.
+
+    The classes are defined inside the test, so the check runs while the test does.
+    """
+
+    class _ByTokenHeaders(_Bearer):
+        token_headers: ClassVar = frozenset({"X-One"})
+
+        @override
+        def _attach(self, request: httpx2.Request, token: str) -> None:
+            request.headers["X-One"] = token
+
+    class _ByProperty(_Bearer):
+        @property
+        @override
+        def credential_headers(self) -> frozenset[str]:
+            return frozenset({"x-two"})
+
+        @override
+        def _attach(self, request: httpx2.Request, token: str) -> None:
+            request.headers["X-Two"] = token
+
+    class _Inherits(_ByTokenHeaders):
+        """Inherit the declaring class's ``_attach`` and its declaration."""
+
+    assert (_ByTokenHeaders().credential_headers, _ByProperty().credential_headers) == ({"x-one"}, {"x-two"})
+    assert _Inherits().credential_headers == {"x-one"}
+    with pytest.raises(TypeError, match=r"_Overrides overrides _attach, so it must declare"):
+
+        class _Overrides(_ByTokenHeaders):
+            @override
+            def _attach(self, request: httpx2.Request, token: str) -> None:
+                request.headers["X-Three"] = token
+
+
 async def test_the_default_skip_looks_for_any_token_header() -> None:
     """Pass a request already carrying one of the declared token headers through untouched, without minting."""
     request = httpx2.Request("GET", "https://api.example/", headers={"x-crumb": "mine"})
@@ -170,6 +206,12 @@ class TestIdentity:
             StaticHeaderAuth({"X-Api-Key": "k"}).credential_identity()
             == StaticHeaderAuth({"x-api-key": "k"}).credential_identity()
         )
+
+    def test_a_static_header_identity_is_a_netstring_of_the_lower_cased_pairs(self) -> None:
+        """Encode each name, lower-cased, and value as a netstring, the pairs in sorted order."""
+        auth = StaticHeaderAuth({"X-Tenant": "t", "X-Api-Key": "k"})
+
+        assert auth.credential_identity() == b"9:x-api-key,1:k,8:x-tenant,1:t,"
 
     def test_the_encoding_cannot_be_confused_by_shifting_text_between_parts(self) -> None:
         """Keep a name-value boundary in the bytes, so ``{"ab": "c"}`` and ``{"a": "bc"}`` differ."""

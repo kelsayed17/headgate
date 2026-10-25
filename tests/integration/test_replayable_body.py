@@ -71,7 +71,31 @@ async def test_a_redirect_asking_for_a_one_shot_body_again_is_not_followed(statu
 
     assert raised.value.status_code == status
     assert len(fake.calls) == 1
-    assert any("one-shot stream" in note for note in raised.value.__notes__)
+    assert raised.value.__notes__[-1] == (
+        f"did not follow the {status} redirect: it asks for the request body again, and the body was a one-shot stream "
+        "(pass content= a factory to make it replayable)"
+    )
+
+
+async def test_a_call_not_following_redirects_keeps_the_location_of_a_one_shot_bodys_307() -> None:
+    """Leave a 307 a call does not follow as it came, ``Location`` and all, with no note: nothing was refused."""
+    moved = httpx2.Response(httpx2.codes.TEMPORARY_REDIRECT, headers={"Location": "/v1/elsewhere"})
+    fake = FakeTransport().route("POST", "/v1/upload", moved)
+    built = client(fake)
+
+    location = await built.post(
+        "upload",
+        expect=Expect(nothing).on(httpx2.codes.TEMPORARY_REDIRECT, _location),
+        content=_chunks(),
+        follow_redirects=False,
+    )
+
+    assert location == "/v1/elsewhere"
+
+
+def _location(response: httpx2.Response, /) -> str | None:
+    """Return *response*'s ``Location``, if it kept one."""
+    return response.headers.get("Location")
 
 
 async def test_a_declared_redirect_answer_reads_the_unfollowed_hop() -> None:

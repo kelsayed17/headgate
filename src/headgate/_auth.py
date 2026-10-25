@@ -66,6 +66,18 @@ MAX_MINT_RESPONSE_BYTES = 1024 * 1024
 FRESH_TOKEN_S = 60.0
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Held[T]:
+    """A cached token, with when it was minted and when it is due for a refresh: ``time.monotonic()`` instants.
+
+    A monotonic clock is immune to wall-clock steps. ``minted_at`` is ``-inf`` for a token whose age is unknown.
+    """
+
+    token: T
+    minted_at: float
+    due_at: float
+
+
 def _identity(pairs: Iterable[tuple[str, str]]) -> bytes:
     """Encode name-value *pairs* as unambiguous bytes, in sorted order: each part length-prefixed, as a netstring."""
     encoded = bytearray()
@@ -300,12 +312,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         """Start with an empty cache that refreshes *refresh_margin_s* seconds before a token expires."""
         self._identity = secrets.token_bytes(32)
         self._refresh_margin_s = refresh_margin_s
-        #: The margin applied to the cached token: never more than half its lifetime.
-        self._margin_s = refresh_margin_s
-        self._token: TokenT | None = None
-        #: ``time.monotonic()`` deadlines, immune to wall-clock steps. ``-inf`` mint time means the age is unknown.
-        self._expires_at = 0.0
-        self._minted_at = -math.inf
+        self._held: _Held[TokenT] | None = None
         self._lock = asyncio.Lock()
 
     # -- Subclass contract ---------------------------------------------------
@@ -425,18 +432,16 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         self._cache(token, lifetime, minted_at=-math.inf)
 
     def _cache(self, token: TokenT, lifetime: float, *, minted_at: float) -> None:
-        self._token = token
-        self._minted_at = minted_at
-        self._expires_at = time.monotonic() + lifetime
         # A lifetime at or under the margin would read as due the moment it was cached, so every request would mint
         # again: refresh at half-life instead.
-        self._margin_s = min(self._refresh_margin_s, lifetime / 2)
+        margin = min(self._refresh_margin_s, lifetime / 2)
+        self._held = _Held(token=token, minted_at=minted_at, due_at=time.monotonic() + lifetime - margin)
 
     def _usable(self, rejected: TokenT | None) -> TokenT | None:
         """Return the cached token unless it is absent, the one a 401 just rejected, or within the refresh margin."""
-        cached = self._token
-        if cached is not None and cached != rejected and time.monotonic() < self._expires_at - self._margin_s:
-            return cached
+        held = self._held
+        if held is not None and held.token != rejected and time.monotonic() < held.due_at:
+            return held.token
         return None
 
     def _is_fresh(self, token: TokenT) -> bool:
@@ -445,7 +450,8 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         A rejected token that is no longer cached was already replaced by another request, so the replacement is worth
         a retry, and the cache hands it over without minting.
         """
-        return token == self._token and time.monotonic() - self._minted_at < FRESH_TOKEN_S
+        held = self._held
+        return held is not None and token == held.token and time.monotonic() - held.minted_at < FRESH_TOKEN_S
 
     async def _mint_step[T](self, step: Awaitable[T]) -> T:
         """Await a *step* of the mint, raising a failure in it as the ``ClientError`` it means."""
