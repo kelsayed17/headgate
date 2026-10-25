@@ -185,6 +185,6 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/kelsayed17/headgate/compare/f319ad8...v0.2.0
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/159a3c2...HEAD
+[0.2.0]: https://github.com/kelsayed17/headgate/compare/f319ad8...159a3c2
 [0.1.0]: https://github.com/kelsayed17/headgate/commit/f319ad8
