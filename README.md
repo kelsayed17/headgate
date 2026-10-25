@@ -76,15 +76,44 @@ on a body that does not match, which the client turns into `ResponseParseError`.
 - A token-bucket rate limit per client (`Rate.per_second`, `Rate.per_minute`) with per-path override rules.
 - A per-host circuit breaker spanning the send and the body read.
 - A response body cap measured on decompressed bytes.
-- Auth helpers: `StaticHeaderAuth`, `QueryParamAuth`, `CachedTokenAuth`. A static credential header is withheld from any
-  redirect hop that leaves the client's origin.
+- Auth helpers: `StaticHeaderAuth`, `QueryParamAuth`, `CachedTokenAuth`, whose credentials stay on your origin (below).
 - An opt-in `HttpCache` (hishel) that degrades to the network when its storage fails.
 - t-string URL paths (`self.get(t"series/{series_id}", ...)`) that escape each interpolated segment.
+
+## Credentials stay on your origin
+
+Every auth headgate ships declares the headers and query parameters it stamps. They are sent only to `base_url`'s
+origin and the origins in `HttpOptions(trusted_origins=...)`, on every hop: the first request (an absolute cursor URL
+from a response body), each redirect, and each redirect a token mint is answered with. A request to any other origin
+still goes out, unsigned, so a signed download URL on a CDN works. `Authorization`, `Proxy-Authorization` and (without
+`cookies=True`) `Cookie` are withheld from untrusted origins whatever the auth, a third-party one included. A redirect
+from `https` to `http` is never followed: it raises as the 3xx it is.
+
+A `CachedTokenAuth` subclass whose `_attach` sets another header declares it:
+
+```python
+class CrumbAuth(CachedTokenAuth):
+    token_headers = frozenset({"X-Crumb"})
+
+    def _attach(self, request: httpx2.Request, token: str) -> None:
+        request.headers["X-Crumb"] = token
+```
+
+## SSRF protection
+
+A client that fetches URLs it did not write (webhooks, user-supplied links, cursors) sets
+`HttpOptions(allow_private_hosts=False)`. Every hop's host is resolved and refused, as `ForbiddenDestinationError`,
+when any address it resolves to is loopback, private, link-local, multicast, reserved or unspecified, IPv4-mapped and
+NAT64 forms included. The default transport connects only to the address it checked, so a DNS answer that changes
+between check and connect cannot redirect it; TLS still verifies the host name. A custom transport (curl included) is
+checked on every hop but resolves names itself, so it is not pinned. The guard cannot be combined with `proxy=`, and
+`HttpOptions(resolver=...)` replaces the event loop's `getaddrinfo`.
 
 ## Errors
 
 `ClientError` is the root. `TransportError` (with `ClientTimeoutError`), `UpstreamStatusError` (with `RateLimitError`
-and `AuthError`) and `ResponseParseError` let a boundary map failures to the right response.
+and `AuthError`), `ResponseParseError` and `ForbiddenDestinationError` let a boundary map failures to the right
+response.
 
 ## Development
 

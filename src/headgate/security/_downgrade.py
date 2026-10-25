@@ -25,12 +25,12 @@ async def refuse_https_downgrade(response: httpx2.Response) -> None:
     httpx2 follows a response only while it has a ``Location``, so the header is removed: the response then reaches
     the call as its final answer. A redirect the call does not follow is its final answer already and is left whole,
     so a call that declares the 3xx still reads its ``Location``. A ``Location`` httpx2 cannot parse is left for httpx2
-    to refuse.
+    to refuse. A request no client call built (an auth flow's hop) gets a standalone context, which follows redirects.
     """
     if not response.has_redirect_location or response.request.url.scheme != "https":
         return
-    context = CallContext.find(response.request)
-    if context is not None and not context.follow_redirects:
+    context = CallContext.of(response.request)
+    if not context.follow_redirects:
         return
     try:
         target = httpx2.URL(response.headers["Location"])
@@ -39,5 +39,4 @@ async def refuse_https_downgrade(response: httpx2.Response) -> None:
     if target.scheme != "http":
         return
     del response.headers["Location"]
-    if context is not None:
-        context.add_note(f"refused to follow a redirect from https to {loggable_url(str(target))}")
+    context.add_note(f"refused to follow a redirect from https to {loggable_url(str(target))}")
