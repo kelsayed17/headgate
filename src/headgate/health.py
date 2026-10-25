@@ -2,7 +2,7 @@
 
 This package neither logs nor emits metrics. Two pieces of state that say a host or the cache is degraded live here
 anyway, process-global: the per-host circuit breakers and the count of requests the cache handed to the live transport
-because it broke. Without these, an open breaker reaches someone only as the ``CircuitOpenError`` its caller saw.
+because it broke. Without these, an open breaker reaches someone only as the ``TransportError`` its caller saw.
 
 These two functions, and the snapshot type the first returns, are the whole read surface. Each returns a fresh copy, so
 a caller can neither mutate the registry nor see it change mid-iteration; a metrics callback can call them on a timer.
@@ -14,6 +14,8 @@ from typing import NamedTuple
 
 from headgate._breaker import HOST_BREAKERS, BreakerState
 from headgate._cache import CACHE_DEGRADATIONS
+
+__all__ = ["BreakerSnapshot", "BreakerState", "breaker_states", "cache_degradations"]
 
 
 class BreakerSnapshot(NamedTuple):
@@ -36,6 +38,3 @@ def breaker_states() -> dict[str, BreakerSnapshot]:
 def cache_degradations() -> dict[str, int]:
     """Per host, how many requests found the HTTP cache broken and were handed to the live transport."""
     return dict(CACHE_DEGRADATIONS)
-
-
-__all__ = ["BreakerSnapshot", "BreakerState", "breaker_states", "cache_degradations"]

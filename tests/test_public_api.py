@@ -8,7 +8,7 @@ _NAMES = [
     "AsyncBaseClient", "Rate", "Expect", "Refused", "nothing", "ClientError", "TransportError",
     "ClientTimeoutError", "UpstreamStatusError", "RateLimitError", "AuthError", "ResponseParseError",
     "StaticHeaderAuth", "QueryParamAuth", "CachedTokenAuth", "HttpCache", "Minted", "MethodFilter",
-    "PathFragmentFilter", "StatusCodeFilter", "Reader", "Refusal", "as_bytes", "event_stream", "json_reader",
+    "PathFragmentFilter", "StatusCodeFilter", "Reader", "RefusalCheck", "as_bytes", "event_stream", "json_reader",
     "RateRule", "ClientConfigurationError", "DecodeError", "ResponseTooLargeError",
 ]  # fmt: skip
 

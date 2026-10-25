@@ -102,13 +102,13 @@ class Retry:
         return min(backoff, _MAX_BACKOFF_WAIT)
 
 
-def build_retry(max_retries: int) -> Retry:
-    """The retry policy for a client built with ``max_retries``.
+def build_retry(max_attempts: int) -> Retry:
+    """The retry policy for a client that makes at most ``max_attempts`` sends per request.
 
-    Despite the name, ``max_retries`` is the number of ATTEMPTS, so ``total`` (retries) is one less: the default 3
-    means one send and up to two re-sends, and ``max_retries<=1`` means a single attempt.
+    ``total`` counts RETRIES, so it is one less: the default 3 means one send and up to two re-sends, and
+    ``max_attempts<=1`` means a single attempt.
     """
-    return Retry(total=max(max_retries - 1, 0), backoff_factor=_BACKOFF_FACTOR)
+    return Retry(total=max(max_attempts - 1, 0), backoff_factor=_BACKOFF_FACTOR)
 
 
 #: The policy a ``retry=False`` call installs: one send, never re-sent.

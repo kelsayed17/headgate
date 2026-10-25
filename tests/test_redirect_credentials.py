@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from headgate._auth import StaticHeaderAuth
-from headgate._base import AsyncBaseClient
+from headgate._client import AsyncBaseClient
 from headgate._rate_limit import Rate
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
-    from pytest_httpx import HTTPXMock
+    from pytest_httpx2 import HTTPXMock
 
 
 class _Client(AsyncBaseClient):
@@ -21,7 +21,7 @@ class _Client(AsyncBaseClient):
 
 def _client(base_url: str = "https://api.example") -> _Client:
     return _Client(
-        rate=Rate.per_second(100), base_url=base_url, auth=StaticHeaderAuth({"x-api-key": "k"}), max_retries=1
+        rate=Rate.per_second(100), base_url=base_url, auth=StaticHeaderAuth({"x-api-key": "k"}), max_attempts=1
     )
 
 
@@ -34,10 +34,10 @@ def _client(base_url: str = "https://api.example") -> _Client:
         ("https://api.example/other", True),
     ],
 )
-async def test_credential_follows_only_same_origin_hops(httpx_mock: HTTPXMock, target: str, kept: bool) -> None:
-    httpx_mock.add_response(url="https://api.example/start", status_code=302, headers={"location": target})
-    httpx_mock.add_response(url=target, text="ok")
+async def test_credential_follows_only_same_origin_hops(httpx2_mock: HTTPXMock, target: str, kept: bool) -> None:
+    httpx2_mock.add_response(url="https://api.example/start", status_code=302, headers={"location": target})
+    httpx2_mock.add_response(url=target, text="ok")
     response = await _client().get("start", expect=RESPONSE)
     assert response.text == "ok"
-    hop = httpx_mock.get_requests()[-1]
+    hop = httpx2_mock.get_requests()[-1]
     assert ("x-api-key" in hop.headers) is kept

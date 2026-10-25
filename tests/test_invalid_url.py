@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from headgate._base import AsyncBaseClient
 from headgate._breaker import HOST_BREAKERS
+from headgate._client import AsyncBaseClient
 from headgate._rate_limit import Rate
 from headgate._responses import as_bytes
 from headgate.errors import ClientError

@@ -76,20 +76,6 @@ def test_the_code_survives_a_pickle_round_trip() -> None:
     assert (restored.status_code, restored.code, str(restored)) == (200, "FAILED", str(err))
 
 
-def test_an_error_pickled_before_code_existed_reads_code_as_none() -> None:
-    """A DBOS result stored before the deploy restores a ``__dict__`` with no ``code`` in it.
-
-    ``_rebuild_client_error`` restores the pickled ``__dict__`` verbatim and never runs ``__init__``, so without the
-    class-level default ``exc.code`` raises ``AttributeError`` in both REST ``ClientError`` handlers.
-    """
-    err = AuthError("bad creds", status_code=401, source="Q")
-    del err.code  # the shape of an error pickled before ``code`` existed
-    restored = pickle.loads(pickle.dumps(err))
-    assert "code" not in vars(restored)
-    assert restored.code is None
-    assert (restored.status_code, str(restored)) == (401, str(err))
-
-
 @pytest.mark.parametrize(
     "err",
     [

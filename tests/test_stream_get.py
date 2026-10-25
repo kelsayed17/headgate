@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate._base import AsyncBaseClient
+from headgate._client import AsyncBaseClient
 from headgate._rate_limit import Rate
 from headgate._responses import Refused
 from headgate.errors import ClientError, UpstreamStatusError
@@ -15,7 +15,7 @@ from headgate.errors import ClientError, UpstreamStatusError
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from pytest_httpx import HTTPXMock
+    from pytest_httpx2 import HTTPXMock
 
 
 class _Client(AsyncBaseClient):
@@ -27,31 +27,31 @@ async def _joined(chunks: AsyncIterator[bytes]) -> bytes:
     return b"".join([c async for c in chunks])
 
 
-async def test_a_body_larger_than_the_response_cap_streams_through(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(content=b"x" * 5000)
+async def test_a_body_larger_than_the_response_cap_streams_through(httpx2_mock: HTTPXMock) -> None:
+    httpx2_mock.add_response(content=b"x" * 5000)
     assert len(await _joined(_Client(max_response_bytes=100).stream_get("big.csv"))) == 5000
 
 
-async def test_a_large_error_body_is_read_only_to_a_snippet(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(status_code=400, content=b"bad " * 50_000)
+async def test_a_large_error_body_is_read_only_to_a_snippet(httpx2_mock: HTTPXMock) -> None:
+    httpx2_mock.add_response(status_code=400, content=b"bad " * 50_000)
     with pytest.raises(UpstreamStatusError) as ei:
         await _joined(_Client().stream_get("big.csv"))
     assert ei.value.status_code == 400
     assert len(str(ei.value)) < 1000
 
 
-async def test_a_refusal_check_runs_on_the_head_before_any_chunk(httpx_mock: HTTPXMock) -> None:
+async def test_a_refusal_check_runs_on_the_head_before_any_chunk(httpx2_mock: HTTPXMock) -> None:
     class Refusing(_Client):
         def __init__(self) -> None:
             AsyncBaseClient.__init__(
                 self,
                 base_url="https://x.test",
                 rate=Rate.per_second(100),
-                refusal=lambda r: Refused("no") if r.status_code == 200 else None,
+                refusal_check=lambda r: Refused("no") if r.status_code == 200 else None,
                 follow_redirects=False,
             )
 
-    httpx_mock.add_response(content=b"data")
+    httpx2_mock.add_response(content=b"data")
     got: list[bytes] = []
     with pytest.raises(ClientError):
         async for chunk in Refusing().stream_get("f"):
@@ -65,7 +65,7 @@ async def test_following_redirects_is_refused_for_a_client_with_a_refusal_check(
             super().__init__(
                 base_url="https://x.test",
                 rate=Rate.per_second(100),
-                refusal=lambda _r: None,
+                refusal_check=lambda _r: None,
                 follow_redirects=False,
             )
 
@@ -73,21 +73,21 @@ async def test_following_redirects_is_refused_for_a_client_with_a_refusal_check(
         await _joined(Refusing().stream_get("f", follow_redirects=True))
 
 
-async def test_a_5xx_that_outlasts_retries_raises(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(status_code=503, is_reusable=True)
+async def test_a_5xx_that_outlasts_retries_raises(httpx2_mock: HTTPXMock) -> None:
+    httpx2_mock.add_response(status_code=503, is_reusable=True)
     with pytest.raises(UpstreamStatusError) as ei:
         await _joined(_Client().stream_get("f"))
     assert ei.value.status_code == 503
 
 
-async def test_a_second_stream_works_after_a_failed_one(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(status_code=404)
-    httpx_mock.add_response(content=b"ok")
+async def test_a_second_stream_works_after_a_failed_one(httpx2_mock: HTTPXMock) -> None:
+    httpx2_mock.add_response(status_code=404)
+    httpx2_mock.add_response(content=b"ok")
     c = _Client()
     with pytest.raises(UpstreamStatusError):
         await _joined(c.stream_get("a"))
     assert await _joined(c.stream_get("b")) == b"ok"
-    assert [r.url for r in httpx_mock.get_requests()] == [
+    assert [r.url for r in httpx2_mock.get_requests()] == [
         httpx2.URL("https://x.test/a"),
         httpx2.URL("https://x.test/b"),
     ]

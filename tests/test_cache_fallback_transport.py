@@ -33,6 +33,7 @@ from hishel import (
 )
 
 from headgate._cache import (
+    CACHE_DEGRADED_EXT,
     MethodFilter,
     NoCloseStorage,
     ResilientCacheTransport,
@@ -309,7 +310,7 @@ async def test_a_fault_while_the_body_streams_degrades_to_network(storage: Async
     body = await resp.aread()
 
     assert body == b"from-network"
-    assert "headgate_cache_degraded" in resp.extensions
+    assert CACHE_DEGRADED_EXT in resp.extensions
 
 
 async def test_credential_query_params_never_reach_storage(storage: AsyncSqliteStorage) -> None:

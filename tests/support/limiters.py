@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from headgate._rate_limit import RateLimitTransport
 
 if TYPE_CHECKING:
-    from headgate._base import AsyncBaseClient
+    from headgate._client import AsyncBaseClient
     from headgate._rate_limit import AsyncRateLimiter
 
 #: The attributes one transport layer names the layer below it by: hishel

@@ -7,8 +7,8 @@ import sys
 
 import pytest
 
-#: The modules the codec seam promises are codec-free. ``headgate._base`` joins when the base client is ported.
-_CORE = ["headgate._responses", "headgate._failures", "headgate.errors", "headgate._builtins", "headgate._base"]
+#: The modules the codec seam promises are codec-free. ``headgate._client`` joins when the base client is ported.
+_CORE = ["headgate._responses", "headgate._failures", "headgate.errors", "headgate._codec", "headgate._client"]
 
 _SCRIPT = """
 import sys

@@ -25,7 +25,6 @@ import time_machine
 from hishel import AsyncSqliteStorage, FilterPolicy
 from hishel.httpx2 import AsyncCacheTransport
 
-from headgate._base import AsyncBaseClient
 from headgate._cache import (
     HttpCache,
     NoCloseStorage,
@@ -33,6 +32,7 @@ from headgate._cache import (
     StatusCodeFilter,
     _RestoreRequestExtensions,
 )
+from headgate._client import AsyncBaseClient
 from headgate._rate_limit import UNLIMITED, Rate, RateLimitTransport
 from headgate._retry import RetryTransport
 from tests.support.responses import RESPONSE

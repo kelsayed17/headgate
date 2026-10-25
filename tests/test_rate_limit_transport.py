@@ -31,8 +31,8 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage, FilterPolicy
 
-from headgate._base import AsyncBaseClient
 from headgate._cache import HttpCache, PathFragmentFilter, StatusCodeFilter
+from headgate._client import AsyncBaseClient
 from headgate._rate_limit import AsyncRateLimiter, Rate, RateRule
 from tests.support.limiters import default_limiter, rate_limit_transport
 from tests.support.responses import RESPONSE
@@ -127,7 +127,7 @@ async def test_a_cache_hit_takes_no_token(sqlite_storage: AsyncSqliteStorage, ac
 async def test_every_retry_takes_a_token(monkeypatch: pytest.MonkeyPatch, acquired: dict[int, int]) -> None:
     monkeypatch.setattr("headgate._retry._BACKOFF_FACTOR", 0.0)
     base = _CountingTransport(500, 500, 200)
-    client = _StubClient(base_url="https://x", transport=base, rate=Rate.per_second(_INSTANT), max_retries=3)
+    client = _StubClient(base_url="https://x", transport=base, rate=Rate.per_second(_INSTANT), max_attempts=3)
 
     await client.get("/thing", expect=RESPONSE)
 
@@ -155,7 +155,7 @@ async def test_each_retry_takes_its_token_before_it_is_sent(
     """The same ordering per attempt: the Nth send arrives with N tokens taken, not N - 1."""
     monkeypatch.setattr("headgate._retry._BACKOFF_FACTOR", 0.0)
     base = _CountingTransport(500, 500, 200, acquired=acquired)
-    client = _StubClient(base_url="https://x", transport=base, rate=Rate.per_second(_INSTANT), max_retries=3)
+    client = _StubClient(base_url="https://x", transport=base, rate=Rate.per_second(_INSTANT), max_attempts=3)
 
     await client.get("/thing", expect=RESPONSE)
 

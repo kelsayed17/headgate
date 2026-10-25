@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 __all__ = ["FOLLOW_REDIRECTS_EXT", "credential_header_guard", "drop_followed_redirect_body"]
 
-#: Request extension naming whether THIS request's redirects will be followed. ``AsyncBaseClient._request`` sets it;
+#: Request extension naming whether THIS request's redirects will be followed. ``AsyncBaseClient`` sets it;
 #: httpx2 copies a request's extensions onto every redirect hop, so :func:`drop_followed_redirect_body` sees it on each
 #: response.
 FOLLOW_REDIRECTS_EXT = "headgate.follow_redirects"
@@ -29,9 +29,9 @@ async def drop_followed_redirect_body(response: httpx2.Response) -> None:
 
     httpx2 reads a followed redirect's body in full inside its own redirect loop, before the next hop — below
     :func:`~headgate._body.read_capped`, which only ever sees the FINAL response. So a 302 whose body decompressed
-    far past ``max_response_bytes`` was held in memory anyway (a 32 KB gzip body became 32 MB,
-    kept alive in the response history). Nothing reads a followed redirect's body, so it is replaced with an empty stream rather
-    than capped. A redirect that is NOT followed is the final response, and keeps its body for ``read_capped``.
+    far past ``max_response_bytes`` would be held in memory anyway, kept alive in the response history. Nothing reads a
+    followed redirect's body, so it is replaced with an empty stream rather than capped. A redirect that is NOT followed
+    is the final response, and keeps its body for ``read_capped``.
     """
     if response.has_redirect_location and response.request.extensions.get(FOLLOW_REDIRECTS_EXT):
         if isinstance(response.stream, httpx2.AsyncByteStream):
@@ -62,7 +62,7 @@ def credential_header_guard(
 
 
 def _origin(url: httpx2.URL) -> tuple[str, str, int | None]:
-    """Scheme, host and port — spelled out because httpx2 types ``URL`` without the ``origin`` httpx2 adds.
+    """Scheme, host and port: the origin, spelled out because httpx2's ``URL`` has no ``origin`` attribute.
 
     No default-port handling is needed: httpx2 drops a default port while parsing, so ``https://host:443`` (and
     ``:0443``) already carries ``port=None``, the same as ``https://host``.

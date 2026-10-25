@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate._base import AsyncBaseClient
 from headgate._breaker import HOST_BREAKERS, NO_BREAKERS
+from headgate._client import AsyncBaseClient
 from headgate._rate_limit import Rate, RateRule
 from headgate._retry import RetryTransport
 from headgate.policy import policy_disabled, policy_is_disabled
@@ -34,7 +34,7 @@ class _Client(AsyncBaseClient):
         super().__init__(
             base_url="https://example.test",
             rate=Rate.per_second(2.0),
-            max_retries=3,
+            max_attempts=3,
             rate_limits=[RateRule("/r", Rate.per_second(8.0))],
         )
 
@@ -145,7 +145,7 @@ class TestPolicyOnIsUnchanged:
     def test_default_construction_keeps_every_policy(self) -> None:
         client = _Client()
         assert _stack_has_breaker(client)
-        # max_retries=3 attempts ⇒ total=2 retries (see build_retry).
+        # max_attempts=3 attempts ⇒ total=2 retries (see build_retry).
         transport = client._http_client._transport
         assert isinstance(transport, RetryTransport)
         assert transport.retry.total == 2

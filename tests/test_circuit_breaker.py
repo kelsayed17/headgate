@@ -28,8 +28,8 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate._base import AsyncBaseClient
-from headgate._breaker import HOST_BREAKERS, AsyncCircuitBreaker, BreakerState
+from headgate._breaker import HOST_BREAKERS, BreakerState, CircuitBreaker
+from headgate._client import AsyncBaseClient
 from headgate._rate_limit import Rate
 from headgate.policy import policy_disabled
 from tests.support.responses import RESPONSE
@@ -78,14 +78,14 @@ class _TruncatedBodyTransport(httpx2.AsyncBaseTransport):
 
 
 @pytest.fixture
-def breaker() -> Iterator[AsyncCircuitBreaker]:
+def breaker() -> Iterator[CircuitBreaker]:
     """Register a fast-recovering breaker for the test host (the registry default is 60s).
 
     The tree-wide ``reset_circuit_breakers`` clears the registry around the test. The cooldown stays 50 ms rather
     than the 1 ms ``test_breaker.py`` uses: ``test_an_auth_flow_failure_does_not_open_the_breaker_for_the_host``
     asserts ``refusing`` inside it, and a shorter one would let that assertion pass on an opened breaker.
     """
-    installed = AsyncCircuitBreaker(failure_threshold=5, recovery_timeout=0.05, name=_HOST)
+    installed = CircuitBreaker(failure_threshold=5, recovery_timeout=0.05, name=_HOST)
     HOST_BREAKERS[_HOST] = installed
     yield installed
 
@@ -98,14 +98,14 @@ async def _fail(client: AsyncBaseClient, times: int) -> None:
             await client.get("x", expect=RESPONSE)
 
 
-async def test_a_cancelled_request_neither_counts_nor_resets(breaker: AsyncCircuitBreaker) -> None:
+async def test_a_cancelled_request_neither_counts_nor_resets(breaker: CircuitBreaker) -> None:
     """A caller's own timeout says nothing about the host, so it must not clear the record."""
-    client = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(503), max_retries=1)
+    client = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(503), max_attempts=1)
     await _fail(client, 4)
     assert breaker.failure_count == 4
 
     hanging = _StubClient(
-        rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(hang=True), max_retries=1
+        rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(hang=True), max_attempts=1
     )
     with pytest.raises(TimeoutError):
         await asyncio.wait_for(hanging.get("x", expect=RESPONSE), timeout=0.05)
@@ -117,12 +117,12 @@ async def test_a_cancelled_request_neither_counts_nor_resets(breaker: AsyncCircu
     assert breaker.state is BreakerState.OPEN, "the 5th real failure must still open the breaker"
 
 
-async def test_only_one_request_probes_a_recovered_host(breaker: AsyncCircuitBreaker) -> None:
+async def test_only_one_request_probes_a_recovered_host(breaker: CircuitBreaker) -> None:
     """Half-open admits a single canary — not every caller that happened to be waiting."""
     from headgate.errors import ClientError
 
     transport = _ScriptedTransport(503)
-    client = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=transport, max_retries=1)
+    client = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=transport, max_attempts=1)
     await _fail(client, 5)
     assert breaker.state is BreakerState.OPEN
     calls_before = transport.calls
@@ -134,20 +134,20 @@ async def test_only_one_request_probes_a_recovered_host(breaker: AsyncCircuitBre
     assert sum(isinstance(r, ClientError) for r in results) == 3
 
 
-async def test_a_cancelled_probe_frees_the_slot(breaker: AsyncCircuitBreaker) -> None:
+async def test_a_cancelled_probe_frees_the_slot(breaker: CircuitBreaker) -> None:
     """Otherwise the breaker stays half-open with a probe that will never report, forever."""
-    failing = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(503), max_retries=1)
+    failing = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(503), max_attempts=1)
     await _fail(failing, 5)
     await asyncio.sleep(0.06)
 
     hanging = _StubClient(
-        rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(hang=True), max_retries=1
+        rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(hang=True), max_attempts=1
     )
     with pytest.raises(TimeoutError):
         await asyncio.wait_for(hanging.get("x", expect=RESPONSE), timeout=0.05)  # this call takes the probe slot
 
     healthy = _ScriptedTransport(200)
-    recovered = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=healthy, max_retries=1)
+    recovered = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=healthy, max_attempts=1)
     resp = await recovered.get("x", expect=RESPONSE)
 
     assert resp.status_code == 200, "the next caller must be admitted as the probe"
@@ -155,7 +155,7 @@ async def test_a_cancelled_probe_frees_the_slot(breaker: AsyncCircuitBreaker) ->
     assert breaker.state is BreakerState.CLOSED
 
 
-async def test_a_body_read_failure_counts_as_a_failure(breaker: AsyncCircuitBreaker) -> None:
+async def test_a_body_read_failure_counts_as_a_failure(breaker: CircuitBreaker) -> None:
     """The breaker must see the whole fetch, not just the headers.
 
     ``_send`` streams the response and caps the body afterwards, so a connection that dies
@@ -163,7 +163,7 @@ async def test_a_body_read_failure_counts_as_a_failure(breaker: AsyncCircuitBrea
     """
     from headgate.errors import TransportError
 
-    client = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_TruncatedBodyTransport(), max_retries=1)
+    client = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_TruncatedBodyTransport(), max_attempts=1)
 
     with pytest.raises(TransportError):
         await client.get("x", expect=RESPONSE)
@@ -171,9 +171,7 @@ async def test_a_body_read_failure_counts_as_a_failure(breaker: AsyncCircuitBrea
     assert breaker.failure_count == 1
 
 
-async def test_a_retried_request_counts_one_failure(
-    breaker: AsyncCircuitBreaker, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_a_retried_request_counts_one_failure(breaker: CircuitBreaker, monkeypatch: pytest.MonkeyPatch) -> None:
     """One fetch is one verdict, however many times the retry layer re-sent it.
 
     This is the property the old ``BreakerTransport`` was wrapped OUTSIDE the retry
@@ -184,7 +182,7 @@ async def test_a_retried_request_counts_one_failure(
 
     monkeypatch.setattr("headgate._retry._BACKOFF_FACTOR", 0.0)
     transport = _ScriptedTransport(503)
-    client = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=transport, max_retries=3)
+    client = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=transport, max_attempts=3)
 
     with pytest.raises(UpstreamStatusError):
         await client.get("x", expect=RESPONSE)
@@ -216,30 +214,30 @@ class _CachedHitTransport(httpx2.AsyncBaseTransport):
         return httpx2.Response(200, content=b"{}", extensions={"hishel_from_cache": True})
 
 
-async def test_an_auth_flow_failure_does_not_open_the_breaker_for_the_host(breaker: AsyncCircuitBreaker) -> None:
+async def test_an_auth_flow_failure_does_not_open_the_breaker_for_the_host(breaker: CircuitBreaker) -> None:
     """Five refused token mints used to open the breaker for EVERY client on the host."""
     from headgate.errors import ClientConfigurationError
 
     refusing = _StubClient(
-        rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(200), auth=_RefusingAuth(), max_retries=1
+        rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(200), auth=_RefusingAuth(), max_attempts=1
     )
     for _ in range(6):
         with pytest.raises(ClientConfigurationError):
             await refusing.get("x", expect=RESPONSE)
 
     assert breaker.failure_count == 0
-    healthy = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(200), max_retries=1)
+    healthy = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(200), max_attempts=1)
     assert (await healthy.get("x", expect=RESPONSE)).status_code == 200, (
         "a correctly configured client on the host is not refused"
     )
 
 
-async def test_an_oversized_body_does_not_count_against_the_host(breaker: AsyncCircuitBreaker) -> None:
+async def test_an_oversized_body_does_not_count_against_the_host(breaker: CircuitBreaker) -> None:
     """The size cap is our limit, not the host failing."""
     from headgate.errors import ResponseTooLargeError
 
     client = _StubClient(
-        rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(200), max_retries=1, max_response_bytes=1
+        rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(200), max_attempts=1, max_response_bytes=1
     )
     for _ in range(6):
         with pytest.raises(ResponseTooLargeError):
@@ -249,11 +247,11 @@ async def test_an_oversized_body_does_not_count_against_the_host(breaker: AsyncC
     assert breaker.state is BreakerState.CLOSED
 
 
-async def test_a_cache_hit_neither_resets_failures_nor_closes_a_probe(breaker: AsyncCircuitBreaker) -> None:
+async def test_a_cache_hit_neither_resets_failures_nor_closes_a_probe(breaker: CircuitBreaker) -> None:
     """A hit reached no network: it used to reset the failure count, and a probe served from cache closed the
     breaker without the host ever being contacted."""
-    failing = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(503), max_retries=1)
-    cached = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_CachedHitTransport(), max_retries=1)
+    failing = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(503), max_attempts=1)
+    cached = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_CachedHitTransport(), max_attempts=1)
 
     await _fail(failing, 4)
     await cached.get("x", expect=RESPONSE)
@@ -267,7 +265,7 @@ async def test_a_cache_hit_neither_resets_failures_nor_closes_a_probe(breaker: A
     assert breaker.state is not BreakerState.CLOSED
 
     healthy = _ScriptedTransport(200)
-    recovered = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=healthy, max_retries=1)
+    recovered = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=healthy, max_attempts=1)
     await recovered.get("x", expect=RESPONSE)
     assert healthy.calls == 1, "the next caller is admitted as the real probe"
     assert breaker.state is BreakerState.CLOSED
@@ -286,24 +284,26 @@ async def test_an_opted_out_client_is_not_refused_by_a_breaker_another_client_op
     HOST_BREAKERS.clear()
     try:
         await _fail(
-            _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(503), max_retries=1), 5
+            _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=_ScriptedTransport(503), max_attempts=1), 5
         )
         assert HOST_BREAKERS[_HOST].state is BreakerState.OPEN
 
         refused = _ScriptedTransport(200)
         with pytest.raises(TransportError):
-            await _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=refused, max_retries=1).get(
+            await _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=refused, max_attempts=1).get(
                 "x", expect=RESPONSE
             )
         assert refused.calls == 0, "control: a client that consults the breaker is refused"
 
         no_breaker = _ScriptedTransport(200)
         await _StubClient(
-            rate=Rate.per_second(2), base_url=_URL, transport=no_breaker, max_retries=1, circuit_breaker=False
+            rate=Rate.per_second(2), base_url=_URL, transport=no_breaker, max_attempts=1, circuit_breaker=False
         ).get("x", expect=RESPONSE)
         policy_off = _ScriptedTransport(200)
         with policy_disabled():
-            policy_off_client = _StubClient(rate=Rate.per_second(2), base_url=_URL, transport=policy_off, max_retries=1)
+            policy_off_client = _StubClient(
+                rate=Rate.per_second(2), base_url=_URL, transport=policy_off, max_attempts=1
+            )
         await policy_off_client.get("x", expect=RESPONSE)
 
         assert no_breaker.calls == 1, "circuit_breaker=False must reach the network"

@@ -1,6 +1,6 @@
-"""URL handling for the client ring (leaf module): path-segment escaping, and redacting a credential from a URL.
+"""URL handling: path-segment escaping, and redacting a credential from a URL.
 
-Two of its functions escape: :func:`path` renders a whole t-string URL path, and :func:`seg` — which it calls —
+Two of its functions escape: :func:`render_path` renders a whole t-string URL path, and :func:`escape_segment` — which it calls —
 escapes one value as a single segment. They exist because interpolating a caller's value straight into an f-string
 path lets that value control the URL's STRUCTURE rather than occupying one segment of it::
 
@@ -8,12 +8,8 @@ path lets that value control the URL's STRUCTURE rather than occupying one segme
       -> httpx2 resolves the dot segments
       -> DELETE https://api.example.test/v2/account
 
-That is reachable wherever a route passes a user-supplied identifier into a path: a validator that permits ``.`` and ``/``
-and a normalizer that only uppercases leave nothing between the route and the client to strip a traversal.
-
-The same gap is an ordinary correctness bug wherever a legitimate identifier contains a slash. a crypto symbol
-like ``BASE/QUOTE``, so an unescaped ``BTC/USD`` builds ``/v2/positions/BTC/USD`` — a different endpoint, which 404s
-instead of closing the position.
+The same gap is an ordinary correctness bug wherever a legitimate identifier contains a slash: an unescaped ``BTC/USD``
+builds ``/v2/positions/BTC/USD``, a different endpoint, which 404s instead of closing the position.
 
 **Escaping belongs in the client** because the client is the layer that builds URLs. Every layer above it deals in real,
 unescaped identifiers, and should: ``BTC/USD`` IS the symbol. Pushing escaping up would mean every caller remembering to
@@ -52,14 +48,19 @@ SECRET_QUERY_PARAMS: frozenset[str] = frozenset(
 )
 _registered: set[str] = set()
 
+_PAIR = re.compile(r"([A-Za-z][\w-]*)=([^&\s'\"]+)")
+
+#: A value that escapes to nothing but dots is a *structural* dot segment, not data. See :func:`escape_segment`.
+_DOT_SEGMENTS = {".": "%2E", "..": "%2E%2E"}
+
 __all__ = [
     "SECRET_QUERY_PARAMS",
+    "escape_segment",
     "is_secret_param",
-    "path",
     "redact_secrets",
     "register_secret_params",
+    "render_path",
     "sanitize_url",
-    "seg",
 ]
 
 
@@ -83,13 +84,7 @@ def redact_secrets(text: str) -> str:
     return _PAIR.sub(lambda m: f"{m[1]}=***" if is_secret_param(m[1]) else m[0], text)
 
 
-_PAIR = re.compile(r"([A-Za-z][\w-]*)=([^&\s'\"]+)")
-
-#: A value that escapes to nothing but dots is a *structural* dot segment, not data — see :func:`seg`.
-_DOT_SEGMENTS = {".": "%2E", "..": "%2E%2E"}
-
-
-def seg(value: object) -> str:
+def escape_segment(value: object) -> str:
     """Escape *value* as exactly ONE URL path segment.
 
     ``safe=""`` is the whole point: :func:`urllib.parse.quote` leaves ``/`` alone by default, which would defeat the
@@ -99,13 +94,13 @@ def seg(value: object) -> str:
     **The dots are the exception, and they have to be.** Keeping ``.`` legal for ``BRK.B`` means a value that is
     ENTIRELY dots reaches the URL as a live dot segment — structure, not data — and httpx2 resolves it::
 
-        seg(".")   -> "."    DELETE /v2/positions/.      collapses to  DELETE /v2/positions
-        seg("..")  -> ".."   DELETE /v2/positions/..     collapses to  DELETE /v2
+        escape_segment(".")   -> "."    DELETE /v2/positions/.      collapses to  DELETE /v2/positions
+        escape_segment("..")  -> ".."   DELETE /v2/positions/..     collapses to  DELETE /v2
 
     That first line is the dangerous one: ``DELETE /v2/positions/{symbol}`` closes ONE position, while
     ``DELETE /v2/positions`` liquidates EVERY position. So the two are mapped to their percent-encoded forms, which
     httpx2 does NOT resolve. The special case fires only when the whole escaped value is dots, so ``BRK.B`` and a
-    literal ``..`` written BETWEEN two holes (a ``{seg(start)}..{end}`` date range) are untouched.
+    literal ``..`` written BETWEEN two holes (a ``{escape_segment(start)}..{end}`` date range) are untouched.
 
     Accepts any object and stringifies it, since call sites pass ``UUID`` and ``int`` ids as well as ``str``.
     """
@@ -119,10 +114,10 @@ def seg(value: object) -> str:
     return _DOT_SEGMENTS.get(escaped, escaped)
 
 
-def path(template: Template) -> str:
+def render_path(template: Template) -> str:
     """Render a t-string URL path, escaping every interpolation BY DEFAULT.
 
-    :func:`seg` is a convention and works only where the author remembered it. This is the mechanism that replaces
+    :func:`escape_segment` is a convention and works only where the author remembered it. This is the mechanism that replaces
     it: an f-string is already one flat ``str`` by the time anything sees it, but a
     :class:`~string.templatelib.Template` keeps its literals and its holes apart, so the escaping decision is made
     HERE. ``t"/v2/positions/{symbol}"`` yields ``BTC%2FUSD`` with the author doing nothing — there is nothing to
@@ -132,7 +127,7 @@ def path(template: Template) -> str:
     rather than what it says, which is what lets shared path prefixes stay unannotated::
 
         _PREFIX = t"/api/v3/brokerage"
-        path(t"{_PREFIX}/accounts")  ->  "/api/v3/brokerage/accounts"
+        render_path(t"{_PREFIX}/accounts")  ->  "/api/v3/brokerage/accounts"
 
     That is a boundary argument, not a proof: ``Template`` is constructible by hand, but data crossing a boundary
     arrives as ``str``, ``bytes`` or parsed JSON, and none of those becomes one without someone deliberately wrapping
@@ -146,9 +141,8 @@ def path(template: Template) -> str:
 
     **That greppability is narrower than it looks, in two ways.** A format spec may itself be interpolated and is
     evaluated eagerly, so ``t"/x/{v:{spec}}"`` with ``spec = "raw"`` renders UNESCAPED while matching no grep for
-    ``:raw}`` — the property holds only because the planned enforcement rule rejects a non-constant spec, not because
-    of anything this function does. A nested ``Template`` also splices unescaped and greps as neither; that one is by
-    design.
+    ``:raw}``, and this function cannot tell. A nested ``Template`` also splices unescaped and greps as neither; that one
+    is by design.
 
     ``raw`` is IGNORED on a ``Template``: the ``Template`` branch is tested first, so ``t"{inner:raw}"`` recurses
     exactly as ``t"{inner}"`` does. Of the two readings that is the safer one — the alternative would let ``:raw`` on
@@ -159,16 +153,16 @@ def path(template: Template) -> str:
 
     A ``conversion`` (``!r`` / ``!s`` / ``!a``) raises rather than being silently dropped — ``!r`` on a ``str`` adds
     quotes a URL segment almost never wants, and ignoring it would silently change what the f-string it replaced did.
-    Values are stringified as :func:`seg` does, since call sites pass ``UUID`` and ``int`` ids too.
+    Values are stringified as :func:`escape_segment` does, since call sites pass ``UUID`` and ``int`` ids too.
 
     :raises TypeError: if *template* is not a :class:`~string.templatelib.Template`.
     :raises ValueError: if any interpolation carries a ``conversion``.
     """
     # Not a belt-and-braces isinstance: iterating a ``str`` yields characters, every one of which takes the literal
-    # branch, so ``path(f"/v2/positions/{sym}")`` would otherwise return the f-string's ALREADY-INTERPOLATED,
+    # branch, so ``render_path(f"/v2/positions/{sym}")`` would otherwise return the f-string's ALREADY-INTERPOLATED,
     # UNESCAPED text — a silent no-op on a security primitive. Static checks catch it; this makes it loud anyway.
     if not isinstance(template, Template):
-        raise TypeError(f"path() takes a t-string Template, got {type(template).__name__}")
+        raise TypeError(f"render_path() takes a t-string Template, got {type(template).__name__}")
 
     out: list[str] = []
     for part in template:
@@ -178,12 +172,12 @@ def path(template: Template) -> str:
         if part.conversion is not None:
             raise ValueError(f"conversion !{part.conversion} is not supported in a URL path: {part.expression!r}")
         if isinstance(part.value, Template):
-            out.append(path(part.value))
+            out.append(render_path(part.value))
         elif part.format_spec == "raw":
             out.append(str(part.value))
         else:
             value = format(part.value, part.format_spec) if part.format_spec else str(part.value)
-            out.append(seg(value))
+            out.append(escape_segment(value))
     return "".join(out)
 
 
@@ -192,7 +186,7 @@ def sanitize_url(url: str) -> str:
 
     Every URL a ``ClientError`` message names goes through here first, because those messages reach the API
     boundary's 502 detail and some providers authenticate by query parameter. A URL with no query is
-    returned unchanged. (Moved here from ``_base._sanitize_url`` earlier, beside the names it redacts.)
+    returned unchanged.
     """
     if "?" not in url:
         return url

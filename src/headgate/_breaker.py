@@ -7,7 +7,7 @@ Three design choices, each fixing a failure mode of the usual ``with breaker:`` 
 
 * **Only a marked failure counts.** An ``asyncio.CancelledError`` (what ``asyncio.wait_for`` raises around a call when
   the caller's timeout is shorter than the client's) records nothing, rather than clearing the failure count; so does
-  an auth flow failing to mint or a body over the size cap. See :meth:`AsyncCircuitBreaker.track`.
+  an auth flow failing to mint or a body over the size cap. See :meth:`CircuitBreaker.track`.
 * **Half-open admits one probe.** A host that has just failed gets one call as its recovery test, not the full
   concurrent load.
 * **The breaker spans the body read.** It is driven from ``AsyncBaseClient``, around the send AND the body read, so a
@@ -33,17 +33,17 @@ if TYPE_CHECKING:
 __all__ = [
     "HOST_BREAKERS",
     "NO_BREAKERS",
-    "AsyncCircuitBreaker",
     "Breaker",
     "BreakerState",
     "Breakers",
+    "CircuitBreaker",
     "CircuitOpenError",
     "Verdict",
 ]
 
 
 class BreakerState(StrEnum):
-    """Circuit-breaker states; the value is what :attr:`AsyncCircuitBreaker.state` reports."""
+    """Circuit-breaker states; the value is what :attr:`CircuitBreaker.state` reports."""
 
     CLOSED = "closed"
     OPEN = "open"
@@ -55,10 +55,10 @@ class CircuitOpenError(Exception):
 
 
 class Verdict:
-    """What one fetch established about its host, marked by ``AsyncBaseClient`` inside :meth:`AsyncCircuitBreaker.track`.
+    """What one fetch established about its host, marked by ``AsyncBaseClient`` inside :meth:`CircuitBreaker.track`.
 
     Unmarked means "nothing": only an explicit mark makes a raise a host failure, and only a clean exit that was not
-    marked neutral is a host success. See :meth:`AsyncCircuitBreaker.track` for why the default is not the reverse.
+    marked neutral is a host success. See :meth:`CircuitBreaker.track` for why the default is not the reverse.
     """
 
     __slots__ = ("failed", "neutral")
@@ -67,16 +67,16 @@ class Verdict:
         self.failed = False
         self.neutral = False
 
-    def host_failed(self) -> None:
+    def mark_failed(self) -> None:
         """The wire failed: a transport error or timeout, or a 429/5xx that survived retries."""
         self.failed = True
 
-    def not_a_host_test(self) -> None:
+    def mark_untested(self) -> None:
         """The fetch reached no network (a cache hit), so its success says nothing about the host."""
         self.neutral = True
 
 
-class AsyncCircuitBreaker:
+class CircuitBreaker:
     """CLOSED / OPEN / HALF_OPEN breaker driven by a ``with breaker.track()`` block.
 
     No lock: every state change happens between awaits, in a single-threaded event loop, so
@@ -138,10 +138,10 @@ class AsyncCircuitBreaker:
         Raises :class:`CircuitOpenError` instead of yielding when the host is being refused. Otherwise yields a
         :class:`Verdict` the fetch marks as it goes, and what the call records on the way out is:
 
-        * **a host FAILURE** — only when the fetch marked :meth:`Verdict.host_failed` before raising, which
+        * **a host FAILURE** — only when the fetch marked :meth:`Verdict.mark_failed` before raising, which
           ``AsyncBaseClient`` does for a transport error or timeout and for a 429/5xx that survived retries. Those are
           what the WIRE said about this host;
-        * **a SUCCESS** — a clean exit, unless the fetch marked :meth:`Verdict.not_a_host_test` (a cache hit, which
+        * **a SUCCESS** — a clean exit, unless the fetch marked :meth:`Verdict.mark_untested` (a cache hit, which
           reached no network). A success resets the consecutive-failure count;
         * **NOTHING** — everything else: an exception the fetch did not mark (an auth flow failing to mint a token, a
           body over the size cap, a programming error) and a ``BaseException`` such as ``CancelledError`` (the
@@ -207,7 +207,7 @@ class AsyncCircuitBreaker:
 class Breaker(Protocol):
     """What a client needs of a breaker: one ``track()`` scope per fetch.
 
-    :class:`AsyncCircuitBreaker` is the real one.
+    :class:`CircuitBreaker` is the real one.
     """
 
     def track(self) -> AbstractContextManager[Verdict]: ...
@@ -249,12 +249,12 @@ _NO_BREAKER = _NoBreaker()
 NO_BREAKERS = _NoBreakers()
 
 
-class _BreakerRegistry(defaultdict[str, "AsyncCircuitBreaker"]):
+class _BreakerRegistry(defaultdict[str, "CircuitBreaker"]):
     """A ``defaultdict`` whose factory gets the key, so each breaker knows its own host."""
 
     @override
-    def __missing__(self, host: str) -> AsyncCircuitBreaker:
-        breaker = AsyncCircuitBreaker(name=host)
+    def __missing__(self, host: str) -> CircuitBreaker:
+        breaker = CircuitBreaker(name=host)
         self[host] = breaker
         return breaker
 

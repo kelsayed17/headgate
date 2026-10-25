@@ -5,10 +5,10 @@ importing ``headgate.msgspec`` or ``headgate.pydantic``.
 """
 
 from headgate._auth import CachedTokenAuth, Minted, QueryParamAuth, StaticHeaderAuth
-from headgate._base import AsyncBaseClient
 from headgate._cache import HttpCache, MethodFilter, PathFragmentFilter, StatusCodeFilter
+from headgate._client import AsyncBaseClient
 from headgate._rate_limit import Rate, RateRule
-from headgate._responses import Expect, Reader, Refusal, Refused, as_bytes, event_stream, json_reader, nothing
+from headgate._responses import Expect, Reader, RefusalCheck, Refused, as_bytes, event_stream, json_reader, nothing
 from headgate.errors import (
     AuthError,
     ClientConfigurationError,
@@ -40,7 +40,7 @@ __all__ = [
     "RateLimitError",
     "RateRule",
     "Reader",
-    "Refusal",
+    "RefusalCheck",
     "Refused",
     "ResponseParseError",
     "ResponseTooLargeError",

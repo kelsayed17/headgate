@@ -21,18 +21,16 @@ if TYPE_CHECKING:
 
 __all__ = ["body_snippet", "refusal_error", "status_error", "transient_status_error", "transport_error"]
 
-#: Cap on the error-body snippet folded into a ClientError message — enough for a
-#: provider's structured reason, not enough to turn an HTML error page into a payload.
+#: Cap on the error-body snippet folded into a ClientError message: enough for a provider's structured reason, not
+#: enough to turn an HTML error page into a payload.
 _BODY_SNIPPET_LIMIT = 300
 
 
 def body_snippet(resp: httpx2.Response) -> str | None:
     """A bounded, single-line view of an error response body.
 
-    The upstream's own reason for a non-transient 4xx IS the diagnosis (a 400 that names the
-    missing field), so the raise folds it into
-    the ``ClientError`` message — which reaches the application boundary's 502 detail, hence
-    bounded and whitespace-collapsed rather than verbatim.
+    The upstream's own reason for a 4xx IS the diagnosis (a 400 that names the missing field), so it is folded into the
+    ``ClientError`` message, bounded and whitespace-collapsed because that message may reach an API response.
     """
     text = " ".join(resp.text.split())
     if not text:
@@ -54,7 +52,7 @@ def status_error(resp: httpx2.Response, log_url: str, *, source: str) -> Upstrea
 
 
 def refusal_error(refused: Refused, resp: httpx2.Response, log_url: str, *, source: str) -> UpstreamStatusError:
-    """The ``ClientError`` for a provider's :class:`Refused`: a reader's, or the host ``refusal=`` check's.
+    """The ``ClientError`` for a provider's :class:`Refused`: a reader's, or the host ``refusal_check=`` check's.
 
     A reader raises its ``Refused`` and the host check returns one; both paths build the error here, so both carry
     the provider's code, the client's name and the body snippet. ``refused.kind`` names the kind (credential, rate
@@ -89,7 +87,7 @@ def transient_status_error(resp: httpx2.Response, *, source: str) -> UpstreamSta
 
     Rate limit vs generic upstream failure; 401/403 are non-transient and belong to :func:`status_error`. The URL is
     ``resp.url`` put through :func:`~headgate._url.sanitize_url`, not ``resp.url`` itself: providers that
-    authenticate by QUERY PARAM would otherwise leak the key, and this message reaches the boundary handler's 502 detail.
+    authenticate by QUERY PARAM would otherwise leak the key into the message.
     """
     code = resp.status_code
     kind = RateLimitError if code == 429 else UpstreamStatusError

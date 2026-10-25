@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-_MODULES = ["headgate.errors", "headgate._base", "headgate.msgspec"]
+_MODULES = ["headgate.errors", "headgate._client", "headgate.msgspec"]
 
 
 def _run(script: str) -> subprocess.CompletedProcess[str]:

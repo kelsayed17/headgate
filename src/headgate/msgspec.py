@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, overload
 
 import msgspec
 
-from headgate._builtins import drop_none as _drop_none
+from headgate._codec import drop_none as _drop_none
 from headgate._responses import json_reader
 from headgate.errors import DecodeError
 
@@ -100,8 +100,7 @@ def decoder[T](
 def to_builtins(value: object, *, drop_none: bool = False) -> Any:  # JSON builtins for httpx2 json=/data=
     """Convert a msgspec struct (or sequence of structs) to ``json=``-ready builtins.
 
-    The clients' single body-prep surface (no per-client msgspec import): a thin ``msgspec.to_builtins`` delegate that
-    applies the struct's ``field(name=…)`` renames, preserves field-declaration order (dict order is wire key order once
+    A thin ``msgspec.to_builtins`` delegate that applies the struct's ``field(name=…)`` renames, preserves field-declaration order (dict order is wire key order once
     httpx2 serializes), and honors ``omit_defaults``.
 
     ``drop_none=True`` additionally removes ``None``-valued fields recursively, for outbound bodies whose unset

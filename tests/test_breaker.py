@@ -8,7 +8,7 @@ Written against ``breaker.call(coro_fn)`` Previously when the breaker stopped
 wrapping a callable and became a context manager. Now the verdict rides on the
 ``Verdict`` the block marks, not on what escapes it: only a marked raise is a host failure,
 and an unmarked one — or a ``CancelledError`` — records nothing. See
-``AsyncCircuitBreaker.track``.
+``CircuitBreaker.track``.
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ import pytest
 from headgate._breaker import (
     HOST_BREAKERS,
     NO_BREAKERS,
-    AsyncCircuitBreaker,
     BreakerState,
+    CircuitBreaker,
     CircuitOpenError,
 )
 
@@ -37,22 +37,22 @@ class _Boom(Exception):
     """Test-only failure marker."""
 
 
-def _fail(cb: AsyncCircuitBreaker, times: int = 1) -> None:
+def _fail(cb: CircuitBreaker, times: int = 1) -> None:
     """Record *times* host failures: a MARKED raise, which is what ``_base._send`` does for a wire failure."""
     for _ in range(times):
         with pytest.raises(_Boom), cb.track() as verdict:
-            verdict.host_failed()
+            verdict.mark_failed()
             raise _Boom("nope")
 
 
 def test_threshold_trips_breaker() -> None:
-    cb = AsyncCircuitBreaker(failure_threshold=5, recovery_timeout=10.0, name="t")
+    cb = CircuitBreaker(failure_threshold=5, recovery_timeout=10.0, name="t")
     _fail(cb, 5)
     assert cb.state is BreakerState.OPEN
 
 
 def test_success_resets_the_failure_count() -> None:
-    cb = AsyncCircuitBreaker(failure_threshold=5, recovery_timeout=10.0, name="t")
+    cb = CircuitBreaker(failure_threshold=5, recovery_timeout=10.0, name="t")
     _fail(cb, 4)
     with cb.track():
         pass
@@ -61,7 +61,7 @@ def test_success_resets_the_failure_count() -> None:
 
 
 def test_open_refuses_before_the_block_runs() -> None:
-    cb = AsyncCircuitBreaker(failure_threshold=3, recovery_timeout=10.0, name="t")
+    cb = CircuitBreaker(failure_threshold=3, recovery_timeout=10.0, name="t")
     _fail(cb, 3)
     ran = False
 
@@ -72,7 +72,7 @@ def test_open_refuses_before_the_block_runs() -> None:
 
 
 async def test_half_open_probe_closes_on_success() -> None:
-    cb = AsyncCircuitBreaker(failure_threshold=2, recovery_timeout=_COOLDOWN, name="t")
+    cb = CircuitBreaker(failure_threshold=2, recovery_timeout=_COOLDOWN, name="t")
     _fail(cb, 2)
     assert cb.state is BreakerState.OPEN
 
@@ -85,7 +85,7 @@ async def test_half_open_probe_closes_on_success() -> None:
 
 async def test_half_open_probe_failure_reopens() -> None:
     """One chance: a failed probe re-opens immediately, without re-reaching the threshold."""
-    cb = AsyncCircuitBreaker(failure_threshold=2, recovery_timeout=_COOLDOWN, name="t")
+    cb = CircuitBreaker(failure_threshold=2, recovery_timeout=_COOLDOWN, name="t")
     _fail(cb, 2)
     await asyncio.sleep(_PAST_COOLDOWN)
 
@@ -96,7 +96,7 @@ async def test_half_open_probe_failure_reopens() -> None:
 
 async def test_half_open_gates_to_a_single_probe() -> None:
     """While the canary is in flight, concurrent callers are refused rather than racing in."""
-    cb = AsyncCircuitBreaker(failure_threshold=2, recovery_timeout=_COOLDOWN, name="t")
+    cb = CircuitBreaker(failure_threshold=2, recovery_timeout=_COOLDOWN, name="t")
     _fail(cb, 2)
     await asyncio.sleep(_PAST_COOLDOWN)
 
@@ -129,7 +129,7 @@ async def test_a_cancelled_probe_neither_records_nor_holds_the_slot() -> None:
     ``except Exception`` does not catch a ``CancelledError``, so a cancelled canary left
     ``_probe_in_flight`` set and the breaker refused every caller forever.
     """
-    cb = AsyncCircuitBreaker(failure_threshold=2, recovery_timeout=_COOLDOWN, name="t")
+    cb = CircuitBreaker(failure_threshold=2, recovery_timeout=_COOLDOWN, name="t")
     _fail(cb, 2)
     await asyncio.sleep(_PAST_COOLDOWN)
 
@@ -148,7 +148,7 @@ async def test_a_cancelled_probe_neither_records_nor_holds_the_slot() -> None:
 
 def test_an_unmarked_exception_records_nothing() -> None:
     """An auth flow failing to mint, a body over the cap: nothing the wire said about the host."""
-    cb = AsyncCircuitBreaker(failure_threshold=2, recovery_timeout=10.0, name="t")
+    cb = CircuitBreaker(failure_threshold=2, recovery_timeout=10.0, name="t")
     for _ in range(5):
         with pytest.raises(_Boom), cb.track():
             raise _Boom("not a host failure")
@@ -159,22 +159,22 @@ def test_an_unmarked_exception_records_nothing() -> None:
 
 def test_a_neutral_success_neither_resets_the_count_nor_counts() -> None:
     """A cache hit reached no network, so it must not wipe the failures already recorded."""
-    cb = AsyncCircuitBreaker(failure_threshold=5, recovery_timeout=10.0, name="t")
+    cb = CircuitBreaker(failure_threshold=5, recovery_timeout=10.0, name="t")
     _fail(cb, 3)
     with cb.track() as verdict:
-        verdict.not_a_host_test()
+        verdict.mark_untested()
 
     assert cb.failure_count == 3
 
 
 async def test_a_neutral_probe_frees_the_slot_without_closing() -> None:
     """A probe served from cache tested nothing: the breaker stays unrecovered, and the next caller probes."""
-    cb = AsyncCircuitBreaker(failure_threshold=2, recovery_timeout=_COOLDOWN, name="t")
+    cb = CircuitBreaker(failure_threshold=2, recovery_timeout=_COOLDOWN, name="t")
     _fail(cb, 2)
     await asyncio.sleep(_PAST_COOLDOWN)
 
     with cb.track() as verdict:
-        verdict.not_a_host_test()
+        verdict.mark_untested()
 
     assert cb.state is not BreakerState.CLOSED
     with cb.track():  # the next caller is admitted as the probe, and its success closes the breaker
@@ -184,7 +184,7 @@ async def test_a_neutral_probe_frees_the_slot_without_closing() -> None:
 
 async def test_a_stale_call_cancelled_after_the_trip_does_not_free_the_probe_slot() -> None:
     """A call admitted while CLOSED must not admit a SECOND concurrent probe when it is cancelled later."""
-    cb = AsyncCircuitBreaker(failure_threshold=1, recovery_timeout=_COOLDOWN, name="t")
+    cb = CircuitBreaker(failure_threshold=1, recovery_timeout=_COOLDOWN, name="t")
     stale_started = asyncio.Event()
 
     async def _stale() -> None:
@@ -223,7 +223,7 @@ async def test_a_stale_call_cancelled_after_the_trip_does_not_free_the_probe_slo
 
 async def test_a_stale_failure_does_not_reopen_over_the_probe_in_flight() -> None:
     """A stale call's failure says nothing about the recovery test that is already out."""
-    cb = AsyncCircuitBreaker(failure_threshold=1, recovery_timeout=_COOLDOWN, name="t")
+    cb = CircuitBreaker(failure_threshold=1, recovery_timeout=_COOLDOWN, name="t")
     stale_started = asyncio.Event()
     fail_now = asyncio.Event()
 
@@ -231,7 +231,7 @@ async def test_a_stale_failure_does_not_reopen_over_the_probe_in_flight() -> Non
         with cb.track() as verdict:
             stale_started.set()
             await fail_now.wait()
-            verdict.host_failed()
+            verdict.mark_failed()
             raise _Boom("late")
 
     stale = asyncio.create_task(_stale())
@@ -266,7 +266,7 @@ def test_no_breakers_admits_every_call_and_never_reads_the_shared_registry() -> 
     breaker = NO_BREAKERS["api.example"]
     for _ in range(10):
         with contextlib.suppress(RuntimeError), breaker.track() as verdict:
-            verdict.host_failed()
+            verdict.mark_failed()
             raise RuntimeError
     with breaker.track():
         pass  # still admitted after ten marked failures

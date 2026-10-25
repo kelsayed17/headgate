@@ -14,7 +14,7 @@ from typing import Any
 import httpx2
 import pytest
 
-from headgate._base import AsyncBaseClient
+from headgate._client import AsyncBaseClient
 from headgate._rate_limit import Rate
 from headgate.errors import (
     AuthError,
@@ -28,7 +28,7 @@ from headgate.msgspec import decoder
 
 
 def _client(handler: httpx2.MockTransport) -> AsyncBaseClient:
-    return AsyncBaseClient(base_url="https://example.test", rate=Rate.per_second(2), max_retries=1, transport=handler)
+    return AsyncBaseClient(base_url="https://example.test", rate=Rate.per_second(2), max_attempts=1, transport=handler)
 
 
 async def test_raises_upstream_status_on_server_error() -> None:
@@ -125,7 +125,7 @@ async def test_the_error_names_the_client_class_that_raised_it() -> None:
 
     transport = httpx2.MockTransport(lambda req: httpx2.Response(500))
     async with NamedClient(
-        rate=Rate.per_second(2), base_url="https://example.test", max_retries=1, transport=transport
+        rate=Rate.per_second(2), base_url="https://example.test", max_attempts=1, transport=transport
     ) as c:
         with pytest.raises(UpstreamStatusError) as ei:
             await c.get("/x", expect=decoder(dict[str, Any]))

@@ -24,7 +24,7 @@ except ImportError as exc:  # pragma: no cover - exercised by the extras CI job
     msg = "headgate.pydantic needs pydantic: pip install headgate[pydantic]"
     raise ImportError(msg) from exc
 
-from headgate._builtins import drop_none as _drop_none
+from headgate._codec import drop_none as _drop_none
 from headgate._responses import json_reader
 from headgate.errors import DecodeError
 
@@ -47,6 +47,8 @@ def _adapter(type_: Any) -> TypeAdapter[Any]:
 def decode[T](content: bytes, type_: type[T], *, strict: bool = ...) -> T: ...
 @overload
 def decode(content: bytes, type_: UnionType, *, strict: bool = ...) -> Any: ...  # a union pins no type
+@overload
+def decode(content: bytes, type_: type[Any] | UnionType, *, strict: bool = ...) -> Any: ...  # as above
 def decode[T](content: bytes, type_: type[T] | UnionType, *, strict: bool = True) -> T | Any:
     """Strict pydantic JSON validation of *content* into *type_*, raising :class:`DecodeError` on failure.
 

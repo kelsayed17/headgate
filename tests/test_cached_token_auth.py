@@ -197,7 +197,7 @@ class TestRotationRefusal:
     def test_a_changed_credential_is_refused_by_name(self) -> None:
         with pytest.raises(ClientConfigurationError) as exc:
             CachedTokenAuth.reject_credential_rotation(
-                "new-token", "configured-token", provider="Example", env_var="EXAMPLE_REFRESH_TOKEN"
+                "new-token", "configured-token", provider="Example", setting="EXAMPLE_REFRESH_TOKEN"
             )
 
         message = str(exc.value)
@@ -208,7 +208,7 @@ class TestRotationRefusal:
     def test_an_absent_or_echoed_credential_is_benign(self, returned: str | None) -> None:
         """Only a DIFFERENT credential means rotation; echoing the same one back is common."""
         CachedTokenAuth.reject_credential_rotation(
-            returned, "same", provider="Example", env_var="EXAMPLE_REFRESH_TOKEN"
+            returned, "same", provider="Example", setting="EXAMPLE_REFRESH_TOKEN"
         )
 
 

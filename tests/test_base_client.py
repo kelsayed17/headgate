@@ -9,10 +9,10 @@ import msgspec
 import pytest
 
 from headgate._auth import StaticHeaderAuth
-from headgate._base import AsyncBaseClient
 from headgate._breaker import HOST_BREAKERS
+from headgate._client import AsyncBaseClient
 from headgate._rate_limit import Rate
-from headgate._responses import Expect, Refusal, Refused, as_bytes, nothing
+from headgate._responses import Expect, RefusalCheck, Refused, as_bytes, nothing
 from headgate._retry import Retry
 from headgate.errors import AuthError, RateLimitError, ResponseParseError, UpstreamStatusError
 from headgate.msgspec import decoder
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
     from pydantic import BaseModel
-    from pytest_httpx import HTTPXMock
+    from pytest_httpx2 import HTTPXMock
 
 
 class _StubClient(AsyncBaseClient):
@@ -36,7 +36,7 @@ def test_client_builds_retry_over_the_paced_transport_stack() -> None:
     from headgate._rate_limit import RateLimitTransport
     from headgate._retry import RetryTransport
 
-    client = _StubClient(rate=Rate.per_second(2), base_url="https://x", max_retries=3)
+    client = _StubClient(rate=Rate.per_second(2), base_url="https://x", max_attempts=3)
     # Retry is the outermost transport and the rate limiter the innermost. The breaker is
     # NOT a layer: it is driven from `_send` so it can span the body read as well as the
     # send, which no transport wrapped around the send can do.
@@ -44,7 +44,7 @@ def test_client_builds_retry_over_the_paced_transport_stack() -> None:
     assert isinstance(stack, RetryTransport)
     assert isinstance(stack._transport, RateLimitTransport)
     assert client._breakers is HOST_BREAKERS
-    # max_retries is the *attempt* count; the policy's total is the
+    # max_attempts is the *attempt* count; the policy's total is the
     # number of *retries*, so it is one less (3 attempts -> 2 retries).
     assert stack.retry.total == 2
 
@@ -78,16 +78,16 @@ def test_init_config_not_exposed_on_self() -> None:
 # ---------- URL joining (delegated to httpx2) ----------
 
 
-async def test_base_url_joins_relative_path(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(url="https://api.example/v1/foo", json={"ok": True})
+async def test_base_url_joins_relative_path(httpx2_mock: HTTPXMock) -> None:
+    httpx2_mock.add_response(url="https://api.example/v1/foo", json={"ok": True})
     client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example/v1")
     resp = await client.get("foo", expect=RESPONSE)
     assert resp is not None
     assert str(resp.url) == "https://api.example/v1/foo"
 
 
-async def test_absolute_url_passes_through(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(url="https://other.example/raw", json={"ok": True})
+async def test_absolute_url_passes_through(httpx2_mock: HTTPXMock) -> None:
+    httpx2_mock.add_response(url="https://other.example/raw", json={"ok": True})
     client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example/v1")
     resp = await client.get("https://other.example/raw", expect=RESPONSE)
     assert resp is not None
@@ -97,22 +97,22 @@ async def test_absolute_url_passes_through(httpx_mock: HTTPXMock) -> None:
 # ---------- Retry on transient status ----------
 
 
-async def test_retries_on_503_then_succeeds(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(url="https://api.example/x", status_code=503)
-    httpx_mock.add_response(url="https://api.example/x", status_code=503)
-    httpx_mock.add_response(url="https://api.example/x", json={"ok": True})
-    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_retries=3)
+async def test_retries_on_503_then_succeeds(httpx2_mock: HTTPXMock) -> None:
+    httpx2_mock.add_response(url="https://api.example/x", status_code=503)
+    httpx2_mock.add_response(url="https://api.example/x", status_code=503)
+    httpx2_mock.add_response(url="https://api.example/x", json={"ok": True})
+    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_attempts=3)
     resp = await client.get("x", expect=RESPONSE)
     assert resp is not None
     assert resp.status_code == 200
 
 
-async def test_raises_after_exhausting_retries(httpx_mock: HTTPXMock) -> None:
+async def test_raises_after_exhausting_retries(httpx2_mock: HTTPXMock) -> None:
     from headgate.errors import UpstreamStatusError
 
     for _ in range(3):
-        httpx_mock.add_response(url="https://api.example/x", status_code=503)
-    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_retries=3)
+        httpx2_mock.add_response(url="https://api.example/x", status_code=503)
+    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_attempts=3)
     # 5xx surviving all retries raises under the raise-by-default contract.
     with pytest.raises(UpstreamStatusError):
         await client.get("x", expect=RESPONSE)
@@ -121,7 +121,7 @@ async def test_raises_after_exhausting_retries(httpx_mock: HTTPXMock) -> None:
 # ---------- Retry-After honored ----------
 
 
-async def test_honors_retry_after_on_429(httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_honors_retry_after_on_429(httpx2_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch) -> None:
     """A 429's ``Retry-After`` decides the wait, not the backoff curve.
 
     The header value must be a WHOLE number of seconds (or an HTTP date): the retry transport
@@ -141,10 +141,10 @@ async def test_honors_retry_after_on_429(httpx_mock: HTTPXMock, monkeypatch: pyt
     monkeypatch.setattr(Retry, "sleep_seconds", _record)
     # Zeroed so the backoff fallback would be a visible 0.0, not a plausible-looking wait.
     monkeypatch.setattr("headgate._retry._BACKOFF_FACTOR", 0.0)
-    httpx_mock.add_response(url="https://api.example/x", status_code=429, headers={"Retry-After": "7"})
-    httpx_mock.add_response(url="https://api.example/x", json={"ok": True})
+    httpx2_mock.add_response(url="https://api.example/x", status_code=429, headers={"Retry-After": "7"})
+    httpx2_mock.add_response(url="https://api.example/x", json={"ok": True})
 
-    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_retries=2)
+    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_attempts=2)
     resp = await client.get("x", expect=RESPONSE)
 
     assert resp is not None
@@ -155,31 +155,31 @@ async def test_honors_retry_after_on_429(httpx_mock: HTTPXMock, monkeypatch: pyt
 # ---------- Circuit breaker ----------
 
 
-async def test_circuit_breaker_opens_after_threshold(httpx_mock: HTTPXMock) -> None:
+async def test_circuit_breaker_opens_after_threshold(httpx2_mock: HTTPXMock) -> None:
     from headgate.errors import TransportError, UpstreamStatusError
 
     # 5 consecutive failed request() calls should open the breaker for that host.
-    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_retries=1)
+    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_attempts=1)
     for _ in range(5):
-        httpx_mock.add_response(url="https://api.example/x", status_code=503)
+        httpx2_mock.add_response(url="https://api.example/x", status_code=503)
         with pytest.raises(UpstreamStatusError):
             await client.get("x", expect=RESPONSE)
     # 6th call: breaker is open, no HTTP request made — it short-circuits to a
     # TransportError ("circuit breaker open") before any request goes out.
-    pre_request_count = len(httpx_mock.get_requests())
+    pre_request_count = len(httpx2_mock.get_requests())
     with pytest.raises(TransportError):
         await client.get("x", expect=RESPONSE)
-    assert len(httpx_mock.get_requests()) == pre_request_count  # no new request
+    assert len(httpx2_mock.get_requests()) == pre_request_count  # no new request
 
 
-async def test_circuit_breaker_resets_on_success(httpx_mock: HTTPXMock) -> None:
+async def test_circuit_breaker_resets_on_success(httpx2_mock: HTTPXMock) -> None:
     from headgate.errors import UpstreamStatusError
 
-    httpx_mock.add_response(url="https://api.example/x", status_code=503)
-    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_retries=1)
+    httpx2_mock.add_response(url="https://api.example/x", status_code=503)
+    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_attempts=1)
     with pytest.raises(UpstreamStatusError):
         await client.get("x", expect=RESPONSE)  # 1 failure
-    httpx_mock.add_response(url="https://api.example/x", json={"ok": True})
+    httpx2_mock.add_response(url="https://api.example/x", json={"ok": True})
     resp = await client.get("x", expect=RESPONSE)
     assert resp is not None
     # Breaker should be reset; counter back to 0.
@@ -191,29 +191,29 @@ async def test_circuit_breaker_resets_on_success(httpx_mock: HTTPXMock) -> None:
 # ---------- get: JSON + model decode paths ----------
 
 
-async def test_request_returns_json(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(url="https://api.example/x", json={"a": 1})
+async def test_request_returns_json(httpx2_mock: HTTPXMock) -> None:
+    httpx2_mock.add_response(url="https://api.example/x", json={"a": 1})
     client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example")
     result = await client.get("x", expect=decoder(dict[str, Any]))
     assert result == {"a": 1}
 
 
-async def test_request_raises_on_decode_error(httpx_mock: HTTPXMock) -> None:
+async def test_request_raises_on_decode_error(httpx2_mock: HTTPXMock) -> None:
     from headgate.errors import ResponseParseError
 
-    httpx_mock.add_response(url="https://api.example/x", content=b"not json")
+    httpx2_mock.add_response(url="https://api.example/x", content=b"not json")
     client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example")
     with pytest.raises(ResponseParseError):
         await client.get("x", expect=decoder(dict[str, Any]))
 
 
-async def test_request_validates_model(httpx_mock: HTTPXMock) -> None:
+async def test_request_validates_model(httpx2_mock: HTTPXMock) -> None:
     import msgspec
 
     class M(msgspec.Struct):
         a: int
 
-    httpx_mock.add_response(url="https://api.example/x", json={"a": 1})
+    httpx2_mock.add_response(url="https://api.example/x", json={"a": 1})
     client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example")
     result = await client.get("x", expect=decoder(M))
     assert result is not None
@@ -234,26 +234,26 @@ def _req_body_model() -> Callable[..., BaseModel]:
     return _ReqBody
 
 
-async def test_json_body_kwarg_rides_through_with_content_type(httpx_mock: HTTPXMock) -> None:
+async def test_json_body_kwarg_rides_through_with_content_type(httpx2_mock: HTTPXMock) -> None:
     # Bodies are httpx-native now: json=<builtins> rides **kwargs, httpx2
     # serializes and stamps the content-type. The caller owns the builtins
     # (here: pydantic model_dump with aliases + exclude_none).
     import json
 
-    httpx_mock.add_response(url="https://api.example/o", json={"ok": True})
+    httpx2_mock.add_response(url="https://api.example/o", json={"ok": True})
     client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example")
     body = _req_body_model()(order_side="buy").model_dump(by_alias=True, exclude_none=True)
     await client.post("o", expect=RESPONSE, json=body)
-    req = httpx_mock.get_requests()[0]
+    req = httpx2_mock.get_requests()[0]
     assert req.headers["content-type"] == "application/json"
     # by_alias applied (orderSide), exclude_none drops stop_price
     assert json.loads(req.content) == {"orderSide": "buy"}
 
 
-async def test_json_body_content_type_is_overridable(httpx_mock: HTTPXMock) -> None:
+async def test_json_body_content_type_is_overridable(httpx2_mock: HTTPXMock) -> None:
     # httpx-native behavior (verified): an explicit caller Content-Type wins
     # over the json= stamp — the same contract the old serialize= seam had.
-    httpx_mock.add_response(url="https://api.example/o", json={})
+    httpx2_mock.add_response(url="https://api.example/o", json={})
     client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example")
     body = _req_body_model()(order_side="buy").model_dump(by_alias=True, exclude_none=True)
     await client.post(
@@ -262,14 +262,14 @@ async def test_json_body_content_type_is_overridable(httpx_mock: HTTPXMock) -> N
         json=body,
         headers={"Content-Type": "application/vnd.api+json"},
     )
-    req = httpx_mock.get_requests()[0]
+    req = httpx2_mock.get_requests()[0]
     assert req.headers["content-type"] == "application/vnd.api+json"
 
 
-async def test_json_body_does_not_mutate_caller_headers(httpx_mock: HTTPXMock) -> None:
+async def test_json_body_does_not_mutate_caller_headers(httpx2_mock: HTTPXMock) -> None:
     # httpx-native behavior (verified): httpx2 copies caller headers into its
     # own Headers — the json= path never mutates the caller's dict.
-    httpx_mock.add_response(url="https://api.example/o", json={})
+    httpx2_mock.add_response(url="https://api.example/o", json={})
     client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example")
     caller_headers: dict[str, str] = {"X-Custom": "1"}
     body = _req_body_model()(order_side="buy").model_dump(by_alias=True, exclude_none=True)
@@ -280,7 +280,7 @@ async def test_json_body_does_not_mutate_caller_headers(httpx_mock: HTTPXMock) -
 # ---------- verb: per-call timeout is a named param ----------
 
 
-async def test_timeout_named_param_forwarded_to_httpx(httpx_mock: HTTPXMock) -> None:
+async def test_timeout_named_param_forwarded_to_httpx(httpx2_mock: HTTPXMock) -> None:
     captured: dict[str, object] = {}
 
     def handler(req: httpx2.Request) -> httpx2.Response:
@@ -297,24 +297,24 @@ async def test_timeout_named_param_forwarded_to_httpx(httpx_mock: HTTPXMock) -> 
 # ---------- Non-transient 4xx passthrough ----------
 
 
-async def test_non_transient_4xx_raises_after_one_request(httpx_mock: HTTPXMock) -> None:
+async def test_non_transient_4xx_raises_after_one_request(httpx2_mock: HTTPXMock) -> None:
     """A non-transient 4xx (e.g. 404) is not retried and raises with its real status."""
-    httpx_mock.add_response(url="https://api.example/x", status_code=404)
-    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_retries=3)
+    httpx2_mock.add_response(url="https://api.example/x", status_code=404)
+    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_attempts=3)
     with pytest.raises(UpstreamStatusError) as ei:
         await client.get("x", expect=RESPONSE)
     assert ei.value.status_code == 404
-    assert len(httpx_mock.get_requests()) == 1
+    assert len(httpx2_mock.get_requests()) == 1
 
 
-async def test_403_raises_auth_error_after_one_request(httpx_mock: HTTPXMock) -> None:
+async def test_403_raises_auth_error_after_one_request(httpx2_mock: HTTPXMock) -> None:
     """403 is non-transient and names OUR credential."""
-    httpx_mock.add_response(url="https://api.example/x", status_code=403)
-    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_retries=3)
+    httpx2_mock.add_response(url="https://api.example/x", status_code=403)
+    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_attempts=3)
     with pytest.raises(AuthError) as ei:
         await client.get("x", expect=RESPONSE)
     assert ei.value.status_code == 403
-    assert len(httpx_mock.get_requests()) == 1
+    assert len(httpx2_mock.get_requests()) == 1
 
 
 # ---------- The reported failure reflects the actual last attempt ----------
@@ -326,7 +326,7 @@ async def test_403_raises_auth_error_after_one_request(httpx_mock: HTTPXMock) ->
 # behaviourally in ``test_rate_limit_transport.py``.
 
 
-async def test_reported_failure_reflects_the_LAST_attempt_kind(httpx_mock: HTTPXMock) -> None:
+async def test_reported_failure_reflects_the_LAST_attempt_kind(httpx2_mock: HTTPXMock) -> None:
     """Mixed transient-then-network failure: the raised error must describe the *actual*
     final failure, not a stale earlier 503.
 
@@ -340,10 +340,10 @@ async def test_reported_failure_reflects_the_LAST_attempt_kind(httpx_mock: HTTPX
     """
     from headgate.errors import TransportError
 
-    httpx_mock.add_response(url="https://api.example/x", status_code=503)
-    httpx_mock.add_exception(httpx2.ConnectError("net"))
-    httpx_mock.add_exception(httpx2.ConnectError("net"))
-    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_retries=3)
+    httpx2_mock.add_response(url="https://api.example/x", status_code=503)
+    httpx2_mock.add_exception(httpx2.ConnectError("net"))
+    httpx2_mock.add_exception(httpx2.ConnectError("net"))
+    client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", max_attempts=3)
     with pytest.raises(TransportError) as ei:
         await client.get("x", expect=RESPONSE)
 
@@ -359,7 +359,7 @@ async def test_reported_failure_reflects_the_LAST_attempt_kind(httpx_mock: HTTPX
 # ---------- no None return: an undeclared status always raises ----------
 
 
-async def test_model_404_raises(httpx_mock: HTTPXMock) -> None:
+async def test_model_404_raises(httpx2_mock: HTTPXMock) -> None:
     """A 404 the call did not declare raises UpstreamStatusError — there is no no-data
     carve-out, and the raise reaches the caller (the ``none_on_status`` seam that mapped it was deleted."""
 
@@ -370,14 +370,14 @@ async def test_model_404_raises(httpx_mock: HTTPXMock) -> None:
     class M(msgspec.Struct):
         a: int
 
-    httpx_mock.add_response(url="https://api.example/x", status_code=404)
+    httpx2_mock.add_response(url="https://api.example/x", status_code=404)
     client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example")
     with pytest.raises(UpstreamStatusError) as ei:
         await client.get("x", expect=decoder(M))
     assert ei.value.status_code == 404
 
 
-async def test_4xx_decode_mode_folds_body_into_message(httpx_mock: HTTPXMock) -> None:
+async def test_4xx_decode_mode_folds_body_into_message(httpx2_mock: HTTPXMock) -> None:
     """A non-transient 4xx the call did not declare folds the response body into the error
     message — the upstream's own reason IS the diagnosis (Public's preflight 400
     carries {"code":3003,"message":"You need an additional $1,371.58 …"}), and
@@ -390,7 +390,7 @@ async def test_4xx_decode_mode_folds_body_into_message(httpx_mock: HTTPXMock) ->
     class M(msgspec.Struct):
         a: int
 
-    httpx_mock.add_response(
+    httpx2_mock.add_response(
         url="https://api.example/x",
         status_code=400,
         content=b'{"code":3003,"message":"You need an additional $1,371.58 to cover this order."}',
@@ -401,7 +401,7 @@ async def test_4xx_decode_mode_folds_body_into_message(httpx_mock: HTTPXMock) ->
     assert "You need an additional $1,371.58" in str(ei.value)
 
 
-async def test_403_decode_mode_folds_body_into_message(httpx_mock: HTTPXMock) -> None:
+async def test_403_decode_mode_folds_body_into_message(httpx2_mock: HTTPXMock) -> None:
     """The 401/403 branch of the same block carries the body too — an auth
     body says WHY the credential was refused."""
 
@@ -412,14 +412,14 @@ async def test_403_decode_mode_folds_body_into_message(httpx_mock: HTTPXMock) ->
     class M(msgspec.Struct):
         a: int
 
-    httpx_mock.add_response(url="https://api.example/x", status_code=403, content=b'{"message":"token expired"}')
+    httpx2_mock.add_response(url="https://api.example/x", status_code=403, content=b'{"message":"token expired"}')
     client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example")
     with pytest.raises(AuthError) as ei:
         await client.get("x", expect=decoder(M))
     assert "token expired" in str(ei.value)
 
 
-async def test_4xx_body_snippet_is_bounded_and_single_line(httpx_mock: HTTPXMock) -> None:
+async def test_4xx_body_snippet_is_bounded_and_single_line(httpx2_mock: HTTPXMock) -> None:
     """The folded body is a bounded, whitespace-collapsed snippet — a 4xx HTML
     error page must not turn the message into a payload."""
 
@@ -430,7 +430,7 @@ async def test_4xx_body_snippet_is_bounded_and_single_line(httpx_mock: HTTPXMock
     class M(msgspec.Struct):
         a: int
 
-    httpx_mock.add_response(
+    httpx2_mock.add_response(
         url="https://api.example/x",
         status_code=400,
         content=b"<html>\n" + b"x" * 5000 + b"\nTAIL-MARKER</html>",
@@ -447,33 +447,33 @@ async def test_4xx_body_snippet_is_bounded_and_single_line(httpx_mock: HTTPXMock
 # ---------- auth via httpx2.Auth (the _request_auth_headers hook is gone) ----------
 
 
-async def test_no_auth_no_authorization_header(httpx_mock: HTTPXMock) -> None:
+async def test_no_auth_no_authorization_header(httpx2_mock: HTTPXMock) -> None:
     """A client built without ``auth=`` sends no Authorization header."""
-    httpx_mock.add_response(url="https://api.example/x", json={})
+    httpx2_mock.add_response(url="https://api.example/x", json={})
     client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example")
     await client.get("x", expect=RESPONSE)
-    req = httpx_mock.get_requests()[0]
+    req = httpx2_mock.get_requests()[0]
     assert "Authorization" not in req.headers
 
 
-async def test_explicit_headers_win_over_auth(httpx_mock: HTTPXMock) -> None:
+async def test_explicit_headers_win_over_auth(httpx2_mock: HTTPXMock) -> None:
     """An explicit ``headers=`` value wins a clash against the Auth flow
     (setdefault precedence — the invariant the hook merge used to guarantee)."""
-    httpx_mock.add_response(url="https://api.example/x", json={})
+    httpx2_mock.add_response(url="https://api.example/x", json={})
     client = _StubClient(
         rate=Rate.per_second(2),
         base_url="https://api.example",
         auth=StaticHeaderAuth({"Authorization": "Bearer T"}),
     )
     await client.get("x", expect=RESPONSE, headers={"Authorization": "X"})
-    req = httpx_mock.get_requests()[0]
+    req = httpx2_mock.get_requests()[0]
     assert req.headers.get("Authorization") == "X"
 
 
 # ---------- auth= param: httpx2.Auth threaded into AsyncClient ----------
 
 
-async def test_auth_param_threaded_to_async_client(httpx_mock: HTTPXMock) -> None:
+async def test_auth_param_threaded_to_async_client(httpx2_mock: HTTPXMock) -> None:
     """A ``httpx2.Auth`` passed as ``auth=`` runs at send time and stamps the
     request — proving the base threads it into the underlying AsyncClient."""
 
@@ -483,10 +483,10 @@ async def test_auth_param_threaded_to_async_client(httpx_mock: HTTPXMock) -> Non
             request.headers.setdefault("X-A", "1")
             yield request
 
-    httpx_mock.add_response(url="https://api.example/x", json={})
+    httpx2_mock.add_response(url="https://api.example/x", json={})
     client = _StubClient(rate=Rate.per_second(2), base_url="https://api.example", auth=_StampAuth())
     await client.get("x", expect=RESPONSE)
-    req = httpx_mock.get_requests()[0]
+    req = httpx2_mock.get_requests()[0]
     assert req.headers["X-A"] == "1"
 
 
@@ -585,7 +585,7 @@ async def test_a_host_refusal_is_raised_as_its_kind_with_the_real_status() -> No
             302, headers={"Location": "https://api.example/missing_key.html"}, content=b"Moved to key page"
         ),
         follow_redirects=False,
-        refusal=_key_page_refusal,
+        refusal_check=_key_page_refusal,
     )
     with pytest.raises(AuthError) as ei:
         await client.get("x", expect=decoder(dict[str, str]))
@@ -607,7 +607,10 @@ async def test_a_host_check_returning_none_changes_nothing_and_sees_every_respon
         return None
 
     client = _serving(
-        httpx2.Response(200, content=b'{"ok":"yes"}'), httpx2.Response(404), follow_redirects=False, refusal=refusal
+        httpx2.Response(200, content=b'{"ok":"yes"}'),
+        httpx2.Response(404),
+        follow_redirects=False,
+        refusal_check=refusal,
     )
     assert await client.get("x", expect=decoder(dict[str, str])) == {"ok": "yes"}
     with pytest.raises(UpstreamStatusError) as ei:
@@ -634,7 +637,7 @@ async def test_the_host_check_runs_before_a_declared_answer() -> None:
     def refusal(resp: httpx2.Response) -> Refused | None:
         return Refused("host refused", kind=AuthError) if resp.status_code == 400 else None
 
-    client = _serving(httpx2.Response(400, json={"message": "refused"}), follow_redirects=False, refusal=refusal)
+    client = _serving(httpx2.Response(400, json={"message": "refused"}), follow_redirects=False, refusal_check=refusal)
     with pytest.raises(AuthError) as ei:
         await client.post("x", expect=Expect(decoder(_Value)).on(400, declared_reader))
     assert ei.value.status_code == 400
@@ -645,11 +648,11 @@ async def test_the_host_check_runs_before_a_declared_answer() -> None:
 def test_a_refusing_client_that_follows_redirects_is_refused_at_construction() -> None:
     """The check sees only the final response, so a refusal on a followed hop would be skipped (spec §3)."""
     with pytest.raises(ValueError, match="follow_redirects=False"):
-        _StubClient(rate=Rate.per_second(2), base_url="https://api.example", refusal=_key_page_refusal)
+        _StubClient(rate=Rate.per_second(2), base_url="https://api.example", refusal_check=_key_page_refusal)
 
 
 async def test_a_per_call_follow_redirects_on_a_refusing_client_is_refused() -> None:
-    client = _serving(httpx2.Response(200, content=b"{}"), follow_redirects=False, refusal=_key_page_refusal)
+    client = _serving(httpx2.Response(200, content=b"{}"), follow_redirects=False, refusal_check=_key_page_refusal)
     with pytest.raises(ValueError, match="follow redirects"):
         await client.get("x", expect=decoder(dict[str, str]), follow_redirects=True)
 
@@ -669,14 +672,16 @@ class _Status(msgspec.Struct, frozen=True):
     status: str
 
 
-def _serving(*responses: httpx2.Response, follow_redirects: bool = True, refusal: Refusal | None = None) -> _StubClient:
+def _serving(
+    *responses: httpx2.Response, follow_redirects: bool = True, refusal_check: RefusalCheck | None = None
+) -> _StubClient:
     it = iter(responses)
     return _StubClient(
         rate=Rate.per_second(2),
         base_url="https://api.example",
         transport=httpx2.MockTransport(lambda req: next(it)),
         follow_redirects=follow_redirects,
-        refusal=refusal,
+        refusal_check=refusal_check,
     )
 
 

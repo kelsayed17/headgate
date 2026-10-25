@@ -31,8 +31,8 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage, FilterPolicy
 
-from headgate._base import AsyncBaseClient
 from headgate._cache import HttpCache, PathFragmentFilter, StatusCodeFilter
+from headgate._client import AsyncBaseClient
 from headgate._rate_limit import UNLIMITED
 from headgate.errors import ClientTimeoutError
 from tests.support.responses import RESPONSE
@@ -134,7 +134,7 @@ async def test_a_black_holing_host_times_out_through_the_cache(sqlite_storage: A
         base_url=f"http://127.0.0.1:{port}",
         rate=UNLIMITED,
         timeout=0.25,
-        max_retries=1,
+        max_attempts=1,
         cache=HttpCache(policy=_series_policy(), storage=sqlite_storage),
     )
     started = time.monotonic()

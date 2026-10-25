@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate._base import AsyncBaseClient
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
+from headgate._client import AsyncBaseClient
 from headgate._rate_limit import Rate
 from headgate.errors import ClientError, ResponseTooLargeError
 from tests.support.responses import RESPONSE
@@ -29,7 +29,7 @@ from tests.support.responses import RESPONSE
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from pytest_httpx import HTTPXMock
+    from pytest_httpx2 import HTTPXMock
 
 
 class _Client(AsyncBaseClient):
@@ -43,9 +43,9 @@ class _Client(AsyncBaseClient):
 
 
 class TestResponseSizeCap:
-    async def test_body_under_cap_passes_through_intact(self, httpx_mock: HTTPXMock) -> None:
+    async def test_body_under_cap_passes_through_intact(self, httpx2_mock: HTTPXMock) -> None:
         body = b"x" * 1024
-        httpx_mock.add_response(content=body)
+        httpx2_mock.add_response(content=body)
         c = _Client(max_response_bytes=8192)
         try:
             resp = await c.get("thing", expect=RESPONSE)
@@ -55,8 +55,8 @@ class TestResponseSizeCap:
         finally:
             await c.aclose()
 
-    async def test_body_over_cap_raises(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(content=b"x" * 20_000)
+    async def test_body_over_cap_raises(self, httpx2_mock: HTTPXMock) -> None:
+        httpx2_mock.add_response(content=b"x" * 20_000)
         c = _Client(max_response_bytes=8192)
         try:
             with pytest.raises(ResponseTooLargeError) as ei:
@@ -72,7 +72,7 @@ class TestResponseSizeCap:
         the compressed body is a few KB.
 
         Driven through ``httpx2.MockTransport`` with a real ``ByteStream``
-        rather than ``httpx_mock``: content-decoding only runs when the
+        rather than ``httpx2_mock``: content-decoding only runs when the
         response has a *stream* (a response constructed with ``content=``
         sets ``_content`` and ``aiter_bytes`` skips the decoder entirely),
         and this test is worthless unless the gzip is really decoded.
@@ -152,9 +152,9 @@ class TestResponseSizeCap:
         finally:
             await c.aclose()
 
-    async def test_declared_content_length_rejects_before_transfer(self, httpx_mock: HTTPXMock) -> None:
+    async def test_declared_content_length_rejects_before_transfer(self, httpx2_mock: HTTPXMock) -> None:
         """An honest oversized body is refused on the header, not downloaded."""
-        httpx_mock.add_response(content=b"x" * 100, headers={"Content-Length": "999999999"})
+        httpx2_mock.add_response(content=b"x" * 100, headers={"Content-Length": "999999999"})
         c = _Client(max_response_bytes=8192)
         try:
             with pytest.raises(ResponseTooLargeError):
@@ -162,9 +162,9 @@ class TestResponseSizeCap:
         finally:
             await c.aclose()
 
-    async def test_missing_content_length_still_capped(self, httpx_mock: HTTPXMock) -> None:
+    async def test_missing_content_length_still_capped(self, httpx2_mock: HTTPXMock) -> None:
         """Chunked responses carry no Content-Length — the House FD index is one."""
-        httpx_mock.add_response(content=b"x" * 20_000, headers={"Transfer-Encoding": "chunked"})
+        httpx2_mock.add_response(content=b"x" * 20_000, headers={"Transfer-Encoding": "chunked"})
         c = _Client(max_response_bytes=8192)
         try:
             with pytest.raises(ResponseTooLargeError):
@@ -176,9 +176,9 @@ class TestResponseSizeCap:
         """3.3 MB (an aggregate ticker JSON) is the largest measured live body."""
         assert DEFAULT_MAX_RESPONSE_BYTES >= 8 * 1024 * 1024
 
-    async def test_per_client_override_raises_the_ceiling(self, httpx_mock: HTTPXMock) -> None:
+    async def test_per_client_override_raises_the_ceiling(self, httpx2_mock: HTTPXMock) -> None:
         body = b"x" * 20_000
-        httpx_mock.add_response(content=body)
+        httpx2_mock.add_response(content=body)
         c = _Client(max_response_bytes=64_000)
         try:
             assert (await c.get("thing", expect=RESPONSE)).content == body

@@ -27,11 +27,10 @@ from headgate._body import DEFAULT_MAX_RESPONSE_BYTES, read_capped, read_head
 from headgate._breaker import HOST_BREAKERS, NO_BREAKERS, CircuitOpenError
 from headgate._failures import refusal_error, status_error, transient_status_error, transport_error
 from headgate._redirects import FOLLOW_REDIRECTS_EXT
-from headgate._responses import Expect, Reader, Refusal, Refused
+from headgate._responses import Expect, Reader, RefusalCheck, Refused
 from headgate._retry import ZERO_RETRY
 from headgate._stack import build_http_client
-from headgate._url import path as render_path
-from headgate._url import sanitize_url
+from headgate._url import render_path, sanitize_url
 from headgate.errors import ClientError, DecodeError, ResponseParseError, TransportError
 from headgate.policy import policy_is_disabled
 
@@ -101,7 +100,7 @@ class AsyncBaseClient:
         *,
         base_url: str,
         rate: Rate,
-        max_retries: int = 3,
+        max_attempts: int = 3,
         default_headers: dict[str, str] | None = None,
         timeout: float = 30.0,
         rate_limits: Sequence[RateRule] = (),
@@ -111,19 +110,19 @@ class AsyncBaseClient:
         auth: httpx2.Auth | None = None,
         max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
         follow_redirects: bool = True,
-        refusal: Refusal | None = None,
+        refusal_check: RefusalCheck | None = None,
     ) -> None:
         # Transport policy off (headgate.policy): no retries and no breaker. The rate limiter checks for itself.
         if policy_is_disabled():
-            max_retries, circuit_breaker = 0, False
+            max_attempts, circuit_breaker = 0, False
         # A refusal check sees only the FINAL response, so a client following redirects would skip one written on a
         # hop. The per-call half is in _prepare.
-        if refusal is not None and follow_redirects:
+        if refusal_check is not None and follow_redirects:
             raise ValueError(
-                f"{type(self).__name__}: a client with a refusal= check must be built with follow_redirects=False"
+                f"{type(self).__name__}: a client with a refusal_check= must be built with follow_redirects=False"
             )
         self._source = type(self).__name__
-        self._refusal = refusal
+        self._refusal_check = refusal_check
         # NO_BREAKERS never reads the shared registry, so a breaker another client opened cannot refuse this one.
         self._breakers: Breakers = HOST_BREAKERS if circuit_breaker else NO_BREAKERS
         self._max_response_bytes = max_response_bytes
@@ -134,7 +133,7 @@ class AsyncBaseClient:
             transport=transport,
             cache=cache,
             max_response_bytes=max_response_bytes,
-            max_retries=max_retries,
+            max_attempts=max_attempts,
             auth=auth,
             default_headers=default_headers,
             follow_redirects=follow_redirects,
@@ -251,7 +250,7 @@ class AsyncBaseClient:
         ``get`` would see, and the call runs through the same stack and failure ladder, except that:
 
         * a 2xx is the only success: there is no ``expect=``, and a 3xx raises unless redirects are followed;
-        * the client's ``refusal=`` check runs on the response head, before the first chunk;
+        * the client's ``refusal_check`` runs on the response head, before the first chunk;
         * a failure while the body is arriving raises ``TransportError`` or ``ClientTimeoutError`` from inside the
           iteration, after earlier chunks were yielded. A retry covers only the head.
 
@@ -259,7 +258,7 @@ class AsyncBaseClient:
         """
         request, log_url = self._prepare("GET", url, follow_redirects=follow_redirects)
         async with self._exchange(request, log_url, follow_redirects=follow_redirects) as streamed:
-            if self._refusal is not None and (refused := self._refusal(streamed)) is not None:
+            if self._refusal_check is not None and (refused := self._refusal_check(streamed)) is not None:
                 head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
                 raise refusal_error(refused, head, log_url, source=self._source)
             if not streamed.is_success:
@@ -284,8 +283,8 @@ class AsyncBaseClient:
         if isinstance(url, Template):
             url = render_path(url)
         log_url = sanitize_url(url)
-        if self._refusal is not None and follow_redirects is True:
-            raise ValueError(f"{self._source} has a refusal= check, so no call may follow redirects")
+        if self._refusal_check is not None and follow_redirects is True:
+            raise ValueError(f"{self._source} has a refusal_check=, so no call may follow redirects")
         try:
             # httpx2 types ``params`` as primitive-valued; ours is Mapping[str, object] (see RequestOptions).
             request = self._http_client.build_request(method, url, **options)  # ty: ignore[invalid-argument-type]
@@ -317,7 +316,7 @@ class AsyncBaseClient:
         send AND the body read. It is keyed on the host the request is addressed to, so a followed redirect's hops are
         charged to that host. A transport failure and a surviving 429/5xx are host failures; a cache hit tested
         nothing; anything else that escapes (an auth flow failing to mint, a body over the cap, a cancellation)
-        records nothing (see ``AsyncCircuitBreaker.track``).
+        records nothing (see ``CircuitBreaker.track``).
         """
         try:
             with self._breakers[request.url.host].track() as verdict:
@@ -329,9 +328,9 @@ class AsyncBaseClient:
                     )
                     try:
                         if streamed.extensions.get("hishel_from_cache"):
-                            verdict.not_a_host_test()
+                            verdict.mark_untested()
                         if streamed.status_code == 429 or streamed.status_code >= 500:
-                            verdict.host_failed()
+                            verdict.mark_failed()
                             raise transient_status_error(streamed, source=self._source)
                         yield streamed
                     finally:
@@ -341,7 +340,7 @@ class AsyncBaseClient:
                     # A hop an auth flow yielded to mint a credential failed: that is the credential host's failure,
                     # not this one's.
                     if not failed_on_auth_hop(exc):
-                        verdict.host_failed()
+                        verdict.mark_failed()
                     raise transport_error(exc, request.method, log_url, source=self._source) from exc
         except CircuitOpenError as exc:
             raise TransportError(str(exc), source=self._source) from None
@@ -365,7 +364,7 @@ class AsyncBaseClient:
         Every response passes four layers, in order:
 
         1. **transport** (:meth:`_exchange`): a transport failure, a surviving 429/5xx, or an open breaker raises;
-        2. **host**: the client's ``refusal=`` check runs on the final response;
+        2. **host**: the client's ``refusal_check`` runs on the final response;
         3. **endpoint**: a status the call declared exactly goes to its reader; any other 2xx to the success reader;
         4. **default**: any other non-2xx raises through :func:`~headgate._failures.status_error`.
 
@@ -379,7 +378,7 @@ class AsyncBaseClient:
         )
         async with self._exchange(request, log_url, follow_redirects=follow_redirects) as streamed:
             resp = await read_capped(streamed, self._max_response_bytes, source=self._source, url=log_url)
-        if self._refusal is not None and (refused := self._refusal(resp)) is not None:
+        if self._refusal_check is not None and (refused := self._refusal_check(resp)) is not None:
             raise refusal_error(refused, resp, log_url, source=self._source)
         read = spec.answers.get(resp.status_code)
         if read is None:

@@ -27,7 +27,7 @@ dev = [
     "pytest>=9.1",
     "pytest-asyncio>=1.4",
     "syrupy>=6.1.1",
-    "pytest-httpx>=0.36.2",
+    "httpx2-pytest>=2.0.0",
     "time-machine",
     "anysqlite",
     "ruff",
@@ -45,7 +45,7 @@ include = ["src/headgate", "examples", "README.md", "LICENSE", "pyproject.toml"]
 asyncio_mode = "auto"
 asyncio_default_test_loop_scope = "session"
 asyncio_default_fixture_loop_scope = "session"
-addopts = "--import-mode=importlib -p headgate_pytest_alias"
+addopts = "--import-mode=importlib"
 markers = ["transport_policy: the test's subject is the retry/breaker/throttle, so it keeps the real rate-limiter wait"]
 testpaths = ["tests"]
 

@@ -51,7 +51,7 @@ def build_http_client(
     transport: httpx2.AsyncBaseTransport | None,
     cache: HttpCache | None,
     max_response_bytes: int,
-    max_retries: int,
+    max_attempts: int,
     auth: httpx2.Auth | None,
     default_headers: dict[str, str] | None,
     follow_redirects: bool,
@@ -85,7 +85,7 @@ def build_http_client(
         else []
     )
     return httpx2.AsyncClient(
-        transport=RetryTransport(transport=inner, retry=build_retry(max_retries)),
+        transport=RetryTransport(transport=inner, retry=build_retry(max_attempts)),
         auth=auth,
         base_url=normalized_base_url,
         headers=default_headers or {},

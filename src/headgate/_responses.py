@@ -11,7 +11,7 @@ Anything a call did not declare raises through the base client's status ladder. 
 receive an undeclared status. A refusal the provider writes inside a body is raised by the reader as :class:`Refused`,
 and the base client turns it into a ``ClientError`` carrying the status the wire actually sent.
 
-:data:`Reader` · :class:`Expect` · :class:`Refused` · :data:`Refusal` · :func:`json_reader` · :func:`as_bytes` ·
+:data:`Reader` · :class:`Expect` · :class:`Refused` · :data:`RefusalCheck` · :func:`json_reader` · :func:`as_bytes` ·
 :func:`nothing` · :func:`event_stream` — each documented on itself.
 
 This module is codec-free: it imports neither msgspec nor pydantic. The JSON ``decoder`` a client uses to build its
@@ -30,7 +30,7 @@ import httpx2
 
 from headgate.errors import UpstreamStatusError
 
-__all__ = ["Expect", "Reader", "Refusal", "Refused", "as_bytes", "event_stream", "json_reader", "nothing"]
+__all__ = ["Expect", "Reader", "RefusalCheck", "Refused", "as_bytes", "event_stream", "json_reader", "nothing"]
 
 
 type Reader[T] = Callable[[httpx2.Response], T]
@@ -66,7 +66,7 @@ class Refused(Exception):
 
     Raised by a reader for a refusal written inside a body: an error envelope, a ``REQUEST_NOT_PROCESSED`` status, a
     vendor error code. It is also returned by a ``decoder`` ``check``, which ``decoder`` raises.
-    :meth:`~headgate._base.AsyncBaseClient._request` is its ONLY catcher. There it becomes ``kind(message,
+    :meth:`~headgate._client.AsyncBaseClient._request` is its ONLY catcher. There it becomes ``kind(message,
     status_code=<the status the wire sent>, code=code, source=<client>, body=<bounded snippet>)``, so a refusal in a 200
     body carries 200.
 
@@ -86,7 +86,7 @@ class Refused(Exception):
         self.kind = kind
 
 
-type Refusal = Callable[[httpx2.Response], Refused | None]
+type RefusalCheck = Callable[[httpx2.Response], Refused | None]
 """A per-HOST check, run on the final response before anything the call declared.
 
 It names a refusal the status line alone cannot show, such as a key-error redirect, and returns ``None`` for everything
@@ -207,7 +207,7 @@ def event_stream(resp: httpx2.Response, /) -> list[bytes]:
 
     httpx2's ``EventSource`` parses the grammar (multi-line ``data``, CRLF, comments) but requires a response that
     declares ``text/event-stream``, so the body is framed into an ``httpx2.Response`` of its own first. ``max_event_size=None``:
-    the body is already buffered and capped by ``_body.read_capped``, and a large reply is legitimately one event, which
+    the body is already buffered and capped by the client, and a large reply is legitimately one event, which
     httpx2's 1 MiB default would refuse. Choosing WHETHER a body is an event stream is the caller's job, usually by
     reading the ``content-type``.
     """

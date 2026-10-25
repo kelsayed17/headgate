@@ -1,7 +1,7 @@
 """The failure taxonomy: raised by clients, caught by their callers.
 
-This module imports only ``typing``. That is load-bearing: every layer above a client catches these, so anything
-imported here is imported by the whole application. Keep it free of httpx, pydantic and settings.
+This module imports only ``typing``: every layer above a client catches these, so anything imported here is imported
+by the whole application.
 
 The shape of the tree matters as well as the names: a boundary handler can map ``ClientTimeoutError`` to 504,
 ``ClientConfigurationError`` to 503 and every other ``ClientError`` to 502. Re-parenting a class changes that mapping.
@@ -55,7 +55,7 @@ class ClientError(Exception):
 
     def __init__(self, message: str, *, source: str | None = None) -> None:
         self.source = source
-        super().__init__(f"[{source}] {message}" if source is not None and source else message)
+        super().__init__(f"[{source}] {message}" if source else message)
 
     @override
     def __reduce__(self) -> tuple[Any, ...]:
@@ -79,8 +79,7 @@ class UpstreamStatusError(ClientError):
     inside a success body. It is never invented.
 
     ``code`` is the provider's own code where something named one: a reader's ``Refused``. The status ladder sets none,
-    so an undeclared 4xx or 5xx carries ``code=None`` and its body only as the snippet in the message. The class
-    attribute makes ``None`` the answer for an instance pickled before ``code`` existed too.
+    so an undeclared 4xx or 5xx carries ``code=None`` and its body only as the snippet in the message.
 
     ``body`` is a bounded, single-line snippet of the response body, folded into the message: the upstream's own reason
     for a 4xx is the diagnosis, and dropping it forces a manual reproduction just to read it.
@@ -88,8 +87,6 @@ class UpstreamStatusError(ClientError):
     Every subclass shares this constructor. A subclass names what KIND of refusal it was (a credential, a rate limit or
     quota), never what status it arrived with.
     """
-
-    code: str | None = None
 
     def __init__(
         self,
@@ -103,7 +100,7 @@ class UpstreamStatusError(ClientError):
         self.status_code = status_code
         self.code = code
         tag = f"status={status_code}, code={code}" if code is not None else f"status={status_code}"
-        detail = f" — {body}" if body is not None and body else ""
+        detail = f" — {body}" if body else ""
         super().__init__(f"{message} ({tag}){detail}", source=source)
 
 
@@ -120,7 +117,7 @@ class AuthError(UpstreamStatusError):
     """OUR credential was refused.
 
     A 401 or 403 from the status ladder, or a host's refusal naming the credential in another shape (a redirect to a
-    sign-in page, which a client's ``refusal=`` check names). The status is never invented.
+    sign-in page, which a client's ``refusal_check=`` check names). The status is never invented.
     """
 
 

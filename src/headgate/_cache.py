@@ -1,10 +1,9 @@
-"""Native hishel HTTP-response caching for the ``AsyncBaseClient`` transport stack.
+"""The opt-in HTTP response cache: hishel's transport, made safe to share and to fail.
 
-An opt-in policy layer beside the ones in :mod:`headgate._transports`:
-`hishel <https://hishel.com>`_'s :class:`hishel.httpx2.AsyncCacheTransport`, placed **innermost** (base-adjacent,
-below retry) so a cache HIT short-circuits before the retry layer (nothing to retry) and reaches no network. The
-circuit breaker is not a layer: ``_base._send`` marks a hit so the breaker records NEITHER a success nor a failure
-for it. Admission is still decided before the fetch, so a hit is refused while the breaker is OPEN.
+`hishel <https://hishel.com>`_'s :class:`hishel.httpx2.AsyncCacheTransport` sits below retry and above the rate
+limiter (see :mod:`headgate._stack`), so a cache hit short-circuits before the retry layer and spends no rate token.
+``AsyncBaseClient`` marks a hit so the circuit breaker records neither a success nor a failure for it; admission is
+still decided before the fetch, so a hit is refused while the breaker is open.
 
 **The filters.** hishel ships NO concrete filters, so :class:`hishel.BaseFilter` is the intended extension point:
 :class:`PathFragmentFilter`, :class:`MethodFilter` and :class:`StatusCodeFilter` compose into a per-client
@@ -14,12 +13,12 @@ headers at all and :class:`hishel.SpecificationPolicy` (the default) would cache
 :class:`StatusCodeFilter`) so an error body never poisons the cache. Per-client constant TTLs ride the ``hishel_ttl``
 request extension, stamped by :class:`ResilientCacheTransport` from :class:`HttpCache`'s ``ttl``; body-keyed POST
 caching uses hishel's native ``FilterPolicy.use_body_key``. Filters run only INSIDE hishel and see the full resolved
-URL, so no other layer re-evaluates a rule: :class:`ResilientCacheTransport` stamps the client's TTL and ``_base``
-stamps only a per-call ``cache_ttl=``.
+URL, so no other layer re-evaluates a rule: :class:`ResilientCacheTransport` stamps the client's TTL and
+``AsyncBaseClient`` stamps only a per-call ``cache_ttl=``.
 
-The two classes below carry their own rationale: :class:`NoCloseStorage` (why one shared storage must not be closed by
-the first adapter to tear down) and :class:`ResilientCacheTransport` (why a fault in the storage must never fail a
-request that would otherwise succeed).
+A storage fault never fails a request that would otherwise succeed: it is counted
+(:func:`headgate.health.cache_degradations`), the request is redone uncached, and the response carries
+:data:`CACHE_DEGRADED_EXT`.
 """
 
 from __future__ import annotations
@@ -45,8 +44,11 @@ if TYPE_CHECKING:
     from hishel import Entry
 
 __all__ = [
+    "CACHE_DEGRADATIONS",
+    "CACHE_DEGRADED_EXT",
     "HttpCache",
     "MethodFilter",
+    "NoCloseStorage",
     "PathFragmentFilter",
     "ResilientCacheTransport",
     "StatusCodeFilter",
@@ -193,6 +195,9 @@ _STRIPPED_SECRETS: ContextVar[tuple[tuple[str, str], ...]] = ContextVar("headgat
 _NETWORK_RESPONSES: ContextVar[list[httpx2.Response] | None] = ContextVar(
     "headgate_cache_network_responses", default=None
 )
+
+#: The response extension a request that found the cache broken carries: the URL (query dropped) and the error.
+CACHE_DEGRADED_EXT = "headgate.cache_degraded"
 
 #: How many requests per host found the cache broken (and were handed to the live transport), since
 #: process start. Process-global like the breaker registry; read through
@@ -375,14 +380,12 @@ class ResilientCacheTransport(AsyncCacheTransport):
     body-keyed query POST; mutations are never cached, so a replay costs one extra fetch and nothing else.
 
     **The body is read INSIDE this layer**, up to the client's size cap. A network-backed hishel storage touches its
-    backend while the body streams, which would otherwise happen in ``_body.read_capped``, after this method had
+    backend while the body streams, which would otherwise happen in ``read_capped``, after this method had
     returned, so a storage fault would escape as a raw backend exception rather than a ``ClientError``. Reading here puts
     that fault inside the fallback. Every response abandoned on the way (hishel's, and the network response it had not
     closed) is closed before the request is redone.
 
-    Implemented as a SUBCLASS rather than a wrapping transport so the stack shape is unchanged: this is still
-    base-adjacent, ``next_transport`` is still the real network transport, and ``aclose()`` keeps hishel's own
-    semantics.
+    A subclass rather than a wrapping transport, so ``aclose()`` keeps hishel's own semantics.
 
     **It stamps the client's default TTL**: a client whose :class:`HttpCache` carries a ``ttl`` has it
     set as the request's ``hishel_ttl`` on every request that enters this layer, unless the request already carries
@@ -390,7 +393,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
 
     **Simultaneous identical GETs share one download.** hishel has no request coalescing: an identical request that
     arrives while the first is still fetching finds nothing in storage and goes to the network too, so five concurrent
-    lookups of one large file on a cold cache made five downloads. So the first GET for a URL fetches, and every
+    lookups of one large file on a cold cache would make five downloads. So the first GET for a URL fetches, and every
     identical GET that arrives while it is in flight waits for it and gets its own copy of that response: a hit or a
     miss, cached or not, since the body is held whole here anyway. A network failure fails every waiting request from the
     one attempt; each caller's retry layer, above this one, then retries, and those retries share again. A first request
@@ -487,25 +490,18 @@ class ResilientCacheTransport(AsyncCacheTransport):
             response = await super().handle_async_request(request)
             return await _buffer_up_to(response, self._max_body_bytes)
         except httpx2.HTTPError:
-            # A real transport failure — NOT the cache's fault. Preserve it so the
-            # retry/breaker layers see the same exception they always have, but close
-            # what it abandoned first.
+            # A real transport failure, not the cache's fault: re-raise it for the retry and breaker layers above,
+            # after closing what it abandoned.
             await _close_quietly(response, *handed_up)
             raise
         except Exception as exc:  # noqa: BLE001  # a cache fault of any kind degrades to the live transport
-            # The cache broke; the REQUEST is still serviceable, so fall through to the
-            # live transport rather than failing the call. Recorded on the response's
-            # extensions because this tier has no logger: the caller gets a normal 200
-            # and nothing else would tell it the cache is down. Query dropped from the
-            # record, since a key-in-the-URL provider carries its credential there.
+            # The cache broke but the request is still serviceable: redo it on the live transport. Counted BEFORE the
+            # live fetch, so a fallback that then fails on the network too cannot hide the cache outage. The query is
+            # dropped from the extension, since a key-in-the-URL provider carries its credential there.
             await _close_quietly(response, *handed_up)
-            # Counted BEFORE the live fetch: the count means "the cache broke", and a fallback that
-            # then fails on the network too must not hide the cache outage behind the network one.
-            # The extension reaches only this call's caller; the count is what a composition root
-            # reads, through ``headgate.health``, to tell a dashboard the cache is down.
             CACHE_DEGRADATIONS[request.url.host] += 1
             fallback = await self.next_transport.handle_async_request(request)
-            fallback.extensions["headgate_cache_degraded"] = (
+            fallback.extensions[CACHE_DEGRADED_EXT] = (
                 f"{request.url.copy_with(query=None, userinfo=b'')}: {type(exc).__name__}: {exc}"[:240]
             )
             return fallback, None

@@ -14,9 +14,10 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage, Entry, FilterPolicy
 
-from headgate._breaker import HOST_BREAKERS, AsyncCircuitBreaker
+from headgate._breaker import HOST_BREAKERS, CircuitBreaker
 from headgate._cache import (
     CACHE_DEGRADATIONS,
+    CACHE_DEGRADED_EXT,
     MethodFilter,
     NoCloseStorage,
     ResilientCacheTransport,
@@ -50,17 +51,17 @@ def test_breaker_states_reports_a_tripped_host_as_open() -> None:
 
 def test_a_tripped_breaker_past_its_cooldown_is_open_but_not_refusing() -> None:
     """The latch ``state`` alone would show: OPEN stays OPEN until some call takes the probe."""
-    breaker = AsyncCircuitBreaker(name=_HOST, recovery_timeout=0.0)
+    breaker = CircuitBreaker(name=_HOST, recovery_timeout=0.0)
     HOST_BREAKERS[_HOST] = breaker
     _trip(breaker)
 
     assert breaker_states()[_HOST] == (BreakerState.OPEN, False)
 
 
-def _trip(breaker: AsyncCircuitBreaker) -> None:
+def _trip(breaker: CircuitBreaker) -> None:
     for _ in range(5):
         with pytest.raises(OSError), breaker.track() as verdict:
-            verdict.host_failed()
+            verdict.mark_failed()
             raise OSError
 
 
@@ -106,6 +107,6 @@ async def test_a_cache_fault_counts_one_degradation_for_its_host(storage: AsyncS
 
     for _ in range(2):
         response = await transport.handle_async_request(httpx2.Request("GET", f"https://{_HOST}/x?api_key=secret"))
-        assert response.extensions["headgate_cache_degraded"]
+        assert response.extensions[CACHE_DEGRADED_EXT]
 
     assert cache_degradations()[_HOST] == 2

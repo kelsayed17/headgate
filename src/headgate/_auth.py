@@ -1,24 +1,15 @@
-"""Generic ``httpx2.Auth`` family for data clients (leaf module).
+"""Provider-agnostic ``httpx2.Auth`` classes: :class:`StaticHeaderAuth`, :class:`QueryParamAuth`, :class:`CachedTokenAuth`.
 
-Reusable :class:`httpx2.Auth` subclasses wired via ``httpx2.AsyncClient(auth=...)``. ``AsyncClient.send`` invokes
-``auth.async_auth_flow(request)`` ONCE per logical request, *outside* the transport stack
-(``RetryTransport(base)``). The flow does NOT re-run for a re-send the retry transport makes: that transport sits
-BELOW the client's auth flow, so it re-sends the same, already-signed request as it was. Only a re-send the flow itself
-yields signs again, which is the 401 re-sign: one forced re-mint in :class:`CachedTokenAuth`, and the same single
-re-send in the provider auths. The circuit breaker re-sends nothing: ``AsyncBaseClient._send`` drives it around the
-one ``AsyncClient.send`` call, above this flow.
+``httpx2.AsyncClient`` runs ``auth.async_auth_flow(request)`` once per logical request, ABOVE the transport stack, so
+a re-send the retry transport makes re-sends the same, already-signed request. Only a re-send the flow itself yields
+signs again: the single 401 re-mint in :class:`CachedTokenAuth`. An auth that needs a provider's own signer (a JWT
+signed with a vendor key) belongs in that provider's client.
 
-**This module is a leaf: it imports only ``httpx2`` and ``headgate.errors``.** Only *provider-agnostic* Auth classes live
-here (``StaticHeaderAuth`` / ``QueryParamAuth`` / ``CachedTokenAuth``). An Auth that needs a provider's signer (a JWT
-signed with a vendor key, a vendor's own OAuth flow) belongs in that provider's package.
+**An explicit ``headers=`` or ``params=`` from the caller wins a clash.** Every class here merges setdefault-style
+(``if key not in request.headers``), because the flow runs at send time and a plain assignment would override the
+caller.
 
-**Explicit-header/param precedence is the first invariant.** An explicit ``headers=`` or ``params=`` from the caller
-must win a clash. The flow runs at send time, and a naive ``request.headers[k] = v`` would override the caller, so every
-subclass here uses a **setdefault-style merge** (``if key not in request.headers/params``).
-
-The async flow is the real one (clients are async-only). ``httpx2.Auth`` calls the async flow via ``AsyncClient``; a sync
-flow is never exercised here, so we delegate to the base ``sync_auth_flow`` (which raises if a sync client ever tried to
-use one of these — the clients never do).
+Only the async flow is implemented; the clients are async-only.
 """
 
 from __future__ import annotations
@@ -32,6 +23,11 @@ import httpx2
 
 from headgate._url import register_secret_params
 from headgate.errors import ClientConfigurationError
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+__all__ = ["AUTH_HOP", "CachedTokenAuth", "Minted", "QueryParamAuth", "StaticHeaderAuth", "failed_on_auth_hop"]
 
 #: The request extension an :class:`httpx2.Auth` flow sets on a request it YIELDS to acquire a credential (as opposed to
 #: the call's own request). A fixture recorder can read it to skip the hop, which is not the endpoint's answer.
@@ -57,11 +53,6 @@ def failed_on_auth_hop(exc: BaseException) -> bool:
 #: A token rejected within this many seconds of being minted is NOT re-minted: it is not stale, so a fresh one carries
 #: the same authority and will be rejected the same way. See :class:`CachedTokenAuth`.
 _FRESH_TOKEN_S = 60.0
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
-
-__all__ = ["AUTH_HOP", "CachedTokenAuth", "Minted", "QueryParamAuth", "StaticHeaderAuth", "failed_on_auth_hop"]
 
 
 class StaticHeaderAuth(httpx2.Auth):
@@ -92,12 +83,10 @@ class StaticHeaderAuth(httpx2.Auth):
 class QueryParamAuth(httpx2.Auth):
     """Merge a fixed set of query params into the request URL (setdefault).
 
-    Covers the key-in-the-URL-query clients, moving the per-call ``params={"api_key": …}`` injection into one place.
-
     **The key rides the URL, and URLs are not secret to observability.** A tracing integration that records the full
     request URL (OpenTelemetry's httpx instrumentation, for one) will record the key in cleartext, so exclude the host of
-    any client using this class from URL capture. Error messages are safe regardless: ``_url.sanitize_url`` redacts the
-    well-known secret parameter names and the names given here.
+    any client using this class from URL capture. Error messages and the HTTP cache are safe regardless: the well-known
+    secret parameter names and the names given here are redacted from both.
     """
 
     def __init__(self, params: dict[str, str]) -> None:
@@ -126,11 +115,8 @@ class Minted[TokenT]:
 class CachedTokenAuth[TokenT = str](httpx2.Auth):
     """Bearer auth for providers that MINT a short-lived token over the network.
 
-    The third shape in this module. ``StaticHeaderAuth`` carries a credential that never changes; a JWT signer
-    computes one locally per request; this one has to *call* an endpoint, so the token has to be cached,
-    refreshed before it expires, and refreshed again if it is rejected early.
-
-    Three behaviours are shared by every OAuth-style flow and are what a subclass gets for free:
+    The token has to be fetched from an endpoint, so it is cached, refreshed before it expires, and refreshed again if
+    it is rejected early. A subclass gets three behaviours for free:
 
     * **lock-guarded mint** — httpx2 runs requests concurrently, so an unguarded refresh lets N in-flight requests each
       fire their own token exchange;
@@ -142,11 +128,8 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
       valid tokens (a revoked scope, a changed entitlement) would cost one mint PER REQUEST. Now it costs at most one mint
       per ``_FRESH_TOKEN_S``, and the 401 reaches the caller as the ``AuthError`` it is.
 
-    There is no "unconfigured" path: every credential a subclass mints from is required at construction, so this flow
-    always mints.
-
     What is deliberately NOT here: the exchange itself. That is where providers genuinely differ (form-encoded or JSON, a
-    separate sign-in host, their own field names), so each provider's auth owns its own request shape. A subclass supplies it in one of two ways:
+    separate sign-in host, their own field names). A subclass supplies it in one of two ways:
 
     * :meth:`_mint_token`, a coroutine that makes the exchange itself (on a client of its own) and returns
       ``(token, lifetime)``. The usual shape.
@@ -179,8 +162,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
-        # Formerly ``@abstractmethod``: with two ways to mint, "abstract" no longer names the contract, so the class
-        # statement checks that a subclass supplied at least one, and fails where it is written.
+        # Not @abstractmethod: either of two methods satisfies the contract, so the class statement checks for one.
         supplied = any(
             getattr(cls, name) is not getattr(CachedTokenAuth, name) for name in ("_mint_token", "_mint_flow")
         )
@@ -207,8 +189,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         """Mint through the owning client's stack: yield each request the exchange needs, end with :class:`Minted`.
 
         *request* is the call that needs the credential, for a hop to copy its extensions from (timeout, retry
-        policy). Called with the lock held, like :meth:`_mint_token`, and the default delegates to it, so a subclass
-        that defines only that gets exactly the behaviour it always had.
+        policy). Called with the lock held, like :meth:`_mint_token`, and the default delegates to it.
         """
         token, lifetime = await self._mint_token()
         yield Minted(token, lifetime)
@@ -222,7 +203,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         return "Authorization" in request.headers
 
     @staticmethod
-    def reject_credential_rotation(returned: str | None, configured: str, *, provider: str, env_var: str) -> None:
+    def reject_credential_rotation(returned: str | None, configured: str, *, provider: str, setting: str) -> None:
         """Refuse a provider that just rotated the long-lived credential out from under us.
 
         A general OAuth hazard, not one provider's quirk: when a token endpoint returns a REPLACEMENT for the credential
@@ -232,14 +213,15 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
 
         Failing here, on the first exchange, is the whole point. Discarding the replacement silently buys one working
         call and then an opaque ``400`` once the access token expires, naming neither the cause nor the fix. A no-op
-        when the endpoint echoes the SAME credential back, which is benign and common.
+        when the endpoint echoes the SAME credential back, which is benign and common. *setting* names where the
+        operator configured the credential, for the error message.
         """
-        if returned is not None and returned and returned != configured:
+        if returned and returned != configured:
             raise ClientConfigurationError(
                 f"{provider} returned a NEW long-lived credential, which means this key is configured for "
                 f"ROTATING credentials. This client cannot use that: the replacement would have to be persisted "
-                f"durably on every exchange, and the configured {env_var} is now dead. Re-authorise with a "
-                f"non-rotating key and set {env_var} to the new value.",
+                f"durably on every exchange, and the configured {setting} is now dead. Re-authorise with a "
+                f"non-rotating key and set {setting} to the new value.",
                 source=provider,
             )
 
@@ -256,9 +238,8 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         self._token = token
         self._minted_at = time.monotonic()
         self._expires_at = self._minted_at + lifetime
-        # A lifetime at or under the refresh margin read as due for refresh the moment it was minted, so every
-        # request minted again. The server's
-        # ``expires_in`` is passed through unclamped, so refresh at half-life when the margin would swallow it.
+        # A lifetime at or under the refresh margin would read as due the moment it was minted, so every request
+        # would mint again: refresh at half-life when the margin would swallow the lifetime.
         self._margin_s = min(self._refresh_margin_s, lifetime / 2)
         return token
 
@@ -268,7 +249,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         ``rejected`` is the token a 401 just came back for. Passing it — rather than a bare ``force`` flag — is what
         makes concurrent 401s collapse: each waiter re-checks under the lock, sees that the cached token is no longer
         the one IT was rejected for, and uses the replacement the first waiter already minted. With a flag, every waiter
-        skipped the cache check and minted its own (four concurrent 401s produced five exchanges).
+        would skip the cache check and mint its own.
 
         The auth flow does the same under the same lock, but drives :meth:`_mint_flow` so a mint can yield requests.
         """

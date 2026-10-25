@@ -18,7 +18,7 @@ import msgspec
 import pytest
 
 from headgate import msgspec as flavor
-from headgate._base import AsyncBaseClient
+from headgate._client import AsyncBaseClient
 from headgate._rate_limit import Rate
 from headgate._responses import as_bytes, nothing
 from headgate.errors import AuthError, UpstreamStatusError
@@ -39,7 +39,7 @@ def _client(handler: Callable[[httpx2.Request], httpx2.Response]) -> AsyncBaseCl
         base_url="https://example.test",
         rate=Rate.per_second(2),
         transport=httpx2.MockTransport(handler),
-        max_retries=1,
+        max_attempts=1,
     )
 
 

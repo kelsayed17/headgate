@@ -23,7 +23,7 @@ from headgate._retry import _ALL_METHODS, RetryTransport, build_retry
 
 
 def test_build_retry_maps_attempts_to_retries() -> None:
-    # max_retries is an *attempt* count; the policy's total is *retries*.
+    # max_attempts is an *attempt* count; the policy's total is *retries*.
     assert build_retry(3).total == 2
     assert build_retry(1).total == 0  # fail-fast: a single attempt
     assert build_retry(0).total == 0  # clamped, never negative
