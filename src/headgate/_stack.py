@@ -1,106 +1,185 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
 """The transport stack every client is built on, assembled in one place.
 
-:func:`build_http_client` is ``AsyncBaseClient.__init__``'s stack half. It returns the ``httpx2.AsyncClient`` the client
-holds, built over::
+:func:`build_http_client` returns the ``httpx2.AsyncClient`` an ``AsyncBaseClient`` holds, over the stack
+:func:`build_transport_stack` builds::
 
-    RetryTransport(                  # status/exception retries + backoff + Retry-After
-      (ResilientCacheTransport(      # opt-in response cache; a HIT stops here
-        RateLimitTransport(          # the rate budget: every network send takes a token
-          base_or_custom_transport))))
+    RetryTransport(                  # re-sends per the RetryPolicy; begins each attempt on the call's context
+      AttemptTransport(              # AttemptFinished per send (only with observers)
+        MiddlewareTransport(         # HttpOptions.middleware, once per attempt, then the credential guard again
+          ResilientCacheTransport(   # opt-in response cache; a hit stops here
+            RateLimitTransport(      # the rate budget: every network send takes its turn and feeds back
+              SendTrackingTransport( # records whether each send connected and how many request bytes it wrote
+                network_transport))))))  # httpx2.AsyncHTTPTransport(trust_env=False, ...) or HttpOptions.transport
 
-The circuit breaker is not in this stack. ``AsyncBaseClient._send`` drives it around the send AND the body read, which
-no transport can span (see :mod:`headgate._async_breaker`).
+:func:`build_transport_stack` builds the layers bottom-up, one statement per layer: a new layer is one more statement in
+its place there, wrapping the layer below it.
+
+Above the stack, ``httpx2.AsyncClient`` runs the auth flow and the hooks, once per logical call and once per hop of a
+redirect or an auth flow:
+
+* request hooks: the credential guard (:class:`~headgate.security.CredentialGuard`, which also runs below the last
+  middleware, where what a middleware stamps is visible), then, over a custom network
+  transport with ``HttpOptions(allow_private_hosts=False)``, the SSRF guard's vetting
+  (:func:`~headgate.security.address_hook`); the default transport pins vetted addresses itself
+  (:class:`~headgate.security.PinnedHTTPTransport`);
+* response hooks: the https-downgrade refusal, the refusal to re-send a one-shot body on a redirect, and the drop of a
+  followed redirect's body (:mod:`headgate._redirects`).
+
+The circuit breaker and the deadline are not in this stack. ``AsyncBaseClient`` drives both around the send and the
+body read, which no transport can span.
+
+Nothing here reads the environment: the client and the default transport are built with ``trust_env=False``, and the
+cookie jar refuses every cookie unless ``HttpOptions(cookies=True)``.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate._auth import StaticHeaderAuth
-from headgate._cache import ResilientCacheTransport, _NoCloseStorage
-from headgate._redirects import credential_header_guard, drop_followed_redirect_body
-from headgate._transports import PathLimiters, RateLimitTransport, RetryTransport, build_retry
+from headgate._attempts import AttemptTransport
+from headgate._middleware import MiddlewareTransport
+from headgate._options import httpx_timeout
+from headgate._redirects import drop_followed_redirect_body, refuse_unreplayable_redirect
+from headgate._user_agent import user_agent
+from headgate.cache._credentials import credential_scope
+from headgate.cache._transport import ResilientCacheTransport
+from headgate.ratelimit import PathBudgets, RateLimitTransport
+from headgate.retry import RetryTransport, SendTrackingTransport
+from headgate.security import AddressGuard, CredentialGuard, PinnedHTTPTransport, address_hook, refuse_https_downgrade
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable
 
-    from headgate._cache import HttpCache
-    from headgate._rate_limiter import Rate
-    from headgate._transports import RateRule
+    from headgate._core import Timing
+    from headgate._options import HttpOptions, TransportPolicy
+    from headgate.ratelimit import Rate, RateBudget
 
-__all__ = ["build_http_client"]
+__all__ = ["Credentials", "build_http_client", "build_transport_stack"]
 
-#: The connection pool every client's default transport gets. The RATE LIMITER is the intended throttle, tuned per
-#: provider; the pool only has to be wide enough never to bind first (see ``AsyncBaseClient``'s docstring). A client
-#: that needs a different pool passes its own ``transport=``, which owns its pool.
-_MAX_CONNECTIONS = 10
-_MAX_KEEPALIVE_CONNECTIONS = 5
+#: The response hooks, in the order they run on every hop.
+_RESPONSE_HOOKS = (refuse_https_downgrade, refuse_unreplayable_redirect, drop_followed_redirect_body)
+
+
+@dataclass(frozen=True, slots=True)
+class Credentials:
+    """A client's credentials as its stack sees them: the auth, and the one guard that keeps them on trusted origins.
+
+    The same guard runs as the first request hook and below the last middleware (see :func:`build_transport_stack`).
+    """
+
+    auth: httpx2.Auth | None
+    guard: CredentialGuard
+
+    @classmethod
+    def of(cls, *, base_url: str, auth: httpx2.Auth | None, http: HttpOptions) -> Credentials:
+        """Return *auth*, with a guard withholding its and *http*'s middleware's credentials from untrusted origins."""
+        guard = CredentialGuard(
+            auth=auth,
+            base_url=httpx2.URL(base_url),
+            trusted_origins=http.trusted_origins,
+            cookie_jar=http.cookies,
+            middleware=http.middleware,
+        )
+        return cls(auth, guard)
 
 
 def build_http_client(
-    *,
-    base_url: str,
-    rate: Rate,
-    rate_limits: Sequence[RateRule],
-    transport: httpx2.AsyncBaseTransport | None,
-    cache: HttpCache | None,
-    max_response_bytes: int,
-    max_retries: int,
-    auth: httpx2.Auth | None,
-    default_headers: dict[str, str] | None,
-    follow_redirects: bool,
-    timeout: float,
+    *, base_url: str, credentials: Credentials, http: HttpOptions, transport: httpx2.AsyncBaseTransport
 ) -> httpx2.AsyncClient:
-    """Build a client's ``httpx2.AsyncClient`` over its policy stack (see the module docstring for the layers)."""
-    # httpx2 joins relative paths only when base_url ends with "/".
-    normalized_base_url = base_url if base_url.endswith("/") else base_url + "/"
-    # A custom transport (e.g. AsyncCurlTransport for TLS impersonation) is used as-is and owns its own pool; otherwise build the
-    # default AsyncHTTPTransport over the shared pool constants above
-    # (_MAX_CONNECTIONS / _MAX_KEEPALIVE_CONNECTIONS): identical for every client.
-    base_transport = transport or httpx2.AsyncHTTPTransport(
-        http2=True,
-        limits=httpx2.Limits(max_connections=_MAX_CONNECTIONS, max_keepalive_connections=_MAX_KEEPALIVE_CONNECTIONS),
-    )
-    # Opt-in cache transport, base-adjacent (innermost). Engaged ONLY when an HttpCache is passed AND it carries a
-    # storage; otherwise the client uses the plain stack and no AsyncCacheTransport is ever constructed. A HIT
-    # short-circuits here, below retry (nothing to retry) and without reaching the network, so _send marks it and the
-    # breaker records neither a success nor a failure for it; hishel calls the wrapped base_transport only on a MISS.
-    # The storage is wrapped in _NoCloseStorage so this client's teardown never closes a storage it shares.
-    # ResilientCacheTransport is the plain hishel AsyncCacheTransport plus one guarantee: a STORAGE fault is counted and
-    # the request redone uncached, rather than failing a fetch that would otherwise succeed. Genuine httpx2 errors still
-    # propagate untouched to the retry/breaker layers above.
-    # Rate limiting is the BOTTOM layer: a cache HIT returns above it and spends no token, while every re-send the retry
-    # layer makes passes through it and spends its own. A per-client rule picks a different limiter for a matching URL
-    # path (see PathLimiters).
-    paced = RateLimitTransport(limiters=PathLimiters(default=rate, rules=rate_limits), transport=base_transport)
-    inner: httpx2.AsyncBaseTransport = paced
-    if cache is not None and cache.storage is not None:
-        inner = ResilientCacheTransport(
-            next_transport=paced,
-            storage=_NoCloseStorage(cache.storage),
-            policy=cache.policy,
-            max_body_bytes=max_response_bytes,
-            ttl=cache.ttl,
-        )
-    # Policy stack: retry (client-default, baked in here) wraps the (cache+)rate-limit+network transports. A caller
-    # turns retry OFF for one call with retry=False on a verb (it rides the request's extensions → RetryTransport);
-    # there is no per-call way to ask for a different non-zero count.
-    request_hooks = (
-        [credential_header_guard(auth, httpx2.URL(normalized_base_url))]
-        if isinstance(auth, StaticHeaderAuth) and auth.header_names
-        else []
-    )
+    """Build a client's ``httpx2.AsyncClient`` over *transport*, the stack :func:`build_transport_stack` built."""
+    # httpx2 joins a relative path onto base_url only when base_url ends with "/".
+    base_url = base_url if base_url.endswith("/") else base_url + "/"
     return httpx2.AsyncClient(
-        transport=RetryTransport(transport=inner, retry=build_retry(max_retries)),
-        auth=auth,
-        base_url=normalized_base_url,
-        headers=default_headers or {},
-        # A StaticHeaderAuth's headers never leave this client's origin, redirect or not: see
-        # credential_header_guard. ``follow_redirects=False`` remains for a client that must not follow at all, such as
-        # one whose auth computes its custom headers per request.
-        follow_redirects=follow_redirects,
-        event_hooks={"request": request_hooks, "response": [drop_followed_redirect_body]},
-        timeout=httpx2.Timeout(connect=10.0, read=timeout, write=10.0, pool=15.0),
+        transport=transport,
+        auth=credentials.auth,
+        base_url=base_url,
+        headers=_default_headers(http),
+        cookies=None if http.cookies else _refusing_jar(),
+        follow_redirects=http.follow_redirects,
+        max_redirects=http.max_redirects,
+        event_hooks={
+            "request": _request_hooks(credentials.guard, http),
+            "response": list(_RESPONSE_HOOKS),
+        },
+        timeout=httpx_timeout(http.timeout),
+        trust_env=False,
     )
+
+
+def build_transport_stack(
+    rate: Rate | RateBudget,
+    policy: TransportPolicy,
+    http: HttpOptions,
+    timing: Timing,
+    credentials: Credentials,
+) -> httpx2.AsyncBaseTransport:
+    """Build the layers under ``httpx2.AsyncClient``, bottom-up: each statement wraps the layer before it.
+
+    The cache partitions its entries by *credentials*' auth, and its guard runs again below the last middleware, so a
+    middleware's declared credentials stay on trusted origins too.
+    """
+    layer = SendTrackingTransport(transport=_network(http))
+    budgets = PathBudgets(default=rate, rules=policy.rate_limits, timing=timing)
+    layer = RateLimitTransport(budgets=budgets, transport=layer)
+    if (cache := policy.cache) is not None:
+        scope = credential_scope(cache, credentials.auth)
+        layer = ResilientCacheTransport(layer, cache, max_body_bytes=http.max_response_bytes, scope=scope)
+    if http.middleware:
+        layer = MiddlewareTransport(transport=layer, middleware=http.middleware, guard=credentials.guard)
+    if http.observers:
+        layer = AttemptTransport(transport=layer)
+    return RetryTransport(transport=layer, policy=policy.retry, sleep=timing.sleep, clock=timing.clock)
+
+
+def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
+    """Return the network transport: the caller's own, used as it is, or an HTTP/2 pool that reads no environment."""
+    if http.transport is not None:
+        return http.transport
+    guard = _address_guard(http)
+    if guard is not None:
+        return PinnedHTTPTransport(guard, ssl_context=http.ssl_context, limits=http.limits)
+    return httpx2.AsyncHTTPTransport(
+        verify=True if http.ssl_context is None else http.ssl_context,
+        http2=True,
+        limits=http.limits,
+        proxy=http.proxy,
+        trust_env=False,
+    )
+
+
+def _address_guard(http: HttpOptions) -> AddressGuard | None:
+    """Return the SSRF guard *http* asks for, or ``None`` when it allows private hosts."""
+    if http.allow_private_hosts:
+        return None
+    return AddressGuard() if http.resolver is None else AddressGuard(http.resolver)
+
+
+def _request_hooks(
+    credentials: CredentialGuard, http: HttpOptions
+) -> list[Callable[[httpx2.Request], Awaitable[None]]]:
+    """Return the request hooks: the credential guard, then the SSRF guard when a custom transport cannot pin."""
+    hooks: list[Callable[[httpx2.Request], Awaitable[None]]] = [credentials]
+    addresses = _address_guard(http)
+    if addresses is not None and http.transport is not None:
+        hooks.append(address_hook(addresses))
+    return hooks
+
+
+def _default_headers(http: HttpOptions) -> httpx2.Headers:
+    """Return the headers every request carries: the ``User-Agent``, then the caller's, which win any clash."""
+    headers = httpx2.Headers({"User-Agent": user_agent(http.user_agent)})
+    # Headers.update replaces case-insensitively, so a caller's "user-agent" replaces headgate's rather than joining it.
+    headers.update(http.headers)
+    return headers
+
+
+def _refusing_jar() -> CookieJar:
+    """Return a cookie jar whose policy allows no domain, so it stores no cookie and sends none back."""
+    return CookieJar(policy=DefaultCookiePolicy(allowed_domains=[]))

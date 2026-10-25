@@ -1,114 +1,125 @@
-"""The msgspec codec flavor: strict JSON decode into ``msgspec.Struct``s, and request-body preparation.
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
 
-A client picks its flavor by import, ``from headgate.msgspec import decoder, to_builtins``, and the base client stays a
-pure HTTP-policy layer with no serialization knowledge of its own.
+"""The msgspec codec flavor: strict JSON decoding into ``msgspec.Struct`` types, and request-body preparation.
 
-:func:`decode` is the strict bytes-level primitive, :func:`decoder` builds a response reader on it, and
-:func:`to_builtins` prepares a request body. Every failure to decode is the shared
-:class:`~headgate.errors.DecodeError`.
+A client picks its flavor by import (``from headgate.msgspec import decoder, to_builtins``), and the base client stays
+an HTTP-policy layer with no serialization knowledge of its own. :func:`decode` is the bytes-level primitive,
+:func:`decoder` builds a response reader on it, and :func:`to_builtins` prepares a request body. Every decode failure
+is the shared :class:`~headgate.errors.DecodeError`.
 
-**Drift detection is strict TYPING, not unknown-field rejection**, and that asymmetry is a decision rather than an
-oversight. ``strict=True`` catches a field that CHANGES type on the wire, which silently corrupts values;
-``forbid_unknown_fields`` catches a field APPEARING, which providers do routinely and without notice. Rejecting one
-turns a harmless upstream addition into a failure on every call to that endpoint, while ignoring it costs nothing, a
-field we do not model being a field we do not read. A struct can opt in with ``forbid_unknown_fields=True`` where
-noticing a new field is worth the outage risk.
+A ``DecodeError``'s message is msgspec's own diagnosis (the expected type and the path), bounded, with the one input
+value msgspec quotes (an unknown enum value) left out.
+
+Drift detection is strict **typing**, not unknown-field rejection. ``strict=True`` catches a field that changes type
+on the wire, which silently corrupts values. ``forbid_unknown_fields`` would catch a field appearing, which providers
+do routinely and without notice: rejecting one turns a harmless upstream addition into a failure on every call, while
+ignoring it costs nothing, since a field nobody models is a field nobody reads. A struct can still opt in with
+``forbid_unknown_fields=True`` where noticing a new field is worth that risk.
+
+``type_`` parameters are annotated ``TypeForm[T]`` (PEP 747), so a union or a generic alias such as ``list[A] | A``
+types the result as exactly that expression.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, overload
+import functools
+import re
+from typing import TYPE_CHECKING, overload
 
 import msgspec
 
-from headgate._builtins import drop_none as _drop_none
+from headgate._codec import drop_none as _drop_none
+from headgate._failures import shorten
 from headgate._responses import json_reader
 from headgate.errors import DecodeError
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from types import UnionType
+    from collections.abc import Callable, Mapping
 
-    from headgate._responses import Reader, Refused
+    from typing_extensions import TypeForm
+
+    from headgate._responses import Reader, RefusedError
 
 __all__ = ["decode", "decoder", "to_builtins"]
 
+#: The one msgspec diagnosis that quotes the input: ``Invalid enum value '<the value>'``, whatever its length, before
+#: the `` - at `$…` `` path when there is one.
+_ENUM_VALUE = re.compile(r"(Invalid enum value) .*?(?= - at `\$|$)", re.DOTALL)
 
-@overload
-def decode[T](content: bytes, type_: type[T], *, strict: bool = ...) -> T: ...
-@overload
-def decode(content: bytes, type_: UnionType, *, strict: bool = ...) -> Any: ...  # a union pins no type
-@overload
-def decode(content: bytes, type_: type[Any] | UnionType, *, strict: bool = ...) -> Any: ...  # as above
-def decode[T](content: bytes, type_: type[T] | UnionType, *, strict: bool = True) -> T | Any:
-    """Strict msgspec JSON decode of *content* into *type_*, raising :class:`DecodeError` on failure.
 
-    The bytes-level primitive every JSON reader shares, and the one to call for bytes that are not a whole response: a
-    document nested inside another, or a fixture read from disk. ``strict=True`` rejects msgspec's built-in coercions,
-    so a JSON string where an ``int`` is declared is wire drift and fails loud.
+def _json_decoder[T](type_: TypeForm[T], *, strict: bool) -> msgspec.json.Decoder[T]:
+    """Build a ``msgspec.json.Decoder`` for *type_*.
 
-    The third overload serves a caller holding a ``type[T] | UnionType`` (``decoder`` itself), which a type checker
-    cannot narrow across the first two.
+    msgspec's stubs type a non-``type[T]`` argument as ``Any``; the annotation records that the decoder decodes into
+    exactly the type expression it was built from.
     """
+    json_decoder: msgspec.json.Decoder[T] = msgspec.json.Decoder(type_, strict=strict)
+    return json_decoder
+
+
+def _decode_with[T](json_decoder: msgspec.json.Decoder[T], content: bytes) -> T:
+    """Decode *content* with *json_decoder*, raising :class:`DecodeError` for malformed or mistyped JSON."""
     try:
-        return msgspec.json.decode(content, type=type_, strict=strict)
-    # msgspec.ValidationError subclasses msgspec.DecodeError, so catching the base alone covers both. Do NOT
-    # "simplify" this to imply only one is raised.
+        return json_decoder.decode(content)
+    # msgspec.ValidationError subclasses msgspec.DecodeError, so the base covers malformed and mistyped bodies alike.
     except msgspec.DecodeError as exc:
-        raise DecodeError(str(exc)) from exc
+        raise DecodeError(_describe(exc)) from exc
 
 
-@overload
+def _describe(exc: msgspec.DecodeError) -> str:
+    """Return msgspec's diagnosis with any quoted input value dropped, bounded like every decode message."""
+    return shorten(_ENUM_VALUE.sub(r"\1", str(exc)))
+
+
+def decode[T](content: bytes, type_: TypeForm[T], *, strict: bool = True) -> T:
+    """Decode *content* as strict JSON into the type expression *type_*.
+
+    The primitive every JSON reader shares, and the one to call for bytes that are not a whole response: a document
+    nested inside another, or a fixture read from disk. ``strict=True`` rejects msgspec's built-in coercions, so a JSON
+    string where an ``int`` is declared is wire drift.
+
+    :raises DecodeError: if *content* is not JSON or does not match *type_*.
+    """
+    return _decode_with(_json_decoder(type_, strict=strict), content)
+
+
 def decoder[T](
-    type_: type[T],
-    *,
-    strict: bool = ...,
-    allow_empty_body: bool = ...,
-    check: Callable[[T], Refused | None] | None = ...,
-) -> Reader[T]: ...
-@overload
-def decoder(type_: UnionType, *, strict: bool = ..., allow_empty_body: bool = ...) -> Reader[Any]: ...
-def decoder[T](
-    type_: type[T] | UnionType,
+    type_: TypeForm[T],
     *,
     strict: bool = True,
     allow_empty_body: bool = False,
-    check: Callable[[T], Refused | None] | None = None,
-) -> Reader[T] | Reader[Any]:
-    """A reader that decodes the body as strict msgspec JSON into the type expression ``type_``.
+    check: Callable[[T], RefusedError | None] | None = None,
+) -> Reader[T]:
+    """Build a reader that decodes the body as strict JSON into the type expression *type_*.
 
-    ``type_`` carries the whole wire shape, so one function serves every JSON body:
+    *type_* carries the whole wire shape, so one function serves every JSON body: an enveloped object
+    (``decoder(MyResponse)``), a bare array (``decoder(list[MyRow])``), a bare map (``decoder(dict[str, MyRow])``), or
+    a union where a provider's body is genuinely one shape or the other (``decoder(list[A] | A)``).
 
-    * an enveloped object: ``decoder(MyResponse)``;
-    * a bare top-level array of objects with no envelope Struct: ``decoder(list[MyRow])``;
-    * a bare map: ``decoder(dict[str, MySnapshot])``;
-    * an array of string arrays: ``decoder(list[list[str]])``;
-    * a UNION of shapes, where a provider's body is genuinely one OR the other: ``decoder(list[A] | A)``. That arm
-      returns ``Reader[Any]``, since a union is not a ``type[T]``, and the caller's declared return annotation pins the
-      shape.
-
-    msgspec decodes the expression atomically, so one malformed element fails the whole decode with
-    :class:`~headgate.errors.DecodeError`. ``strict=True`` (the default) makes a coerced token wire drift;
-    ``strict=False`` is the deliberate opt-out for a wire that needs lax coercion. ``allow_empty_body`` and ``check``
-    are documented on :func:`~headgate._responses.json_reader`.
+    msgspec decodes the expression atomically, so one malformed element fails the whole body with
+    :class:`~headgate.errors.DecodeError`. ``strict=False`` is the deliberate opt-out for a wire that needs lax
+    coercion. ``allow_empty_body`` and ``check`` are documented on :func:`~headgate._responses.json_reader`.
     """
-    return json_reader(
-        lambda content: decode(content, type_, strict=strict), allow_empty_body=allow_empty_body, check=check
-    )
+    decode_body = functools.partial(_decode_with, _json_decoder(type_, strict=strict))
+    return json_reader(decode_body, allow_empty_body=allow_empty_body, check=check)
 
 
-def to_builtins(value: object, *, drop_none: bool = False) -> Any:  # JSON builtins for httpx2 json=/data=
-    """Convert a msgspec struct (or sequence of structs) to ``json=``-ready builtins.
+@overload
+def to_builtins(value: msgspec.Struct | Mapping[str, object], *, drop_none: bool = ...) -> dict[str, object]: ...
+@overload
+def to_builtins[T](value: list[T], *, drop_none: bool = ...) -> list[object]: ...
+@overload
+def to_builtins(value: object, *, drop_none: bool = ...) -> object: ...
+def to_builtins(value: object, *, drop_none: bool = False) -> object:
+    """Convert a struct, or a list or mapping of them, to builtins ready for httpx2's ``json=`` or ``data=``.
 
-    The clients' single body-prep surface (no per-client msgspec import): a thin ``msgspec.to_builtins`` delegate that
-    applies the struct's ``field(name=…)`` renames, preserves field-declaration order (dict order is wire key order once
-    httpx2 serializes), and honors ``omit_defaults``.
+    A delegate of ``msgspec.to_builtins``: it applies each struct's ``field(name=...)`` renames, keeps field
+    declaration order (the wire key order once httpx2 serializes), and honors ``omit_defaults``. An ``array_like``
+    struct converts to a list, not the ``dict`` its overload names.
 
-    ``drop_none=True`` additionally removes ``None``-valued fields recursively, for outbound bodies whose unset
-    optionals must be OMITTED rather than serialized as ``null``. The drop keeps ``False`` (unlike ``omit_defaults``).
-
-    Serves BOTH body wire formats: JSON bodies pass the builtins to httpx2's ``json=`` (httpx2 serializes and stamps the
-    content-type), and form bodies pass them to ``data=`` (httpx2 urlencodes).
+    ``drop_none=True`` also removes ``None``-valued fields recursively, for a body whose unset optionals must be
+    omitted rather than sent as ``null``. It keeps ``False`` and ``0``, unlike ``omit_defaults``.
     """
     out = msgspec.to_builtins(value)
     return _drop_none(out) if drop_none else out

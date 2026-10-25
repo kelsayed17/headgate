@@ -1,0 +1,50 @@
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
+
+"""Seams two policy areas meet at, defined once so neither has to import the other.
+
+* :class:`CredentialStamper`: what an auth declares about the credentials it puts on a request. The credential guard
+  uses it to keep them on trusted origins; the cache uses it to partition entries by credential and to keep
+  credentials out of storage. Its first two members, :class:`CredentialCarrier`, are what a signing middleware
+  declares, for the guard alone.
+* :data:`BREAKER_GATE`: set by the client on every call, read by the retry layer, so a retry sequence stops as soon as
+  the origin's breaker opens without the retry layer knowing about breakers.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Protocol, runtime_checkable
+
+from headgate._core._context import Slot
+
+__all__ = ["BREAKER_GATE", "CredentialCarrier", "CredentialStamper"]
+
+
+@runtime_checkable
+class CredentialCarrier(Protocol):
+    """Something that declares the credentials it puts on a request: an auth, or a signing middleware."""
+
+    @property
+    def credential_headers(self) -> frozenset[str]:
+        """Return the names of the headers it sets (compared case-insensitively)."""
+        ...
+
+    @property
+    def credential_params(self) -> frozenset[str]:
+        """Return the names of the query parameters it sets."""
+        ...
+
+
+@runtime_checkable
+class CredentialStamper(CredentialCarrier, Protocol):
+    """An auth that declares the credentials it stamps on a request, and names the credential they stand for."""
+
+    def credential_identity(self) -> bytes:
+        """Return stable bytes identifying the credential (its secret material); never stored, only hashed."""
+        ...
+
+
+#: Answers whether the breaker for the call's origin is refusing right now. The client puts it on every call's
+#: context; the retry layer checks it before scheduling another attempt.
+BREAKER_GATE = Slot[Callable[[], bool]]("breaker_gate")
