@@ -10,13 +10,14 @@ error rather than the status it was, and an unreadable token response escaped th
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, override
 
 import httpx2
 import pytest
 
 from headgate import CachedTokenAuth, HttpOptions, Minted, TransportPolicy
-from headgate._responses import as_bytes
+from headgate._responses import as_bytes, nothing
 from headgate.errors import (
     AuthError,
     ClientConfigurationError,
@@ -28,6 +29,7 @@ from headgate.errors import (
 )
 from headgate.ratelimit import UNLIMITED
 from headgate.retry import RetryPolicy
+from headgate.testing import FakeTransport
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
 
@@ -221,3 +223,48 @@ async def test_a_bug_in_a_mint_propagates_as_itself() -> None:
     """Leave an exception outside the mapping alone: it is a bug in the mint, not a failure to report."""
     with pytest.raises(NotImplementedError, match="half-written mint"):
         await _call(_Raises(NotImplementedError("half-written mint")))
+
+
+class _ThreeHops(CachedTokenAuth):
+    """A mint that takes three requests through the client's own stack."""
+
+    hops = 3
+
+    @override
+    async def _mint_flow(
+        self, request: httpx2.Request
+    ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+        del request
+        for hop in range(self.hops):
+            yield httpx2.Request("GET", f"https://login.example.test/step/{hop}")
+        yield Minted("t", math.inf)
+
+
+
+def _hopping_client(max_redirects: int) -> tuple[StubClient, FakeTransport]:
+    """Return a client minting through :class:`_ThreeHops` with *max_redirects*, and its network."""
+    fake = FakeTransport().route("GET", "/v1/x", 200)
+    for hop in range(_ThreeHops.hops):
+        fake.route("GET", f"/step/{hop}", 200)
+    auth = _ThreeHops()
+    http = HttpOptions(transport=fake, max_redirects=max_redirects)
+    return StubClient(base_url="https://api.example.test/v1", rate=UNLIMITED, auth=auth, http=http), fake
+
+
+async def test_a_mints_hops_count_toward_max_redirects() -> None:
+    """Refuse a call whose mint takes more hops than ``max_redirects``: httpx2 keeps one history for both."""
+    client, fake = _hopping_client(_ThreeHops.hops - 1)
+
+    with pytest.raises(TransportError, match="Exceeded maximum allowed redirects"):
+        await client.get("x", expect=nothing)
+
+    assert len(fake.calls_to("GET", "/v1/x")) == 0
+
+
+async def test_a_mint_within_max_redirects_completes() -> None:
+    """Send the call once a mint of as many hops as ``max_redirects`` allows has finished."""
+    client, fake = _hopping_client(_ThreeHops.hops)
+
+    await client.get("x", expect=nothing)
+
+    assert len(fake.calls) == _ThreeHops.hops + 1

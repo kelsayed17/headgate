@@ -56,6 +56,13 @@ The transport behaves like a native httpx2 one wherever the layers above it can 
   transport would raise, so the policy layers classify it.
 * Closing a response before its body is read aborts the transfer. ``curl_cffi``'s own ``aclose`` waits for the whole
   body to arrive into an unbounded queue, which would defeat headgate's response size cap.
+
+**The SSRF guard** (``HttpOptions(allow_private_hosts=False)``) vets every hop's host before this transport sends it,
+but cannot pin the connection to the address it vetted, because curl resolves the name itself. Pinning would take
+``CURLOPT_RESOLVE`` per request, and ``curl_cffi`` 0.16 sets libcurl options only session-wide, after the handle is
+taken from the pool (an ``await``, so a per-request value would race between concurrent requests), and a resolve entry
+stays in the multi handle's shared DNS cache after the transfer. Over this transport the guard therefore refuses a
+forbidden host, but a rebinding DNS answer between the check and curl's own lookup is not ruled out.
 """
 
 from __future__ import annotations

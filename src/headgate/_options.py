@@ -252,6 +252,8 @@ class HttpOptions:
     * ``headers``: sent on every request; a call's ``headers=`` wins a clash.
     * ``timeout``: :class:`Timeouts`, or a number for the read timeout alone.
     * ``follow_redirects`` and ``max_redirects``: the client's default, which a call can override, and the hop limit.
+      httpx2 counts an auth flow's hops in the same history as redirects, so each request a
+      :class:`~headgate.CachedTokenAuth` mint sends, and a 401 it re-mints after, uses one of ``max_redirects`` too.
     * ``max_response_bytes``: the cap on a buffered body, counted after decompression.
     * ``refusal_check``: a per-host check run on every final response (see :data:`~headgate.RefusalCheck`). It sees
       only the final response, so a refusal written on a followed hop would be skipped, and it therefore requires

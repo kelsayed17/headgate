@@ -209,6 +209,12 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     The hops a :meth:`_mint_flow` yields are addressed by the subclass's own code, so each may carry credentials to the
     origin it names, and the redirects it is answered with stay pinned to that origin (see :mod:`headgate.security`).
 
+    **Every hop counts toward** ``HttpOptions.max_redirects``. httpx2 keeps one history per logical request, and puts
+    each response an auth flow answers with in it beside the redirects, so a mint of *n* hops (and the response a 401
+    re-mint answers) uses *n* of the call's redirect allowance. A client whose mint makes several hops, or whose
+    endpoints redirect too, raises ``max_redirects`` to cover both; past it the call raises ``TransportError``
+    ("Exceeded maximum allowed redirects").
+
     The lock is held while a mint flow's requests are in flight, so requests that need a token wait for the mint to
     finish or fail, bounded by the hop's own timeout. Closing the flow (an error, or the caller's cancellation)
     releases it.
