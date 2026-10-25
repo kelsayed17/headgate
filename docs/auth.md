@@ -68,7 +68,7 @@ Or `_mint_flow(request)` yields the requests the exchange needs, so they travel 
 [`examples/orders_client.py`](../examples/orders_client.py) has a complete one. What the flow can count on:
 
 - **Each response arrives read**, so `.content`, `.text` and `.json()` work on it. It is read up to 1 MiB
-  (`headgate._auth.MAX_MINT_RESPONSE_BYTES`, decompressed); a larger one fails the mint with `ResponseTooLargeError`.
+  (`headgate.MAX_MINT_RESPONSE_BYTES`, decompressed); a larger one fails the mint with `ResponseTooLargeError`.
 - **Each hop is sent with the call's timeouts** unless it sets a `timeout` extension of its own, and every hop's
   timeouts are cut to what the call's deadline leaves, so a token host that never answers cannot hold the call (or
   the other calls waiting for the token) past it.

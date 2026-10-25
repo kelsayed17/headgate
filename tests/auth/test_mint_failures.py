@@ -16,8 +16,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import CachedTokenAuth, HttpOptions, Minted, Timeouts, TransportPolicy
-from headgate._auth import MAX_MINT_RESPONSE_BYTES
+from headgate import MAX_MINT_RESPONSE_BYTES, CachedTokenAuth, HttpOptions, Minted, Timeouts, TransportPolicy
 from headgate._responses import as_bytes, nothing
 from headgate.errors import (
     AuthError,

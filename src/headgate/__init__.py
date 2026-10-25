@@ -11,7 +11,8 @@ picks a codec flavor by importing ``headgate.msgspec`` or ``headgate.pydantic``.
   :class:`TransportPolicy`, :class:`HttpOptions`, :class:`Timeouts`, :class:`IdempotencyKeys`, :class:`Route`,
   :class:`Middleware`, :class:`Observer`;
 * declared responses: :class:`Expect`, :data:`Reader` and the readers, :data:`RefusalCheck`, :class:`RefusedError`;
-* auth: :class:`StaticHeaderAuth`, :class:`QueryParamAuth`, :class:`CachedTokenAuth`, :class:`Minted`;
+* auth: :class:`StaticHeaderAuth`, :class:`QueryParamAuth`, :class:`CachedTokenAuth`, :class:`Minted`,
+  :data:`MAX_MINT_RESPONSE_BYTES`;
 * the policy values: retry (:class:`RetryPolicy`, :class:`Backoff`, :class:`RetryBudget`, :class:`Hedge`,
   :data:`NO_RETRY`), the breaker (:class:`BreakerPolicy`, :class:`BreakerRegistry`), rate limiting (:class:`Rate`,
   :class:`RateBudget`, :class:`RateRule`, :class:`Adaptive`) and the cache (:class:`HttpCache`, its filters,
@@ -24,7 +25,7 @@ The policy layers are subpackages with public paths of their own (:mod:`headgate
 :mod:`headgate.pagination`); events are in :mod:`headgate.events` and the testing kit in :mod:`headgate.testing`.
 """
 
-from headgate._auth import CachedTokenAuth, Minted, QueryParamAuth, StaticHeaderAuth
+from headgate._auth import MAX_MINT_RESPONSE_BYTES, CachedTokenAuth, Minted, QueryParamAuth, StaticHeaderAuth
 from headgate._client import AsyncBaseClient, Method, RequestOptions
 from headgate._core import Observer
 from headgate._middleware import Middleware
@@ -63,6 +64,7 @@ from headgate.retry import NO_RETRY, Backoff, Hedge, RetryBudget, RetryPolicy
 from headgate.streaming import Stream
 
 __all__ = [
+    "MAX_MINT_RESPONSE_BYTES",
     "NO_RETRY",
     "Adaptive",
     "AsyncBaseClient",
