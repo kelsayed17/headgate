@@ -1,19 +1,132 @@
 name: ci
-on: [push, pull_request]
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read # checkout only
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  lint:
+    name: Lint, format and type check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv sync --python 3.14
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.14"
+      - run: uv lock --check
+      - run: uv sync --locked
       - run: uv run ruff check
+      - run: uv run ruff format --check
       - run: uv run ty check
-      - run: uv run python -m pytest
-  core-only:
+
+  test:
+    name: Tests and coverage (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.14"
+      - run: uv sync --locked
+      - run: uv run python -m pytest --cov --cov-report=term-missing
+
+  lowest-dependencies:
+    name: Tests at the lowest declared dependencies
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv venv --python 3.14 /tmp/core && uv pip install --python /tmp/core/bin/python .
-      - run: /tmp/core/bin/python -c "import headgate, headgate.msgspec; from headgate import AsyncBaseClient"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.14"
+      - run: uv sync --resolution lowest-direct
+      - run: uv run python -m pytest
+
+  core-only:
+    name: Install without extras
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.14"
+      - run: uv venv "$RUNNER_TEMP/core" && uv pip install --python "$RUNNER_TEMP/core/bin/python" .
+      - run: >-
+          "$RUNNER_TEMP/core/bin/python" -c
+          "import headgate, headgate.msgspec, headgate.health, headgate.policy; from headgate import AsyncBaseClient"
+
+  audit:
+    name: Dependency vulnerability audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - run: uv audit --frozen --preview-features audit-command
+
+  zizmor:
+    name: Workflow security audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout
+      security-events: write # upload zizmor's SARIF results to code scanning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+
+  benchmarks-smoke:
+    name: Benchmarks run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.14"
+      - run: uv sync --locked
+      - run: uv run python -m pytest benchmarks
+
+  benchmarks:
+    # CPU-simulation and allocation measurements, compared against main on every pull request. Enable by installing
+    # the CodSpeed GitHub app for this repository and setting the repository variable CODSPEED_ENABLED=true.
+    if: vars.CODSPEED_ENABLED == 'true'
+    name: Benchmarks (CodSpeed)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout
+      id-token: write # tokenless CodSpeed upload for a public repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.14"
+      - run: uv sync --locked
+      - uses: CodSpeedHQ/action@78102a468f96d8e0ccb92d0ec49425753fc42062 # v5.6.0
+        with:
+          mode: simulation,memory
+          run: uv run python -m pytest benchmarks --codspeed

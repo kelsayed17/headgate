@@ -4,57 +4,152 @@ build-backend = "hatchling.build"
 
 [project]
 name = "headgate"
-version = "0.1.0"
-description = "An httpx2 client base with retries, rate limiting, a circuit breaker, caching and a declared-response contract."
+version = "0.2.0"
+description = "The async API-client base on httpx2: safe retries, rate budgets, per-origin breakers, credential-safe caching, typed events and declared responses."
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Khaled Elsayed", email = "4119211+kelsayed17@users.noreply.github.com" }]
+keywords = [
+    "http", "http-client", "api-client", "async", "asyncio", "httpx", "httpx2",
+    "retry", "rate-limiting", "circuit-breaker", "caching", "opentelemetry",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
-    "httpx2[http2]>=2.13.1",
+    "httpx2[http2]>=2.16.0",
     "hishel>=1.4.0",
-    "aiolimiter>=1.2.1",
-    "msgspec>=0.22",
+    "msgspec>=0.22.0",
+    # TypeForm (PEP 747) is imported only for type checking; type checkers of client code need it to resolve it.
+    "typing-extensions>=4.15; python_version < '3.15'",
 ]
 
 [project.optional-dependencies]
-pydantic = ["pydantic>=2.12"]
-curl = ["curl_cffi>=0.16.2"]
+pydantic = ["pydantic>=2.14.1"]
+curl = ["curl_cffi>=0.16.3"]
+otel = ["opentelemetry-api>=1.45.1"]
+# hishel's own extra for its async storages: AsyncSqliteStorage imports anysqlite.
+cache = ["hishel[async]>=1.4.0"]
+
+[project.urls]
+Homepage = "https://github.com/kelsayed17/headgate"
+Documentation = "https://github.com/kelsayed17/headgate/tree/main/docs"
+Repository = "https://github.com/kelsayed17/headgate"
+Issues = "https://github.com/kelsayed17/headgate/issues"
+Changelog = "https://github.com/kelsayed17/headgate/blob/main/CHANGELOG.md"
+Security = "https://github.com/kelsayed17/headgate/security/policy"
 
 [dependency-groups]
 dev = [
     "pytest>=9.1",
     "pytest-asyncio>=1.4",
     "syrupy>=6.1.1",
-    "pytest-httpx>=0.36.2",
+    "httpx2-pytest>=2.0.0",
     "time-machine",
-    "anysqlite",
     "ruff",
     "ty",
-    "headgate[pydantic,curl]",
+    "headgate[pydantic,curl,otel,cache]",
+    "opentelemetry-sdk>=1.45.1",
+    "pytest-cov>=7",
+    "pytest-codspeed>=5.0.3",
+    "hypothesis>=6.170",
+    "mutmut>=3.8",
+    "vcrpy>=8.3",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/headgate"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/headgate", "examples", "README.md", "LICENSE", "pyproject.toml"]
+# The source, plus what a downstream packager needs to run the test suite; never local caches.
+include = [
+    "src/headgate",
+    "tests",
+    "examples",
+    "docs",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "pyproject.toml",
+]
+exclude = [".hypothesis", "**/__pycache__", "**/*.pyc", "mutants", ".coverage*", ".codspeed"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_test_loop_scope = "session"
 asyncio_default_fixture_loop_scope = "session"
-addopts = "--import-mode=importlib -p headgate_pytest_alias"
+addopts = "--import-mode=importlib --strict-markers"
 markers = ["transport_policy: the test's subject is the retry/breaker/throttle, so it keeps the real rate-limiter wait"]
 testpaths = ["tests"]
+pythonpath = ["examples"]
 
 [tool.ruff]
 line-length = 120
 target-version = "py314"
+
+[tool.ruff.lint]
+select = ["ALL"]
+# Only rules that cannot be satisfied by construction: COM812 fights the formatter, and pydocstyle's
+# D203/D213 are the mutually exclusive alternatives to the D211/D212 this project follows.
+ignore = ["COM812", "D203", "D213"]
+
+[tool.ruff.lint.per-file-ignores]
+# pytest's assertions are plain ``assert`` statements.
+"tests/**" = ["S101"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+mark-parentheses = false
 
 [tool.uv.sources]
 headgate = { workspace = true }
 
 [tool.ty.environment]
 extra-paths = ["examples"]
+
+[tool.ty.rules]
+all = "error"
+
+[tool.ty.analysis]
+respect-type-ignore-comments = false
+
+[tool.coverage.run]
+branch = true
+source = ["headgate"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
+
+[tool.mutmut]
+source_paths = ["src/"]
+pytest_add_cli_args_test_selection = ["tests/"]
+# Tests of the source's own shape (the API-surface snapshot, the import boundary, the no-logging/no-environment
+# contracts) read the files mutmut rewrites with its trampolines, so mutation runs leave them out; they check structure,
+# not behaviour, and the regular suite still runs them.
+pytest_add_cli_args = [
+    "-p", "no:cacheprovider", "-x", "-q",
+    "--deselect", "tests/package/test_api_surface.py",
+    "--deselect", "tests/package/test_boundaries.py",
+    "--deselect", "tests/package/test_contracts.py",
+]
+# The docs tests run the README's and the guides' examples and check their links, so the pages they read come along.
+also_copy = [
+    "tests/", "examples/", "docs/",
+    "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md", "LICENSE",
+]

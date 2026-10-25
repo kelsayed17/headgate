@@ -5,3 +5,10 @@ dist/
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
+.coverage
+.coverage.*
+htmlcov/
+.codspeed/
+.benchmarks/
+mutants/
+.hypothesis/

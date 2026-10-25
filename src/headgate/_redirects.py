@@ -1,70 +1,86 @@
-"""What a redirect may do to a request: the two hooks every client installs.
+# Copyright (c) 2026 Khaled Elsayed
+# SPDX-License-Identifier: MIT
 
-:func:`drop_followed_redirect_body` is a response hook and :func:`credential_header_guard` a request hook; both are
-installed by :func:`headgate._stack.build_http_client`. :data:`FOLLOW_REDIRECTS_EXT` is the request extension that
-tells the first one whether this request's redirects are being followed.
+"""What a followed redirect may keep and re-send: two response hooks every client installs.
+
+* :func:`drop_followed_redirect_body`: the body of a redirect httpx2 follows is dropped unread.
+* :func:`refuse_unreplayable_redirect`: a redirect that would send a one-shot request body a second time is not
+  followed; its 3xx is the call's final response.
+
+Both are installed by :func:`headgate._stack.build_http_client`; the call's :class:`~headgate._core.CallContext` tells
+them whether this request's redirects are being followed. Where a redirect may take a request, and what credentials it
+may carry there, is :mod:`headgate.security`'s.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Final
 
 import httpx2
 
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+from headgate._core import CallContext
+from headgate.retry import REPLAYABLE_BODY
 
-    from headgate._auth import StaticHeaderAuth
+__all__ = ["drop_followed_redirect_body", "refuse_unreplayable_redirect"]
 
-__all__ = ["FOLLOW_REDIRECTS_EXT", "credential_header_guard", "drop_followed_redirect_body"]
-
-#: Request extension naming whether THIS request's redirects will be followed. ``AsyncBaseClient._request`` sets it;
-#: httpx2 copies a request's extensions onto every redirect hop, so :func:`drop_followed_redirect_body` sees it on each
-#: response.
-FOLLOW_REDIRECTS_EXT = "headgate.follow_redirects"
+#: The redirects httpx2 turns into a body-less GET for a POST (RFC 9110 section 15.4.2 and 15.4.3 allow it).
+_POST_BECOMES_GET: Final = frozenset({httpx2.codes.MOVED_PERMANENTLY, httpx2.codes.FOUND})
 
 
 async def drop_followed_redirect_body(response: httpx2.Response) -> None:
-    """A response hook discarding the body of a redirect httpx2 is about to follow.
+    """Discard the body of a redirect httpx2 is about to follow (a response hook).
 
-    httpx2 reads a followed redirect's body in full inside its own redirect loop, before the next hop — below
-    :func:`~headgate._body.read_capped`, which only ever sees the FINAL response. So a 302 whose body decompressed
-    far past ``max_response_bytes`` was held in memory anyway (a 32 KB gzip body became 32 MB,
-    kept alive in the response history). Nothing reads a followed redirect's body, so it is replaced with an empty stream rather
-    than capped. A redirect that is NOT followed is the final response, and keeps its body for ``read_capped``.
+    httpx2 reads a followed redirect's body in full inside its own redirect loop, before the next hop, and so below
+    :func:`~headgate._body.read_capped`, which only ever sees the final response. A 302 whose body decompressed far
+    past ``max_response_bytes`` would otherwise be held in memory, kept alive in the response history. Nothing reads a
+    followed redirect's body, so it is replaced with an empty stream rather than capped. A redirect that is not followed
+    is the final response, and keeps its body for ``read_capped``. httpx2 hands the call's extensions, and so its
+    context, to every hop.
+
+    An ``AsyncClient`` always hands its hooks an async stream; the ``isinstance`` check only narrows the type.
     """
-    if response.has_redirect_location and response.request.extensions.get(FOLLOW_REDIRECTS_EXT):
-        if isinstance(response.stream, httpx2.AsyncByteStream):
-            await response.stream.aclose()
+    stream = response.stream
+    context = CallContext.find(response.request)
+    if (
+        response.has_redirect_location
+        and context is not None
+        and context.follow_redirects
+        and isinstance(stream, httpx2.AsyncByteStream)
+    ):
+        await stream.aclose()
         response.stream = httpx2.ByteStream(b"")
 
 
-def credential_header_guard(
-    auth: StaticHeaderAuth, base_url: httpx2.URL
-) -> Callable[[httpx2.Request], Awaitable[None]]:
-    """A request hook withholding *auth*'s headers from any hop that leaves *base_url*'s origin.
+def _resends_body(response: httpx2.Response) -> bool:
+    """Return whether httpx2 follows the redirect *response* by sending its request's body again.
 
-    httpx2 strips only ``Authorization`` and ``Cookie`` when a redirect crosses origins, so a credential in any other
-    header followed the redirect wherever it pointed. The guard withholds a ``StaticHeaderAuth``'s headers from any hop
-    that leaves the client's origin. httpx2 runs request hooks before EVERY hop, redirects included, so the redirect is
-    still followed (a provider may legitimately redirect to a signed file URL on another host) and only the credential
-    stays behind.
+    It does for every redirect but a 303, which becomes a GET, and a 301 or 302 answering a POST, which httpx2 turns
+    into a GET as browsers do.
     """
-    names = auth.header_names
-    home = _origin(base_url)
-
-    async def guard(request: httpx2.Request) -> None:
-        if _origin(request.url) != home:
-            for name in names:
-                request.headers.pop(name, None)
-
-    return guard
+    status = response.status_code
+    if status == httpx2.codes.SEE_OTHER:
+        return False
+    return not (status in _POST_BECOMES_GET and response.request.method == "POST")
 
 
-def _origin(url: httpx2.URL) -> tuple[str, str, int | None]:
-    """Scheme, host and port — spelled out because httpx2 types ``URL`` without the ``origin`` httpx2 adds.
+async def refuse_unreplayable_redirect(response: httpx2.Response) -> None:
+    """Stop httpx2 following a redirect that would send a one-shot request body again (a response hook).
 
-    No default-port handling is needed: httpx2 drops a default port while parsing, so ``https://host:443`` (and
-    ``:0443``) already carries ``port=None``, the same as ``https://host``.
+    A ``content=`` given as an async iterable is consumed by the first send (:data:`~headgate.retry.REPLAYABLE_BODY`),
+    so following a 307 or 308 would fail inside httpx2 with ``StreamConsumed``. The ``Location`` is removed instead, as
+    :func:`~headgate.security.refuse_https_downgrade` does: the 3xx reaches the call as its final answer, raised through
+    the status ladder unless the call declares it, with a note saying why. A body given as a factory is built afresh for
+    the next hop, so its redirects are followed.
     """
-    return url.scheme, url.host, url.port
+    if not response.has_redirect_location:
+        return
+    context = CallContext.find(response.request)
+    if context is None or not context.follow_redirects or context.get(REPLAYABLE_BODY) is not False:
+        return
+    if not _resends_body(response):
+        return
+    del response.headers["Location"]
+    context.add_note(
+        f"did not follow the {response.status_code} redirect: it asks for the request body again, and the body was a "
+        "one-shot stream (pass content= a factory to make it replayable)"
+    )
