@@ -2,41 +2,135 @@
   <img src="https://raw.githubusercontent.com/kelsayed17/headgate/main/docs/assets/logo.png" alt="headgate logo: a gate metering a stream of requests" width="160">
 </p>
 
-# headgate
+<h1 align="center">headgate</h1>
 
-[![PyPI](https://img.shields.io/pypi/v/headgate)](https://pypi.org/project/headgate/)
-[![Python](https://img.shields.io/pypi/pyversions/headgate)](https://pypi.org/project/headgate/)
-[![CI](https://github.com/kelsayed17/headgate/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kelsayed17/headgate/actions/workflows/ci.yml)
-[![Coverage: 100%](https://img.shields.io/badge/coverage-100%25-brightgreen)](CONTRIBUTING.md)
-[![Docs](https://img.shields.io/badge/docs-kelsayed17.github.io%2Fheadgate-blue)](https://kelsayed17.github.io/headgate/)
-[![Licence: MIT](https://img.shields.io/pypi/l/headgate)](LICENSE)
+<p align="center">
+  <strong>The Swiss Army knife for HTTP API clients in Python.</strong><br>
+  Retries, rate limits, deadlines, circuit breaking, caching, pagination, streaming, auth and security,<br>
+  in one async base class built on <a href="https://pypi.org/project/httpx2/">httpx2</a>.
+</p>
 
-**An async API-client base for Python, built on [httpx2](https://pypi.org/project/httpx2/).** Subclass
-`AsyncBaseClient`, declare what each endpoint answers, and every client you build gets the same production behaviour:
-retries that re-send only when it is safe, a shared rate budget that listens to the server, a per-origin circuit
-breaker, whole-call deadlines, credentials that never leave your origin, an opt-in cache that never stores them, typed
-events and OpenTelemetry, and errors that say exactly what happened. Each endpoint method stays one line.
+<p align="center">
+  <a href="https://pypi.org/project/headgate/"><img src="https://img.shields.io/pypi/v/headgate" alt="PyPI"></a>
+  <a href="https://pypi.org/project/headgate/"><img src="https://img.shields.io/pypi/pyversions/headgate" alt="Python versions"></a>
+  <a href="https://github.com/kelsayed17/headgate/actions/workflows/ci.yml"><img src="https://github.com/kelsayed17/headgate/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/kelsayed17/headgate/blob/main/CONTRIBUTING.md"><img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="Coverage: 100%"></a>
+  <a href="https://kelsayed17.github.io/headgate/"><img src="https://img.shields.io/badge/docs-kelsayed17.github.io%2Fheadgate-blue" alt="Docs"></a>
+  <a href="https://github.com/kelsayed17/headgate/blob/main/LICENSE"><img src="https://img.shields.io/pypi/l/headgate" alt="Licence: MIT"></a>
+</p>
 
-A headgate controls how much water gets through a channel. This library does the same for requests, in one place,
-so that no client has to get it right on its own.
+<p align="center">
+  <a href="https://kelsayed17.github.io/headgate/"><b>Documentation</b></a> ·
+  <a href="https://kelsayed17.github.io/headgate/comparison/"><b>Compared with others</b></a> ·
+  <a href="https://kelsayed17.github.io/headgate/standards/"><b>Standards</b></a> ·
+  <a href="https://kelsayed17.github.io/headgate/security/"><b>Security</b></a> ·
+  <a href="https://github.com/kelsayed17/headgate/blob/main/CHANGELOG.md"><b>Changelog</b></a>
+</p>
 
-One base class replaces the stack a production client usually grows: an HTTP library, a retry library, a rate limiter,
-a cache, a circuit breaker, an event-stream parser and a mocking library, plus the glue that makes them agree.
+## Why headgate
 
-**Docs:** <https://kelsayed17.github.io/headgate/>. New here? See [how headgate compares](docs/comparison.md) with
-the libraries it replaces, [the standards it follows](docs/standards.md), and a
-[GitHub API client](examples/github_client.py) written with it.
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>🧰 One class, not a stack</h3>
+      A production client usually grows an HTTP library, a retry library, a rate limiter, a cache, a circuit
+      breaker, an event-stream parser, a mocking library and the glue between them. headgate is all of them, built
+      to cooperate: a cache hit is never retried, a retry waits its rate turn, and one deadline bounds the lot.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🛡️ Secure by default</h3>
+      Credentials stay on your origin on every redirect and next-page link. An https-to-http redirect is refused.
+      An SSRF guard with DNS pinning is one option away. Secrets are redacted from every error, and nothing is read
+      from the environment.
+    </td>
+    <td width="33%" valign="top">
+      <h3>📜 Built on the standards</h3>
+      17 RFCs and drafts, followed by default: <code>Retry-After</code>, the IETF <code>RateLimit</code> headers,
+      Problem Details (RFC 9457), <code>Link</code> pagination (RFC 8288), <code>Idempotency-Key</code>,
+      <code>Deprecation</code> and <code>Sunset</code>, and more.
+    </td>
+  </tr>
+</table>
 
-## Requirements and install
+## A client in one screen
 
-Python 3.14 or newer, and `httpx2`, pydantic's fork of httpx.
+A client is a subclass. The configuration lives in `__init__`, and each endpoint method stays one line. This is part
+of [`examples/github_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/github_client.py), a tested client for the GitHub REST API:
 
-- **Why 3.14:** endpoint paths are [template strings](https://peps.python.org/pep-0750/) (`t"orders/{order_id}"`), so
-  each value is escaped into its own path segment by default: `BTC/USD` becomes `BTC%2FUSD` instead of a new path.
-  Template strings exist only from Python 3.14.
-- **Why httpx2:** headgate is built and tested on it alone. Its API is httpx's, so moving a client over is mostly
-  `import httpx2` where you had `import httpx`. Upstream `httpx` is not supported: passing one of its objects raises a
-  `TypeError` naming the mistake. See [why httpx2](docs/comparison.md#why-httpx2).
+```python
+from headgate import AsyncBaseClient, Expect, HttpOptions, LinkHeader, Rate, RateBudget, StaticHeaderAuth, nothing
+from headgate.msgspec import decoder
+
+# Readers and pagers are values: build them once, at import, where a bad declaration fails.
+REPOSITORY = decoder(Repository)
+REPOSITORY_OR_NONE = Expect(REPOSITORY).on(HTTPStatus.NOT_FOUND, nothing)  # a missing or hidden repository
+ISSUES = decoder(list[Issue])
+ISSUE_PAGES = LinkHeader(items=_issues)
+
+
+class GitHub(AsyncBaseClient):
+    """Read repositories and their open issues from the GitHub REST API."""
+
+    def __init__(self, token: str, *, transport: httpx2.AsyncBaseTransport | None = None) -> None:
+        """Authenticate with *token*; *transport* replaces the network, as a test does."""
+        super().__init__(
+            base_url=API,
+            # Well under the 5,000 requests an hour a token gets, and never more than 50 at once.
+            rate=RateBudget(Rate.per_second(10), max_in_flight=50),
+            auth=StaticHeaderAuth({"Authorization": f"Bearer {token}"}),
+            http=HttpOptions(
+                transport=transport,
+                headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
+            ),
+        )
+
+    async def repository(self, owner: str, name: str) -> Repository | None:
+        """Return the repository *owner*/*name*, or ``None`` when it does not exist or the token cannot see it."""
+        return await self.get(t"repos/{owner}/{name}", expect=REPOSITORY_OR_NONE)
+
+    def open_issues(self, owner: str, name: str) -> Paginated[list[Issue], Issue]:
+        """Return the open issues (and pull requests) of *owner*/*name*, 100 a page, fetched as they are iterated."""
+        params = {"state": "open", "per_page": 100}
+        return self.paginate(t"repos/{owner}/{name}/issues", expect=ISSUES, pages=ISSUE_PAGES, params=params)
+```
+
+Nothing in those methods mentions retries, pacing, GitHub's `X-RateLimit-*` headers, timeouts or where the token may
+go, and nothing needs to. Those come from the base class.
+
+## What it replaces
+
+| Job | What people usually add | In headgate |
+| --- | --- | --- |
+| 🔁 Retries | tenacity, stamina, backoff | [`RetryPolicy`](https://kelsayed17.github.io/headgate/retries/): safe re-sends only, `Retry-After` obeyed, a budget across calls |
+| 🚦 Rate limits | aiolimiter, pyrate-limiter | [`RateBudget`](https://kelsayed17.github.io/headgate/rate-budgets/): paced, and paused when the server says so |
+| ⏱️ Deadlines | `asyncio.timeout` around each call, by hand | [one deadline](https://kelsayed17.github.io/headgate/deadlines/) over every attempt, wait and read |
+| 🔌 Circuit breaking | pybreaker, purgatory | [a breaker per origin](https://kelsayed17.github.io/headgate/breaker/), charged only for the host's own failures |
+| 🗄️ Caching | hishel, requests-cache | [hishel](https://kelsayed17.github.io/headgate/caching/), partitioned by credential |
+| 📄 Pagination | a loop per endpoint | [`paginate()`](https://kelsayed17.github.io/headgate/pagination/): cursors, offsets, `Link` headers, next URLs |
+| 📡 Server-sent events | httpx-sse | [`stream().aiter_events()`](https://kelsayed17.github.io/headgate/streaming/#server-sent-events), with resume |
+| 🧪 Test doubles | respx, pytest-httpx | [`headgate.testing`](https://kelsayed17.github.io/headgate/testing/): a fake network and a clock that makes waits instant |
+
+### Compared with HTTP clients
+
+✅ built in · 🧩 with another library or your own code · ➖ not available
+
+| | requests | httpx | aiohttp | **headgate** |
+| --- | :---: | :---: | :---: | :---: |
+| Async | ➖ | ✅ | ✅ | ✅ |
+| Retries that wait for `Retry-After` | 🧩 | 🧩 | 🧩 | ✅ |
+| One deadline over every retry | 🧩 | 🧩 | 🧩 | ✅ |
+| Rate limiting that obeys the server | 🧩 | 🧩 | 🧩 | ✅ |
+| Circuit breaker | 🧩 | 🧩 | 🧩 | ✅ |
+| Every credential kept off other hosts | 🧩 | 🧩 | 🧩 | ✅ |
+| SSRF guard with DNS pinning | 🧩 | 🧩 | 🧩 | ✅ |
+| RFC 9457 problem details parsed | ➖ | ➖ | ➖ | ✅ |
+| Test fakes | 🧩 | 🧩 | 🧩 | ✅ |
+
+The [full comparison](https://kelsayed17.github.io/headgate/comparison/) covers about 30 libraries, and says when each is the better pick.
+
+## Install
+
+Python 3.14 or newer.
 
 ```bash
 pip install headgate               # or: uv add headgate. Brings httpx2[http2], hishel and msgspec
@@ -46,10 +140,23 @@ pip install 'headgate[otel]'       # + OpenTelemetryObserver (opentelemetry-api 
 pip install 'headgate[cache]'      # + what hishel's AsyncSqliteStorage needs (hishel[async]: anysqlite)
 ```
 
+<details>
+<summary><b>Why Python 3.14, and why httpx2?</b></summary>
+
+- **Why 3.14:** endpoint paths are [template strings](https://peps.python.org/pep-0750/) (`t"orders/{order_id}"`), so
+  each value is escaped into its own path segment by default: `BTC/USD` becomes `BTC%2FUSD` instead of a new path.
+  Template strings exist only from Python 3.14.
+- **Why httpx2:** it is pydantic's maintained fork of httpx, and headgate is built and tested on it alone. Its API is
+  httpx's, so moving a client over is mostly `import httpx2` where you had `import httpx`. Upstream `httpx` is not
+  supported: passing one of its objects raises a `TypeError` naming the mistake. See
+  [why httpx2](https://kelsayed17.github.io/headgate/comparison/#why-httpx2).
+
+</details>
+
 ## Quickstart
 
-A client is a subclass that fixes its configuration in `super().__init__()` and exposes one method per endpoint. A
-path is a t-string, so every value is escaped as one segment; `expect=` declares what the endpoint answers.
+A walkthrough of a whole client: typed responses, a declared 404, and cursor pagination. A path is a t-string, so
+every value is escaped as one segment; `expect=` declares what the endpoint answers.
 
 ```python
 from http import HTTPStatus
@@ -144,36 +251,36 @@ async def main(api_key: str) -> tuple[float, Series | None, list[str]]:
 Nothing in those methods mentions retries, rate limits, timeouts or credentials, and nothing needs to:
 `get_series("GDP")` is paced by the client's budget, bounded by a 60-second deadline, retried on a 503 or a dropped
 connection, refused fast while the origin's breaker is open, and fails with an error that names the client, the
-request line, the status, the request id and every attempt. [`examples/`](examples/) has this client, the same client
-in both codec flavors, and a fuller one ([`orders_client.py`](examples/orders_client.py)): a minted OAuth token, an
+request line, the status, the request id and every attempt. [`examples/`](https://github.com/kelsayed17/headgate/tree/main/examples/) has this client, the same client
+in both codec flavors, and a fuller one ([`orders_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/orders_client.py)): a minted OAuth token, an
 idempotent POST, a declared business refusal, `Link`-header pages and a streamed export.
 
 ## What every client gets
 
 | Capability | What it does by default | Guide |
 | --- | --- | --- |
-| Declared responses | A reader for any 2xx, `Expect(...).on(status, reader)` for documented non-2xx answers; anything else raises | [responses](docs/responses.md) |
-| Retries | 3 sends with jittered backoff; idempotent methods after a network failure or a 408, 425, 429, 500, 502, 503, 504; a POST only when provably unprocessed or keyed | [retries](docs/retries.md) |
-| Retry budget and hedging | Retries capped at 20% of first attempts (plus 10 a second) per client; opt-in hedged sends for slow idempotent calls | [retries](docs/retries.md#the-retry-budget) |
-| `Retry-After` | Waited exactly up to 30 s, past that raised with `retry_after` set | [retries](docs/retries.md#retry-after) |
-| Rate budgets | GCRA pacing, shareable across clients and threads, per-path lanes, an optional in-flight cap | [rate budgets](docs/rate-budgets.md) |
-| Server feedback | 429/503 and `RateLimit` / `X-RateLimit-*` headers pause the whole budget; adaptive throttling (AIMD) | [rate budgets](docs/rate-budgets.md#server-feedback) |
-| Circuit breaker | Per origin, opens after 5 consecutive origin failures, one probe after 60 s | [breaker](docs/breaker.md) |
-| Deadlines and timeouts | 60 s for the whole call; each attempt's timeouts cut to what is left | [deadlines](docs/deadlines.md) |
-| Credentials stay home | Auth headers and params go only to `base_url`'s origin and `trusted_origins`, on every hop | [security](docs/security.md) |
-| Redirect hardening | No `https` to `http` downgrade, a hop limit, no re-sent one-shot body | [security](docs/security.md#redirects) |
-| SSRF guard | Opt-in: refuse private, loopback and other non-global addresses, pinned at connect time | [security](docs/security.md#the-ssrf-guard) |
-| Response cap | 32 MiB per buffered body, counted after decompression | [configuration](docs/configuration.md#httpoptions) |
-| Caching | Opt-in hishel cache, partitioned by credential, never storing one; coalesced identical GETs; conditional reads | [caching](docs/caching.md) |
-| Streaming and uploads | `stream()` for bodies and server-sent events with resume; raw, streamed and multipart request bodies | [streaming](docs/streaming.md) |
-| Pagination | `paginate()` with `Cursor`, `Offset`, `LinkHeader` or `NextUrl`, lazy, loop-safe, bounded by pages or items | [pagination](docs/pagination.md) |
-| Errors | One `ClientError` tree; method, URL, request id, attempts, `retryable`, `retry_after`, RFC 9457 problems | [errors](docs/errors.md) |
-| Auth | Static headers, query keys, and a cached minted token with one re-mint on a 401 | [auth](docs/auth.md) |
-| Observability | Typed events, OpenTelemetry spans and metrics, request ids, `Deprecation` / `Sunset` notices, health snapshots | [observability](docs/observability.md) |
-| Testing kit | `FakeTransport`, `FaultyTransport`, `TestClock`, `isolated_breakers`, vcrpy cassette filters | [testing](docs/testing.md) |
-| Per-call options | `retry=`, `deadline=`, `timeout=`, `idempotency_key=`, `cache_ttl=`, and `with_options()` views | [configuration](docs/configuration.md#per-call-options) |
+| Declared responses | A reader for any 2xx, `Expect(...).on(status, reader)` for documented non-2xx answers; anything else raises | [responses](https://kelsayed17.github.io/headgate/responses/) |
+| Retries | 3 sends with jittered backoff; idempotent methods after a network failure or a 408, 425, 429, 500, 502, 503, 504; a POST only when provably unprocessed or keyed | [retries](https://kelsayed17.github.io/headgate/retries/) |
+| Retry budget and hedging | Retries capped at 20% of first attempts (plus 10 a second) per client; opt-in hedged sends for slow idempotent calls | [retries](https://kelsayed17.github.io/headgate/retries/#the-retry-budget) |
+| `Retry-After` | Waited exactly up to 30 s, past that raised with `retry_after` set | [retries](https://kelsayed17.github.io/headgate/retries/#retry-after) |
+| Rate budgets | GCRA pacing, shareable across clients and threads, per-path lanes, an optional in-flight cap | [rate budgets](https://kelsayed17.github.io/headgate/rate-budgets/) |
+| Server feedback | 429/503 and `RateLimit` / `X-RateLimit-*` headers pause the whole budget; adaptive throttling (AIMD) | [rate budgets](https://kelsayed17.github.io/headgate/rate-budgets/#server-feedback) |
+| Circuit breaker | Per origin, opens after 5 consecutive origin failures, one probe after 60 s | [breaker](https://kelsayed17.github.io/headgate/breaker/) |
+| Deadlines and timeouts | 60 s for the whole call; each attempt's timeouts cut to what is left | [deadlines](https://kelsayed17.github.io/headgate/deadlines/) |
+| Credentials stay home | Auth headers and params go only to `base_url`'s origin and `trusted_origins`, on every hop | [security](https://kelsayed17.github.io/headgate/security/) |
+| Redirect hardening | No `https` to `http` downgrade, a hop limit, no re-sent one-shot body | [security](https://kelsayed17.github.io/headgate/security/#redirects) |
+| SSRF guard | Opt-in: refuse private, loopback and other non-global addresses, pinned at connect time | [security](https://kelsayed17.github.io/headgate/security/#the-ssrf-guard) |
+| Response cap | 32 MiB per buffered body, counted after decompression | [configuration](https://kelsayed17.github.io/headgate/configuration/#httpoptions) |
+| Caching | Opt-in hishel cache, partitioned by credential, never storing one; coalesced identical GETs; conditional reads | [caching](https://kelsayed17.github.io/headgate/caching/) |
+| Streaming and uploads | `stream()` for bodies and server-sent events with resume; raw, streamed and multipart request bodies | [streaming](https://kelsayed17.github.io/headgate/streaming/) |
+| Pagination | `paginate()` with `Cursor`, `Offset`, `LinkHeader` or `NextUrl`, lazy, loop-safe, bounded by pages or items | [pagination](https://kelsayed17.github.io/headgate/pagination/) |
+| Errors | One `ClientError` tree; method, URL, request id, attempts, `retryable`, `retry_after`, RFC 9457 problems | [errors](https://kelsayed17.github.io/headgate/errors/) |
+| Auth | Static headers, query keys, and a cached minted token with one re-mint on a 401 | [auth](https://kelsayed17.github.io/headgate/auth/) |
+| Observability | Typed events, OpenTelemetry spans and metrics, request ids, `Deprecation` / `Sunset` notices, health snapshots | [observability](https://kelsayed17.github.io/headgate/observability/) |
+| Testing kit | `FakeTransport`, `FaultyTransport`, `TestClock`, `isolated_breakers`, vcrpy cassette filters | [testing](https://kelsayed17.github.io/headgate/testing/) |
+| Per-call options | `retry=`, `deadline=`, `timeout=`, `idempotency_key=`, `cache_ttl=`, and `with_options()` views | [configuration](https://kelsayed17.github.io/headgate/configuration/#per-call-options) |
 
-How the pieces fit together, for contributors and the curious: [design](docs/design.md).
+How the pieces fit together, for contributors and the curious: [design](https://kelsayed17.github.io/headgate/design/).
 
 ## The contracts
 
@@ -193,6 +300,9 @@ How the pieces fit together, for contributors and the curious: [design](docs/des
 `AsyncBaseClient(*, base_url, rate, auth=None, policy=TransportPolicy(), http=HttpOptions())`. `rate` is a `Rate` (a
 budget of the client's own) or a `RateBudget` shared with other clients. `TransportPolicy` says what the stack does to
 every request, `HttpOptions` how requests are sent and read. Both are frozen and validate on construction.
+
+<details>
+<summary><b>A fuller client's configuration</b></summary>
 
 ```python
 class OrdersClient(AsyncBaseClient):
@@ -227,6 +337,8 @@ class OrdersClient(AsyncBaseClient):
         )
 ```
 
+</details>
+
 | `TransportPolicy` | Default | | `HttpOptions` | Default |
 | --- | --- | --- | --- | --- |
 | `retry` | `RetryPolicy()`: 3 attempts | | `timeout` | `Timeouts(connect=10, read=30, write=10, pool=15)` |
@@ -238,7 +350,7 @@ class OrdersClient(AsyncBaseClient):
 | `routes` | none | | `observers`, `middleware` | none |
 
 Every option, its validation and the precedence of call, view, route and policy:
-[configuration](docs/configuration.md).
+[configuration](https://kelsayed17.github.io/headgate/configuration/).
 
 ## Per-call options
 
@@ -282,7 +394,7 @@ def gateway_status(error: ClientError) -> HTTPStatus:
             return HTTPStatus.BAD_GATEWAY  # the upstream failed, refused us, or sent something unreadable
 ```
 
-More in [errors](docs/errors.md).
+More in [errors](https://kelsayed17.github.io/headgate/errors/).
 
 ## Testing your client
 
@@ -323,7 +435,7 @@ async def test_a_503_is_retried_after_the_wait_it_asks_for() -> None:
     assert clock.sleeps == [2.0]
 ```
 
-Fault schedules, cassettes and switching the policy off: [testing](docs/testing.md).
+Fault schedules, cassettes and switching the policy off: [testing](https://kelsayed17.github.io/headgate/testing/).
 
 ## Codec flavors
 
@@ -349,9 +461,9 @@ uv run --only-group docs zensical serve   # preview the docs site at http://loca
 ```
 
 Lint selects every ruff rule, ty treats every rule as an error, and suppression comments are not accepted. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for the rules a change must keep, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for how we
-work together, and [SECURITY.md](SECURITY.md) to report a vulnerability privately. The changes in each release are in
-[CHANGELOG.md](CHANGELOG.md).
+[CONTRIBUTING.md](https://github.com/kelsayed17/headgate/blob/main/CONTRIBUTING.md) for the rules a change must keep, [CODE_OF_CONDUCT.md](https://github.com/kelsayed17/headgate/blob/main/CODE_OF_CONDUCT.md) for how we
+work together, and [SECURITY.md](https://github.com/kelsayed17/headgate/blob/main/SECURITY.md) to report a vulnerability privately. The changes in each release are in
+[CHANGELOG.md](https://github.com/kelsayed17/headgate/blob/main/CHANGELOG.md).
 
 ## Licence
 
