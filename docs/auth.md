@@ -65,7 +65,7 @@ class PartnerAuth(CachedTokenAuth):
 
 Or `_mint_flow(request)` yields the requests the exchange needs, so they travel through the owning client's own stack
 (its transport, rate budget, retries and error mapping), and ends by yielding `Minted(token, lifetime)`.
-[`examples/orders_client.py`](../examples/orders_client.py) has a complete one. What the flow can count on:
+[`examples/orders_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/orders_client.py) has a complete one. What the flow can count on:
 
 - **Each response arrives read**, so `.content`, `.text` and `.json()` work on it. It is read up to 1 MiB
   (`headgate.MAX_MINT_RESPONSE_BYTES`, decompressed); a larger one fails the mint with `ResponseTooLargeError`.

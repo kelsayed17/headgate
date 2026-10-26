@@ -4,7 +4,7 @@
 with nothing private patched. Two seams make that possible:
 
 - **the network** is `HttpOptions(transport=...)`. Have the client accept a transport and pass it through, as the
-  [examples](../examples/) do: `CatalogClient(api_key, transport=fake)`;
+  [examples](https://github.com/kelsayed17/headgate/tree/main/examples) do: `CatalogClient(api_key, transport=fake)`;
 - **time and breaker state** are read when a client is **constructed**, from context variables the kit's context
   managers set. Build the client inside them; entering one around a client that already exists changes nothing.
 
