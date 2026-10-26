@@ -1,23 +1,95 @@
+---
+title: An async API-client base for Python
+hide:
+  - toc
+---
+
+<div class="hg-hero" markdown>
+
+![headgate logo](assets/logo.png)
+
+<div markdown>
+
 # headgate
 
 **An async API-client base for Python, built on [httpx2](https://pypi.org/project/httpx2/).** Subclass
-`AsyncBaseClient`, declare what each endpoint answers, and every client you build gets the same production behaviour:
-
-- **retries that re-send only when it is safe**: idempotent methods, or a POST under an idempotency key, with
-  `Retry-After` honoured and a budget across calls;
-- **a shared rate budget that listens to the server**: `RateLimit` and `X-RateLimit-*` headers pause it, and pushback
-  slows it down;
-- **a per-origin circuit breaker** and **whole-call deadlines** that bound every wait and retry;
-- **credentials that never leave your origin**, and an opt-in **cache that never stores them**;
-- **typed events and OpenTelemetry**, and **errors that say exactly what happened**.
-
+`AsyncBaseClient`, declare what each endpoint answers, and every client you build gets the same production behaviour.
 Each endpoint method stays one line.
+
+[Get started](#install){ .md-button .md-button--primary }
+[How it compares](comparison.md){ .md-button }
+[:fontawesome-brands-github: GitHub](https://github.com/kelsayed17/headgate){ .md-button }
+
+</div>
+
+</div>
+
+<div class="grid cards" markdown>
+
+-   :lucide-rotate-cw:{ .lg .hg-icon } **Retries that are safe**
+
+    ---
+
+    Idempotent methods only, or a POST under an idempotency key. `Retry-After` is waited exactly, and a budget stops
+    retries multiplying an outage.
+
+    [:lucide-arrow-right: Retries](retries.md)
+
+-   :lucide-gauge:{ .lg .hg-icon } **A rate budget that listens**
+
+    ---
+
+    One budget shared by every call, paused by `RateLimit` and `X-RateLimit-*` headers and slowed by pushback.
+
+    [:lucide-arrow-right: Rate budgets](rate-budgets.md)
+
+-   :lucide-timer:{ .lg .hg-icon } **Deadlines and a breaker**
+
+    ---
+
+    One deadline bounds every attempt, wait and read. A per-origin circuit breaker stops calls to a host that is down.
+
+    [:lucide-arrow-right: Deadlines](deadlines.md) · [Circuit breaker](breaker.md)
+
+-   :lucide-key-round:{ .lg .hg-icon } **Credentials that stay home**
+
+    ---
+
+    Credentials are pinned to their origin, an https-to-http redirect is refused, and an SSRF guard is one option away.
+
+    [:lucide-arrow-right: Security](security.md)
+
+-   :lucide-database-zap:{ .lg .hg-icon } **A cache that keeps no secrets**
+
+    ---
+
+    hishel's cache, partitioned by credential, never storing one, and storing only what your reader accepted.
+
+    [:lucide-arrow-right: Caching](caching.md)
+
+-   :lucide-activity:{ .lg .hg-icon } **Errors and events that explain**
+
+    ---
+
+    Typed errors that say what happened and whether to retry, typed events, and an OpenTelemetry observer.
+
+    [:lucide-arrow-right: Errors](errors.md) · [Observability](observability.md)
+
+</div>
 
 ## Install
 
-```bash
-pip install headgate   # or: uv add headgate
-```
+=== "pip"
+
+    ```bash
+    pip install headgate
+    ```
+
+=== "uv"
+
+    ```bash
+    uv add headgate
+    ```
 
 headgate needs **Python 3.14** or newer: endpoint paths are [template strings](https://peps.python.org/pep-0750/), so
 each value is escaped into its own path segment by default. It runs on **httpx2**, pydantic's fork of httpx; see

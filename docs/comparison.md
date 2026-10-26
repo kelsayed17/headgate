@@ -1,3 +1,8 @@
+---
+hide:
+  - toc
+---
+
 # Compared with others
 
 headgate is a base for **HTTP API clients**: it owns the whole call, from building the request to reading the body,
@@ -5,6 +10,8 @@ and handles the concerns every client shares. The libraries people usually reach
 for any code. This page says what that difference buys, and when to use them instead.
 
 ## At a glance
+
+<div class="hg-compare" markdown>
 
 | | tenacity | stamina | a hand-rolled httpx client | headgate |
 | --- | --- | --- | --- | --- |
@@ -20,6 +27,8 @@ for any code. This page says what that difference buys, and when to use them ins
 | Credential safety | n/a | n/a | write it yourself | credentials pinned to their origin, an https-to-http redirect refused, an optional SSRF guard |
 | Observability | `before_sleep` and other hooks | instrumentation built in | write it yourself | typed events and an OpenTelemetry observer |
 | Test support | none built in | `set_testing()` | patch what you must | `headgate.testing`: a fake network, instant retries, failure schedules, a test clock |
+
+</div>
 
 ## When to use something else
 
