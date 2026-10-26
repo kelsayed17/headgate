@@ -6,6 +6,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-26
+
+Adds `Paginated.collect()`, so a walk becomes a list in one call, bounded by items as well as pages. Nothing changes for
+existing code.
+
 ### Added
 
 - `Paginated.collect(max_items=None)` returns a walk's items as a list; with `max_items`, at most that many, fetching
@@ -243,7 +248,8 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/kelsayed17/headgate/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kelsayed17/headgate/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/kelsayed17/headgate/compare/159a3c2...v0.3.0
 [0.2.0]: https://github.com/kelsayed17/headgate/compare/f319ad8...159a3c2
