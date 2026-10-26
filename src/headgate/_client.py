@@ -107,7 +107,7 @@ if TYPE_CHECKING:
     from headgate._responses import RefusalCheck
     from headgate.breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
-    from headgate.pagination import Pager
+    from headgate.pagination import PageLimit, Pager
     from headgate.ratelimit import Rate, RateBudget
 
 __all__ = ["AsyncBaseClient", "Method", "RequestOptions"]
@@ -460,6 +460,7 @@ class AsyncBaseClient:
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I],
         retry: bool | RetryPolicy = True,
+        limit: PageLimit | None = None,
         **options: Unpack[RequestOptions],
     ) -> Paginated[P, I]:
         """Return the pages *pages* follows from the GET of *url*, each read through *expect*, iterated lazily.
@@ -468,6 +469,10 @@ class AsyncBaseClient:
         pages. Each page is a GET through the whole stack, fetched only when the iteration reaches it, and a next-page
         URL taken from a response is sent as an absolute URL, under the same credential and destination rules as any
         other. Iterating again starts again from the first page.
+
+        *limit* is a page budget (:class:`~headgate.PageLimit`): at most ``max_pages`` pages are fetched. When more
+        would follow, the walk raises :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or
+        with ``on_limit="stop"`` ends there. A walk that ends within the budget is unaffected.
 
         :raises ValueError: for a body option (``json``, ``data``, ``content``, ``files``): pages are GETs.
         """
@@ -484,7 +489,7 @@ class AsyncBaseClient:
             page_options["params"] = request.params
             return await self.get(request.url, expect=paired, retry=retry, **page_options)
 
-        return Paginated(fetch, pages, first, source=self._source)
+        return Paginated(fetch, pages, first, source=self._source, limit=limit)
 
     # A call, end to end.
 

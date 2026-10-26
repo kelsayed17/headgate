@@ -82,12 +82,15 @@ def _absolute(response: httpx2.Response, target: str) -> PageRequest:
 class Cursor[P, I]:
     """Pages linked by an opaque cursor: ``next`` reads it from a page, and it is sent back as the query ``param``.
 
-    The last page is the one whose ``next`` returns ``None`` or ``""``.
+    The last page is the one whose ``next`` returns ``None`` or ``""``, or one with no items: a cursor that advances
+    while returning nothing makes no progress. Set ``stop_on_empty=False`` for an endpoint that sends empty pages
+    mid-walk.
     """
 
     items: Callable[[P], Sequence[I]]
     next: Callable[[P], str | None]
     param: str
+    stop_on_empty: bool = True
 
     def __post_init__(self) -> None:
         """Refuse an empty parameter name."""
@@ -102,8 +105,10 @@ class Cursor[P, I]:
         return self.items(page)
 
     def next_page(self, page: P, request: PageRequest, response: httpx2.Response) -> PageRequest | None:
-        """Return *request* carrying *page*'s cursor, or ``None`` when it has none."""
+        """Return *request* carrying *page*'s cursor, or ``None`` when it has none or (by default) no items."""
         del response
+        if self.stop_on_empty and not self.items(page):
+            return None
         cursor = self.next(page)
         return request.with_param(self.param, cursor) if bool(cursor) else None
 
@@ -153,9 +158,14 @@ class Offset[P, I]:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class LinkHeader[P, I]:
-    """Pages linked by the response's ``Link`` header: the target of its ``rel="next"`` link is the next page."""
+    """Pages linked by the response's ``Link`` header: the target of its ``rel="next"`` link is the next page.
+
+    The last page is the one with no ``rel="next"`` link, or one with no items (``stop_on_empty=False`` follows the
+    link past an empty page).
+    """
 
     items: Callable[[P], Sequence[I]]
+    stop_on_empty: bool = True
 
     def first(self, request: PageRequest) -> PageRequest:
         """Return *request* unchanged."""
@@ -166,8 +176,10 @@ class LinkHeader[P, I]:
         return self.items(page)
 
     def next_page(self, page: P, request: PageRequest, response: httpx2.Response) -> PageRequest | None:
-        """Return the request for *response*'s ``rel="next"`` link, or ``None`` when it has none."""
-        del page, request
+        """Return the request for *response*'s ``rel="next"`` link, or ``None`` when it has none or *page* is empty."""
+        del request
+        if self.stop_on_empty and not self.items(page):
+            return None
         target = next_link(response.headers)
         return None if target is None else _absolute(response, target)
 
@@ -176,11 +188,13 @@ class LinkHeader[P, I]:
 class NextUrl[P, I]:
     """Pages linked by a URL in the body: ``next`` reads the next page's URL (absolute or relative) from a page.
 
-    The last page is the one whose ``next`` returns ``None`` or ``""``.
+    The last page is the one whose ``next`` returns ``None`` or ``""``, or one with no items (``stop_on_empty=False``
+    follows the URL past an empty page).
     """
 
     items: Callable[[P], Sequence[I]]
     next: Callable[[P], str | None]
+    stop_on_empty: bool = True
 
     def first(self, request: PageRequest) -> PageRequest:
         """Return *request* unchanged."""
@@ -191,7 +205,9 @@ class NextUrl[P, I]:
         return self.items(page)
 
     def next_page(self, page: P, request: PageRequest, response: httpx2.Response) -> PageRequest | None:
-        """Return the request for *page*'s next URL, or ``None`` when it names none."""
+        """Return the request for *page*'s next URL, or ``None`` when it names none or (by default) has no items."""
         del request
+        if self.stop_on_empty and not self.items(page):
+            return None
         target = self.next(page)
         return _absolute(response, target) if bool(target) else None
