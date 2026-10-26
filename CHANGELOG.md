@@ -6,8 +6,27 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-26
+
+Fixes four bugs where a call's deadline, its timeouts, the rate budget and the cache disagreed. One of them makes a
+configuration that could never work an error, so this is a minor release: see **Changed**.
+
+### Added
+
+- `headgate.ratelimit.BudgetBacklogError`, raised by `RateBudget.wait` when a call's paced turn comes after its deadline.
+
+### Changed
+
+- A timeout longer than the deadline it runs under is refused with `ValueError` on the client, a view or a call, since
+  it could never take effect ([#6](https://github.com/kelsayed17/headgate/issues/6)). Raise the deadline with it, e.g.
+  `with_options(timeout=300.0, deadline=600.0)`.
+- A body past `max_response_bytes` is no longer stored in the cache, since it is not held to be written on accept.
+
 ### Fixed
 
+- A cached miss is stored only once the call's reader accepts it, so a refusal inside a 200, an undecodable body or an
+  undeclared status is no longer served from the cache for the entry's lifetime
+  ([#9](https://github.com/kelsayed17/headgate/issues/9)). A `stream()` is accepted when its head checks pass.
 - Identical concurrent GETs share one cached download again when their timeouts are longer than the time their deadline
   leaves; the sharing key now uses the timeouts the call asked for, not the deadline-cut ones
   ([#4](https://github.com/kelsayed17/headgate/issues/4)).
@@ -16,21 +35,6 @@ change the public API; such changes are listed under **Changed** and **Removed**
   cannot be sent in time ends the call with the failure it already has, and such a hedge is not sent. A deadline that
   passes before an attempt is sent says so, and `attempts` counts only the sends made
   ([#5](https://github.com/kelsayed17/headgate/issues/5)).
-
-- A cached miss is stored only once the call's reader accepts it, so a refusal inside a 200, an undecodable body or an
-  undeclared status is no longer served from the cache for the entry's lifetime
-  ([#9](https://github.com/kelsayed17/headgate/issues/9)). A `stream()` is accepted when its head checks pass.
-
-### Changed
-
-- A body past `max_response_bytes` is no longer stored, since it is not held to be written on accept.
-- A timeout longer than the deadline it runs under is refused with `ValueError` on the client, a view or a call, since
-  it could never take effect ([#6](https://github.com/kelsayed17/headgate/issues/6)). Raise the deadline with it, e.g.
-  `with_options(timeout=300.0, deadline=600.0)`.
-
-### Added
-
-- `headgate.ratelimit.BudgetBacklogError`, raised by `RateBudget.wait` when a call's paced turn comes after its deadline.
 
 ## [0.2.0] - 2026-10-25
 
@@ -211,6 +215,7 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/159a3c2...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/kelsayed17/headgate/compare/159a3c2...v0.3.0
 [0.2.0]: https://github.com/kelsayed17/headgate/compare/f319ad8...159a3c2
 [0.1.0]: https://github.com/kelsayed17/headgate/commit/f319ad8
