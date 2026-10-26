@@ -4,6 +4,13 @@
 
 # headgate
 
+[![PyPI](https://img.shields.io/pypi/v/headgate)](https://pypi.org/project/headgate/)
+[![Python](https://img.shields.io/pypi/pyversions/headgate)](https://pypi.org/project/headgate/)
+[![CI](https://github.com/kelsayed17/headgate/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kelsayed17/headgate/actions/workflows/ci.yml)
+[![Coverage: 100%](https://img.shields.io/badge/coverage-100%25-brightgreen)](CONTRIBUTING.md)
+[![Docs](https://img.shields.io/badge/docs-kelsayed17.github.io%2Fheadgate-blue)](https://kelsayed17.github.io/headgate/)
+[![Licence: MIT](https://img.shields.io/pypi/l/headgate)](LICENSE)
+
 **An async API-client base for Python, built on [httpx2](https://pypi.org/project/httpx2/).** Subclass
 `AsyncBaseClient`, declare what each endpoint answers, and every client you build gets the same production behaviour:
 retries that re-send only when it is safe, a shared rate budget that listens to the server, a per-origin circuit
@@ -13,10 +20,19 @@ events and OpenTelemetry, and errors that say exactly what happened. Each endpoi
 A headgate controls how much water gets through a channel. This library does the same for requests, in one place,
 so that no client has to get it right on its own.
 
+**Docs:** <https://kelsayed17.github.io/headgate/>. New here? See [how headgate compares](docs/comparison.md) with
+tenacity, stamina and a hand-rolled client, and a [GitHub API client](examples/github_client.py) written with it.
+
 ## Requirements and install
 
-Python 3.14 or newer (endpoint paths are t-strings) and `httpx2`, pydantic's fork of httpx. Upstream `httpx` is not
-supported: passing one of its objects raises a `TypeError` naming the mistake.
+Python 3.14 or newer, and `httpx2`, pydantic's fork of httpx.
+
+- **Why 3.14:** endpoint paths are [template strings](https://peps.python.org/pep-0750/) (`t"orders/{order_id}"`), so
+  each value is escaped into its own path segment by default: `BTC/USD` becomes `BTC%2FUSD` instead of a new path.
+  Template strings exist only from Python 3.14.
+- **Why httpx2:** headgate is built and tested on it alone. Its API is httpx's, so moving a client over is mostly
+  `import httpx2` where you had `import httpx`. Upstream `httpx` is not supported: passing one of its objects raises a
+  `TypeError` naming the mistake. See [why httpx2](docs/comparison.md#why-httpx2).
 
 ```bash
 pip install headgate               # or: uv add headgate. Brings httpx2[http2], hishel and msgspec

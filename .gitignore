@@ -12,3 +12,6 @@ htmlcov/
 .benchmarks/
 mutants/
 .hypothesis/
+
+# The docs site, built by `mkdocs build`
+site/

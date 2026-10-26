@@ -6,6 +6,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Added
+
+- A documentation site at <https://kelsayed17.github.io/headgate/>, built from `docs/`, with a page comparing headgate
+  with tenacity, stamina and a hand-rolled client.
+- `examples/github_client.py`: a tested client for a few GitHub REST endpoints.
+
 ## [0.3.0] - 2026-10-26
 
 Fixes four bugs where a call's deadline, its timeouts, the rate budget and the cache disagreed. One of them makes a
