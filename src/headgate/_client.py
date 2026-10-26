@@ -83,7 +83,7 @@ from headgate._view import KEEP, ROOT_DEFAULTS, Keep, overlay_timeout
 from headgate.breaker import BreakerOpenError, CircuitBreaker
 from headgate.breaker._registry import NO_BREAKER
 from headgate.breaker._scope import scoped_registry
-from headgate.cache._transport import host_untested
+from headgate.cache._transport import host_untested, store_accepted
 from headgate.errors import (
     CircuitOpenError,
     ClientError,
@@ -510,7 +510,10 @@ class AsyncBaseClient:
             async with self._deadline(prepared), self._exchange(prepared) as (streamed, _):
                 announce_deprecation(prepared.context, streamed)
                 resp = await read_capped(streamed, self._max_response_bytes, self._site(prepared))
-            return self._dispatch(resp, spec, self._site(prepared))
+            answer = self._dispatch(resp, spec, self._site(prepared))
+            # Only now that the reader accepted it may a cached miss be stored.
+            await store_accepted(resp)
+            return answer
 
     @contextlib.asynccontextmanager
     async def _streamed(self, call: _Call) -> AsyncGenerator[Stream]:
@@ -530,6 +533,8 @@ class AsyncBaseClient:
                 if not streamed.is_success:
                     head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
                     raise status_error(head, self._site(prepared))
+                # A stream has no reader: passing the head checks is what accepts it.
+                await store_accepted(streamed)
             yield Stream(streamed, self._site(prepared), functools.partial(self._network_failure, prepared, verdict))
 
     # Preparing the request.

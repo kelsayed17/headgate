@@ -17,8 +17,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
   passes before an attempt is sent says so, and `attempts` counts only the sends made
   ([#5](https://github.com/kelsayed17/headgate/issues/5)).
 
+- A cached miss is stored only once the call's reader accepts it, so a refusal inside a 200, an undecodable body or an
+  undeclared status is no longer served from the cache for the entry's lifetime
+  ([#9](https://github.com/kelsayed17/headgate/issues/9)). A `stream()` is accepted when its head checks pass.
+
 ### Changed
 
+- A body past `max_response_bytes` is no longer stored, since it is not held to be written on accept.
 - A timeout longer than the deadline it runs under is refused with `ValueError` on the client, a view or a call, since
   it could never take effect ([#6](https://github.com/kelsayed17/headgate/issues/6)). Raise the deadline with it, e.g.
   `with_options(timeout=300.0, deadline=600.0)`.
