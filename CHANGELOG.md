@@ -6,6 +6,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-26
+
+Bounds `paginate()`: a page budget, and a stop at pages with no items. The stop changes what three pagers do by
+default, so this is a minor release: see **Changed**.
+
 ### Added
 
 - A page budget for `paginate()`: `limit=PageLimit(max_pages)` raises the new `PageLimitError` once the budget is spent
@@ -231,7 +236,8 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/kelsayed17/headgate/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/kelsayed17/headgate/compare/159a3c2...v0.3.0
 [0.2.0]: https://github.com/kelsayed17/headgate/compare/f319ad8...159a3c2
 [0.1.0]: https://github.com/kelsayed17/headgate/commit/f319ad8
