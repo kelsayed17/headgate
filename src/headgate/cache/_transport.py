@@ -417,15 +417,23 @@ def _sharing_key(request: httpx2.Request) -> _SharingKey:
     """Return what two in-flight GETs must agree on to share one download.
 
     Headers as well as the URL, since two GETs that differ in ``Range``, ``Accept`` or a credential ask for different
-    responses. The ``timeout`` extension and the call's own retry policy too, since a request willing to wait longer,
-    or to try more often, must not inherit the ``ReadTimeout`` of one that was not.
+    responses. The timeouts and the call's own retry policy too, since a request willing to wait longer, or to try more
+    often, must not inherit the ``ReadTimeout`` of one that was not. The timeouts are the ones the call asked for, not
+    the ones fitted to its deadline, which differ on every request; each waiter's own deadline still bounds its wait.
     """
-    timeout = request.extensions.get("timeout")
-    # Sorted by name, which is unique, so the values (a float or None) are never compared.
-    named: list[tuple[str, object]] = sorted((str(name), value) for name, value in timeout.items()) if timeout else []
-    timeouts = tuple(named)
-    retry = CallContext.of(request).get(RETRY_POLICY)
+    context = CallContext.of(request)
+    timeouts = context.requested_timeouts(request)
+    retry = context.get(RETRY_POLICY)
     return str(request.url), tuple(sorted(request.headers.multi_items())), timeouts, retry
+
+
+def _cut_short(request: httpx2.Request, failure: Exception) -> bool:
+    """Return whether *failure* is a timeout of *request*'s own deadline-fitted timeouts, not of the ones it asked for.
+
+    The requests waiting on it asked for the same timeouts, but each has a deadline of its own: one with more time left
+    must fetch for itself rather than inherit a timeout it would not have hit.
+    """
+    return isinstance(failure, httpx2.TimeoutException) and CallContext.of(request).timeouts_cut(request)
 
 
 class ResilientCacheTransport(AsyncCacheTransport):
@@ -519,7 +527,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
             response, body = await self._fetch(request)
             in_flight.outcome = _Unshared.FETCH_OWN if body is None else _Download.of(response, body)
         except NETWORK_ERRORS as exc:
-            in_flight.outcome = exc
+            in_flight.outcome = _Unshared.FETCH_OWN if _cut_short(request, exc) else exc
             raise
         finally:
             # Freed before the waiters wake, so none of them finds this download again.

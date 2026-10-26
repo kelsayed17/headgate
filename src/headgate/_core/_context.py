@@ -40,16 +40,34 @@ __all__ = ["CallContext", "SendProgress", "Slot"]
 _EXTENSION: Final = "headgate.call"
 
 
+#: A request's httpx2 timeouts as ``(phase, seconds)`` pairs sorted by phase; ``None`` is a phase without a limit.
+type PhaseTimeouts = tuple[tuple[str, float | None], ...]
+
+
+def _named(timeout: object) -> PhaseTimeouts:
+    """Return *timeout*, a request's ``timeout`` extension, as :data:`PhaseTimeouts`; empty when it is not one."""
+    if not isinstance(timeout, dict):
+        return ()
+    # Sorted by phase, which is unique, so the values (a float or None) are never compared.
+    pairs: list[tuple[str, float | None]] = sorted((str(phase), limit) for phase, limit in timeout.items())
+    return tuple(pairs)
+
+
 @dataclass(slots=True)
 class SendProgress:
-    """What one attempt established about sending: whether a connection was obtained, and request bytes written.
+    """What one attempt established about sending: whether it was handed to the network, connected, and bytes written.
 
     These are facts, recorded by whichever layer can observe them, so the retry layer can tell a request that never
     left from one that may have been processed.
     """
 
+    dispatched: bool = False
     connected: bool = False
     bytes_sent: int = 0
+
+    def mark_dispatched(self) -> None:
+        """Record that the attempt passed the rate budget and was handed to the network."""
+        self.dispatched = True
 
     def mark_connected(self) -> None:
         """Record that the attempt obtained a connection."""
@@ -85,6 +103,7 @@ class CallContext:
         "_emitter",
         "_notes",
         "_progress",
+        "_requested_timeouts",
         "_slots",
         "follow_redirects",
         "idempotency_key",
@@ -110,6 +129,7 @@ class CallContext:
         self._progress = SendProgress()
         self._notes: list[str] = []
         self._slots: dict[object, object] = {}
+        self._requested_timeouts: PhaseTimeouts | None = None
         #: The ``Idempotency-Key`` (or configured header) value every attempt of the call carries, if any.
         self.idempotency_key: str | None = None
         #: Whether httpx2 follows this call's redirects, read by the hook that drops a followed redirect's body.
@@ -173,10 +193,25 @@ class CallContext:
         timeout = request.extensions.get("timeout")
         if remaining is None or not isinstance(timeout, dict):
             return
+        if self._requested_timeouts is None:
+            self._requested_timeouts = _named(timeout)
         left = max(remaining, floor)
         request.extensions["timeout"] = {
             phase: left if limit is None else min(limit, left) for phase, limit in timeout.items()
         }
+
+    def requested_timeouts(self, request: httpx2.Request) -> PhaseTimeouts:
+        """Return the httpx2 timeouts the call asked for, before :meth:`fit_timeouts` cut any of them to the deadline.
+
+        Before any fit, they are *request*'s own ``timeout`` extension (none without one).
+        """
+        if self._requested_timeouts is not None:
+            return self._requested_timeouts
+        return _named(request.extensions.get("timeout"))
+
+    def timeouts_cut(self, request: httpx2.Request) -> bool:
+        """Return whether :meth:`fit_timeouts` cut *request*'s timeouts below the ones the call asked for."""
+        return _named(request.extensions.get("timeout")) != self.requested_timeouts(request)
 
     # Attempts.
 

@@ -6,7 +6,7 @@
 Self-contained: it imports only ``httpx2``, the standard library and :mod:`headgate._core`.
 """
 
-from headgate.ratelimit._budget import BudgetPausedError, RateBudget
+from headgate.ratelimit._budget import BudgetBacklogError, BudgetPausedError, RateBudget
 from headgate.ratelimit._budgets import PathBudgets
 from headgate.ratelimit._rate import UNLIMITED, Adaptive, Rate, RateRule
 from headgate.ratelimit._transport import RateLimitTransport
@@ -14,6 +14,7 @@ from headgate.ratelimit._transport import RateLimitTransport
 __all__ = [
     "UNLIMITED",
     "Adaptive",
+    "BudgetBacklogError",
     "BudgetPausedError",
     "PathBudgets",
     "Rate",

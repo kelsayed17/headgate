@@ -70,6 +70,19 @@ class BudgetPausedError(Exception):
         self.status_code = status_code
 
 
+class BudgetBacklogError(Exception):
+    """Raised by :meth:`RateBudget.wait` when the call's paced turn comes after its deadline, so it is never sent.
+
+    ``AsyncBaseClient`` raises it to its caller as :class:`headgate.errors.ClientTimeoutError`. ``retry_after`` is the
+    seconds until the turn the call would have had.
+    """
+
+    def __init__(self, message: str, *, retry_after: float) -> None:
+        """Record *message* and *retry_after*."""
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 def _release_nothing() -> None:
     """Release no slot: what :meth:`RateBudget.occupy` returns for a budget without a concurrency limit."""
 
@@ -173,6 +186,7 @@ class RateBudget:
         Emits :class:`~headgate._core.RateLimited` for every wait. :class:`RateLimitTransport` calls it once per send.
 
         :raises BudgetPausedError: when a pause would outlast the call's deadline.
+        :raises BudgetBacklogError: when the call's paced turn comes after its deadline.
         """
         reservation: tuple[float, float] | None = None
         while True:
@@ -192,6 +206,11 @@ class RateBudget:
                     reason = THROTTLED if self._factor < 1 else PACED
                     if delay <= 0:
                         return
+                    remaining = context.remaining()
+                    if remaining is not None and delay >= remaining:
+                        self._refund(reservation)
+                        msg = f"the rate budget's turn in {delay:.3g}s comes after the call's deadline"
+                        raise BudgetBacklogError(msg, retry_after=delay)
             if context.observed:
                 context.emit(RateLimited(call=context.info, delay=delay, reason=reason))
             try:

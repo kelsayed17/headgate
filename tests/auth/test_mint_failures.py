@@ -410,11 +410,12 @@ async def _hop_timeouts(auth: CachedTokenAuth, *, deadline: float | None) -> dic
         base_url=f"https://{_API_HOST}",
         rate=UNLIMITED,
         auth=auth,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), deadline=deadline),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1), deadline=None),
         http=HttpOptions(transport=httpx2.MockTransport(handle), timeout=_CALL_TIMEOUTS),
     )
     async with client:
-        await client.get("series", expect=as_bytes)
+        # Per call: a client whose own timeouts outlast its deadline is refused when it is built.
+        await client.get("series", expect=as_bytes, deadline=deadline)
     return seen["/token"]
 
 

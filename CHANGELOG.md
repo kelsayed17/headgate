@@ -6,6 +6,26 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Fixed
+
+- Identical concurrent GETs share one cached download again when their timeouts are longer than the time their deadline
+  leaves; the sharing key now uses the timeouts the call asked for, not the deadline-cut ones
+  ([#4](https://github.com/kelsayed17/headgate/issues/4)).
+- A call whose rate-budget turn comes after its deadline fails at once with `ClientTimeoutError` saying it was never
+  sent, with `retryable=True` and `retry_after`, instead of waiting and failing like a slow upstream. A deadline that
+  passes before the send says so, and `attempts` counts only the sends made
+  ([#5](https://github.com/kelsayed17/headgate/issues/5)).
+
+### Changed
+
+- A timeout longer than the deadline it runs under is refused with `ValueError` on the client, a view or a call, since
+  it could never take effect ([#6](https://github.com/kelsayed17/headgate/issues/6)). Raise the deadline with it, e.g.
+  `with_options(timeout=300.0, deadline=600.0)`.
+
+### Added
+
+- `headgate.ratelimit.BudgetBacklogError`, raised by `RateBudget.wait` when a call's paced turn comes after its deadline.
+
 ## [0.2.0] - 2026-10-25
 
 The first release published to PyPI. It reshapes the client around option objects and rebuilds every policy
