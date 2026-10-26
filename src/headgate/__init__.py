@@ -51,6 +51,7 @@ from headgate.errors import (
     ClientTimeoutError,
     DecodeError,
     ForbiddenDestinationError,
+    PageLimitError,
     Problem,
     RateLimitError,
     ResponseParseError,
@@ -58,7 +59,7 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
-from headgate.pagination import Cursor, LinkHeader, NextUrl, Offset, Pager, PageRequest, Paginated
+from headgate.pagination import Cursor, LinkHeader, NextUrl, Offset, PageLimit, Pager, PageRequest, Paginated
 from headgate.ratelimit import Adaptive, Rate, RateBudget, RateRule
 from headgate.retry import NO_RETRY, Backoff, Hedge, RetryBudget, RetryPolicy
 from headgate.streaming import Stream
@@ -95,6 +96,8 @@ __all__ = [
     "NotModified",
     "Observer",
     "Offset",
+    "PageLimit",
+    "PageLimitError",
     "PageRequest",
     "Pager",
     "Paginated",

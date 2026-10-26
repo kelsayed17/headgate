@@ -79,7 +79,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.errors]
   '''
   module headgate.errors
-  __all__ = ['AuthError', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'DecodeError', 'ErrorDetails', 'ForbiddenDestinationError', 'Problem', 'RateLimitError', 'ResponseParseError', 'ResponseTooLargeError', 'TransportError', 'UpstreamStatusError']
+  __all__ = ['AuthError', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'DecodeError', 'ErrorDetails', 'ForbiddenDestinationError', 'PageLimitError', 'Problem', 'RateLimitError', 'ResponseParseError', 'ResponseTooLargeError', 'TransportError', 'UpstreamStatusError']
   class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
   class CircuitOpenError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class ClientConfigurationError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
@@ -101,6 +101,7 @@
       key retryable: bool (optional)
       key retry_after: float | None (optional)
   class ForbiddenDestinationError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+  class PageLimitError(ClientError)(message: 'str', *, pages: 'int', **details: 'Unpack[ErrorDetails]') -> 'None'
   class Problem(object)(*, type: 'str' = 'about:blank', title: 'str | None' = None, status: 'int | None' = None, detail: 'str | None' = None, instance: 'str | None' = None, extensions: 'Mapping[str, object]' = <factory>) -> 'None'
       field type: str = 'about:blank'
       field title: str | None = None
@@ -219,11 +220,12 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.pagination]
   '''
   module headgate.pagination
-  __all__ = ['Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageRequest', 'Pager', 'Paginated', 'parse_link_header']
-  class Cursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str') -> 'None'
+  __all__ = ['Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageLimit', 'PageRequest', 'Pager', 'Paginated', 'parse_link_header']
+  class Cursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field param: str
+      field stop_on_empty: bool = True
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
@@ -231,14 +233,16 @@
       field target: str
       field params: Mapping[str, str]
       property rels
-  class LinkHeader(Generic)(*, items: 'Callable[[P], Sequence[I]]') -> 'None'
+  class LinkHeader(Generic)(*, items: 'Callable[[P], Sequence[I]]', stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
+      field stop_on_empty: bool = True
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class NextUrl(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]') -> 'None'
+  class NextUrl(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
+      field stop_on_empty: bool = True
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
@@ -250,6 +254,9 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
+  class PageLimit(object)(max_pages: 'int', on_limit: "Literal['raise', 'stop']" = 'raise') -> 'None'
+      field max_pages: int
+      field on_limit: Literal['raise', 'stop'] = 'raise'
   class PageRequest(object)(url: 'str | Template', params: 'Mapping[str, object] | None' = None) -> 'None'
       field url: str | Template
       field params: Mapping[str, object] | None = None
@@ -258,7 +265,7 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Iterable[I]'
-  class Paginated(Generic)(fetch: 'Fetch[P]', pager: 'Pager[P, I]', first: 'PageRequest', *, source: 'str') -> 'None'
+  class Paginated(Generic)(fetch: 'Fetch[P]', pager: 'Pager[P, I]', first: 'PageRequest', *, source: 'str', limit: 'PageLimit | None' = None) -> 'None'
       def pages(self) -> 'AsyncIterator[P]'
   def parse_link_header(value: 'str') -> 'list[Link]'
   '''
@@ -454,7 +461,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['MAX_MINT_RESPONSE_BYTES', 'NO_RETRY', 'Adaptive', 'AsyncBaseClient', 'AuthError', 'Backoff', 'BreakerPolicy', 'BreakerRegistry', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Cursor', 'DecodeError', 'Expect', 'ForbiddenDestinationError', 'Fresh', 'Hedge', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'LinkHeader', 'Method', 'MethodFilter', 'Middleware', 'Minted', 'NextUrl', 'NotModified', 'Observer', 'Offset', 'PageRequest', 'Pager', 'Paginated', 'Partition', 'PathFragmentFilter', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryBudget', 'RetryPolicy', 'Route', 'StaticHeaderAuth', 'StatusCodeFilter', 'Stream', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'Validator', 'as_bytes', 'conditional', 'event_stream', 'json_reader', 'nothing']
+  __all__ = ['MAX_MINT_RESPONSE_BYTES', 'NO_RETRY', 'Adaptive', 'AsyncBaseClient', 'AuthError', 'Backoff', 'BreakerPolicy', 'BreakerRegistry', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Cursor', 'DecodeError', 'Expect', 'ForbiddenDestinationError', 'Fresh', 'Hedge', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'LinkHeader', 'Method', 'MethodFilter', 'Middleware', 'Minted', 'NextUrl', 'NotModified', 'Observer', 'Offset', 'PageLimit', 'PageLimitError', 'PageRequest', 'Pager', 'Paginated', 'Partition', 'PathFragmentFilter', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryBudget', 'RetryPolicy', 'Route', 'StaticHeaderAuth', 'StatusCodeFilter', 'Stream', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'Validator', 'as_bytes', 'conditional', 'event_stream', 'json_reader', 'nothing']
   MAX_MINT_RESPONSE_BYTES = 1048576
   NO_RETRY = RetryPolicy(attempts=1, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryBudget(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05)
   class Adaptive(object)(*, decrease: 'float' = 0.5, increase: 'float' = 0.1, min_rate: 'float' = 0.1) -> 'None'
@@ -466,7 +473,7 @@
       def delete(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
       def get(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
       def head(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
-      def paginate(self, url: 'str | Template', *, expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I]', retry: 'bool | RetryPolicy' = True, **options: 'Unpack[RequestOptions]') -> 'Paginated[P, I]'
+      def paginate(self, url: 'str | Template', *, expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I]', retry: 'bool | RetryPolicy' = True, limit: 'PageLimit | None' = None, **options: 'Unpack[RequestOptions]') -> 'Paginated[P, I]'
       def patch(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
       def post(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
       def put(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
@@ -504,10 +511,11 @@
       property retryable
       property url
   class ClientTimeoutError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  class Cursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str') -> 'None'
+  class Cursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field param: str
+      field stop_on_empty: bool = True
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
@@ -553,8 +561,9 @@
   class IdempotencyKeys(object)(*, header: 'str' = 'Idempotency-Key', factory: 'Callable[[], str]' = <function _uuid4_text at 0x…>) -> 'None'
       field header: str = 'Idempotency-Key'
       field factory: Callable[[], str] = <function _uuid4_text at 0x…>
-  class LinkHeader(Generic)(*, items: 'Callable[[P], Sequence[I]]') -> 'None'
+  class LinkHeader(Generic)(*, items: 'Callable[[P], Sequence[I]]', stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
+      field stop_on_empty: bool = True
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
@@ -567,9 +576,10 @@
   class Minted(Generic)(token: 'TokenT', lifetime: 'float') -> 'None'
       field token: TokenT
       field lifetime: float
-  class NextUrl(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]') -> 'None'
+  class NextUrl(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
+      field stop_on_empty: bool = True
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
@@ -585,6 +595,10 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
+  class PageLimit(object)(max_pages: 'int', on_limit: "Literal['raise', 'stop']" = 'raise') -> 'None'
+      field max_pages: int
+      field on_limit: Literal['raise', 'stop'] = 'raise'
+  class PageLimitError(ClientError)(message: 'str', *, pages: 'int', **details: 'Unpack[ErrorDetails]') -> 'None'
   class PageRequest(object)(url: 'str | Template', params: 'Mapping[str, object] | None' = None) -> 'None'
       field url: str | Template
       field params: Mapping[str, object] | None = None
@@ -593,7 +607,7 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Iterable[I]'
-  class Paginated(Generic)(fetch: 'Fetch[P]', pager: 'Pager[P, I]', first: 'PageRequest', *, source: 'str') -> 'None'
+  class Paginated(Generic)(fetch: 'Fetch[P]', pager: 'Pager[P, I]', first: 'PageRequest', *, source: 'str', limit: 'PageLimit | None' = None) -> 'None'
       def pages(self) -> 'AsyncIterator[P]'
   class Partition(Enum)(*values)
       CREDENTIAL = 'credential'

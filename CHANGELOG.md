@@ -8,9 +8,19 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- A page budget for `paginate()`: `limit=PageLimit(max_pages)` raises the new `PageLimitError` once the budget is spent
+  with pages still to come, or with `on_limit="stop"` ends the walk there
+  ([#14](https://github.com/kelsayed17/headgate/issues/14)).
 - A documentation site at <https://kelsayed17.github.io/headgate/>, built from `docs/`, with a page comparing headgate
   with tenacity, stamina and a hand-rolled client.
 - `examples/github_client.py`: a tested client for a few GitHub REST endpoints.
+
+### Changed
+
+- `Cursor`, `NextUrl` and `LinkHeader` stop at a page with no items, as `Offset` already did, instead of following its
+  link: a link that advances while returning nothing made the walk spend requests for nothing. Pass
+  `stop_on_empty=False` for an endpoint that sends empty pages mid-walk
+  ([#15](https://github.com/kelsayed17/headgate/issues/15)).
 
 ## [0.3.0] - 2026-10-26
 

@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, assert_type
 
 import httpx2
@@ -23,6 +24,8 @@ from headgate import (
     LinkHeader,
     NextUrl,
     Offset,
+    PageLimit,
+    PageLimitError,
     PageRequest,
     RequestOptions,
     UpstreamStatusError,
@@ -33,6 +36,8 @@ from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+
+    from headgate import Pager
 
 _BASE = "https://api.test"
 _RATE = Rate.per_second(100)
@@ -357,3 +362,141 @@ def test_a_cursor_needs_a_parameter_name() -> None:
     """Refuse a cursor pager with no query parameter to send the cursor in, saying so."""
     with pytest.raises(ValueError, match=r"^param must name a query parameter$"):
         Cursor(items=items_of, next=cursor_of, param="")
+
+
+# Walks that would never end on their own.
+
+#: Pages a bounded test walk is allowed.
+_BUDGET = 3
+#: The last page of the walk that has an empty page in it.
+_LAST = 2
+
+
+def _linked(request: httpx2.Request, ids: list[int], following: int | None) -> httpx2.Response:
+    """Answer *request* with *ids*, linking to page *following* by cursor, next URL and ``Link`` header alike."""
+    if following is None:
+        return _page(request, ids)
+    response = _page(request, ids, cursor=str(following), next=f"/items?at={following}")
+    response.headers["Link"] = f'</items?at={following}>; rel="next"'
+    return response
+
+
+def _endless(request: httpx2.Request) -> httpx2.Response:
+    """Answer every page with one item and a link to a new page, so the walk never ends on its own."""
+    at = int(request.url.params.get("at", "0"))
+    return _linked(request, [at], at + 1)
+
+
+def _with_an_empty_page(request: httpx2.Request) -> httpx2.Response:
+    """Answer page 0 with an item, page 1 with none and page 2 with an item; pages 0 and 1 link to the next."""
+    at = int(request.url.params.get("at", "0"))
+    return _linked(request, [] if at == 1 else [at], None if at == _LAST else at + 1)
+
+
+def _cursor(*, stop_on_empty: bool = True) -> Pager[Page, Item]:
+    """Return a cursor strategy for the linked pages."""
+    return Cursor(items=items_of, next=cursor_of, param="at", stop_on_empty=stop_on_empty)
+
+
+def _next_url(*, stop_on_empty: bool = True) -> Pager[Page, Item]:
+    """Return a next-URL strategy for the linked pages."""
+    return NextUrl(items=items_of, next=next_of, stop_on_empty=stop_on_empty)
+
+
+def _link_header(*, stop_on_empty: bool = True) -> Pager[Page, Item]:
+    """Return a ``Link`` header strategy for the linked pages."""
+    return LinkHeader(items=items_of, stop_on_empty=stop_on_empty)
+
+
+_LINKED_STRATEGIES = [_cursor, _next_url, _link_header]
+_LINKED_IDS = ["cursor", "next-url", "link-header"]
+
+
+@pytest.mark.parametrize("strategy", _LINKED_STRATEGIES, ids=_LINKED_IDS)
+async def test_a_page_with_no_items_ends_the_walk(strategy: Callable[..., Pager[Page, Item]]) -> None:
+    """Stop at a page with no items, though it links to another: a link that advances while returning nothing."""
+    api = _Api(_with_an_empty_page)
+    paginated = api.client().paginate("items", expect=decoder(Page), pages=strategy())
+
+    assert [item.id async for item in paginated] == [0]
+    assert len(api.sent) == len(("the page with an item", "the empty page"))
+
+
+@pytest.mark.parametrize("strategy", _LINKED_STRATEGIES, ids=_LINKED_IDS)
+async def test_an_empty_page_can_be_walked_past(strategy: Callable[..., Pager[Page, Item]]) -> None:
+    """Follow the link past an empty page with ``stop_on_empty=False``, for an endpoint that sends them mid-walk."""
+    api = _Api(_with_an_empty_page)
+    paginated = api.client().paginate("items", expect=decoder(Page), pages=strategy(stop_on_empty=False))
+
+    assert [item.id async for item in paginated] == [0, _LAST]
+    assert len(api.sent) == _LAST + 1
+
+
+async def test_a_walk_past_its_page_limit_raises_with_what_it_fetched() -> None:
+    """Raise ``PageLimitError`` once the budget is spent with pages to come, after yielding the pages it allowed."""
+    api = _Api(_endless)
+    paginated = api.client().paginate("items", expect=decoder(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
+    items = aiter(paginated)
+
+    allowed = [(await anext(items)).id for _ in range(_BUDGET)]
+    with pytest.raises(PageLimitError) as raised:
+        await anext(items)
+
+    assert allowed == list(range(_BUDGET)), "the pages the budget allowed were yielded before the raise"
+    assert len(api.sent) == _BUDGET, "the page past the limit was never fetched"
+    assert raised.value.pages == _BUDGET
+    assert isinstance(raised.value, ClientError)
+    assert raised.value.url == "items"
+    assert str(raised.value) == (
+        f"[StubClient] pagination reached its limit of {_BUDGET} pages with more to come (items); the result is"
+        " incomplete. Raise PageLimit.max_pages, or set on_limit='stop' to end the walk there"
+    )
+
+
+async def test_a_limit_on_a_template_url_raises_without_naming_it() -> None:
+    """Raise past the limit on a templated URL, without naming the URL."""
+    client = _Api(_endless).client()
+    paginated = client.paginate(t"items/{'x'}", expect=decoder(Page), pages=_cursor(), limit=PageLimit(1))
+    with pytest.raises(PageLimitError) as raised:
+        _ = [page async for page in paginated.pages()]
+    assert raised.value.url is None
+
+
+async def test_a_walk_can_stop_quietly_at_its_page_limit() -> None:
+    """End the walk at the budget with ``on_limit="stop"``, for a caller that wants only the first pages."""
+    api = _Api(_endless)
+    limit = PageLimit(_BUDGET, on_limit="stop")
+    paginated = api.client().paginate("items", expect=decoder(Page), pages=_cursor(), limit=limit)
+
+    assert [item.id async for item in paginated] == list(range(_BUDGET))
+    assert len(api.sent) == _BUDGET
+
+
+async def test_a_walk_that_ends_exactly_at_its_limit_is_complete() -> None:
+    """Raise nothing when the last page is the budget's last: no page was left unfetched."""
+    paginated = (
+        _Api(_by_cursor)
+        .client()
+        .paginate(
+            "items",
+            expect=decoder(Page),
+            pages=Cursor(items=items_of, next=cursor_of, param="after"),
+            limit=PageLimit(3),
+        )
+    )
+    assert [item.id async for item in paginated] == [1, 2, 3, 4]
+
+
+@pytest.mark.parametrize(
+    ("build", "message"),
+    [
+        (lambda: PageLimit(0), "max_pages must be >= 1 (got 0)"),
+        (lambda: PageLimit(max_pages=True), "max_pages must be >= 1 (got True)"),
+        (lambda: replace(PageLimit(5), on_limit="truncate"), "on_limit must be 'raise' or 'stop' (got 'truncate')"),
+    ],
+    ids=["zero", "a-bool", "unknown-outcome"],
+)
+def test_a_bad_page_limit_is_refused(build: Callable[[], object], message: str) -> None:
+    """Refuse a budget below one page, a ``bool`` passed as a count, and an outcome that does not exist."""
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        build()

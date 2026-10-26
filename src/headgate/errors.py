@@ -37,6 +37,7 @@ __all__ = [
     "DecodeError",
     "ErrorDetails",
     "ForbiddenDestinationError",
+    "PageLimitError",
     "Problem",
     "RateLimitError",
     "ResponseParseError",
@@ -327,3 +328,17 @@ class ForbiddenDestinationError(ClientError):
     boundary can answer it as the caller's bad input. Nothing was sent, so it is never retried and never charged to a
     circuit breaker.
     """
+
+
+class PageLimitError(ClientError):
+    """A paginated walk reached its page budget (``paginate(..., max_pages=...)``) with more pages still to come.
+
+    The pages fetched so far were yielded; what follows was not fetched, so the result is incomplete. ``pages`` is the
+    number of pages fetched. A walk whose last page falls exactly on the budget ends normally, and
+    ``on_limit="stop"`` ends a walk at the budget without raising.
+    """
+
+    def __init__(self, message: str, *, pages: int, **details: Unpack[ErrorDetails]) -> None:
+        """Record *pages*, the pages fetched, with the *details* of the page that would have come next."""
+        super().__init__(message, **details)
+        self.pages = pages
