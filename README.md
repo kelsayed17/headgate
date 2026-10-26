@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The Swiss Army knife for HTTP API clients in Python.</strong><br>
-  Retries, rate limits, deadlines, circuit breaking, caching, pagination, streaming, auth and security,<br>
+  Retries, rate limits, deadlines, circuit breaking, caching, pagination, streaming, auth and security,
   in one async base class built on <a href="https://pypi.org/project/httpx2/">httpx2</a>.
 </p>
 
