@@ -12,7 +12,11 @@ extra_css = ["stylesheets/extra.css"]
 
 nav = [
   { "Home" = "index.md" },
-  { "Compared with others" = "comparison.md" },
+  { "Why headgate" = [
+    { "Compared with others" = "comparison.md" },
+    { "Security" = "security.md" },
+    { "Standards" = "standards.md" },
+  ] },
   { "Guides" = [
     "configuration.md",
     "responses.md",
@@ -23,7 +27,6 @@ nav = [
     "breaker.md",
     "caching.md",
     "auth.md",
-    "security.md",
     "pagination.md",
     "streaming.md",
     "observability.md",

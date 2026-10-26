@@ -89,3 +89,158 @@
 .hg-compare table th:last-child {
   background-color: color-mix(in srgb, var(--md-accent-fg-color) 9%, transparent);
 }
+
+/* Comparison matrices: one icon per cell, coloured by what it means. */
+.md-typeset .hg-yes {
+  color: #16a34a;
+}
+
+.md-typeset .hg-addon {
+  color: #d97706;
+}
+
+.md-typeset .hg-no {
+  color: var(--md-default-fg-color--lighter);
+}
+
+.hg-matrix table th:not(:first-child),
+.hg-matrix table td:not(:first-child) {
+  text-align: center;
+}
+
+.hg-matrix table td:first-child {
+  min-width: 12rem;
+}
+
+@media screen and (max-width: 44.9375em) {
+  .hg-matrix table td:first-child {
+    min-width: 8rem;
+  }
+}
+
+/* The legend above a matrix: icons and their meanings on one line. */
+.hg-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.4rem;
+  font-size: 0.75rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* The home page's "one base class instead of a stack": many chips on the left, one headgate on the right. */
+.hg-stack {
+  display: grid;
+  grid-template-columns: 1fr auto 14rem;
+  gap: 1rem;
+  align-items: center;
+  margin: 1.5rem 0;
+}
+
+.hg-stack-before {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 1rem;
+  border: 1px dashed var(--md-default-fg-color--lighter);
+  border-radius: 0.8rem;
+}
+
+.hg-stack-label {
+  width: 100%;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--md-default-fg-color--light);
+}
+
+.hg-chip {
+  padding: 0.25rem 0.7rem;
+  border-radius: 1rem;
+  font-size: 0.75rem;
+  background-color: var(--md-code-bg-color);
+}
+
+.hg-chip-glue {
+  font-style: italic;
+  color: var(--md-default-fg-color--light);
+}
+
+.hg-stack-arrow {
+  font-size: 2rem;
+  color: var(--md-accent-fg-color);
+}
+
+.hg-stack-after {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 1.2rem 1rem;
+  text-align: center;
+  border-radius: 0.8rem;
+  background-color: color-mix(in srgb, var(--md-accent-fg-color) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--md-accent-fg-color) 40%, transparent);
+}
+
+.hg-stack-after img {
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 0.8rem;
+}
+
+.hg-stack-after strong {
+  font-size: 1.1rem;
+}
+
+.hg-stack-after span {
+  font-size: 0.75rem;
+  color: var(--md-default-fg-color--light);
+}
+
+@media screen and (max-width: 44.9375em) {
+  .hg-stack {
+    grid-template-columns: 1fr;
+  }
+
+  .hg-stack-arrow {
+    justify-self: center;
+    transform: rotate(90deg);
+  }
+}
+
+/* The home page's call pipeline: numbered steps that wrap, each with a one-line job. */
+.md-typeset ol.hg-pipeline {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: 0.6rem;
+  margin: 1.2rem 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: hg-step;
+}
+
+.md-typeset ol.hg-pipeline li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  border-radius: 0.6rem;
+  border-top: 3px solid var(--md-accent-fg-color);
+  background-color: var(--md-code-bg-color);
+  counter-increment: hg-step;
+}
+
+.md-typeset ol.hg-pipeline li::before {
+  content: counter(hg-step);
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--md-accent-fg-color);
+}
+
+.md-typeset ol.hg-pipeline li span {
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--md-default-fg-color--light);
+}
