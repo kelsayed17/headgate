@@ -40,7 +40,7 @@ _SAMPLE_FLAGS = ast.PyCF_ONLY_AST | ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
 
 def _python_blocks(path: Path) -> list[tuple[int, str]]:
     """Return each Python block of the Markdown file *path*, with the line its body starts on."""
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     return [
         (text.count("\n", 0, match.start()) + 2, match[2]) for match in _FENCE.finditer(text) if match[1] == "python"
     ]
@@ -77,7 +77,7 @@ def _found(statement: ast.stmt, candidates: list[ast.stmt]) -> bool:
 
 def _source_statements() -> list[ast.stmt]:
     """Return the top-level statements of every example and example test."""
-    return [statement for path in _SOURCES for statement in ast.parse(path.read_text()).body]
+    return [statement for path in _SOURCES for statement in ast.parse(path.read_text(encoding="utf-8")).body]
 
 
 def _slug(heading: str) -> str:
@@ -88,7 +88,7 @@ def _slug(heading: str) -> str:
 
 def _anchors(path: Path) -> set[str]:
     """Return the heading anchors of the Markdown file *path*."""
-    return {_slug(heading) for heading in _HEADING.findall(path.read_text())}
+    return {_slug(heading) for heading in _HEADING.findall(path.read_text(encoding="utf-8"))}
 
 
 _README_BLOCKS = _python_blocks(_README)
@@ -136,7 +136,7 @@ def test_every_guide_sample_parses_and_imports_real_names(path: Path, line: int,
 def test_every_relative_link_resolves(page: Path) -> None:
     """Find the file each relative link on *page* names, and the heading its anchor names."""
     broken: list[str] = []
-    for target in _LINK.findall(page.read_text()):
+    for target in _LINK.findall(page.read_text(encoding="utf-8")):
         if target.startswith(("http://", "https://", "mailto:")):
             continue
         file_part, _, anchor = target.partition("#")
