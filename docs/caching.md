@@ -66,7 +66,11 @@ stored either; the request that fetched it still receives it.
 
 hishel has no request coalescing, so an identical GET arriving while the first is still being fetched would miss too.
 headgate makes it wait and gives it a copy of the first one's response (a hit, a miss or a degraded fetch). Identical
-means the same URL, every header, the same timeouts and the same retry policy. A network failure fails every waiting
+means the same URL, every header, the same requested timeouts (before fitting them to each call's deadline), and the
+same retry policy. Explicit middleware timeout changes remain part of that identity; fitting a later attempt
+preserves those overrides rather than restoring the original client defaults. Each call still has its own deadline: expiring or cancelling one does not cancel another. A timeout
+in a phase shortened by the fetching call's deadline is not handed to its waiters; the next waiter fetches for those
+that still have time. An unchanged phase timeout, or another network failure, fails every waiting
 request from the one attempt, each with its own copy of the error, and each caller's retry layer then retries (and
 shares again). Only the request that fetched counts toward the [breaker](breaker.md). A body past the size cap is not
 held, so each waiting request fetches its own. POSTs are never shared.
