@@ -1,0 +1,91 @@
+/* headgate's colours, taken from the logo: deep navy, a working blue and a bright cyan. */
+:root {
+  --hg-navy: #011740;
+  --hg-blue: #0a82e0;
+  --hg-cyan: #1fd6f5;
+}
+
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: var(--hg-navy);
+  --md-primary-fg-color--light: #0b2a63;
+  --md-primary-fg-color--dark: #000d26;
+  --md-accent-fg-color: var(--hg-blue);
+  --md-typeset-a-color: var(--hg-blue);
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: var(--hg-cyan);
+  --md-primary-fg-color--light: #6ae4fa;
+  --md-primary-fg-color--dark: #0fb3cf;
+  /* Text on the cyan: navy, since white on a light cyan is hard to read. */
+  --md-primary-bg-color: var(--hg-navy);
+  --md-primary-bg-color--light: rgba(1, 23, 64, 0.7);
+  --md-accent-fg-color: var(--hg-cyan);
+  --md-typeset-a-color: var(--hg-cyan);
+}
+
+/* The landing page's hero: the logo, the name, one sentence and the ways in. */
+.hg-hero {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 1.5rem 2rem;
+  align-items: center;
+  margin: 1rem 0 2.5rem;
+}
+
+.hg-hero img {
+  width: 9rem;
+  height: 9rem;
+  border-radius: 1.6rem;
+  box-shadow: 0 0.6rem 2rem rgba(10, 130, 224, 0.35);
+}
+
+.md-typeset .hg-hero h1 {
+  margin: 0 0 0.4rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.hg-hero p {
+  margin: 0 0 1rem;
+  font-size: 1.05rem;
+}
+
+.md-typeset .hg-hero .md-button {
+  margin: 0.2rem 0.4rem 0.2rem 0;
+}
+
+@media screen and (max-width: 44.9375em) {
+  .hg-hero {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+
+  .hg-hero img {
+    width: 6rem;
+    height: 6rem;
+    border-radius: 1.1rem;
+  }
+}
+
+/* Feature cards: a coloured icon above each title. */
+.md-typeset .grid.cards .hg-icon {
+  color: var(--md-accent-fg-color);
+}
+
+/* Wide tables read better a little smaller, with each row named in bold. */
+.md-typeset table:not([class]) {
+  font-size: 0.7rem;
+}
+
+.md-typeset table:not([class]) td:first-child {
+  min-width: 8rem;
+  font-weight: 600;
+}
+
+/* The comparison's last column is headgate's: tinted, so it reads as the answer. */
+.hg-compare table td:last-child,
+.hg-compare table th:last-child {
+  background-color: color-mix(in srgb, var(--md-accent-fg-color) 9%, transparent);
+}
