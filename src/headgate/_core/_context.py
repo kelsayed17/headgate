@@ -75,6 +75,12 @@ class Slot[T]:
         return f"Slot({self.name!r})"
 
 
+#: Per-request timeouts before deadline fitting; requests on one call can have different limits.
+ORIGINAL_TIMEOUTS = Slot[dict[object, dict[str, object]]]("original_timeouts")
+#: Last fitted limits distinguish deadline changes from explicit middleware overrides.
+FITTED_TIMEOUTS = Slot[dict[object, dict[str, object]]]("fitted_timeouts")
+
+
 class CallContext:
     """One logical call's state, shared by every layer that handles one of its requests. See the module docstring."""
 
@@ -173,10 +179,25 @@ class CallContext:
         timeout = request.extensions.get("timeout")
         if remaining is None or not isinstance(timeout, dict):
             return
+        originals = self.get(ORIGINAL_TIMEOUTS)
+        if originals is None:
+            originals = {}
+            self.put(ORIGINAL_TIMEOUTS, originals)
+        fitted = self.get(FITTED_TIMEOUTS)
+        if fitted is None:
+            fitted = {}
+            self.put(FITTED_TIMEOUTS, fitted)
+        previous = fitted.get(request, {})
+        original = originals.get(request, {})
+        originals[request] = {
+            phase: original.get(phase, limit) if phase in previous and limit == previous[phase] else limit
+            for phase, limit in timeout.items()
+        }
         left = max(remaining, floor)
         request.extensions["timeout"] = {
             phase: left if limit is None else min(limit, left) for phase, limit in timeout.items()
         }
+        fitted[request] = dict(request.extensions["timeout"])
 
     # Attempts.
 
