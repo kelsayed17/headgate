@@ -79,7 +79,7 @@ async def test_a_cassette_holds_the_call_and_no_credential(tmp_path: Path) -> No
     with vcr.VCR(**cassettes.vcr_config()).use_cassette(str(cassette), record_mode="all"):
         body = await _client(_MintingAuth(), cassettes, httpx2.MockTransport(_network)).get("data", expect=as_bytes)
 
-    recorded = cassette.read_text()
+    recorded = cassette.read_text(encoding="utf-8")
     assert body == _BODY
     assert f"{_BASE}/data" in recorded
     assert _BODY.decode() in recorded
