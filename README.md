@@ -166,7 +166,7 @@ idempotent POST, a declared business refusal, `Link`-header pages and a streamed
 | Response cap | 32 MiB per buffered body, counted after decompression | [configuration](docs/configuration.md#httpoptions) |
 | Caching | Opt-in hishel cache, partitioned by credential, never storing one; coalesced identical GETs; conditional reads | [caching](docs/caching.md) |
 | Streaming and uploads | `stream()` for bodies and server-sent events with resume; raw, streamed and multipart request bodies | [streaming](docs/streaming.md) |
-| Pagination | `paginate()` with `Cursor`, `Offset`, `LinkHeader` or `NextUrl`, lazy, loop-safe | [pagination](docs/pagination.md) |
+| Pagination | `paginate()` with `Cursor`, `Offset`, `LinkHeader` or `NextUrl`, lazy, loop-safe, bounded by pages or items | [pagination](docs/pagination.md) |
 | Errors | One `ClientError` tree; method, URL, request id, attempts, `retryable`, `retry_after`, RFC 9457 problems | [errors](docs/errors.md) |
 | Auth | Static headers, query keys, and a cached minted token with one re-mint on a 401 | [auth](docs/auth.md) |
 | Observability | Typed events, OpenTelemetry spans and metrics, request ids, `Deprecation` / `Sunset` notices, health snapshots | [observability](docs/observability.md) |

@@ -500,3 +500,73 @@ def test_a_bad_page_limit_is_refused(build: Callable[[], object], message: str) 
     """Refuse a budget below one page, a ``bool`` passed as a count, and an outcome that does not exist."""
     with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
         build()
+
+
+async def test_collect_returns_every_item_in_order() -> None:
+    """Collect the whole walk into a list, typed by the pager's items."""
+    api = _Api(_by_cursor)
+    paginated = api.client().paginate(
+        "items", expect=decoder(Page), pages=Cursor(items=items_of, next=cursor_of, param="after")
+    )
+    items = await paginated.collect()
+    assert_type(items, list[Item])
+    assert [item.id for item in items] == [1, 2, 3, 4]
+    assert len(api.sent) == len(("first page", "after=b", "after=c"))
+
+
+@pytest.mark.parametrize(
+    ("max_items", "ids", "fetched"),
+    [
+        (1, [1], 1),
+        (2, [1, 2], 1),
+        (3, [1, 2, 3], 2),
+        (4, [1, 2, 3, 4], 3),
+        (10, [1, 2, 3, 4], 3),
+    ],
+    ids=["inside-a-page", "fills-a-page", "fills-the-next", "everything", "more-than-there-is"],
+)
+async def test_collect_stops_at_max_items_without_fetching_further(
+    max_items: int, ids: list[int], fetched: int
+) -> None:
+    """Return at most *max_items* items, fetching no page past the one that filled the list."""
+    api = _Api(_by_cursor)
+    paginated = api.client().paginate(
+        "items", expect=decoder(Page), pages=Cursor(items=items_of, next=cursor_of, param="after")
+    )
+    assert [item.id for item in await paginated.collect(max_items=max_items)] == ids
+    assert len(api.sent) == fetched
+
+
+async def test_collect_of_no_items_sends_nothing() -> None:
+    """Return an empty list for ``max_items=0`` without a request."""
+    api = _Api(_endless)
+    paginated = api.client().paginate("items", expect=decoder(Page), pages=_cursor())
+    assert await paginated.collect(max_items=0) == []
+    assert api.sent == []
+
+
+async def test_collect_within_the_page_limit_raises_nothing() -> None:
+    """Return the items when they are all collected before the page budget is spent, though more pages follow."""
+    api = _Api(_endless)
+    paginated = api.client().paginate("items", expect=decoder(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
+    assert [item.id for item in await paginated.collect(max_items=_BUDGET)] == list(range(_BUDGET))
+    assert len(api.sent) == _BUDGET
+
+
+async def test_collect_past_the_page_limit_raises() -> None:
+    """Propagate ``PageLimitError`` when the budget is spent before the walk or *max_items* is done."""
+    api = _Api(_endless)
+    paginated = api.client().paginate("items", expect=decoder(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
+    with pytest.raises(PageLimitError):
+        await paginated.collect(max_items=_BUDGET + 1)
+    assert len(api.sent) == _BUDGET
+
+
+@pytest.mark.parametrize("max_items", [-1, True], ids=["negative", "a-bool"])
+async def test_collect_refuses_a_bad_count(max_items: int) -> None:
+    """Refuse a negative count, and a ``bool`` passed as one, before sending anything."""
+    api = _Api(_endless)
+    paginated = api.client().paginate("items", expect=decoder(Page), pages=_cursor())
+    with pytest.raises(ValueError, match=f"^max_items must be None or >= 0 \\(got {max_items!r}\\)$"):
+        await paginated.collect(max_items=max_items)
+    assert api.sent == []

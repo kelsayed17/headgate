@@ -8,6 +8,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `Paginated.collect(max_items=None)` returns a walk's items as a list; with `max_items`, at most that many, fetching
+  no page past the one that fills it ([#19](https://github.com/kelsayed17/headgate/issues/19)).
 - A [standards page](https://kelsayed17.github.io/headgate/standards/) mapping each RFC and draft headgate follows to
   what it does, and a comparison with about 30 HTTP, retry, rate-limit, cache, breaker and testing libraries.
 
