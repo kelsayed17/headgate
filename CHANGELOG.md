@@ -6,6 +6,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Fixed
+
+- Concurrent identical GETs share downloads when their configured timeouts exceed the remaining deadline. Each call
+  retains its own deadline, and a deadline-shortened phase timeout does not fail another waiting call.
+
+
 ## [0.2.0] - 2026-10-25
 
 The first release published to PyPI. It reshapes the client around option objects and rebuilds every policy
