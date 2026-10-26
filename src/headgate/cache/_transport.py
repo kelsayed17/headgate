@@ -50,6 +50,7 @@ from hishel import AsyncBaseStorage, Entry, Request, Response
 from hishel.httpx2 import AsyncCacheTransport
 
 from headgate._core import CacheOutcome, CacheResult, CallContext
+from headgate._core._context import FITTED_TIMEOUTS, ORIGINAL_TIMEOUTS
 from headgate.cache._credentials import CredentialScope
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
 
@@ -403,6 +404,7 @@ class _InFlight:
     """A GET being fetched, and what the identical requests waiting on it get once it finishes."""
 
     finished: asyncio.Event = field(default_factory=asyncio.Event)
+    deadline_fitted: bool = False
     outcome: _Outcome = _Unshared.TRY_AGAIN
 
 
@@ -413,19 +415,49 @@ def _report(request: httpx2.Request, outcome: CacheOutcome) -> None:
         context.emit(CacheResult(call=context.info, outcome=outcome))
 
 
+def _requested_timeouts(request: httpx2.Request) -> dict[str, object]:
+    """Recover requested phase limits only where no explicit override followed deadline fitting."""
+    context = CallContext.of(request)
+    originals = context.get(ORIGINAL_TIMEOUTS)
+    fitted = context.get(FITTED_TIMEOUTS)
+    original = {} if originals is None else originals.get(request, {})
+    previous = {} if fitted is None else fitted.get(request, {})
+    current = request.extensions.get("timeout") or {}
+    return {
+        phase: original.get(phase, limit) if phase in previous and limit == previous[phase] else limit
+        for phase, limit in current.items()
+    }
+
+
 def _sharing_key(request: httpx2.Request) -> _SharingKey:
     """Return what two in-flight GETs must agree on to share one download.
 
     Headers as well as the URL, since two GETs that differ in ``Range``, ``Accept`` or a credential ask for different
-    responses. The ``timeout`` extension and the call's own retry policy too, since a request willing to wait longer,
-    or to try more often, must not inherit the ``ReadTimeout`` of one that was not.
+    responses. The original ``timeout`` extension and the call's own retry policy too, since a request willing to wait
+    longer, or to try more often, must not inherit the ``ReadTimeout`` of one that was not.
     """
-    timeout = request.extensions.get("timeout")
+    timeout = _requested_timeouts(request)
     # Sorted by name, which is unique, so the values (a float or None) are never compared.
-    named: list[tuple[str, object]] = sorted((str(name), value) for name, value in timeout.items()) if timeout else []
+    named: list[tuple[str, object]] = (
+        sorted((str(name), value) for name, value in timeout.items()) if bool(timeout) else []
+    )
     timeouts = tuple(named)
     retry = CallContext.of(request).get(RETRY_POLICY)
     return str(request.url), tuple(sorted(request.headers.multi_items())), timeouts, retry
+
+
+def _deadline_limited_timeout(request: httpx2.Request, exc: BaseException) -> bool:
+    """Whether fitting shortened the phase whose timeout ended this fetch."""
+    phases = (
+        (httpx2.ConnectTimeout, "connect"),
+        (httpx2.ReadTimeout, "read"),
+        (httpx2.WriteTimeout, "write"),
+        (httpx2.PoolTimeout, "pool"),
+    )
+    phase = next((name for kind, name in phases if isinstance(exc, kind)), "")
+    requested = _requested_timeouts(request)
+    fitted = request.extensions.get("timeout") or {}
+    return phase in requested and bool(requested[phase] != fitted.get(phase))
 
 
 class ResilientCacheTransport(AsyncCacheTransport):
@@ -456,7 +488,9 @@ class ResilientCacheTransport(AsyncCacheTransport):
     **Simultaneous identical GETs share one download.** hishel has no request coalescing, so an identical GET that
     arrives while the first is still fetching would find nothing in storage and go to the network too. Instead it waits
     and gets its own copy of the first one's response, whether a hit, a miss or degraded, since the body is held whole
-    here anyway. A network failure (one of :data:`~headgate.retry._policy.NETWORK_ERRORS`) fails every waiting request
+    here anyway. A timeout in a phase shortened to this call's deadline hands fetching to the next waiter instead of
+    failing it.
+    Any other network failure (one of :data:`~headgate.retry._policy.NETWORK_ERRORS`) fails every waiting request
     from the one attempt, each with its own copy chained to the original; each caller's retry layer then retries, and
     those retries share again. What a waiting request receives is marked :data:`HOST_UNTESTED`, so only the request that
     fetched counts toward the circuit breaker. If the first request is cancelled or fails outside the network, the next
@@ -495,6 +529,9 @@ class ResilientCacheTransport(AsyncCacheTransport):
         while (in_flight := self._in_flight.get(key)) is not None:
             await in_flight.finished.wait()
             outcome = in_flight.outcome
+            if isinstance(outcome, httpx2.TimeoutException) and in_flight.deadline_fitted:
+                # This fetch's remaining deadline cannot fail another call that still has time.
+                continue
             if isinstance(outcome, NETWORK_ERRORS):
                 _report(request, CacheOutcome.SHARED)
                 raise _shared_failure(outcome)
@@ -519,6 +556,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
             response, body = await self._fetch(request)
             in_flight.outcome = _Unshared.FETCH_OWN if body is None else _Download.of(response, body)
         except NETWORK_ERRORS as exc:
+            in_flight.deadline_fitted = _deadline_limited_timeout(request, exc)
             in_flight.outcome = exc
             raise
         finally:
