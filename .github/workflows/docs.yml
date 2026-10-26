@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: "3.14"
       # Strict: a broken link or a page missing from the nav fails the build.
-      - run: uv run --locked --only-group docs mkdocs build --strict
+      - run: uv run --locked --only-group docs zensical build --strict --clean
       - if: github.event_name == 'push'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:

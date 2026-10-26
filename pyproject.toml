@@ -67,7 +67,7 @@ dev = [
     "mutmut>=3.8",
     "vcrpy>=8.3",
 ]
-docs = ["mkdocs-material>=9.8.0"]
+docs = ["zensical>=0.0.72"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/headgate"]

@@ -341,6 +341,7 @@ uv run ty check
 uv run python -m pytest --cov             # 100% line and branch coverage is required
 uv run python -m pytest benchmarks        # the benchmarks, as CI runs them
 uv run mutmut run                         # mutation testing; slow, run it before a release
+uv run --only-group docs zensical serve   # preview the docs site at http://localhost:8000
 ```
 
 Lint selects every ruff rule, ty treats every rule as an error, and suppression comments are not accepted. See

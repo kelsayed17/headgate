@@ -13,5 +13,5 @@ htmlcov/
 mutants/
 .hypothesis/
 
-# The docs site, built by `mkdocs build`
+# The docs site, built by `zensical build`
 site/
