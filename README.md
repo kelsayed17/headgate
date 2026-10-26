@@ -20,8 +20,12 @@ events and OpenTelemetry, and errors that say exactly what happened. Each endpoi
 A headgate controls how much water gets through a channel. This library does the same for requests, in one place,
 so that no client has to get it right on its own.
 
+One base class replaces the stack a production client usually grows: an HTTP library, a retry library, a rate limiter,
+a cache, a circuit breaker, an event-stream parser and a mocking library, plus the glue that makes them agree.
+
 **Docs:** <https://kelsayed17.github.io/headgate/>. New here? See [how headgate compares](docs/comparison.md) with
-tenacity, stamina and a hand-rolled client, and a [GitHub API client](examples/github_client.py) written with it.
+the libraries it replaces, [the standards it follows](docs/standards.md), and a
+[GitHub API client](examples/github_client.py) written with it.
 
 ## Requirements and install
 

@@ -6,6 +6,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Added
+
+- A [standards page](https://kelsayed17.github.io/headgate/standards/) mapping each RFC and draft headgate follows to
+  what it does, and a comparison with about 30 HTTP, retry, rate-limit, cache, breaker and testing libraries.
+
 ## [0.4.0] - 2026-10-26
 
 Bounds `paginate()`: a page budget, and a stop at pages with no items. The stop changes what three pagers do by

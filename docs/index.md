@@ -77,6 +77,49 @@ Each endpoint method stays one line.
 
 </div>
 
+## One base class instead of a stack
+
+A production API client usually grows a stack: an HTTP library, a retry library, a rate limiter, a cache, a circuit
+breaker, a mocking library, and the glue code that makes them agree on deadlines and credentials. headgate is that
+whole stack, built to work as one.
+
+<div class="hg-stack">
+  <div class="hg-stack-before">
+    <span class="hg-stack-label">The usual stack</span>
+    <span class="hg-chip">httpx or aiohttp</span>
+    <span class="hg-chip">tenacity or stamina</span>
+    <span class="hg-chip">aiolimiter</span>
+    <span class="hg-chip">hishel or requests-cache</span>
+    <span class="hg-chip">pybreaker</span>
+    <span class="hg-chip">httpx-sse</span>
+    <span class="hg-chip">respx</span>
+    <span class="hg-chip hg-chip-glue">your glue code</span>
+  </div>
+  <div class="hg-stack-arrow" aria-hidden="true">&rarr;</div>
+  <div class="hg-stack-after">
+    <img src="assets/logo.png" alt="">
+    <strong>headgate</strong>
+    <span>one dependency, every layer built to work with the others</span>
+  </div>
+</div>
+
+Each call your client makes passes through every layer, in an order chosen so they cooperate: a cache hit is never
+retried, a retry spends its own rate turn, and one deadline bounds the lot.
+
+<ol class="hg-pipeline">
+  <li><strong>Deadline</strong><span>one budget of time for the whole call</span></li>
+  <li><strong>Circuit breaker</strong><span>fails fast while the host is down</span></li>
+  <li><strong>Auth</strong><span>credentials only for your origin</span></li>
+  <li><strong>Retries</strong><span>safe re-sends, <code>Retry-After</code> obeyed</span></li>
+  <li><strong>Cache</strong><span>a hit stops here</span></li>
+  <li><strong>Rate budget</strong><span>paced, and paused when the server asks</span></li>
+  <li><strong>Network</strong><span>HTTP/2, size-capped body</span></li>
+  <li><strong>Your reader</strong><span>a typed result, or a typed error</span></li>
+</ol>
+
+[:lucide-arrow-right: How headgate compares with 20+ libraries](comparison.md){ .md-button }
+[:lucide-arrow-right: The standards it follows](standards.md){ .md-button }
+
 ## Install
 
 === "pip"

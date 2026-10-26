@@ -3,6 +3,29 @@
 An API client holds credentials and follows URLs it did not write: redirects, cursor URLs, links in a response body.
 headgate makes the safe behaviour the default and loosening it explicit.
 
+## At a glance
+
+| Threat | What headgate does | Your control |
+| --- | --- | --- |
+| :lucide-key-round: a credential sent to another host by a redirect or a link | [withholds it on every hop](#credentials-stay-on-your-origin) to an origin you did not trust | trust more origins with `trusted_origins=` |
+| :lucide-arrow-down-to-line: an https page redirecting to plain http | [refuses the redirect](#redirects) | always on |
+| :lucide-server-crash: a URL that reaches your internal network (SSRF) | [refuses private addresses](#the-ssrf-guard), with DNS pinning, once you turn the guard on | `allow_private_hosts=False` turns it on |
+| :lucide-folder-tree: a value like `../admin` rewriting the path | [escapes each value](#paths-built-from-values) as one segment | `{value:raw}` for a pre-built fragment |
+| :lucide-eye-off: a token printed in a log or error | [redacts it](#redaction) as `***` in every error and event | always on |
+| :lucide-package-x: a proxy or `.netrc` picked up from the environment | [ignores the environment](#hermetic-by-default) | pass `proxy=` or `ssl_context=` explicitly |
+| :lucide-file-down: a huge response exhausting memory | [caps a buffered body](configuration.md#httpoptions) at 32 MiB | `max_response_bytes=` |
+| :lucide-database: one user's cached answer served to another | [partitions the cache](caching.md#partitions) by credential | `Partition.SHARED` for public data |
+
+Every hop goes through the same checks, not only the first request: each redirect, each next page and each request an
+auth flow sends.
+
+<ol class="hg-pipeline">
+  <li><strong>Origin check</strong><span>not your origin or a trusted one? Credentials, <code>Authorization</code> and <code>Cookie</code> are removed, and it goes out unsigned</span></li>
+  <li><strong>Address check</strong><span>with the SSRF guard on, every address the host resolves to must be public, or nothing is sent</span></li>
+  <li><strong>Pinned connect</strong><span>the connection goes to the address that was checked, so DNS cannot swap it</span></li>
+  <li><strong>Response check</strong><span>an https-to-http redirect is refused, and a one-shot body is never sent twice</span></li>
+</ol>
+
 ## Credentials stay on your origin
 
 Every auth headgate ships declares the headers and query parameters it stamps (the `CredentialStamper` protocol:
