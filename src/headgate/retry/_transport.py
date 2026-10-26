@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Final, override
 
 import httpx2
 
-from headgate._core import BREAKER_GATE, CallContext, RetryScheduled, Sleep, asyncio_sleep
+from headgate._core import BREAKER_GATE, BudgetBacklogError, CallContext, RetryScheduled, Sleep, asyncio_sleep
 from headgate.retry._budget import RetryLedger
 from headgate.retry._classify import Attempted, Verdict, classify
 from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, RetryOutcome
@@ -212,6 +212,11 @@ class _Sequence:
             result = await self._transport.handle_async_request(request)
         except NETWORK_ERRORS as exc:
             result = exc
+        except BudgetBacklogError:
+            # Never sent, so it is no attempt; the caller decides what the call ends with.
+            context.withdraw_attempt()
+            self._sent -= 1
+            raise
         except asyncio.CancelledError:
             # A losing hedge, or the whole call reaching its deadline: the history still accounts for the send.
             context.add_note(f"{prefix}: cancelled after {_rounded(context.clock() - started)}")
@@ -258,13 +263,10 @@ class _Sequence:
                         pending.add(task)
                     else:
                         extra = hedge.max_extra
-                for task in [send for send in sends if send in done]:
-                    pending.discard(task)
-                    attempt = task.result()
-                    if not attempt.retryable_failure:
-                        keep = attempt
-                        return attempt
-                    failed = attempt
+                answer, failed = _first_answer([send for send in sends if send in done], pending=pending, failed=failed)
+                if answer is not None:
+                    keep = answer
+                    return answer
                 if not pending and failed is not None:
                     keep = failed
                     return failed
@@ -361,11 +363,37 @@ class _Sequence:
                 if (reason := self._stop_reason()) is not None:
                     self._context.add_note(reason)
                     return _settle(attempt)
+                try:
+                    retried = await self._round()
+                except BudgetBacklogError:
+                    # The retry could not be sent before the deadline: the call ends with the failure it has.
+                    self._context.add_note("deadline exhausted")
+                    return _settle(attempt)
                 await _release(attempt)
-                attempt = await self._round()
+                attempt = retried
         finally:
             if self._timeout is not None:
                 self._request.extensions["timeout"] = self._timeout
+
+
+def _first_answer(
+    finished: list[asyncio.Task[_Attempt]], *, pending: set[asyncio.Task[_Attempt]], failed: _Attempt | None
+) -> tuple[_Attempt | None, _Attempt | None]:
+    """Take the *finished* sends out of *pending*; return the first answer among them, and the last failure so far.
+
+    An answer is an attempt that is not a retryable failure. A send the rate budget could not admit before the deadline
+    was never sent, so it is passed over while another send is still running or one has failed; otherwise its
+    ``BudgetBacklogError`` is raised.
+    """
+    for task in finished:
+        pending.discard(task)
+        if (pending or failed is not None) and isinstance(task.exception(), BudgetBacklogError):
+            continue
+        attempt = task.result()
+        if not attempt.retryable_failure:
+            return attempt, failed
+        failed = attempt
+    return None, failed
 
 
 async def _waited(sleep: Sleep, seconds: float) -> None:

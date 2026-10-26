@@ -493,3 +493,65 @@ async def test_one_shared_upstream_failure_is_one_breaker_failure(
     assert all(isinstance(result, raised) for result in results), results
     assert network.calls == 1
     assert failures("example.test") == 1
+
+
+async def test_gets_whose_timeouts_the_deadline_cut_still_share(storage: AsyncSqliteStorage) -> None:
+    """GETs whose read timeout outlasts the deadline share one download, though each one's fitted timeout differs.
+
+    The deadline cuts every request's timeouts to the time it has left, which is different on every request; the
+    sharing key uses the timeouts the call asked for.
+    """
+    network = _GatedNetwork()
+    client = StubClient(
+        base_url="https://example.test",
+        rate=UNLIMITED,
+        policy=TransportPolicy(
+            deadline=20.0, retry=RetryPolicy(attempts=1), cache=HttpCache(policy=every_get_policy(), storage=storage)
+        ),
+        http=HttpOptions(transport=network),
+    )
+    try:
+        tasks = [asyncio.create_task(client.get("files/2025.zip", expect=as_bytes)) for _ in range(_CONCURRENT)]
+        results = await _gather_gated(network, tasks)
+    finally:
+        await client.aclose()
+
+    assert results == [_BODY] * _CONCURRENT
+    assert network.calls == 1
+
+
+def _due_in(seconds: float) -> httpx2.Request:
+    """Return a GET of the shared URL asking for a 60 s read timeout, fitted to a deadline *seconds* away."""
+    request = httpx2.Request("GET", _URL, extensions={"timeout": {"read": 60.0}})
+    context = CallContext(CallInfo(method="GET", url=_URL), deadline_after=seconds)
+    context.attach(request)
+    context.fit_timeouts(request)
+    return request
+
+
+@pytest.mark.parametrize(
+    ("first_due_in", "calls"),
+    [
+        pytest.param(5.0, len(("the first request's", "the waiting one's own")), id="cut-by-the-deadline"),
+        pytest.param(120.0, 1, id="the-timeout-it-asked-for"),
+    ],
+)
+async def test_a_timeout_the_deadline_cut_short_is_not_shared(
+    first_due_in: float, calls: int, storage: AsyncSqliteStorage
+) -> None:
+    """A waiting GET with more time left fetches for itself when the first one timed out on its own deadline.
+
+    A timeout of the read timeout both asked for is shared like any other network failure.
+    """
+    network = _GatedNetwork(exc=httpx2.ReadTimeout("slow"))
+    transport = cache_transport(storage, network, policy=_cache_no_get())
+
+    first = asyncio.create_task(transport.handle_async_request(_due_in(first_due_in)))
+    await _eventually(lambda: network.calls == 1)
+    waiting = asyncio.create_task(transport.handle_async_request(_due_in(120.0)))
+    await _let_waiters_arrive()
+    network.gate.set()
+    results = await asyncio.gather(first, waiting, return_exceptions=True)
+
+    assert all(isinstance(result, httpx2.ReadTimeout) for result in results), results
+    assert network.calls == calls

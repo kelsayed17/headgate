@@ -70,6 +70,7 @@ from headgate._options import (
     HttpOptions,
     Timeouts,
     TransportPolicy,
+    check_timeout_fits,
     httpx_timeout,
     match_route,
     reject_upstream_httpx,
@@ -82,7 +83,7 @@ from headgate._view import KEEP, ROOT_DEFAULTS, Keep, overlay_timeout
 from headgate.breaker import BreakerOpenError, CircuitBreaker
 from headgate.breaker._registry import NO_BREAKER
 from headgate.breaker._scope import scoped_registry
-from headgate.cache._transport import host_untested
+from headgate.cache._transport import host_untested, store_accepted
 from headgate.errors import (
     CircuitOpenError,
     ClientError,
@@ -92,7 +93,7 @@ from headgate.errors import (
     RateLimitError,
 )
 from headgate.pagination import PageRequest, Paginated
-from headgate.ratelimit import BudgetPausedError
+from headgate.ratelimit import BudgetBacklogError, BudgetPausedError
 from headgate.retry import NO_RETRY, REPLAYABLE_BODY, RetryPolicy
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_OUTCOME, RETRY_POLICY
 from headgate.streaming import Stream
@@ -263,6 +264,7 @@ class AsyncBaseClient:
         self._refusal_check = http.refusal_check
         self._max_response_bytes = http.max_response_bytes
         self._request_id_headers = http.request_id_headers
+        check_timeout_fits(http.timeout, policy.deadline)
         self._timeout = http.timeout
         self._emitter = Emitter(http.observers) if http.observers else SILENT
         self._view = ROOT_DEFAULTS
@@ -316,6 +318,8 @@ class AsyncBaseClient:
         :raises ValueError: for a timeout or deadline that is not positive.
         """
         layered = self._view.layered(headers=headers, deadline=deadline, retry=retry)
+        if timeout is not None:
+            check_timeout_fits(timeout, self._policy.deadline if layered.deadline is KEEP else layered.deadline)
         view = copy.copy(self)
         # A shallow copy shares the pool, the stack and any subclass state; only the view's own settings differ.
         vars(view).update(
@@ -506,7 +510,10 @@ class AsyncBaseClient:
             async with self._deadline(prepared), self._exchange(prepared) as (streamed, _):
                 announce_deprecation(prepared.context, streamed)
                 resp = await read_capped(streamed, self._max_response_bytes, self._site(prepared))
-            return self._dispatch(resp, spec, self._site(prepared))
+            answer = self._dispatch(resp, spec, self._site(prepared))
+            # Only now that the reader accepted it may a cached miss be stored.
+            await store_accepted(resp)
+            return answer
 
     @contextlib.asynccontextmanager
     async def _streamed(self, call: _Call) -> AsyncGenerator[Stream]:
@@ -526,6 +533,8 @@ class AsyncBaseClient:
                 if not streamed.is_success:
                     head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
                     raise status_error(head, self._site(prepared))
+                # A stream has no reader: passing the head checks is what accepts it.
+                await store_accepted(streamed)
             yield Stream(streamed, self._site(prepared), functools.partial(self._network_failure, prepared, verdict))
 
     # Preparing the request.
@@ -570,9 +579,10 @@ class AsyncBaseClient:
         full_url = sanitize_url(str(request.url)) if self._emitter.active else None
         info = CallInfo(method=call.method, url=log_url, route=route, full_url=full_url)
         route_policy = match_route(self._policy.routes, request.url.path)
-        context = CallContext(
-            info, clock=self._timing.clock, deadline_after=self._deadline_of(call, route_policy), emitter=self._emitter
-        )
+        deadline = self._deadline_of(call, route_policy)
+        if (timeout := options.get("timeout")) is not None:
+            check_timeout_fits(timeout, deadline)
+        context = CallContext(info, clock=self._timing.clock, deadline_after=deadline, emitter=self._emitter)
         context.follow_redirects = follow
         if (retry := self._retry_of(call, route_policy)) is not None:
             context.put(RETRY_POLICY, retry)
@@ -669,8 +679,12 @@ class AsyncBaseClient:
             async with asyncio.timeout(remaining):
                 yield
         except TimeoutError:
-            site = self._site(prepared)
-            msg = f"{site.method} {site.url}: deadline exceeded after {prepared.context.elapsed():.3g}s"
+            context = prepared.context
+            if context.progress.dispatched or context.attempt == 0:
+                site, unsent = self._site(prepared), ""
+            else:
+                site, unsent = self._unsent_site(prepared), f", before attempt {context.attempt} was sent"
+            msg = f"{site.method} {site.url}: deadline exceeded after {context.elapsed():.3g}s{unsent}"
             raise ClientTimeoutError(msg, **site.details()) from None
 
     # The exchange: one send under the origin's breaker.
@@ -704,6 +718,14 @@ class AsyncBaseClient:
         except BreakerOpenError as exc:
             details = self._site(prepared).details(retry_after=exc.retry_after)
             raise CircuitOpenError(str(exc), **details) from None
+        except BudgetBacklogError as exc:
+            # Our own pacing, not the provider's: the call was never sent (the retry layer withdrew the attempt), and
+            # sending it later will be admitted.
+            site = self._site(prepared)
+            details = site.details(retry_after=exc.retry_after)
+            details["retryable"] = True
+            msg = f"{site.method} {site.url}: never sent: {exc}"
+            raise ClientTimeoutError(msg, **details) from None
         except BudgetPausedError as exc:
             # Not the retry policy's call: the budget says when sending again will be admitted.
             details = self._site(prepared).details(retry_after=exc.retry_after)
@@ -830,6 +852,10 @@ class AsyncBaseClient:
         return CallSite(
             self._source, info.method, info.url, context.attempt, self._request_id_headers, context.get(RETRY_OUTCOME)
         )
+
+    def _unsent_site(self, prepared: _Prepared) -> CallSite:
+        """Return :meth:`_site` for a call whose current attempt never reached the network: it does not count."""
+        return replace(self._site(prepared), attempts=prepared.context.attempt - 1)
 
 
 def _effective_policy(policy: TransportPolicy, *, off: bool) -> TransportPolicy:

@@ -82,6 +82,7 @@ class RateLimitTransport(httpx2.AsyncBaseTransport):
         release = await budget.occupy()
         # The waits took some of the call's time: the send that follows gets only what is left.
         context.fit_timeouts(request)
+        context.progress.mark_dispatched()
         sent_at = budget.now()
         try:
             response = await self._transport.handle_async_request(request)

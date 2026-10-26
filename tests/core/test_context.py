@@ -116,3 +116,30 @@ def test_a_standalone_context_names_only_the_origin_and_path() -> None:
     assert context.info.url == "https://api.example.test/v1/x"
     assert context.deadline is None
     assert CallContext.find(request) is context
+
+
+def test_each_request_keeps_the_timeouts_it_asked_for() -> None:
+    """Record what each request asked for at its first fit, so a hop fitted first cannot stand in for the call's own.
+
+    A token mint's hop with timeouts of its own is fitted before the call's request: each keeps its own.
+    """
+    context = _context(deadline_after=_STEP)
+    hop = httpx2.Request("GET", _URL, extensions={"timeout": {"read": 1.0}})
+    call = httpx2.Request("GET", _URL, extensions={"timeout": {"read": 60.0}})
+    context.fit_timeouts(hop)
+    context.fit_timeouts(call)
+    context.fit_timeouts(call)
+
+    assert CallContext.requested_timeouts(hop) == (("read", 1.0),)
+    assert CallContext.requested_timeouts(call) == (("read", 60.0),), "a second fit keeps what was asked for"
+    assert not CallContext.timeouts_cut(hop)
+    assert CallContext.timeouts_cut(call)
+
+
+def test_a_withdrawn_attempt_does_not_count() -> None:
+    """Take back an attempt that was never sent."""
+    context = _context()
+    context.begin_attempt()
+    context.begin_attempt()
+    context.withdraw_attempt()
+    assert context.attempt == 1

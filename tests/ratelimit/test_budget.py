@@ -18,7 +18,16 @@ import pytest
 
 from headgate._core import CallContext, CallInfo, Emitter, RateLimited, Timing
 from headgate.policy import policy_disabled
-from headgate.ratelimit import UNLIMITED, Adaptive, BudgetPausedError, PathBudgets, Rate, RateBudget, RateRule
+from headgate.ratelimit import (
+    UNLIMITED,
+    Adaptive,
+    BudgetBacklogError,
+    BudgetPausedError,
+    PathBudgets,
+    Rate,
+    RateBudget,
+    RateRule,
+)
 from headgate.testing import TestClock
 from tests.support.events import Recorder
 
@@ -211,6 +220,21 @@ async def test_a_pause_past_the_deadline_raises_at_once() -> None:
 
     assert (raised.value.retry_after, raised.value.status_code) == (_PAUSE, 503)
     assert clock.sleeps == [], "a pause that cannot fit is never waited"
+
+
+async def test_a_turn_past_the_deadline_raises_at_once_and_gives_the_turn_back() -> None:
+    """Refuse a call whose paced turn comes at or after its deadline, without waiting; the next call takes the turn."""
+    clock = TestClock()
+    budget = _budget(clock, Rate.per_second(1), adaptive=None)
+    await budget.wait(_context(clock))
+
+    with pytest.raises(BudgetBacklogError) as raised:
+        await budget.wait(_context(clock, deadline=_SHORT_DEADLINE))
+
+    assert raised.value.retry_after == 1.0
+    assert clock.sleeps == [], "a turn that cannot fit is never waited"
+    await budget.wait(_context(clock, deadline=_LONG_DEADLINE))
+    assert clock.sleeps == [1.0], "the refused turn was given back"
 
 
 async def test_a_pause_that_starts_while_a_call_waits_its_turn_is_waited_too() -> None:

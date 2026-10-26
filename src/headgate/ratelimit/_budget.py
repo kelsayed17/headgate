@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Final
 
 import httpx2
 
-from headgate._core import SYSTEM_TIMING, RateLimited
+from headgate._core import SYSTEM_TIMING, BudgetBacklogError, RateLimited
 from headgate.ratelimit._feedback import read_feedback
 from headgate.ratelimit._inflight import InFlightLimit
 from headgate.ratelimit._rate import Adaptive, Rate
@@ -173,6 +173,7 @@ class RateBudget:
         Emits :class:`~headgate._core.RateLimited` for every wait. :class:`RateLimitTransport` calls it once per send.
 
         :raises BudgetPausedError: when a pause would outlast the call's deadline.
+        :raises BudgetBacklogError: when the call's paced turn comes after its deadline.
         """
         reservation: tuple[float, float] | None = None
         while True:
@@ -192,6 +193,11 @@ class RateBudget:
                     reason = THROTTLED if self._factor < 1 else PACED
                     if delay <= 0:
                         return
+                    remaining = context.remaining()
+                    if remaining is not None and delay >= remaining:
+                        self._refund(reservation)
+                        msg = f"the rate budget's turn in {delay:.3g}s comes after the call's deadline"
+                        raise BudgetBacklogError(msg, retry_after=delay)
             if context.observed:
                 context.emit(RateLimited(call=context.info, delay=delay, reason=reason))
             try:

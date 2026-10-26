@@ -48,6 +48,7 @@ __all__ = [
     "Route",
     "Timeouts",
     "TransportPolicy",
+    "check_timeout_fits",
     "httpx_timeout",
     "match_route",
     "reject_upstream_httpx",
@@ -114,6 +115,31 @@ def httpx_timeout(client: Timeouts | float, call: Timeouts | float | None = None
     if call is not None:
         base = call if isinstance(call, Timeouts) else replace(base, read=call)
     return httpx2.Timeout(connect=base.connect, read=base.read, write=base.write, pool=base.pool)
+
+
+def check_timeout_fits(timeout: Timeouts | float, deadline: float | None) -> None:
+    """Refuse a *timeout* someone set that is longer than the *deadline* it runs under, since it could never apply.
+
+    A bare number is the read timeout. Of a ``Timeouts``, only the phases set away from their defaults are checked, so
+    a short deadline over the default timeouts stays valid: there the deadline cuts each attempt's timeouts, as meant.
+
+    :raises ValueError: naming the phase, its timeout and the deadline.
+    """
+    if deadline is None:
+        return
+    defaults = Timeouts()
+    if isinstance(timeout, Timeouts):
+        phases = [(name, getattr(timeout, name)) for name in ("connect", "read", "write", "pool")]
+        chosen = [(name, limit) for name, limit in phases if limit != getattr(defaults, name)]
+    else:
+        chosen = [("read", timeout)]
+    for name, limit in chosen:
+        if limit > deadline:
+            msg = (
+                f"{name} timeout {limit:g}s is longer than the {deadline:g}s deadline it runs under, so it can never "
+                f"take effect: raise the deadline (TransportPolicy(deadline=...) or deadline=), or lower the timeout"
+            )
+            raise ValueError(msg)
 
 
 def _uuid4_text() -> str:

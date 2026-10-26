@@ -283,12 +283,13 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.ratelimit]
   '''
   module headgate.ratelimit
-  __all__ = ['UNLIMITED', 'Adaptive', 'BudgetPausedError', 'PathBudgets', 'Rate', 'RateBudget', 'RateLimitTransport', 'RateRule']
+  __all__ = ['UNLIMITED', 'Adaptive', 'BudgetBacklogError', 'BudgetPausedError', 'PathBudgets', 'Rate', 'RateBudget', 'RateLimitTransport', 'RateRule']
   UNLIMITED = Rate(requests=1000000, period=1.0)
   class Adaptive(object)(*, decrease: 'float' = 0.5, increase: 'float' = 0.1, min_rate: 'float' = 0.1) -> 'None'
       field decrease: float = 0.5
       field increase: float = 0.1
       field min_rate: float = 0.1
+  class BudgetBacklogError(Exception)(message: 'str', *, retry_after: 'float') -> 'None'
   class BudgetPausedError(Exception)(message: 'str', *, retry_after: 'float', status_code: 'int') -> 'None'
   class PathBudgets(object)(*, default: 'Rate | RateBudget', rules: 'Sequence[RateRule]' = (), timing: 'Timing' = Timing(clock=<built-in function monotonic>, sleep=<function asyncio_sleep at 0x…>)) -> 'None'
       def for_request(self, request: 'httpx2.Request') -> 'RateBudget'

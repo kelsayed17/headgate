@@ -13,7 +13,7 @@ from hishel import AsyncBaseStorage, AsyncSqliteStorage, Entry, FilterPolicy, Re
 
 from headgate import HttpOptions, TransportPolicy
 from headgate.cache import HttpCache, MethodFilter, PathFragmentFilter, StatusCodeFilter
-from headgate.cache._transport import ResilientCacheTransport
+from headgate.cache._transport import ResilientCacheTransport, store_accepted
 from headgate.ratelimit import UNLIMITED
 from tests.support.clients import StubClient
 
@@ -64,6 +64,13 @@ def stub_client(
         policy=TransportPolicy(cache=cache),
         http=dataclasses.replace(http or HttpOptions(), transport=transport),
     )
+
+
+async def accept(response: httpx2.Response) -> bytes:
+    """Read *response* and accept it, as a client does once the call's reader returns: a miss is stored now."""
+    body = await response.aread()
+    await store_accepted(response)
+    return body
 
 
 def cache_transport(

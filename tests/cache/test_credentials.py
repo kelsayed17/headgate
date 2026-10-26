@@ -28,7 +28,7 @@ from headgate._core import CredentialStamper
 from headgate.cache import HttpCache, Partition
 from headgate.cache._credentials import CredentialScope, credential_scope
 from headgate.ratelimit import UNLIMITED
-from tests.cache._helpers import cache_transport, series_policy
+from tests.cache._helpers import accept, cache_transport, series_policy
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
@@ -278,7 +278,7 @@ async def _store_and_inspect(secrets: _Secrets) -> tuple[int, bytes]:
                 headers={"Authorization": f"Bearer {bearer}", "Cookie": f"s={cookie}", _HEADER: key},
             )
             response = await transport.handle_async_request(request)
-            await response.aread()
+            await accept(response)
         return len(network.sent), await _stored_bytes(connection)
     finally:
         await storage.close()
@@ -310,7 +310,7 @@ async def test_a_set_cookie_is_handed_to_the_caller_and_never_stored() -> None:
     transport = cache_transport(storage, network, policy=series_policy())
     try:
         fetched = await transport.handle_async_request(httpx2.Request("GET", _URL))
-        await fetched.aread()
+        await accept(fetched)
         hit = await transport.handle_async_request(httpx2.Request("GET", _URL))
         await hit.aread()
         stored = await _stored_bytes(connection)
