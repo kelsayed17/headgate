@@ -38,6 +38,8 @@ __all__ = ["CallContext", "SendProgress", "Slot"]
 
 #: The one request extension headgate keeps its per-call state in.
 _EXTENSION: Final = "headgate.call"
+#: The extension holding a request's timeouts as they were before :meth:`CallContext.fit_timeouts` first cut them.
+_REQUESTED_TIMEOUT: Final = "headgate.requested_timeout"
 
 
 #: A request's httpx2 timeouts as ``(phase, seconds)`` pairs sorted by phase; ``None`` is a phase without a limit.
@@ -103,7 +105,6 @@ class CallContext:
         "_emitter",
         "_notes",
         "_progress",
-        "_requested_timeouts",
         "_slots",
         "follow_redirects",
         "idempotency_key",
@@ -129,7 +130,6 @@ class CallContext:
         self._progress = SendProgress()
         self._notes: list[str] = []
         self._slots: dict[object, object] = {}
-        self._requested_timeouts: PhaseTimeouts | None = None
         #: The ``Idempotency-Key`` (or configured header) value every attempt of the call carries, if any.
         self.idempotency_key: str | None = None
         #: Whether httpx2 follows this call's redirects, read by the hook that drops a followed redirect's body.
@@ -193,25 +193,25 @@ class CallContext:
         timeout = request.extensions.get("timeout")
         if remaining is None or not isinstance(timeout, dict):
             return
-        if self._requested_timeouts is None:
-            self._requested_timeouts = _named(timeout)
+        # Recorded on the request itself: a call's hops (a token mint, say) may ask for timeouts of their own.
+        request.extensions.setdefault(_REQUESTED_TIMEOUT, timeout)
         left = max(remaining, floor)
         request.extensions["timeout"] = {
             phase: left if limit is None else min(limit, left) for phase, limit in timeout.items()
         }
 
-    def requested_timeouts(self, request: httpx2.Request) -> PhaseTimeouts:
-        """Return the httpx2 timeouts the call asked for, before :meth:`fit_timeouts` cut any of them to the deadline.
+    @staticmethod
+    def requested_timeouts(request: httpx2.Request) -> PhaseTimeouts:
+        """Return the httpx2 timeouts *request* asked for, before :meth:`fit_timeouts` cut any of them to a deadline.
 
-        Before any fit, they are *request*'s own ``timeout`` extension (none without one).
+        Before any fit, they are its own ``timeout`` extension (none without one).
         """
-        if self._requested_timeouts is not None:
-            return self._requested_timeouts
-        return _named(request.extensions.get("timeout"))
+        return _named(request.extensions.get(_REQUESTED_TIMEOUT, request.extensions.get("timeout")))
 
-    def timeouts_cut(self, request: httpx2.Request) -> bool:
-        """Return whether :meth:`fit_timeouts` cut *request*'s timeouts below the ones the call asked for."""
-        return _named(request.extensions.get("timeout")) != self.requested_timeouts(request)
+    @staticmethod
+    def timeouts_cut(request: httpx2.Request) -> bool:
+        """Return whether :meth:`fit_timeouts` cut *request*'s timeouts below the ones it asked for."""
+        return _named(request.extensions.get("timeout")) != CallContext.requested_timeouts(request)
 
     # Attempts.
 
@@ -230,6 +230,10 @@ class CallContext:
         self._attempt += 1
         self._progress = SendProgress()
         return self._attempt
+
+    def withdraw_attempt(self) -> None:
+        """Record that the attempt just begun was never sent (its rate-budget turn came too late): it does not count."""
+        self._attempt -= 1
 
     # Notes and events.
 

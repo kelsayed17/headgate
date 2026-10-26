@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Final, override
 import httpx2
 import pytest
 
-from headgate._core import BREAKER_GATE, CallContext, CallInfo, Emitter, RetryScheduled
+from headgate._core import BREAKER_GATE, BudgetBacklogError, CallContext, CallInfo, Emitter, RetryScheduled
 from headgate.retry import Backoff, Hedge, RetryBudget, RetryPolicy, RetryTransport
 from headgate.retry._tracking import head_size
 from headgate.testing import FaultyTransport, Respond, TestClock
@@ -340,6 +340,86 @@ async def test_an_answer_before_the_hedge_delay_cancels_the_hedge_timer() -> Non
     await call
 
     assert gate.cancelled == 1
+
+
+# --- Sends the rate budget cannot admit before the deadline ---
+
+
+def _backlog() -> BudgetBacklogError:
+    """Return the error the rate budget raises for a turn past the deadline."""
+    return BudgetBacklogError("the rate budget's turn comes after the call's deadline", retry_after=2.0)
+
+
+class _Scripted(httpx2.AsyncBaseTransport):
+    """Answer each send with the next of *answers*: a status, or an exception raised."""
+
+    def __init__(self, *answers: int | Exception) -> None:
+        """Answer in order."""
+        self._answers = list(answers)
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        answer = self._answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return httpx2.Response(answer, request=request, content=b"busy")
+
+
+async def test_a_first_send_the_budget_cannot_admit_is_withdrawn_and_raised() -> None:
+    """Raise the budget's refusal of the first send, which then counts as no attempt."""
+    clock = TestClock()
+    retry = RetryTransport(transport=_Scripted(_backlog()), policy=RetryPolicy(budget=None), sleep=clock.sleep)
+    request, context = _request(clock)
+
+    with pytest.raises(BudgetBacklogError):
+        await retry.handle_async_request(request)
+
+    assert context.attempt == 0
+
+
+async def test_a_retry_the_budget_cannot_admit_ends_with_the_last_failure() -> None:
+    """End with the failure already in hand, noted as out of time, rather than with the unsent retry."""
+    clock = TestClock()
+    policy = RetryPolicy(budget=None, backoff=_QUARTER)
+    retry = RetryTransport(transport=_Scripted(503, _backlog()), policy=policy, sleep=clock.sleep, clock=clock)
+    request, context = _request(clock)
+
+    response = await retry.handle_async_request(request)
+
+    assert response.status_code == httpx2.codes.SERVICE_UNAVAILABLE
+    assert await response.aread() == b"busy"
+    assert context.notes[-1] == "deadline exhausted"
+    assert context.attempt == 1, "the retry was never sent"
+
+
+class _HedgeRefused(_Held):
+    """A held network whose rate budget refuses every send after the first."""
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        if self.started:
+            raise _backlog()
+        return await super().handle_async_request(request)
+
+
+async def test_a_hedge_the_budget_cannot_admit_leaves_the_first_send_to_answer() -> None:
+    """Pass over a hedge the budget refused, and answer with the send still in flight."""
+    changes = _Changes()
+    network, gate = _HedgeRefused(changes), _Gate(changes)
+    retry = RetryTransport(
+        transport=network, policy=RetryPolicy(budget=None, hedge=Hedge(after=_HEDGE_AFTER)), sleep=gate.sleep
+    )
+    request, context = _request(TestClock())
+
+    call = asyncio.create_task(retry.handle_async_request(request))
+    await changes.until(lambda: network.started and gate.waits)
+    gate.opened.set()
+    await _settle()
+
+    assert not call.done()
+    network.started[0].set_result(200)
+    assert (await call).status_code == httpx2.codes.OK
+    assert context.attempt == 1
 
 
 # --- Exact bounds of a wait ---

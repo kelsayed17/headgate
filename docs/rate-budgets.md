@@ -29,8 +29,7 @@ under a `threading.Lock` and nothing in it is bound to a loop.
 - **Pacing** is GCRA, the virtual-scheduling form of a leaky bucket. Up to `rate.requests` requests (at least one) go
   out back to back; after that they are `period / requests` seconds apart. Waiters are served in arrival order, and a
   waiter cancelled in the queue gives its turn back when nobody reserved after it. A call whose turn comes at or after
-  its deadline does not queue: it gives the turn back and raises `ClientTimeoutError` at once, saying it was never sent
-  (`attempts` counts only the sends made, `retryable=True`, `retry_after` the wait it was refused).
+  its deadline does not queue: it gives the turn back and the attempt is never sent (see [deadlines](deadlines.md)).
 - **`max_in_flight`** caps how many requests are open at once. A request holds its slot from the send until its
   response body is **closed**, not until the head arrives, since the server is still busy with a body that streams.
   Every path that drops a response closes it, so a slot cannot leak.

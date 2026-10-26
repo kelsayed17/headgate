@@ -675,10 +675,10 @@ class AsyncBaseClient:
                 yield
         except TimeoutError:
             context = prepared.context
-            if context.progress.dispatched:
+            if context.progress.dispatched or context.attempt == 0:
                 site, unsent = self._site(prepared), ""
             else:
-                site, unsent = self._unsent_site(prepared), ", before the request was sent"
+                site, unsent = self._unsent_site(prepared), f", before attempt {context.attempt} was sent"
             msg = f"{site.method} {site.url}: deadline exceeded after {context.elapsed():.3g}s{unsent}"
             raise ClientTimeoutError(msg, **site.details()) from None
 
@@ -714,8 +714,9 @@ class AsyncBaseClient:
             details = self._site(prepared).details(retry_after=exc.retry_after)
             raise CircuitOpenError(str(exc), **details) from None
         except BudgetBacklogError as exc:
-            # Our own pacing, not the provider's: the call was never sent, and sending it later will be admitted.
-            site = self._unsent_site(prepared)
+            # Our own pacing, not the provider's: the call was never sent (the retry layer withdrew the attempt), and
+            # sending it later will be admitted.
+            site = self._site(prepared)
             details = site.details(retry_after=exc.retry_after)
             details["retryable"] = True
             msg = f"{site.method} {site.url}: never sent: {exc}"
@@ -849,8 +850,7 @@ class AsyncBaseClient:
 
     def _unsent_site(self, prepared: _Prepared) -> CallSite:
         """Return :meth:`_site` for a call whose current attempt never reached the network: it does not count."""
-        site = self._site(prepared)
-        return replace(site, attempts=max(prepared.context.attempt - 1, 0))
+        return replace(self._site(prepared), attempts=prepared.context.attempt - 1)
 
 
 def _effective_policy(policy: TransportPolicy, *, off: bool) -> TransportPolicy:

@@ -12,8 +12,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   leaves; the sharing key now uses the timeouts the call asked for, not the deadline-cut ones
   ([#4](https://github.com/kelsayed17/headgate/issues/4)).
 - A call whose rate-budget turn comes after its deadline fails at once with `ClientTimeoutError` saying it was never
-  sent, with `retryable=True` and `retry_after`, instead of waiting and failing like a slow upstream. A deadline that
-  passes before the send says so, and `attempts` counts only the sends made
+  sent, with `retryable=True` and `retry_after`, instead of waiting and failing like a slow upstream; a retry that
+  cannot be sent in time ends the call with the failure it already has, and such a hedge is not sent. A deadline that
+  passes before an attempt is sent says so, and `attempts` counts only the sends made
   ([#5](https://github.com/kelsayed17/headgate/issues/5)).
 
 ### Changed

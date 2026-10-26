@@ -9,6 +9,9 @@
   declares, for the guard alone.
 * :data:`BREAKER_GATE`: set by the client on every call, read by the retry layer, so a retry sequence stops as soon as
   the origin's breaker opens without the retry layer knowing about breakers.
+* :class:`BudgetBacklogError`: raised by the rate budget for an attempt whose turn comes after the call's deadline. The
+  retry layer withdraws the attempt, which was never sent, and keeps the call's last failure when it has one; the
+  client raises it as ``ClientTimeoutError``.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from typing import Protocol, runtime_checkable
 
 from headgate._core._context import Slot
 
-__all__ = ["BREAKER_GATE", "CredentialCarrier", "CredentialStamper"]
+__all__ = ["BREAKER_GATE", "BudgetBacklogError", "CredentialCarrier", "CredentialStamper"]
 
 
 @runtime_checkable
@@ -48,3 +51,16 @@ class CredentialStamper(CredentialCarrier, Protocol):
 #: Answers whether the breaker for the call's origin is refusing right now. The client puts it on every call's
 #: context; the retry layer checks it before scheduling another attempt.
 BREAKER_GATE = Slot[Callable[[], bool]]("breaker_gate")
+
+
+class BudgetBacklogError(Exception):
+    """Raised by ``RateBudget.wait`` when an attempt's paced turn comes after its call's deadline, so it is never sent.
+
+    ``retry_after`` is the seconds until the turn the attempt would have had. It is public as
+    ``headgate.ratelimit.BudgetBacklogError``.
+    """
+
+    def __init__(self, message: str, *, retry_after: float) -> None:
+        """Record *message* and *retry_after*."""
+        super().__init__(message)
+        self.retry_after = retry_after

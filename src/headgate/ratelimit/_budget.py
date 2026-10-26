@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Final
 
 import httpx2
 
-from headgate._core import SYSTEM_TIMING, RateLimited
+from headgate._core import SYSTEM_TIMING, BudgetBacklogError, RateLimited
 from headgate.ratelimit._feedback import read_feedback
 from headgate.ratelimit._inflight import InFlightLimit
 from headgate.ratelimit._rate import Adaptive, Rate
@@ -68,19 +68,6 @@ class BudgetPausedError(Exception):
         super().__init__(message)
         self.retry_after = retry_after
         self.status_code = status_code
-
-
-class BudgetBacklogError(Exception):
-    """Raised by :meth:`RateBudget.wait` when the call's paced turn comes after its deadline, so it is never sent.
-
-    ``AsyncBaseClient`` raises it to its caller as :class:`headgate.errors.ClientTimeoutError`. ``retry_after`` is the
-    seconds until the turn the call would have had.
-    """
-
-    def __init__(self, message: str, *, retry_after: float) -> None:
-        """Record *message* and *retry_after*."""
-        super().__init__(message)
-        self.retry_after = retry_after
 
 
 def _release_nothing() -> None:

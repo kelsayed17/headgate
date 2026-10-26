@@ -134,7 +134,7 @@ async def test_a_deadline_passing_before_the_send_says_so() -> None:
     holder = asyncio.create_task(built.get("slow", expect=nothing, retry=NO_RETRY))
     try:
         await holding.wait()
-        with pytest.raises(ClientTimeoutError, match="before the request was sent") as raised:
+        with pytest.raises(ClientTimeoutError, match="before attempt 1 was sent") as raised:
             await built.get("x", expect=nothing, deadline=_SHORT_DEADLINE)
     finally:
         holder.cancel()

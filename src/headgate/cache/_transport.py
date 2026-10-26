@@ -418,12 +418,11 @@ def _sharing_key(request: httpx2.Request) -> _SharingKey:
 
     Headers as well as the URL, since two GETs that differ in ``Range``, ``Accept`` or a credential ask for different
     responses. The timeouts and the call's own retry policy too, since a request willing to wait longer, or to try more
-    often, must not inherit the ``ReadTimeout`` of one that was not. The timeouts are the ones the call asked for, not
-    the ones fitted to its deadline, which differ on every request; each waiter's own deadline still bounds its wait.
+    often, must not inherit the ``ReadTimeout`` of one that was not. The timeouts are the ones the request asked for,
+    not the ones fitted to its deadline, which differ on every request; each waiter's own deadline bounds its wait.
     """
-    context = CallContext.of(request)
-    timeouts = context.requested_timeouts(request)
-    retry = context.get(RETRY_POLICY)
+    timeouts = CallContext.requested_timeouts(request)
+    retry = CallContext.of(request).get(RETRY_POLICY)
     return str(request.url), tuple(sorted(request.headers.multi_items())), timeouts, retry
 
 
@@ -433,7 +432,7 @@ def _cut_short(request: httpx2.Request, failure: Exception) -> bool:
     The requests waiting on it asked for the same timeouts, but each has a deadline of its own: one with more time left
     must fetch for itself rather than inherit a timeout it would not have hit.
     """
-    return isinstance(failure, httpx2.TimeoutException) and CallContext.of(request).timeouts_cut(request)
+    return isinstance(failure, httpx2.TimeoutException) and CallContext.timeouts_cut(request)
 
 
 class ResilientCacheTransport(AsyncCacheTransport):
