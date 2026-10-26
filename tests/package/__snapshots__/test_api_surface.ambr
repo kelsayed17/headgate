@@ -266,6 +266,7 @@
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Iterable[I]'
   class Paginated(Generic)(fetch: 'Fetch[P]', pager: 'Pager[P, I]', first: 'PageRequest', *, source: 'str', limit: 'PageLimit | None' = None) -> 'None'
+      def collect(self, *, max_items: 'int | None' = None) -> 'list[I]'
       def pages(self) -> 'AsyncIterator[P]'
   def parse_link_header(value: 'str') -> 'list[Link]'
   '''
@@ -608,6 +609,7 @@
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Iterable[I]'
   class Paginated(Generic)(fetch: 'Fetch[P]', pager: 'Pager[P, I]', first: 'PageRequest', *, source: 'str', limit: 'PageLimit | None' = None) -> 'None'
+      def collect(self, *, max_items: 'int | None' = None) -> 'list[I]'
       def pages(self) -> 'AsyncIterator[P]'
   class Partition(Enum)(*values)
       CREDENTIAL = 'credential'

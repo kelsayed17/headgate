@@ -27,6 +27,20 @@ Nothing is fetched until iteration starts, no page is kept once the iteration mo
 nothing more, and iterating again starts again from the first page. A page that leads back to a request already made
 (a cursor or next URL that repeats) raises `ClientError` instead of looping forever.
 
+## Collecting into a list
+
+`await walk.collect()` returns every item as a list. `collect(max_items=n)` returns at most the first `n`, and stops as
+soon as it has them: the page after the one that filled the list is never requested.
+
+```python
+everything = await client.paginate("items", expect=decoder(Page), pages=ITEM_PAGES).collect()
+first_250 = await client.paginate("items", expect=decoder(Page), pages=ITEM_PAGES).collect(max_items=250)
+```
+
+`max_items=0` returns `[]` without a request, and a negative count raises `ValueError`. Use `max_items` to bound how
+many **items** you get back, and a [page budget](#a-page-budget) to bound how many **requests** a walk may make; when
+both apply, a `PageLimitError` is raised only if the budget runs out before `max_items` is reached.
+
 ## A page budget
 
 A walk ends at its last page, but a server bug, an unordered dataset or a too-broad filter can keep naming new pages

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from contextlib import aclosing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, final
 
@@ -12,7 +13,7 @@ from headgate._failures import loggable_url
 from headgate.errors import ClientError, PageLimitError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 
     import httpx2
 
@@ -51,9 +52,10 @@ type Fetch[P] = Callable[[PageRequest], Awaitable[tuple[P, httpx2.Response]]]
 class Paginated[P, I]:
     """The pages of a paginated endpoint and the items on them, fetched one page at a time as iteration reaches them.
 
-    ``async for item in paginated`` yields every item; :meth:`pages` yields the pages themselves. Nothing is fetched
-    until iteration starts, no page is held after the iteration moves past it, and each iteration starts again from
-    the first page. Stopping early fetches nothing more.
+    ``async for item in paginated`` yields every item; :meth:`pages` yields the pages themselves; :meth:`collect`
+    returns the items as a list, optionally at most so many of them. Nothing is fetched until iteration starts, no
+    page is held after the iteration moves past it, and each iteration starts again from the first page. Stopping
+    early fetches nothing more.
 
     A page that leads back to a request already made (a cursor or next URL that repeats) raises ``ClientError``
     instead of looping forever; the requests made are remembered for that, one small key per page. A walk with a
@@ -97,7 +99,27 @@ class Paginated[P, I]:
             del response
             yield page
 
-    async def _items(self) -> AsyncIterator[I]:
+    async def collect(self, *, max_items: int | None = None) -> list[I]:
+        """Return every item of the walk, in order; with *max_items*, at most that many.
+
+        The walk stops as soon as it has *max_items* items, so no page past the one that filled it is fetched, and
+        ``max_items=0`` sends no request. A :class:`PageLimit` applies as it does to iteration: a walk it cuts short
+        raises ``PageLimitError`` unless the items were all collected first.
+        """
+        if max_items is not None and (isinstance(max_items, bool) or max_items < 0):
+            msg = f"max_items must be None or >= 0 (got {max_items!r})"
+            raise ValueError(msg)
+        collected: list[I] = []
+        if max_items == 0:
+            return collected
+        async with aclosing(self._items()) as items:
+            async for item in items:
+                collected.append(item)
+                if len(collected) == max_items:
+                    break
+        return collected
+
+    async def _items(self) -> AsyncGenerator[I]:
         """Iterate the items of every page, in order."""
         async for page in self.pages():
             for item in self._pager.page_items(page):
