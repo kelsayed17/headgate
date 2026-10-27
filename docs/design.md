@@ -30,7 +30,9 @@ src/headgate/
   _responses.py      Reader, Expect, RefusedError and the built-in readers
   _failures.py       the ClientError a failed exchange becomes
   _auth.py           StaticHeaderAuth, QueryParamAuth, CachedTokenAuth
-  _body.py, _request_body.py, _redirects.py, _middleware.py, _attempts.py, _deprecation.py, _view.py, _url.py
+  _codec.py          the Codec protocol, and the readers and writers built on one
+  _body.py, _request_body.py, _redirects.py, _middleware.py, _attempts.py, _deprecation.py, _view.py, _url.py,
+  _user_agent.py, _curl.py
   _core/             shared seams only: time, origins, CallContext, events, the policy switch
   retry/             RetryPolicy and its values, RetryTransport, send tracking, the budget ledger
   breaker/           BreakerPolicy, BreakerRegistry, CircuitBreaker

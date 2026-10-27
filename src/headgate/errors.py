@@ -331,7 +331,7 @@ class ForbiddenDestinationError(ClientError):
 
 
 class PageLimitError(ClientError):
-    """A paginated walk reached its page budget (``paginate(..., max_pages=...)``) with more pages still to come.
+    """A paginated walk reached its page budget (``limit=PageLimit(max_pages)``) with more pages still to come.
 
     The pages fetched so far were yielded; what follows was not fetched, so the result is incomplete. ``pages`` is the
     number of pages fetched. A walk whose last page falls exactly on the budget ends normally, and
