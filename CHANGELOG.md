@@ -6,7 +6,24 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Added
+
+- Walks of POSTs: `paginate()` takes a `PageRequest(url, params, body=..., write=...)` as its first argument, and each
+  page is then a `post` of the body, written by `write` (a codec's `encoder`) or sent as `json=`. Two new pagers carry
+  the page token in that body: `BodyCursor(items=, next=, put=)` puts each cursor into the next page's body, and
+  `BodyOffset(items=, page_size=, offset=, put=)` advances an offset the body carries. A POST page keeps the rule for
+  a method that is not idempotent: it is re-sent only under `IdempotencyKeys` (a fresh key per page) or a `retry=`
+  that treats POST as idempotent. See [Walks of POSTs](docs/pagination.md#walks-of-posts).
+- `PageRequest.body`, `PageRequest.write` and `PageRequest.with_body()`, and a third type parameter on `Pager`,
+  `Cursor` and `Offset`: the type `B` of the walk's body, which is `None`, as before, for a walk of GETs.
+
 ### Changed
+
+- `paginate()` refuses `body=` (as it refused the other body options), `params=` beside a `PageRequest`, and on a walk
+  of POSTs a fixed idempotency key (`idempotency_key=`, or the key's header in `headers=`); `LinkHeader` and `NextUrl`
+  refuse a walk with a body. A `PageLimitError` or pagination-loop `ClientError` from a walk of POSTs names `POST` as
+  its method. The message for a body option on `paginate()` is now "paginate takes no body option: a walk of POSTs
+  passes its body in a PageRequest".
 
 - Messages, docs and docstrings use American spelling. The one message whose text changes is the refusal of a token
   endpoint that rotates its long-lived credential, which now says "Re-authorize".

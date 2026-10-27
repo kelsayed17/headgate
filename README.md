@@ -287,7 +287,7 @@ token, an idempotent POST, a declared business refusal, `Link`-header pages and 
 | [Response cap](https://kelsayed17.github.io/headgate/configuration/#httpoptions) | 32 MiB per buffered body, counted after decompression |
 | [Caching](https://kelsayed17.github.io/headgate/caching/) | Opt-in hishel cache, partitioned by credential, never storing one; coalesced identical GETs; conditional reads |
 | [Streaming and uploads](https://kelsayed17.github.io/headgate/streaming/) | `stream()` for bodies and server-sent events with resume; raw, streamed and multipart request bodies |
-| [Pagination](https://kelsayed17.github.io/headgate/pagination/) | `paginate()` with `Cursor`, `Offset`, `LinkHeader` or `NextUrl`, lazy, loop-safe, bounded by pages or items |
+| [Pagination](https://kelsayed17.github.io/headgate/pagination/) | `paginate()` with `Cursor`, `Offset`, `LinkHeader` or `NextUrl`, or `BodyCursor` and `BodyOffset` for a POST body; lazy, loop-safe, bounded by pages or items |
 | [Errors](https://kelsayed17.github.io/headgate/errors/) | One `ClientError` tree; method, URL, request id, attempts, `retryable`, `retry_after`, RFC 9457 problems |
 | [Auth](https://kelsayed17.github.io/headgate/auth/) | Static headers, query keys, and a cached minted token with one re-mint on a 401 |
 | [Observability](https://kelsayed17.github.io/headgate/observability/) | Typed events, OpenTelemetry spans and metrics, request ids, `Deprecation` / `Sunset` notices, health snapshots |

@@ -81,7 +81,8 @@ AsyncBaseClient.get(url, expect=..., **options)
 ```
 
 `stream()` takes the same path, except that the response is handed to the caller's block open, with the breaker scope
-held until the block exits, and the deadline bounds only opening it. Each page of `paginate()` is a `get`.
+held until the block exits, and the deadline bounds only opening it. Each page of `paginate()` is a `get`, or a `post`
+for a walk of POSTs.
 
 The breaker and the deadline are driven by the client, not by a transport layer, because only the client's scope spans
 both the send and the body read. The cache is below the retry layer, so a hit is never retried, and above the rate
