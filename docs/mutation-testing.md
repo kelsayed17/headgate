@@ -25,7 +25,9 @@ same tests fail on those mutants when run in a plain process, so they are counte
 
 ## Latest score
 
-A full run on 2026-10-25 (mutmut 3.8, 10 workers, about 17 minutes) generated 5,573 mutants:
+A full run on 2026-10-25 (mutmut 3.8, 10 workers, about 17 minutes) generated 5,573 mutants. It ran against the source
+of headgate 0.2.0 ([`cab9a27`](https://github.com/kelsayed17/headgate/tree/cab9a27/src/headgate)), so the modules and
+functions named below are that source's: some have since been renamed, merged or made public.
 
 | Outcome | Mutants |
 | --- | --- |

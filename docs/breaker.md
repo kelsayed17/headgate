@@ -43,7 +43,7 @@ does it record nothing.
 
 ## Sharing and keying
 
-Breakers live in a `BreakerRegistry`, by default the process-wide `headgate.breaker.DEFAULT_REGISTRY`. Every client
+Breakers live in a `BreakerRegistry`, by default one the whole process shares. Every client
 whose `BreakerPolicy` names the same registry and the same thresholds shares an origin's breaker, so two clients of one
 upstream cannot each spend a full quota of failures against it. A client that asks for other thresholds gets a breaker
 of its own for that origin, with exactly the thresholds it asked for, rather than whichever thresholds the first client
@@ -66,10 +66,11 @@ so it is not refused by a breaker another client opened.
 ## Watching it
 
 Every transition a call causes is a `BreakerChanged` event (origin, previous and new state, failure count, and the
-call). `headgate.health.breaker_states(registry=DEFAULT_REGISTRY)` returns a snapshot per origin, with `refusing`
-alongside `state`: an open breaker whose cooldown has elapsed still reads open until a call takes the probe, so
-`refusing` is what says whether a call made now would be turned away. Where clients with different thresholds keep
-several breakers for one origin, the snapshot reports the most degraded. See [observability](observability.md).
+call). `headgate.health.breaker_states()` returns a snapshot per origin of the shared registry (pass `registry=` for
+another), with `refusing` alongside `state`: an open breaker whose cooldown has elapsed still reads open until a call
+takes the probe, so `refusing` is what says whether a call made now would be turned away. Where clients with different
+thresholds keep several breakers for one origin, the snapshot reports the most degraded. See
+[observability](observability.md).
 
 In tests, `headgate.testing.isolated_breakers()` gives the clients built in its block a fresh registry, so no breaker
 state crosses between tests. See [testing](testing.md).
