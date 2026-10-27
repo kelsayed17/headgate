@@ -115,7 +115,7 @@ async def test_a_view_deadline_bounds_its_calls() -> None:
         await client(fake).with_options(deadline=_SHORT_DEADLINE).get("x", expect=nothing)
 
 
-async def test_a_view_deadline_of_none_lifts_the_policys_and_the_routes() -> None:
+async def test_a_view_deadline_of_none_lifts_the_policy_and_route_deadlines() -> None:
     """Run a call past the policy's and the route's deadlines when the view has none."""
     fake = FakeTransport().reply("GET", "/v1/x", _slow)
     policy = TransportPolicy(deadline=_SHORT_DEADLINE, routes=(Route("/x", deadline=_SHORT_DEADLINE),))

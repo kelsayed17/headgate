@@ -115,7 +115,7 @@ def test_a_de_facto_reset_is_seconds_or_a_unix_time(reset: str, pause: float) ->
 
 
 def test_de_facto_headers_with_quota_left_or_garbage_say_nothing() -> None:
-    """Read nothing from quota left, from unparseable values, or from no remaining count at all."""
+    """Read nothing from quota left, from unparsable values, or from no remaining count at all."""
     assert _feedback(X_RateLimit_Remaining="3", X_RateLimit_Reset="9") == Feedback()
     assert _feedback(X_RateLimit_Remaining="none") == Feedback()
     assert _feedback(X_RateLimit_Reset="9") == Feedback()

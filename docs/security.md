@@ -1,7 +1,7 @@
 # Security
 
 An API client holds credentials and follows URLs it did not write: redirects, cursor URLs, links in a response body.
-headgate makes the safe behaviour the default and loosening it explicit.
+headgate makes the safe behavior the default and loosening it explicit.
 
 ## At a glance
 

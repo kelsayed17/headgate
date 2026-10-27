@@ -3,7 +3,7 @@
 
 """A one-shot ``content=`` stream is sent once, and a factory's body whole on every send.
 
-The client marks a one-shot body with ``REPLAYABLE_BODY``; the retry layer and the redirect hooks honour the mark.
+The client marks a one-shot body with ``REPLAYABLE_BODY``; the retry layer and the redirect hooks honor the mark.
 """
 
 from __future__ import annotations

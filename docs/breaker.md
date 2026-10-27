@@ -4,7 +4,7 @@ When an origin is down, every call to it spends a connect timeout, a retry seque
 load to whatever is trying to recover. A circuit breaker notices the failures, refuses calls to that origin at once for
 a while, then lets one call through to test whether it has recovered.
 
-## Behaviour
+## Behavior
 
 Each origin (`scheme://host:port`) has a breaker with three states:
 

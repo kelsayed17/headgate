@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``AsyncBaseClient``'s cache: when it is engaged, hit and miss behaviour, TTL threading, and a shared storage.
+"""``AsyncBaseClient``'s cache: when it is engaged, hit and miss behavior, TTL threading, and a shared storage.
 
 The cache is opt-in per client (``cache=HttpCache(policy=, storage=, ttl=)``). A client with no ``cache`` never
 caches. The ``HttpCache``'s ``ttl`` is stamped on every request as the ``hishel_ttl`` extension by the cache transport
@@ -67,7 +67,7 @@ async def test_a_client_without_a_cache_never_caches() -> None:
     assert base.count == 2 * _REPEATS
 
 
-# Hit and miss behaviour and hishel_ttl threading, over real SQLite storage.
+# Hit and miss behavior and hishel_ttl threading, over real SQLite storage.
 
 
 async def test_cache_hit_second_call_no_network(storage: AsyncSqliteStorage) -> None:

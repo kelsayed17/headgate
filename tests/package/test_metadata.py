@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The built distribution's metadata: licence, Python floor, dependencies and extras."""
+"""The built distribution's metadata: license, Python floor, dependencies and extras."""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ def _requirements() -> list[str]:
     return [re.sub(r"\[[^\]]*\]", "", r.lower()).replace(" ", "") for r in requires("headgate") or []]
 
 
-def test_metadata_declares_licence_python_and_author() -> None:
-    """Check the licence expression, the Python floor and the author."""
+def test_metadata_declares_license_python_and_author() -> None:
+    """Check the license expression, the Python floor and the author."""
     meta = metadata("headgate")
     assert meta["License-Expression"] == "MIT"
     assert meta["Requires-Python"] == ">=3.14"

@@ -347,7 +347,7 @@ async def test_the_block_receives_a_stream() -> None:
         assert stream.status_code == httpx2.codes.OK
 
 
-async def test_a_stream_honours_the_policys_breaker() -> None:
+async def test_a_stream_honors_the_policy_breaker() -> None:
     """Refuse to open a stream to a host whose breaker is open."""
     client = StubClient(
         base_url=_BASE,

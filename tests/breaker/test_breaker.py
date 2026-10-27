@@ -360,7 +360,7 @@ def test_a_registry_keys_a_breaker_by_origin_and_thresholds() -> None:
     assert len(registry) == 0
 
 
-def test_a_registrys_breakers_read_its_clock() -> None:
+def test_a_registry_breakers_read_its_clock() -> None:
     """Hand the registry's clock to every breaker it builds, so a test can drive their cooldowns."""
     clock = _Clock()
     registry = BreakerRegistry(clock=clock)

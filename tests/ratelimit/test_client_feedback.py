@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Server rate-limit feedback through ``AsyncBaseClient``: a pause every sharer honours, or raises past a deadline.
+"""Server rate-limit feedback through ``AsyncBaseClient``: a pause every sharer honors, or raises past a deadline.
 
 The budgets here run on a fake clock and sleep, so a pause of minutes costs nothing; the module keeps the real
 ``RateBudget.wait`` (``transport_policy``), which is where the pause is enforced.

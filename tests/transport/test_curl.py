@@ -4,7 +4,7 @@
 """``AsyncCurlTransport``: a curl response comes back as the httpx2 response a native transport would give.
 
 Most tests replace ``curl_cffi``'s ``AsyncSession`` with a recording double; the ``TestRealCurl`` tests drive real curl
-against a local HTTP server, for the behaviour only libcurl itself can show (decompression, aborting a transfer).
+against a local HTTP server, for the behavior only libcurl itself can show (decompression, aborting a transfer).
 """
 
 from __future__ import annotations
@@ -269,7 +269,7 @@ async def test_a_streamed_body_arrives_chunk_by_chunk_and_is_closed(sessions: li
 
 
 async def test_closing_a_response_early_tells_curl_to_abort(sessions: list[_Session]) -> None:
-    """Set ``quit_now`` on close, so curl aborts the transfer instead of queueing the rest of the body."""
+    """Set ``quit_now`` on close, so curl aborts the transfer instead of queuing the rest of the body."""
     transport, session = _transport(sessions)
     curl = _CurlResponse(chunks=[b"ab", b"cd"])
     session.respond = lambda: curl

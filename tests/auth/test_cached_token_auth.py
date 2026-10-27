@@ -124,7 +124,7 @@ class TestCaching:
         assert auth.mints == 1
 
     async def test_concurrent_first_requests_share_one_exchange(self, client_factory: _Factory) -> None:
-        """Serialise the first mint: without the lock each in-flight request fires its own exchange."""
+        """Serialize the first mint: without the lock each in-flight request fires its own exchange."""
         auth = _CountingAuth(delay=0.01)
         client = client_factory(auth, _ok)
 
@@ -231,7 +231,7 @@ class TestRejection:
     async def test_a_streamed_body_survives_the_401_re_send(self) -> None:
         """Buffer a streamed body before the first send, because the 401 path re-sends the request.
 
-        ``requires_request_body = True`` would not do it: httpx2 honours that only in its default flows, which this
+        ``requires_request_body = True`` would not do it: httpx2 honors that only in its default flows, which this
         class overrides.
         """
         body = b'{"order": 1}'
@@ -442,7 +442,7 @@ class TestAMintThatYieldsRequests:
 
         assert marks == {"/seed": True, "/token": True, "/data": False}
 
-    async def test_a_failed_hop_is_recognised_as_an_auth_hop_failure(self, client_factory: _Factory) -> None:
+    async def test_a_failed_hop_is_recognized_as_an_auth_hop_failure(self, client_factory: _Factory) -> None:
         """Let the breaker see a hop's failure as the credential host's, even for a hop the subclass left unmarked."""
 
         def handle(request: httpx2.Request) -> httpx2.Response:
@@ -594,10 +594,10 @@ class TestASubclassMustSupplyAMint:
 
 
 class TestFailedOnAuthHop:
-    """``failed_on_auth_hop`` recognises only a request error stamped with a marked request."""
+    """``failed_on_auth_hop`` recognizes only a request error stamped with a marked request."""
 
     def test_an_error_on_a_marked_request_is_an_auth_hop_failure(self) -> None:
-        """Recognise a request error whose request carries the marker."""
+        """Recognize a request error whose request carries the marker."""
         hop = httpx2.Request("GET", "https://seed.test/", extensions={AUTH_HOP: True})
 
         assert failed_on_auth_hop(httpx2.ConnectError("down", request=hop))

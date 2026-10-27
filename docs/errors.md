@@ -4,7 +4,7 @@ Every failure a client raises is a `headgate.errors.ClientError`, and the shape 
 an application boundary can map it onto its own answers without knowing which client failed.
 
 ```text
-ClientError                      also: an unparseable URL, a pagination loop
+ClientError                      also: an unparsable URL, a pagination loop
 ├── TransportError               a network failure that outlasted retries
 │   ├── ClientTimeoutError       a timeout, or the call's deadline
 │   └── CircuitOpenError         the origin's breaker refused the call unsent

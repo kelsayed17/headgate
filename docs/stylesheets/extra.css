@@ -1,4 +1,4 @@
-/* headgate's colours, taken from the logo: deep navy, a working blue and a bright cyan. */
+/* headgate's colors, taken from the logo: deep navy, a working blue and a bright cyan. */
 :root {
   --hg-navy: #011740;
   --hg-blue: #0a82e0;
@@ -93,7 +93,7 @@
   }
 }
 
-/* Feature cards: a coloured icon above each title. */
+/* Feature cards: a colored icon above each title. */
 .md-typeset .grid.cards .hg-icon {
   color: var(--md-accent-fg-color);
 }
@@ -114,7 +114,7 @@
   background-color: color-mix(in srgb, var(--md-accent-fg-color) 9%, transparent);
 }
 
-/* Comparison matrices: one icon per cell, coloured by what it means. */
+/* Comparison matrices: one icon per cell, colored by what it means. */
 .md-typeset .hg-yes {
   color: #16a34a;
 }

@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The origin helpers: normalised comparison and the ``scheme://host[:port]`` text."""
+"""The origin helpers: normalized comparison and the ``scheme://host[:port]`` text."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from headgate._core import origin_of, origin_text, same_origin
         ("https://[::1]:8443/x", "https://[::1]:8443"),
     ],
 )
-def test_origin_text_is_normalised_and_drops_the_default_port(url: str, text: str) -> None:
+def test_origin_text_is_normalized_and_drops_the_default_port(url: str, text: str) -> None:
     """Lower-case the host, drop the scheme's default port, and bracket an IPv6 host."""
     assert origin_text(origin_of(url)) == text
 

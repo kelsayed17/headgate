@@ -39,7 +39,7 @@ def test_decode_strict_by_default_rejects_coerced_token() -> None:
         decoder(_Struct)(response(b'{"x": "3"}'))
 
 
-def test_decode_lax_optin_coerces_string_to_int() -> None:
+def test_decode_lax_opt_in_coerces_string_to_int() -> None:
     """Coerce a quoted number with ``strict=False``, the opt-out for wires that quote numerics."""
     assert decoder(_Struct, strict=False)(response(b'{"x": "3"}')) == _Struct(x=3)
 

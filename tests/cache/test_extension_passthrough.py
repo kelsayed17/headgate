@@ -4,7 +4,7 @@
 """A cache-enabled client keeps its timeout, and every other request extension, below the cache.
 
 hishel does not forward the request it was given: it converts it to its own ``Request``, keeps only the metadata it
-recognises (``hishel_ttl`` and friends), and rebuilds an ``httpx2.Request`` from that for the transport below. The rest
+recognizes (``hishel_ttl`` and friends), and rebuilds an ``httpx2.Request`` from that for the transport below. The rest
 of ``request.extensions`` is dropped, including httpx2's ``timeout``: the per-request extension httpx2 builds from
 ``AsyncClient(timeout=...)`` and the only place httpcore reads a timeout from. Without it a cache miss to a host that
 accepts and never answers waits forever.

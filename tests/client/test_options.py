@@ -133,7 +133,7 @@ def _ok(request: httpx2.Request) -> httpx2.Response:
         (lambda: Route("/x", deadline=0.0), "deadline must be > 0 (got 0.0)"),
         (lambda: IdempotencyKeys(header=""), "header must name a header"),
     ],
-    ids=["other-scheme", "unparseable", "no-scheme", "empty-route", "route-deadline", "empty-header"],
+    ids=["other-scheme", "unparsable", "no-scheme", "empty-route", "route-deadline", "empty-header"],
 )
 def test_a_bad_option_says_exactly_what_is_wrong(build: Callable[[], object], message: str) -> None:
     """Refuse a bad option with a message naming the option and what it got."""
@@ -187,8 +187,8 @@ def test_default_transport_settings_cannot_ride_a_custom_transport(build: Callab
         build()
 
 
-def test_options_freeze_and_normalise_what_they_are_given() -> None:
-    """Copy headers into a read-only mapping, normalise origins and request-id names, and make sequences tuples."""
+def test_options_freeze_and_normalize_what_they_are_given() -> None:
+    """Copy headers into a read-only mapping, normalize origins and request-id names, and make sequences tuples."""
     headers = {"X-A": "1"}
     rules = [RateRule("/r", _RATE)]
     routes = [Route("/reports")]

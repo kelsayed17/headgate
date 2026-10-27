@@ -95,8 +95,8 @@ async def test_a_protocol_relative_path_keys_the_breaker_on_the_host_it_reaches(
 # --- A redirect to a bad URL ---
 
 
-async def test_an_unparseable_redirect_location_is_a_transport_failure_of_the_host() -> None:
-    """Count an unparseable ``Location`` against the host: httpx2 raises ``RemoteProtocolError``, an ``HTTPError``."""
+async def test_an_unparsable_redirect_location_is_a_transport_failure_of_the_host() -> None:
+    """Count an unparsable ``Location`` against the host: httpx2 raises ``RemoteProtocolError``, an ``HTTPError``."""
     client = StubClient(
         rate=Rate.per_second(2),
         base_url=f"https://{_HOST}",

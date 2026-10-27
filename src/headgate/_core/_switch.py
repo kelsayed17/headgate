@@ -3,7 +3,7 @@
 
 """The construction-time switch that builds clients with their transport policy off.
 
-It lives here, below every layer, because a rate budget honours it when it is built, whoever builds it, and the
+It lives here, below every layer, because a rate budget honors it when it is built, whoever builds it, and the
 policy subpackages may import only this core. :mod:`headgate.policy` is its public face and documents what "off" means.
 """
 

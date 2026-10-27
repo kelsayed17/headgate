@@ -4,7 +4,7 @@
 """A ``with_options`` view shares its client's retry budget, rate budget and circuit breakers.
 
 The view is built by copying the client, and each of the three lives in a different place (the retry transport's
-ledgers, the rate-limit transport's budgets, the breaker registry), so each is checked by behaviour: what a call
+ledgers, the rate-limit transport's budgets, the breaker registry), so each is checked by behavior: what a call
 through one spends or trips, a call through the other finds spent or tripped.
 """
 

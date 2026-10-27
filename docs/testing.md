@@ -74,7 +74,7 @@ response, whether that response was closed, and the error raised.
 | `PoolFull()` | raises `PoolTimeout`; nothing sent |
 | `Respond(status_code=200, headers=..., json=..., content=..., retry_after=None)` | answers |
 | `DropMidBody(after_bytes)` | writes that many request bytes, then loses the connection |
-| `Slow(seconds, then=Respond())` | waits (honouring the read timeout), then takes `then` |
+| `Slow(seconds, then=Respond())` | waits (honoring the read timeout), then takes `then` |
 | `RefusedStream()` | resets the HTTP/2 stream with `REFUSED_STREAM`, exactly as httpx2 raises it |
 
 ```python
@@ -136,5 +136,5 @@ def _no_transport_policy() -> Iterator[None]:
         yield
 ```
 
-Prefer `instant_retries()` when the retry behaviour is part of what you test: it keeps the retries and makes them
+Prefer `instant_retries()` when the retry behavior is part of what you test: it keeps the retries and makes them
 instant.

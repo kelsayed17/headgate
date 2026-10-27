@@ -21,7 +21,7 @@
   <a href="https://kelsayed17.github.io/headgate/"><img
     src="https://img.shields.io/badge/docs-kelsayed17.github.io%2Fheadgate-blue" alt="Docs"></a>
   <a href="https://github.com/kelsayed17/headgate/blob/main/LICENSE"><img
-    src="https://img.shields.io/pypi/l/headgate" alt="Licence: MIT"></a>
+    src="https://img.shields.io/pypi/l/headgate" alt="License: MIT"></a>
 </p>
 
 <p align="center">
@@ -303,7 +303,7 @@ How the pieces fit together, for contributors and the curious: [design](https://
 2. **Transport only.** A client does I/O and decoding. Retries, pacing and the breaker live in the transport stack;
    business decisions belong to the caller.
 3. **Wire types are data.** Responses decode into plain typed values (msgspec structs or pydantic models) with no
-   behaviour.
+   behavior.
 4. **No logging; typed events instead.** headgate writes no log records. It reports to the observers you install,
    with sanitized data only, and its errors carry what you need to diagnose a failure.
 5. **No environment reads.** Credentials are passed in. No proxy variable, `.netrc` or `SSL_CERT_FILE` is read: the
@@ -390,7 +390,7 @@ view with other defaults that shares the pool, the budgets and the breakers; the
 Every failure is a `ClientError`, so an application boundary can map the tree onto its own answers:
 
 ```text
-ClientError                      also: an unparseable URL, a pagination loop
+ClientError                      also: an unparsable URL, a pagination loop
 ├── TransportError               a network failure that outlasted retries
 │   ├── ClientTimeoutError       a timeout, or the call's deadline
 │   └── CircuitOpenError         the origin's breaker refused the call unsent
@@ -487,7 +487,7 @@ Lint selects every ruff rule, ty treats every rule as an error, and suppression 
 [SECURITY.md](https://github.com/kelsayed17/headgate/blob/main/SECURITY.md) to report a vulnerability privately. The
 changes in each release are in [CHANGELOG.md](https://github.com/kelsayed17/headgate/blob/main/CHANGELOG.md).
 
-## Licence
+## License
 
 MIT. `src/headgate/_curl.py` is derived from [httpx-curl-cffi](https://github.com/vgavro/httpx-curl-cffi)
 (BSD-3-Clause); its notice is kept in the file.

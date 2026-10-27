@@ -166,7 +166,7 @@ class IdempotencyKeys:
     """Stamp a fresh idempotency key on every POST and PATCH a client sends, once per call, under ``header``.
 
     The key is stamped before the retry layer, so every attempt of one call carries the same key and the upstream can
-    recognise a re-send. A call can pass its own with ``idempotency_key=``, and a key the caller set in ``headers=``
+    recognize a re-send. A call can pass its own with ``idempotency_key=``, and a key the caller set in ``headers=``
     is kept.
     """
 
@@ -253,7 +253,7 @@ def _is_bare_origin(url: httpx2.URL) -> bool:
 
 
 def _normalized_origin(text: str) -> str:
-    """Return *text*, an ``http(s)://host[:port]`` origin, normalised; ``ValueError`` for anything else."""
+    """Return *text*, an ``http(s)://host[:port]`` origin, normalized; ``ValueError`` for anything else."""
     try:
         url = httpx2.URL(text)
     except httpx2.InvalidURL:
@@ -305,7 +305,7 @@ class SecurityOptions:
     resolver: Resolver | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a resolver without the SSRF guard, and normalise the trusted origins."""
+        """Refuse a resolver without the SSRF guard, and normalize the trusted origins."""
         if self.allow_private_hosts and self.resolver is not None:
             msg = "resolver= is used only by the SSRF guard, so it needs allow_private_hosts=False"
             raise ValueError(msg)
@@ -358,7 +358,7 @@ class HttpOptions:
     middleware: tuple[Middleware, ...] = ()
 
     def __post_init__(self) -> None:
-        """Validate every option, and freeze and normalise the collections."""
+        """Validate every option, and freeze and normalize the collections."""
         self._check_transport()
         _check_positive("max_response_bytes", self.max_response_bytes)
         if self.max_redirects < 0:

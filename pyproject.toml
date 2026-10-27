@@ -66,6 +66,7 @@ dev = [
     "hypothesis>=6.170",
     "mutmut>=3.8",
     "vcrpy>=8.3",
+    "typos>=1.51.1",
 ]
 docs = ["zensical>=0.0.72"]
 
@@ -127,6 +128,18 @@ all = "error"
 
 [tool.ty.analysis]
 respect-type-ignore-comments = false
+
+[tool.typos.default]
+# The code, docs and messages are written in American English.
+locale = "en-us"
+
+[tool.typos.default.extend-words]
+# AIMD (additive increase, multiplicative decrease) and a generator's ``asend`` are not misspellings.
+aimd = "aimd"
+asend = "asend"
+
+[tool.typos.files]
+extend-exclude = ["docs/assets/", "uv.lock"]
 
 [tool.coverage.run]
 branch = true

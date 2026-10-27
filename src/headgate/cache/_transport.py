@@ -120,7 +120,7 @@ def _guarded_body(entry: Entry) -> Entry:
 class _GuardedStorage(AsyncBaseStorage):
     """Delegate to *backend*, raising every backend failure, in a call or in a body it streams, as one error.
 
-    This is the only place a storage fault is recognised, so :class:`ResilientCacheTransport` falls back on exactly
+    This is the only place a storage fault is recognized, so :class:`ResilientCacheTransport` falls back on exactly
     :class:`CacheStorageError` and lets anything else raised inside hishel propagate. ``close`` is delegated but never
     called by the transport, since a shared storage is closed by whoever created it.
 
@@ -298,7 +298,7 @@ class _RestoreRequest(httpx2.AsyncBaseTransport):
     """Undo, below hishel, what hishel and the cache layer took off the request, and record what comes back.
 
     hishel does not forward the request it is handed: it rebuilds an ``httpx2.Request`` from its own model, keeping
-    only the extensions it recognises. The rest is gone, including httpx2's ``timeout``, the only place httpcore reads
+    only the extensions it recognizes. The rest is gone, including httpx2's ``timeout``, the only place httpcore reads
     a timeout from, so without this layer a cache miss to a host that accepts and never answers waits forever. The
     extensions go back with ``setdefault``, so what hishel computed for itself (``hishel_ttl`` and friends) wins.
 

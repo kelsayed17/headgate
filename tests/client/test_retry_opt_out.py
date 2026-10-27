@@ -5,7 +5,7 @@
 
 The flag is on every verb and installs a zero-retry policy (one send, no re-send) for that one request. It is a
 keyword argument rather than a transport extension so it shows in the verb's signature and at the call site. These
-tests pin the behaviour end to end, so a verb that silently stopped threading the flag fails here. The controls use a
+tests pin the behavior end to end, so a verb that silently stopped threading the flag fails here. The controls use a
 POST carrying an idempotency key, which the default policy does re-send.
 """
 

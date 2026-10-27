@@ -7,7 +7,7 @@ site_url = "https://kelsayed17.github.io/headgate/"
 repo_url = "https://github.com/kelsayed17/headgate"
 repo_name = "kelsayed17/headgate"
 edit_uri = "edit/main/docs/"
-copyright = "Copyright &copy; 2026 Khaled Elsayed. MIT licence."
+copyright = "Copyright &copy; 2026 Khaled Elsayed. MIT license."
 extra_css = ["stylesheets/extra.css"]
 
 nav = [
