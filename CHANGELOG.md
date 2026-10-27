@@ -6,9 +6,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-26
+
 Makes the public API smaller and more regular: the auth hooks lose their underscores, `head()` and `paginate()` take
-what the other verbs take, path rules match whole segments, timeouts are always a `Timeouts`, request bodies get a writer to
-mirror `expect=`, and each package exports only what a client is written with. Each change below says what to write instead.
+what the other verbs take, path rules match whole segments, timeouts are always a `Timeouts`, request bodies get a
+writer to mirror `expect=`, and each package exports only what a client is written with. Much of it changes existing
+code, so this is a minor release: each change below says what to write instead.
 
 ### Added
 
@@ -338,7 +341,8 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/kelsayed17/headgate/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kelsayed17/headgate/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kelsayed17/headgate/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/kelsayed17/headgate/compare/159a3c2...v0.3.0
