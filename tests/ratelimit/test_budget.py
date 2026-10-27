@@ -237,6 +237,7 @@ async def test_a_turn_past_the_deadline_raises_at_once_and_gives_the_turn_back()
         await budget.wait(_context(clock, deadline=_SHORT_DEADLINE))
 
     assert raised.value.retry_after == 1.0
+    assert str(raised.value) == "the rate budget's turn in 1s comes after the call's deadline"
     assert clock.sleeps == [], "a turn that cannot fit is never waited"
     await budget.wait(_context(clock, deadline=_LONG_DEADLINE))
     assert clock.sleeps == [1.0], "the refused turn was given back"

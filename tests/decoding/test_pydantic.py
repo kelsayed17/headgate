@@ -15,13 +15,13 @@ from typing import TYPE_CHECKING
 
 import msgspec
 import pytest
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError
 
 from headgate import msgspec as msgspec_flavor
 from headgate._failures import MESSAGE_TEXT_LIMIT
 from headgate._responses import RefusedError
 from headgate.errors import DecodeError
-from headgate.pydantic import decode, decoder, encoder, to_builtins
+from headgate.pydantic import PydanticCodec, decode, decoder, encoder, to_builtins
 from tests.support.responses import response
 
 if TYPE_CHECKING:
@@ -269,3 +269,25 @@ def test_the_encoder_applies_aliases_and_can_leave_out_none() -> None:
     written = encoder(_Aliased)(order)
     assert (written.content, written.content_type) == (b'{"orderId":"a1","note":null}', "application/json")
     assert encoder(_Aliased, drop_none=True)(order).content == b'{"orderId":"a1"}'
+
+
+def test_decode_coerces_when_lax() -> None:
+    """Coerce a quoted number with ``decode(..., strict=False)``, as the reader does."""
+    assert decode(b'["3"]', list[int], strict=False) == [3]
+
+
+def test_a_codec_built_at_run_time_is_strict_and_keeps_none_by_default() -> None:
+    """Validate strictly and write ``None`` fields unless told otherwise, for a codec of the caller's own."""
+    with pytest.raises(ValidationError):
+        PydanticCodec().decoder(list[int])(b'["3"]')
+    assert PydanticCodec(strict=False).decoder(list[int])(b'["3"]') == [3]
+    order = _Aliased(orderId="a1")
+    assert PydanticCodec().encoder(_Aliased)(order) == b'{"orderId":"a1","note":null}'
+    assert PydanticCodec(drop_none=True).encoder(_Aliased)(order) == b'{"orderId":"a1"}'
+
+
+@pytest.mark.filterwarnings("error")
+def test_the_encoder_serializes_by_the_declared_type_without_a_warning() -> None:
+    """Serialize by the declared type's adapter: any other one warns, quoting the value, which may be a credential."""
+    assert encoder(_Aliased)(_Aliased(orderId="a1")).content == b'{"orderId":"a1","note":null}'
+    assert PydanticCodec().encoder(_Aliased)(_Aliased(orderId="a1")) == b'{"orderId":"a1","note":null}'
