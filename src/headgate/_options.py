@@ -112,16 +112,17 @@ class Timeouts:
 
     def __post_init__(self) -> None:
         """Refuse a timeout that is not positive."""
-        for name, value in self.phases():
+        for name, value in _set_phases(self):
             _check_positive(name, value)
-
-    def phases(self) -> list[tuple[str, float]]:
-        """Return the phases this sets, with their timeouts, in ``httpx2.Timeout``'s order."""
-        return [(name, value) for name in _PHASES if (value := getattr(self, name)) is not None]
 
     def over(self, base: Timeouts) -> Timeouts:
         """Return *base* with the phases this sets in place of its own."""
-        return replace(base, **dict(self.phases()))
+        return replace(base, **dict(_set_phases(self)))
+
+
+def _set_phases(timeouts: Timeouts) -> list[tuple[str, float]]:
+    """Return the phases *timeouts* sets, with their timeouts, in ``httpx2.Timeout``'s order."""
+    return [(name, value) for name in _PHASES if (value := getattr(timeouts, name)) is not None]
 
 
 #: The timeouts of every phase a client leaves unset.
@@ -146,7 +147,7 @@ def check_timeout_fits(timeout: Timeouts, deadline: float | None) -> None:
     """
     if deadline is None:
         return
-    for name, limit in timeout.phases():
+    for name, limit in _set_phases(timeout):
         if limit > deadline:
             msg = (
                 f"{name} timeout {limit:g}s is longer than the {deadline:g}s deadline it runs under, so it can never "

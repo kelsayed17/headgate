@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import CachedTokenAuth, QueryParamAuth, StaticHeaderAuth
+from headgate import BearerAuth, CachedTokenAuth, QueryParamAuth, StaticHeaderAuth
 from headgate._core import CredentialStamper
 from tests.support.tokens import premint
 
@@ -236,3 +236,12 @@ class TestIdentity:
 
         assert first.credential_identity() == second.credential_identity()
         assert first.credential_identity() != _KeyedBearer("key-2").credential_identity()
+
+
+async def test_a_bearer_auth_is_the_static_bearer_header() -> None:
+    """Stamp ``Authorization: Bearer <token>`` and name the same credential as the header written out by hand."""
+    auth = BearerAuth("tok")
+    sent = await anext(auth.async_auth_flow(httpx2.Request("GET", "https://api.example/x")))
+    assert sent.headers["Authorization"] == "Bearer tok"
+    assert auth.credential_headers == {"authorization"}
+    assert auth.credential_identity() == StaticHeaderAuth({"Authorization": "Bearer tok"}).credential_identity()

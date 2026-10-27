@@ -11,6 +11,7 @@ import httpx2
 import pytest
 
 from headgate import Expect, HttpOptions, as_bytes, json_reader, nothing
+from headgate._responses import accepts
 from headgate.errors import ResponseParseError, UpstreamStatusError
 from headgate.testing import FakeTransport
 from tests.observe._support import client
@@ -120,7 +121,7 @@ def test_a_malformed_accept_is_refused_where_it_is_written(accept: str) -> None:
 
 def test_without_accept_every_response_is_accepted() -> None:
     """Accept any response when ``accept`` is not given."""
-    assert Expect(as_bytes).accepts(httpx2.Response(200, content=b"<html>", headers={"content-type": "text/html"}))
+    assert accepts(Expect(as_bytes), httpx2.Response(200, content=b"<html>", headers={"content-type": "text/html"}))
 
 
 def test_json_reader_refuses_an_empty_body_unless_allowed() -> None:

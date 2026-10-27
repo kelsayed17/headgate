@@ -25,7 +25,7 @@ from tests.support.tokens import premint
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-    from headgate._middleware import Next
+    from headgate import Next
 
 
 class _Bearer(CachedTokenAuth):

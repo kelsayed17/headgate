@@ -112,9 +112,10 @@ timestamp, a nonce) belongs in a middleware:
 import hashlib
 import hmac
 import time
-from collections.abc import Awaitable, Callable
 
 import httpx2
+
+from headgate import Next
 
 
 class HmacSigner:
@@ -125,9 +126,7 @@ class HmacSigner:
     def __init__(self, secret: bytes) -> None:
         self._secret = secret
 
-    async def __call__(
-        self, request: httpx2.Request, call_next: Callable[[httpx2.Request], Awaitable[httpx2.Response]]
-    ) -> httpx2.Response:
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
         stamp = str(int(time.time()))
         payload = b"\n".join((request.method.encode(), request.url.raw_path, stamp.encode(), request.content))
         request.headers["X-Timestamp"] = stamp

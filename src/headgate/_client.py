@@ -77,10 +77,10 @@ from headgate._options import (
     reject_upstream_httpx,
 )
 from headgate._request_body import check_one_body, request_content
-from headgate._responses import Expect, Reader, RefusedError, nothing
+from headgate._responses import Expect, Reader, RefusedError, accepts, nothing
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import render_path, route_template, sanitize_url
-from headgate._view import KEEP, ROOT_DEFAULTS, Keep
+from headgate._view import KEEP, ROOT_DEFAULTS, ViewOptions
 from headgate.breaker import CircuitBreaker
 from headgate.breaker._breaker import BreakerOpenError
 from headgate.breaker._registry import NO_BREAKER
@@ -94,12 +94,13 @@ from headgate.errors import (
     ForbiddenDestinationError,
     RateLimitError,
 )
-from headgate.pagination import PageRequest, Paginated
+from headgate.pagination import PageRequest
+from headgate.pagination._paginated import PageWalk
 from headgate.ratelimit import UNLIMITED
 from headgate.ratelimit._budget import BudgetPausedError
 from headgate.retry import NO_RETRY, RetryPolicy
 from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY
-from headgate.streaming import Stream
+from headgate.streaming._stream import OpenStream
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Mapping
@@ -110,8 +111,9 @@ if TYPE_CHECKING:
     from headgate._responses import RefusalCheck
     from headgate.breaker._breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
-    from headgate.pagination import PageLimit, Pager
+    from headgate.pagination import PageLimit, Pager, Paginated
     from headgate.ratelimit import Rate, RateBudget
+    from headgate.streaming import Stream
 
 __all__ = ["AsyncBaseClient", "Method", "RequestOptions"]
 
@@ -311,22 +313,11 @@ class AsyncBaseClient:
         if self._owns_pool:
             await self._http_client.aclose()
 
-    def with_options(
-        self,
-        *,
-        headers: Mapping[str, str] | None = None,
-        timeout: Timeouts | None = None,
-        deadline: float | Literal[Keep.KEEP] | None = KEEP,
-        retry: bool | RetryPolicy | None = None,
-    ) -> Self:
+    def with_options(self, **options: Unpack[ViewOptions]) -> Self:
         """Return a view of this client whose calls take different defaults; the client itself is unchanged.
 
-        * ``headers``: sent on every call of the view, over the client's; a call's ``headers=`` still wins a clash.
-        * ``timeout``: :class:`~headgate.Timeouts` whose set phases replace the client's; the others are kept.
-        * ``deadline``: seconds each call may take, or ``None`` for no deadline.
-        * ``retry``: ``False`` sends once, a :class:`~headgate.RetryPolicy` replaces the client's, ``True`` restores it.
-
-        An option left out keeps the client's (or, on a view of a view, the outer view's). A call's own options win
+        The options are :class:`~headgate.ViewOptions`: ``headers=``, ``timeout=``, ``deadline=`` and ``retry=``. An
+        option left out keeps the client's (or, on a view of a view, the outer view's). A call's own options win
         over the view's, and the view's over a :class:`~headgate.Route`'s.
 
         The view shares everything that makes calls cooperate: the connection pool and transport stack, so the rate
@@ -337,8 +328,8 @@ class AsyncBaseClient:
 
         :raises ValueError: for a timeout or deadline that is not positive.
         """
-        layered = self._view.layered(headers=headers, deadline=deadline, retry=retry)
-        if timeout is not None:
+        layered = self._view.layered(options)
+        if (timeout := options.get("timeout")) is not None:
             check_timeout_fits(timeout, self._policy.deadline if layered.deadline is KEEP else layered.deadline)
         view = copy.copy(self)
         # A shallow copy shares the pool, the stack and any subclass state; only the view's own settings differ.
@@ -463,17 +454,17 @@ class AsyncBaseClient:
 
     def stream(
         self,
-        method: Method,
         url: str | Template,
         *,
+        method: Method = "GET",
         retry: bool | RetryPolicy = True,
         follow_redirects: bool | None = None,
         last_event_id: str | None = None,
         **options: Unpack[RequestOptions],
     ) -> contextlib.AbstractAsyncContextManager[Stream]:
-        """Send a request and open its 2xx response as a :class:`~headgate.streaming.Stream`, read as it arrives.
+        """Send a request, a GET unless *method* says otherwise, and open its 2xx response as a ``Stream``.
 
-        ``async with client.stream("GET", "export.csv") as stream:`` then ``async for chunk in
+        ``async with client.stream("export.csv") as stream:`` then ``async for chunk in
         stream.aiter_bytes():``. The body is never buffered and never capped, and the response is closed when the block
         exits. The call runs through the same stack and failure ladder as a verb, except that:
 
@@ -536,7 +527,7 @@ class AsyncBaseClient:
             # A page's follow_redirects and cache_ttl land on get's own parameters of those names.
             return await self.get(request.url, expect=paired, retry=retry, **page_options)
 
-        return Paginated(fetch, pages, first, source=self._source, limit=limit)
+        return PageWalk(fetch, pages, first, source=self._source, limit=limit)
 
     # A call, end to end.
 
@@ -587,7 +578,9 @@ class AsyncBaseClient:
                     raise status_error(head, self._site(prepared))
                 # A stream has no reader: passing the head checks is what accepts it.
                 await store_accepted(streamed)
-            yield Stream(streamed, self._site(prepared), functools.partial(self._network_failure, prepared, verdict))
+            yield OpenStream(
+                streamed, self._site(prepared), functools.partial(self._network_failure, prepared, verdict)
+            )
 
     # Preparing the request.
 
@@ -889,7 +882,7 @@ class AsyncBaseClient:
                 raise status_error(resp, site)
             read = spec.ok
         try:
-            if not spec.accepts(resp):
+            if not accepts(spec, resp):
                 content_type = resp.headers.get("content-type") or "no Content-Type"
                 msg = f"expected {spec.accept}, got {content_type}"
                 raise DecodeError(msg)

@@ -54,7 +54,7 @@ BREAKER_GATE = Slot[Callable[[], bool]]("breaker_gate")
 
 
 class BudgetBacklogError(Exception):
-    """Raised by ``RateBudget.wait`` when an attempt's paced turn comes after its call's deadline, so it is never sent.
+    """Raised by ``Pacer.wait`` when an attempt's paced turn comes after its call's deadline, so it is never sent.
 
     ``retry_after`` is the seconds until the turn the attempt would have had. It is public as
     ``headgate.ratelimit.BudgetBacklogError``.

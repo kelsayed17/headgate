@@ -38,7 +38,7 @@ under a `threading.Lock` and nothing in it is bound to a loop.
 - **What spends.** Every attempt spends its own turn, retries and hedges included, as do redirect hops and token-mint
   hops. A cache hit spends nothing: the cache sits above the budget.
 
-`budget.effective_rate`, `budget.in_flight` and `budget.pause_remaining()` read the budget's state now.
+`budget.effective_rate`, `budget.in_flight` and `budget.pause_remaining` read the budget's state now.
 
 ## Per-path lanes
 

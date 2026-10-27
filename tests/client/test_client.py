@@ -26,7 +26,8 @@ from headgate._client import AsyncBaseClient
 from headgate._responses import Expect, RefusalCheck, RefusedError, as_bytes, nothing
 from headgate.errors import AuthError, RateLimitError, ResponseParseError, TransportError, UpstreamStatusError
 from headgate.msgspec import decoder
-from headgate.ratelimit import UNLIMITED, Rate, RateBudget
+from headgate.ratelimit import UNLIMITED, Rate
+from headgate.ratelimit._budget import Pacer
 from headgate.retry import Backoff, RetryPolicy
 from headgate.testing import FakeTransport, TestClock
 from tests.support.breakers import failures
@@ -53,10 +54,10 @@ async def test_every_retry_is_paced_by_the_rate_budget(monkeypatch: pytest.Monke
     """Check that retry wraps the rate budget: each of the three attempts waits its own turn."""
     waits: list[None] = []
 
-    async def counting_wait(_budget: RateBudget, _context: CallContext) -> None:
+    async def counting_wait(_budget: Pacer, _context: CallContext) -> None:
         waits.append(None)
 
-    monkeypatch.setattr(RateBudget, "wait", counting_wait)
+    monkeypatch.setattr(Pacer, "wait", counting_wait)
     statuses = iter([httpx2.codes.SERVICE_UNAVAILABLE, httpx2.codes.SERVICE_UNAVAILABLE, httpx2.codes.OK])
     sent: list[httpx2.Request] = []
 

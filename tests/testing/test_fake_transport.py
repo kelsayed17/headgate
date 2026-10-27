@@ -13,8 +13,9 @@ import pytest
 from headgate import HttpOptions, Rate, TransportPolicy, as_bytes, nothing
 from headgate.errors import TransportError, UpstreamStatusError
 from headgate.retry import NO_RETRY
-from headgate.testing import FakeTransport, UnmatchedRequestError
+from headgate.testing import FakeTransport, Respond, UnmatchedRequestError
 from tests.support.clients import StubClient
+from tests.support.responses import RESPONSE
 
 _BASE = "https://api.example.test/v1"
 _RATE = Rate.per_second(1000)
@@ -33,6 +34,19 @@ async def test_a_route_serves_its_replies_in_order_and_repeats_the_last() -> Non
     assert await client.get("series", expect=as_bytes) == b"ok"
     assert await client.get("series", expect=as_bytes) == b"ok"
     assert [request.url.path for request in fake.calls] == ["/v1/series"] * len(("503", "200", "200"))
+
+
+async def test_a_route_serves_a_respond_step_as_faulty_transport_does() -> None:
+    """Answer with a ``Respond``: its status, its ``Retry-After``, and its JSON body with a JSON content type."""
+    fake = FakeTransport().reply("GET", "/v1/series", Respond(503, retry_after=2.0), Respond(json={"id": "GDP"}))
+    client = _client(fake, policy=TransportPolicy(retry=NO_RETRY))
+
+    with pytest.raises(UpstreamStatusError) as raised:
+        await client.get("series", expect=nothing)
+    reply = await client.get("series", expect=RESPONSE)
+
+    assert (raised.value.status_code, raised.value.retry_after) == (503, 2.0)
+    assert (reply.headers["content-type"], reply.json()) == ("application/json", {"id": "GDP"})
 
 
 async def test_a_route_without_replies_answers_an_empty_200() -> None:

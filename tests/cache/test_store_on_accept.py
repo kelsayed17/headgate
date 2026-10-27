@@ -102,7 +102,7 @@ async def test_a_stream_is_stored_once_its_head_is_accepted(storage: AsyncSqlite
     network = _Provider(_ANSWER)
     client = stub_client(transport=network, cache=HttpCache(policy=every_get_policy(), storage=storage))
     try:
-        async with client.stream("GET", "reading") as stream:
+        async with client.stream("reading") as stream:
             assert [chunk async for chunk in stream.aiter_bytes()] == [_ANSWER]
         assert await client.get("reading", expect=as_bytes) == _ANSWER
     finally:

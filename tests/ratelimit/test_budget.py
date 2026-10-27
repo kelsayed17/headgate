@@ -4,7 +4,7 @@
 """``RateBudget`` on its own: pacing, pauses, adaptive throttling, sharing, and the budgets a client resolves.
 
 Every test drives the budget on a fake clock, so the assertions are exact; one smoke test checks real pacing. The
-module keeps the real ``RateBudget.wait`` (``transport_policy``), since that wait is the subject.
+module keeps the real ``Pacer.wait`` (``transport_policy``), since that wait is the subject.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import pytest
 from headgate._core import BudgetBacklogError, CallContext, CallInfo, Emitter, RateLimited, Timing
 from headgate.policy import policy_disabled
 from headgate.ratelimit import UNLIMITED, Adaptive, Rate, RateBudget, RateRule
-from headgate.ratelimit._budget import BudgetPausedError
+from headgate.ratelimit._budget import BudgetPausedError, Pacer, pacer_of
 from headgate.ratelimit._budgets import PathBudgets
 from headgate.testing import TestClock
 from tests.support.events import Recorder
@@ -49,13 +49,13 @@ def _context(clock: TestClock, *, deadline: float | None = None, observer: Recor
     return CallContext(CallInfo(method="GET", url="https://x/"), clock=clock, deadline_after=deadline, emitter=emitter)
 
 
-def _budget(clock: TestClock, rate: Rate = _RATE, **options: Adaptive | int | None) -> RateBudget:
+def _budget(clock: TestClock, rate: Rate = _RATE, **options: Adaptive | int | None) -> Pacer:
     """Return a budget at *rate* on *clock*."""
     adaptive = options.get("adaptive", Adaptive())
     in_flight = options.get("max_in_flight")
     assert adaptive is None or isinstance(adaptive, Adaptive)
     assert in_flight is None or isinstance(in_flight, int)
-    return RateBudget(
+    return Pacer(
         rate,
         adaptive=adaptive,
         max_in_flight=in_flight,
@@ -95,7 +95,7 @@ async def test_concurrent_waiters_reserve_successive_turns_in_arrival_order() ->
         slept.append(seconds)
         await asyncio.sleep(0)
 
-    budget = RateBudget(_RATE, timing=Timing(clock=clock, sleep=record))
+    budget = Pacer(_RATE, timing=Timing(clock=clock, sleep=record))
     await asyncio.gather(*(budget.wait(_context(clock)) for _ in range(_BURST + 3)))
     assert slept == pytest.approx([_RATE.interval * turn for turn in (1, 2, 3)])
 
@@ -120,7 +120,7 @@ async def test_a_cancelled_waiter_gives_its_turn_back() -> None:
         slept.append(seconds)
         await blocked.wait()
 
-    budget = RateBudget(Rate.per_second(1), timing=Timing(clock=clock, sleep=sleep))
+    budget = Pacer(Rate.per_second(1), timing=Timing(clock=clock, sleep=sleep))
     await budget.wait(_context(clock))
     waiter = asyncio.create_task(budget.wait(_context(clock)))
     await asyncio.sleep(0)
@@ -142,7 +142,7 @@ async def test_a_cancelled_waiter_behind_a_later_one_keeps_the_queue_intact() ->
         slept.append(seconds)
         await blocked.wait()
 
-    budget = RateBudget(Rate.per_second(1), timing=Timing(clock=clock, sleep=sleep))
+    budget = Pacer(Rate.per_second(1), timing=Timing(clock=clock, sleep=sleep))
     await budget.wait(_context(clock))
     first = asyncio.create_task(budget.wait(_context(clock)))
     second = asyncio.create_task(budget.wait(_context(clock)))
@@ -177,12 +177,24 @@ async def test_a_wait_nobody_observes_builds_no_event() -> None:
 async def test_real_pacing_waits_on_the_system_clock() -> None:
     """Pace on the real clock and sleep by default: a second immediate request waits about one interval."""
     rate = Rate(requests=1, period=0.05)
-    budget = RateBudget(rate)
+    budget = Pacer(rate)
     context = CallContext(CallInfo(method="GET", url="https://x/"))
     await budget.wait(context)
     start = time.monotonic()
     await budget.wait(context)
     assert time.monotonic() - start >= rate.interval / 2
+
+
+def test_a_budget_reads_out_what_its_pacer_saw() -> None:
+    """Report, through the public budget, the pause and the lowered rate a 429 left on the pacer it spends through."""
+    clock = TestClock()
+    budget = RateBudget(_RATE, timing=clock.timing, wall_clock=clock)
+    assert (budget.pause_remaining, budget.effective_rate) == (0, _RATE)
+
+    pacer_of(budget).observe(_response(429, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
+
+    assert budget.pause_remaining == _PAUSE
+    assert budget.effective_rate.requests == _BURST / 2
 
 
 # --- Server pauses ---
@@ -239,7 +251,7 @@ async def test_a_pause_that_starts_while_a_call_waits_its_turn_is_waited_too() -
             budget.observe(_response(429, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
         await clock.sleep(seconds)
 
-    budget = RateBudget(Rate.per_second(1), adaptive=None, timing=Timing(clock=clock, sleep=sleep), wall_clock=clock)
+    budget = Pacer(Rate.per_second(1), adaptive=None, timing=Timing(clock=clock, sleep=sleep), wall_clock=clock)
     await budget.wait(_context(clock))
     await budget.wait(_context(clock))
     assert clock.sleeps == [1.0, _PAUSE - 1.0], "the pause began when the turn's wait did"
@@ -253,7 +265,7 @@ async def test_a_pause_past_the_deadline_found_after_a_paced_wait_raises() -> No
         budget.observe(_response(429, {"Retry-After": str(int(_LONG_DEADLINE * 2))}), sent_at=clock())
         await clock.sleep(seconds)
 
-    budget = RateBudget(Rate.per_second(1), adaptive=None, timing=Timing(clock=clock, sleep=sleep), wall_clock=clock)
+    budget = Pacer(Rate.per_second(1), adaptive=None, timing=Timing(clock=clock, sleep=sleep), wall_clock=clock)
     await budget.wait(_context(clock))
     with pytest.raises(BudgetPausedError):
         await budget.wait(_context(clock, deadline=_LONG_DEADLINE))
@@ -352,21 +364,21 @@ async def test_a_budget_without_adaptive_throttling_keeps_its_rate() -> None:
 
 def test_a_budget_reports_its_configuration() -> None:
     """Expose the configured rate, the throttling and the concurrency cap."""
-    budget = RateBudget(_RATE, max_in_flight=2)
+    budget = Pacer(_RATE, max_in_flight=2)
     assert (budget.rate, budget.adaptive, budget.max_in_flight, budget.in_flight) == (_RATE, Adaptive(), 2, 0)
-    assert RateBudget(_RATE).max_in_flight is None
+    assert Pacer(_RATE).max_in_flight is None
 
 
 @pytest.mark.parametrize("cap", [0, -1])
 def test_a_budget_refuses_a_concurrency_cap_below_one(cap: int) -> None:
     """Refuse a cap that would admit nothing."""
     with pytest.raises(ValueError, match="max_in_flight"):
-        RateBudget(_RATE, max_in_flight=cap)
+        Pacer(_RATE, max_in_flight=cap)
 
 
 async def test_a_budget_without_a_cap_lends_no_slot() -> None:
     """Return a release that does nothing when there is no concurrency cap."""
-    budget = RateBudget(_RATE)
+    budget = Pacer(_RATE)
     release = await budget.occupy()
     release()
     assert budget.in_flight == 0
@@ -427,7 +439,7 @@ def test_one_budget_shared_by_clients_on_several_threads_books_every_turn_once()
             slept.append(seconds)
 
     rate = Rate.per_second(2)
-    budget = RateBudget(rate, timing=Timing(clock=lambda: 0.0, sleep=record))
+    budget = Pacer(rate, timing=Timing(clock=lambda: 0.0, sleep=record))
 
     async def spend() -> None:
         context = CallContext(CallInfo(method="GET", url="https://x/"), clock=lambda: 0.0)
@@ -446,7 +458,7 @@ def test_one_budget_shared_by_clients_on_several_threads_books_every_turn_once()
 
 async def test_a_slot_given_back_twice_is_freed_once() -> None:
     """Make a slot's release idempotent, so two closes of one body cannot free another holder's slot."""
-    budget = RateBudget(_RATE, max_in_flight=2)
+    budget = Pacer(_RATE, max_in_flight=2)
     first = await budget.occupy()
     await budget.occupy()
     first()
@@ -506,7 +518,7 @@ async def test_a_refused_call_gives_back_the_turn_it_reserved() -> None:
         await clock.sleep(seconds)
 
     rate = Rate(requests=1, period=interval)
-    budget = RateBudget(rate, adaptive=None, timing=Timing(clock=clock, sleep=sleep), wall_clock=clock)
+    budget = Pacer(rate, adaptive=None, timing=Timing(clock=clock, sleep=sleep), wall_clock=clock)
     await budget.wait(_context(clock))
     with pytest.raises(BudgetPausedError):
         await budget.wait(_context(clock, deadline=interval + 0.5))
@@ -520,7 +532,7 @@ async def test_an_absolute_reset_is_measured_from_the_wall_clock() -> None:
     clock = TestClock()
     wall = 1_700_000_000.0
     reset_in = 42.0
-    budget = RateBudget(_RATE, timing=Timing(clock=clock, sleep=clock.sleep), wall_clock=lambda: wall)
+    budget = Pacer(_RATE, timing=Timing(clock=clock, sleep=clock.sleep), wall_clock=lambda: wall)
     headers = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": f"{wall + reset_in:.0f}"}
 
     budget.observe(_response(200, headers), sent_at=clock())

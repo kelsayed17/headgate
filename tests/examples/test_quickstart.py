@@ -28,7 +28,7 @@ from headgate import (
     ResponseParseError,
     UpstreamStatusError,
 )
-from headgate.testing import FakeTransport, TestClock, isolated_breakers
+from headgate.testing import FakeTransport, Respond, TestClock, isolated_breakers
 
 pytestmark = pytest.mark.transport_policy
 
@@ -45,12 +45,7 @@ async def test_find_series_reads_a_404_as_none() -> None:
 
 async def test_a_503_is_retried_after_the_wait_it_asks_for() -> None:
     """Retry a 503 once its ``Retry-After`` has passed, on a test clock that makes the wait instant."""
-    fake = FakeTransport().reply(
-        "GET",
-        "/v1/series/GDP",
-        httpx2.Response(503, headers={"Retry-After": "2"}),
-        httpx2.Response(200, json=GDP),
-    )
+    fake = FakeTransport().reply("GET", "/v1/series/GDP", Respond(503, retry_after=2.0), Respond(json=GDP))
     clock = TestClock()
     with clock.install(), isolated_breakers():  # the clients built in the block use them
         catalog = CatalogClient("test-key", transport=fake)

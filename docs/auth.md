@@ -10,9 +10,9 @@ Every one merges without overriding: a header or parameter the call sets itself 
 ## Static credentials
 
 ```python
-from headgate import QueryParamAuth, StaticHeaderAuth
+from headgate import BearerAuth, QueryParamAuth, StaticHeaderAuth
 
-bearer = StaticHeaderAuth({"Authorization": f"Bearer {api_key}"})
+bearer = BearerAuth(api_key)
 api_key_header = StaticHeaderAuth({"x-api-key": api_key})
 query_key = QueryParamAuth({"api_key": api_key})
 ```
@@ -94,6 +94,6 @@ endpoint. The API host's breaker records nothing for it.
 - `credential_identity()` names the long-lived credential for the cache partition. By default each instance is its own
   identity; return the client id and secret (hashed, never stored) to let instances holding the same credential share
   entries. Never return the short-lived token, which changes on every refresh.
-- `CachedTokenAuth.reject_credential_rotation(returned, configured, provider=..., setting=...)` raises
+- `self.reject_credential_rotation(returned, configured, setting=...)`, called from your `mint_token`, raises
   `ClientConfigurationError` when a token endpoint hands back a replacement for the long-lived credential, which an
   in-memory cache cannot persist.

@@ -45,7 +45,7 @@ async def test_a_stream_to_a_private_address_is_refused() -> None:
     built = client(fake, http=_GUARDED)
 
     with pytest.raises(ForbiddenDestinationError, match=r"10\.0\.0\.7.*private"):
-        async with built.stream("GET", _INTERNAL):
+        async with built.stream(_INTERNAL):
             pass
 
     assert fake.calls == ()
@@ -55,7 +55,7 @@ async def test_a_stream_through_the_pinning_transport_is_refused() -> None:
     """Refuse a stream on the default network transport, which vets the address it connects to."""
     async with StubClient(base_url=BASE, rate=FAST, http=_GUARDED) as built:
         with pytest.raises(ForbiddenDestinationError, match=r"10\.0\.0\.7.*private"):
-            async with built.stream("GET", _INTERNAL):
+            async with built.stream(_INTERNAL):
                 pass
 
 
@@ -89,9 +89,9 @@ async def test_a_stream_to_another_origin_carries_no_credential() -> None:
     fake = FakeTransport().reply("GET", "/v1/file", 200).reply("GET", "/file", 200)
     built = client(fake, auth=StaticHeaderAuth({"X-Api-Key": "secret"}))
 
-    async with built.stream("GET", "file"):
+    async with built.stream("file"):
         pass
-    async with built.stream("GET", "https://cdn.example.test/file"):
+    async with built.stream("https://cdn.example.test/file"):
         pass
 
     own, foreign = fake.calls

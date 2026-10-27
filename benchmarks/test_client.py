@@ -247,7 +247,7 @@ def test_stream(benchmark: BenchmarkFixture, runner: asyncio.Runner) -> None:
     client = _client(lambda request: httpx2.Response(_OK, content=payload, request=request))
 
     async def drain() -> int:
-        async with client.stream("GET", "file") as stream:
+        async with client.stream("file") as stream:
             return sum([len(chunk) async for chunk in stream.aiter_bytes()])
 
     benchmark(lambda: runner.run(drain()))

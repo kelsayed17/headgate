@@ -30,7 +30,8 @@ from hishel import AsyncSqliteStorage, FilterPolicy
 
 from headgate import HttpOptions, TransportPolicy
 from headgate.cache import HttpCache, PathFragmentFilter, StatusCodeFilter
-from headgate.ratelimit import Rate, RateBudget, RateRule
+from headgate.ratelimit import Rate, RateRule
+from headgate.ratelimit._budget import Pacer, pacer_of
 from headgate.ratelimit._budgets import PathBudgets
 from headgate.ratelimit._transport import RateLimitTransport
 from headgate.retry import RetryPolicy
@@ -97,18 +98,18 @@ def _series_policy() -> FilterPolicy:
 
 @pytest.fixture
 def acquired(monkeypatch: pytest.MonkeyPatch) -> dict[int, int]:
-    """Count the turns taken per budget, keyed by ``id``, through ``RateBudget.wait``, the spending seam.
+    """Count the turns taken per budget, keyed by ``id``, through ``Pacer.wait``, the spending seam.
 
     It wraps the autouse ``no_rate_limit`` no-op, so counting never sleeps.
     """
     counts: dict[int, int] = {}
-    original = RateBudget.wait
+    original = Pacer.wait
 
-    async def counting_wait(self: RateBudget, context: CallContext) -> None:
+    async def counting_wait(self: Pacer, context: CallContext) -> None:
         counts[id(self)] = counts.get(id(self), 0) + 1
         await original(self, context)
 
-    monkeypatch.setattr(RateBudget, "wait", counting_wait)
+    monkeypatch.setattr(Pacer, "wait", counting_wait)
     return counts
 
 
@@ -126,7 +127,9 @@ async def test_a_cache_hit_takes_no_token(sqlite_storage: AsyncSqliteStorage, ac
     await client.get("/series?id=A", expect=RESPONSE)
 
     assert len(base.requests) == 1, "the second GET must be served from cache"
-    assert acquired[id(default_budget(client))] == 1, "a cached response reached no network and must spend no turn"
+    assert acquired[id(pacer_of(default_budget(client)))] == 1, (
+        "a cached response reached no network and must spend no turn"
+    )
 
 
 async def test_every_retry_takes_a_token(acquired: dict[int, int]) -> None:
@@ -143,7 +146,7 @@ async def test_every_retry_takes_a_token(acquired: dict[int, int]) -> None:
     await client.get("/thing", expect=RESPONSE)
 
     assert len(base.requests) == len(statuses), "two retries then success"
-    assert acquired[id(default_budget(client))] == len(statuses), (
+    assert acquired[id(pacer_of(default_budget(client)))] == len(statuses), (
         "each re-send is a request on the wire and must spend its own turn"
     )
 
@@ -195,7 +198,7 @@ async def test_a_path_rule_selects_its_own_budget(acquired: dict[int, int]) -> N
     budgets = rate_limit_transport(client).budgets
     candles = budgets.for_request(httpx2.Request("GET", "https://x/products/BTC-USD/candles"))
     assert candles is not budgets.default
-    assert (acquired[id(candles)], acquired[id(budgets.default)]) == (1, 1)
+    assert (acquired[id(pacer_of(candles))], acquired[id(pacer_of(budgets.default))]) == (1, 1)
 
 
 async def test_aclose_reaches_the_transport_below_the_budget() -> None:
@@ -221,4 +224,4 @@ async def test_the_transport_paces_each_request_on_the_budget_its_path_selects(a
     await transport.handle_async_request(candles)
 
     assert transport.budgets is budgets
-    assert acquired == {id(budgets.for_request(candles)): 1}
+    assert acquired == {id(pacer_of(budgets.for_request(candles))): 1}

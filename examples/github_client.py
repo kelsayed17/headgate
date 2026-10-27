@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
-from headgate import AsyncBaseClient, Expect, HttpOptions, LinkHeader, Rate, RateBudget, StaticHeaderAuth, nothing
+from headgate import AsyncBaseClient, BearerAuth, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
 from headgate.msgspec import decoder
 
 if TYPE_CHECKING:
@@ -69,7 +69,7 @@ class GitHub(AsyncBaseClient):
             base_url=API,
             # Well under the 5,000 requests an hour a token gets, and never more than 50 at once.
             rate=RateBudget(Rate.per_second(10), max_in_flight=50),
-            auth=StaticHeaderAuth({"Authorization": f"Bearer {token}"}),
+            auth=BearerAuth(token),
             http=HttpOptions(
                 transport=transport,
                 headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},

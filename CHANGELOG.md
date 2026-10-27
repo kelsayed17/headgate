@@ -20,6 +20,14 @@ mirror `expect=`, and each package exports only what a client is written with. E
 - `rate=` is optional: without it a client paces nothing itself (`headgate.ratelimit.UNLIMITED`) but still waits out
   the pauses the server asks for, a 429 or 503 with `Retry-After` and a spent `RateLimit` quota.
 - `Rate.per_hour(requests)`, for a provider that states its quota hourly.
+- `BearerAuth(token)`, for the most common `StaticHeaderAuth({"Authorization": f"Bearer {token}"})`.
+- `HttpCache(methods=, paths=, statuses=)` say what is stored without hishel's `FilterPolicy`: the GETs of `paths`
+  (every path by default) answered with a status in `statuses` (200 by default). `policy=` stays, now optional, for
+  a `FilterPolicy` of your own.
+- `Next`, the type of a middleware's `call_next`, and `ViewOptions`, the options `with_options()` takes, are exported
+  from `headgate`.
+- `FakeTransport.reply()` takes a `Respond`, the step `FaultyTransport` answers with, beside a response, a status or a
+  function: `Respond(503, retry_after=2.0)`.
 
 ### Changed
 
@@ -43,6 +51,18 @@ mirror `expect=`, and each package exports only what a client is written with. E
 - `CachedTokenAuth(refresh_margin_s=)` is `CachedTokenAuth(refresh_margin=)`, in seconds like every other duration.
 - In `headgate.testing`, `Respond(status=)` is `Respond(status_code=)`, and `FakeTransport.route()` is
   `FakeTransport.reply()`, so it no longer shares a name with `headgate.Route`.
+- `stream()` takes the URL first and the method as `method=`, a GET by default: `client.stream("export.csv")`, and
+  `client.stream("jobs", method="POST")` where you wrote `client.stream("POST", "jobs")`.
+- `with_options()` takes its options as `ViewOptions`, and an option left out keeps the outer setting: passing
+  `headers=None`, `timeout=None` or `retry=None` to mean "keep" is no longer accepted; leave the option out.
+- The `event_stream` reader returns each event whole (`httpx2.ServerSentEvent`, with `event`, `data`, `id` and
+  `retry`), as `Stream.aiter_events()` yields them; read `.data` where you used the bytes it returned.
+- `HttpCache`'s filters take any iterable (`MethodFilter({"GET"})`, `StatusCodeFilter([200])`), and `MethodFilter`
+  matches a method in any case.
+- `CachedTokenAuth.reject_credential_rotation` is an instance method named for the auth class, as every mint failure
+  is: call `self.reject_credential_rotation(returned, configured, setting=...)` without `provider=`.
+- `RateBudget.pause_remaining` is a property.
+- `Paginated` and `Stream` are protocols: what `paginate()` and `stream()` return, typed, but not built directly.
 - `Offset(limit=)` is `Offset(page_size=)`, so it no longer shares a name with `paginate(limit=)`, the page budget.
 - `paginate()` takes `follow_redirects=` and `cache_ttl=`, applied to every page as on `get()`. Its options are typed
   by the new `PageOptions`, `RequestOptions` plus those two.
@@ -73,6 +93,8 @@ mirror `expect=`, and each package exports only what a client is written with. E
   - `headgate.security`: `CredentialGuard`, `CHAIN_ORIGIN`, `address_hook`, `refuse_https_downgrade`.
 - `BreakerState` from `headgate.events` and `headgate.health`: import it from `headgate.breaker`, its one home.
 - `headgate.policy.policy_is_disabled`; `policy_disabled` stays.
+- `RateBudget.wait()`, `observe()`, `occupy()` and `now()`, which only the client's rate-limit layer called, and
+  `Expect.accepts()`, which only the client called.
 
 ## [0.5.0] - 2026-10-26
 

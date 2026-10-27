@@ -158,6 +158,6 @@ class OrdersClient(AsyncBaseClient):
 
     async def export_orders(self, write: Callable[[bytes], object]) -> None:
         """Stream the CSV export of every order into *write*, a chunk at a time, never holding it whole."""
-        async with self.stream("GET", "exports/orders.csv") as export:
+        async with self.stream("exports/orders.csv") as export:
             async for chunk in export.aiter_bytes():
                 write(chunk)

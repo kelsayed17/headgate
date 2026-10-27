@@ -360,21 +360,17 @@ class TestRotationRefusal:
     def test_a_changed_credential_is_refused_by_name(self) -> None:
         """Name the rotation and the setting to fix in the error."""
         with pytest.raises(ClientConfigurationError, match="rotating") as exc:
-            CachedTokenAuth.reject_credential_rotation(
-                "new-token", "configured-token", provider="Example", setting="EXAMPLE_REFRESH_TOKEN"
-            )
+            _CountingAuth().reject_credential_rotation("new-token", "configured-token", setting="EXAMPLE_REFRESH_TOKEN")
 
         assert "EXAMPLE_REFRESH_TOKEN" in str(exc.value)
-        assert exc.value.source == "Example"
-        assert str(exc.value).startswith("[Example] Example returned a new long-lived credential")
+        assert exc.value.source == "_CountingAuth"
+        assert str(exc.value).startswith("[_CountingAuth] _CountingAuth's token endpoint returned a new long-lived")
         assert "new-token" not in str(exc.value)
 
     @pytest.mark.parametrize("returned", [None, "", "same"], ids=["absent", "empty", "echoed"])
     def test_an_absent_or_echoed_credential_is_benign(self, returned: str | None) -> None:
         """Accept a missing, empty or echoed credential: only a different one means rotation."""
-        CachedTokenAuth.reject_credential_rotation(
-            returned, "same", provider="Example", setting="EXAMPLE_REFRESH_TOKEN"
-        )
+        _CountingAuth().reject_credential_rotation(returned, "same", setting="EXAMPLE_REFRESH_TOKEN")
 
 
 class _HoppingAuth(CachedTokenAuth[tuple[str, str]]):

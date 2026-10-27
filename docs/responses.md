@@ -16,7 +16,7 @@ read and capped, because some readers need a header too. headgate ships these:
 | `json_reader(decode)` | what `decode(body_bytes)` returns | a codec of your own |
 | `as_bytes` | the body, undecoded | CSV, ZIP, PDF, a dump another parser reads |
 | `nothing` | `None` | a void write (`DELETE`, a cancel) or a `HEAD` |
-| `event_stream` | the `data` of each server-sent event, in order | a buffered `text/event-stream` body |
+| `event_stream` | each server-sent event (`event`, `data`, `id`, `retry`), in order | a buffered `text/event-stream` body |
 
 A reader that finds the body is not the shape it expected raises: a codec raises `DecodeError`, and the `ValueError`,
 `LookupError` or `TypeError` hand-written code over `response.json()` raises counts the same. On a 2xx the client turns

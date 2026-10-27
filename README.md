@@ -58,7 +58,7 @@ A client is a subclass. The configuration lives in `__init__`, and each endpoint
 of [`examples/github_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/github_client.py), a tested client for the GitHub REST API:
 
 ```python
-from headgate import AsyncBaseClient, Expect, HttpOptions, LinkHeader, Rate, RateBudget, StaticHeaderAuth, nothing
+from headgate import AsyncBaseClient, BearerAuth, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
 from headgate.msgspec import decoder
 
 # Readers and pagers are values: build them once, at import, where a bad declaration fails.
@@ -77,7 +77,7 @@ class GitHub(AsyncBaseClient):
             base_url=API,
             # Well under the 5,000 requests an hour a token gets, and never more than 50 at once.
             rate=RateBudget(Rate.per_second(10), max_in_flight=50),
-            auth=StaticHeaderAuth({"Authorization": f"Bearer {token}"}),
+            auth=BearerAuth(token),
             http=HttpOptions(
                 transport=transport,
                 headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
@@ -164,7 +164,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
-from headgate import AsyncBaseClient, Cursor, Expect, HttpOptions, Rate, StaticHeaderAuth, nothing
+from headgate import AsyncBaseClient, BearerAuth, Cursor, Expect, HttpOptions, Rate, nothing
 from headgate.msgspec import decoder
 
 if TYPE_CHECKING:
@@ -219,7 +219,7 @@ class CatalogClient(AsyncBaseClient):
         super().__init__(
             base_url="https://api.catalog.example/v1",
             rate=Rate.per_second(10),
-            auth=StaticHeaderAuth({"Authorization": f"Bearer {api_key}"}),
+            auth=BearerAuth(api_key),
             http=HttpOptions(transport=transport),
         )
 
@@ -403,10 +403,9 @@ More in [errors](https://kelsayed17.github.io/headgate/errors/).
 for the network, and a `TestClock` makes every wait instant.
 
 ```python
-import httpx2
 from quickstart import CatalogClient
 
-from headgate.testing import FakeTransport, TestClock, isolated_breakers
+from headgate.testing import FakeTransport, Respond, TestClock, isolated_breakers
 
 GDP = {"id": "GDP", "title": "Gross domestic product", "values": [27.4, 28.1]}
 
@@ -421,12 +420,7 @@ async def test_find_series_reads_a_404_as_none() -> None:
 
 async def test_a_503_is_retried_after_the_wait_it_asks_for() -> None:
     """Retry a 503 once its ``Retry-After`` has passed, on a test clock that makes the wait instant."""
-    fake = FakeTransport().reply(
-        "GET",
-        "/v1/series/GDP",
-        httpx2.Response(503, headers={"Retry-After": "2"}),
-        httpx2.Response(200, json=GDP),
-    )
+    fake = FakeTransport().reply("GET", "/v1/series/GDP", Respond(503, retry_after=2.0), Respond(json=GDP))
     clock = TestClock()
     with clock.install(), isolated_breakers():  # the clients built in the block use them
         catalog = CatalogClient("test-key", transport=fake)

@@ -45,6 +45,7 @@ __all__ = [
     "AUTH_HOP",
     "FRESH_TOKEN_S",
     "MAX_MINT_RESPONSE_BYTES",
+    "BearerAuth",
     "CachedTokenAuth",
     "Minted",
     "QueryParamAuth",
@@ -192,6 +193,14 @@ class StaticHeaderAuth(httpx2.Auth):
         for key, value in self._headers.items():
             request.headers.setdefault(key, value)
         yield request
+
+
+class BearerAuth(StaticHeaderAuth):
+    """Send a static bearer token as ``Authorization: Bearer <token>``: the most common :class:`StaticHeaderAuth`."""
+
+    def __init__(self, token: str) -> None:
+        """Send *token* on every request to a trusted origin."""
+        super().__init__({"Authorization": f"Bearer {token}"})
 
 
 class QueryParamAuth(httpx2.Auth):
@@ -399,22 +408,23 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         """Return whether *request* needs no credential from this auth: by default, one carrying a token header."""
         return any(name in request.headers for name in self.token_headers)
 
-    @staticmethod
-    def reject_credential_rotation(returned: str | None, configured: str, *, provider: str, setting: str) -> None:
+    def reject_credential_rotation(self, returned: str | None, configured: str, *, setting: str) -> None:
         """Raise ``ClientConfigurationError`` when a token endpoint returns a replacement for the configured credential.
 
         When a token endpoint returns a replacement for the credential used to call it, the configured one is dead and
         the replacement exists only in this response. An in-memory cache cannot persist it, so the only safe answer is
         to fail on the first exchange and say why: discarding the replacement silently buys one working call, then an
         opaque ``400`` once the access token expires. An absent or empty *returned*, or one equal to *configured*, is
-        benign and common. *setting* names where the operator configured the credential, for the error message.
+        benign and common. *setting* names where the operator configured the credential, for the error message, which
+        is named for this auth class, as every mint failure is.
         """
+        provider = type(self).__name__
         if returned is None or returned in {"", configured}:
             return
         msg = (
-            f"{provider} returned a new long-lived credential, which means this key is configured for rotating "
-            f"credentials. This client cannot use that: the replacement would have to be persisted durably on every "
-            f"exchange, and the configured {setting} is now dead. Re-authorise with a non-rotating key and set "
+            f"{provider}'s token endpoint returned a new long-lived credential, which means this key is configured for "
+            f"rotating credentials. This client cannot use that: the replacement would have to be persisted durably on "
+            f"every exchange, and the configured {setting} is now dead. Re-authorise with a non-rotating key and set "
             f"{setting} to the new value."
         )
         raise ClientConfigurationError(msg, source=provider)

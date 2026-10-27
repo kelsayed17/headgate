@@ -6,12 +6,12 @@ should not be held whole: a large download, or a server-sent event stream that n
 ## Streams
 
 ```python
-async with client.stream("GET", "exports/2026.csv") as stream:
+async with client.stream("exports/2026.csv") as stream:
     async for chunk in stream.aiter_bytes():
         sink.write(chunk)
 ```
 
-`client.stream(method, url, *, retry=..., follow_redirects=..., last_event_id=None, **options)` sends the request when
+`client.stream(url, *, method="GET", retry=..., follow_redirects=..., last_event_id=None, **options)` sends the request when
 the block is entered and hands it a `Stream` once a 2xx head has arrived. It runs through the same stack and failure
 ladder as a verb, except that:
 
@@ -34,12 +34,12 @@ A `Stream` has `status_code`, `headers` and `request_id`, and three ways to read
 ## Server-sent events
 
 ```python
-async with client.stream("GET", "events", headers={"Accept": "text/event-stream"}) as stream:
+async with client.stream("events", headers={"Accept": "text/event-stream"}) as stream:
     async for event in stream.aiter_events():
         handle(event.event, event.data)
     resume_from = stream.last_event_id
 
-async with client.stream("GET", "events", last_event_id=resume_from) as stream:
+async with client.stream("events", last_event_id=resume_from) as stream:
     ...
 ```
 
@@ -49,8 +49,8 @@ async with client.stream("GET", "events", last_event_id=resume_from) as stream:
 `ResponseTooLargeError`. `stream.last_event_id` is the last `id` seen; pass it as `last_event_id=` when re-opening, and
 the request carries `Last-Event-ID` so the server resumes after it.
 
-For an event stream that is short and bounded, the buffered `event_stream` reader returns the `data` of every event in
-a body (see [responses](responses.md#readers)).
+For an event stream that is short and bounded, the buffered `event_stream` reader returns every event in a body, in the
+shape `aiter_events()` yields them (see [responses](responses.md#readers)).
 
 ## Request bodies
 

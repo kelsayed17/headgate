@@ -47,7 +47,7 @@ from tests.support.wire import Script
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
-    from headgate._middleware import Next
+    from headgate import Next
 
 _BASE = "https://api.example.test"
 _REQUEST_ID = "req-123"

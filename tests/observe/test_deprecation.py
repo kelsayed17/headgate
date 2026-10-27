@@ -110,7 +110,7 @@ async def test_a_streamed_call_reports_its_deprecation() -> None:
     """Announce from a streamed response's head too."""
     fake = FakeTransport().reply("GET", "/v1/old", httpx2.Response(200, content=b"a", headers={"Deprecation": "true"}))
     recorder = Recorder()
-    async with client(fake, recorder).stream("GET", "old") as stream:
+    async with client(fake, recorder).stream("old") as stream:
         chunks = [chunk async for chunk in stream.aiter_bytes()]
 
     assert chunks == [b"a"]

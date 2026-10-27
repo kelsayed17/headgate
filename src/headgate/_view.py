@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, TypedDict
 
 import httpx2
 
@@ -23,13 +23,29 @@ from headgate.retry import NO_RETRY
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from headgate._options import Timeouts
     from headgate.retry import RetryPolicy
 
-__all__ = ["KEEP", "ROOT_DEFAULTS", "Keep", "ViewDefaults"]
+__all__ = ["KEEP", "ROOT_DEFAULTS", "Keep", "ViewDefaults", "ViewOptions"]
+
+
+class ViewOptions(TypedDict, total=False):
+    """The defaults :meth:`~headgate.AsyncBaseClient.with_options` changes; an option left out keeps the outer one.
+
+    * ``headers``: sent on every call of the view, over the client's; a call's ``headers=`` still wins a clash.
+    * ``timeout``: :class:`~headgate.Timeouts` whose set phases replace the client's; the others are kept.
+    * ``deadline``: seconds each call may take, or ``None`` for no deadline.
+    * ``retry``: ``False`` sends once, a :class:`~headgate.RetryPolicy` replaces the client's, ``True`` restores it.
+    """
+
+    headers: Mapping[str, str]
+    timeout: Timeouts
+    deadline: float | None
+    retry: bool | RetryPolicy
 
 
 class Keep(Enum):
-    """The ``with_options`` default that keeps a setting as it is, where ``None`` is itself a value."""
+    """A view's deadline when it sets none, where ``None`` is itself a value (no deadline)."""
 
     KEEP = "keep"
 
@@ -58,28 +74,23 @@ class ViewDefaults:
             merged.update(call)
         return merged
 
-    def layered(
-        self,
-        *,
-        headers: Mapping[str, str] | None,
-        deadline: float | Literal[Keep.KEEP] | None,
-        retry: bool | RetryPolicy | None,
-    ) -> ViewDefaults:
-        """Return these defaults with a further view's laid over them; ``None`` / ``KEEP`` keeps a setting.
+    def layered(self, options: ViewOptions) -> ViewDefaults:
+        """Return these defaults with a further view's *options* laid over them; an option left out keeps a setting.
 
         :raises ValueError: for a deadline that is not positive and finite.
         """
         changed = self
-        if headers is not None:
+        if (headers := options.get("headers")) is not None:
             merged = httpx2.Headers(list(self.headers))
             merged.update(headers)
             changed = replace(changed, headers=tuple(merged.items()))
-        if deadline is not KEEP:
+        if "deadline" in options:
+            deadline = options["deadline"]
             if deadline is not None and not (deadline > 0 and math.isfinite(deadline)):
                 msg = f"deadline must be > 0 and finite, or None (got {deadline})"
                 raise ValueError(msg)
             changed = replace(changed, deadline=deadline)
-        if retry is not None:
+        if (retry := options.get("retry")) is not None:
             changed = replace(changed, retry=_retry_override(retry=retry))
         return changed
 

@@ -39,7 +39,7 @@ async def test_a_one_shot_body_answered_503_is_not_sent_again(method: Method) ->
     built = client(fake)
 
     with pytest.raises(UpstreamStatusError) as raised:
-        async with built.stream(method, "upload", content=_chunks(), idempotency_key="k"):
+        async with built.stream("upload", method=method, content=_chunks(), idempotency_key="k"):
             pass
 
     assert raised.value.status_code == httpx2.codes.SERVICE_UNAVAILABLE
@@ -53,7 +53,7 @@ async def test_a_factory_body_is_sent_whole_on_every_attempt(method: Method) -> 
     fake = FakeTransport().reply(method, "/v1/upload", 503, 200)
     built = client(fake)
 
-    async with built.stream(method, "upload", content=_chunks, idempotency_key="k") as stream:
+    async with built.stream("upload", method=method, content=_chunks, idempotency_key="k") as stream:
         assert stream.status_code == httpx2.codes.OK
 
     assert [request.content for request in fake.calls] == [_BODY, _BODY]
@@ -123,7 +123,7 @@ async def test_a_redirect_that_drops_the_body_is_followed(status: int, method: M
     fake = FakeTransport().reply(method, "/v1/upload", moved).reply("GET", "/v1/done", 200)
     built = client(fake)
 
-    async with built.stream(method, "upload", content=_chunks()) as stream:
+    async with built.stream("upload", method=method, content=_chunks()) as stream:
         assert stream.status_code == httpx2.codes.OK
 
     assert [request.method for request in fake.calls] == [method, "GET"]
