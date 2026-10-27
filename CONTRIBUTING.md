@@ -16,6 +16,7 @@ Every change must pass all of these, which CI runs on every pull request:
 uv run ruff check
 uv run ruff format --check
 uv run ty check
+uv run typos
 uv run python -m pytest --cov
 ```
 
@@ -23,6 +24,7 @@ uv run python -m pytest --cov
   finding: suppression comments (`noqa`, `ty: ignore`, `pragma: no cover`) are not accepted.
 - **Coverage is 100% of lines and branches.** A new branch needs a test; an unreachable branch should be deleted.
 - **Docstrings** describe what the code does now and why, in the present tense.
+- **American English** in code, docs and messages: `typos` checks the spelling (`behavior`, `normalize`, `license`).
 
 ## Retry invariants
 
@@ -30,10 +32,10 @@ uv run python -m pytest --cov
 change to the retry layer must keep: a POST or PATCH without an idempotency key is never re-sent after any of its bytes
 were written (unless the server proved it unprocessed); no attempt or wait runs past the deadline; retries never exceed
 the budget; every response that is not returned is closed; and the error's attempt history matches what was sent. A
-failing example is a bug to fix, not a test to loosen. Behaviour the invariants do not pin is covered by the behaviour
+failing example is a bug to fix, not a test to loosen. Behavior the invariants do not pin is covered by the behavior
 tests beside them.
 
 ## Pull requests
 
-Keep a pull request to one change, describe the behaviour it changes, and add an entry to `CHANGELOG.md` under
+Keep a pull request to one change, describe the behavior it changes, and add an entry to `CHANGELOG.md` under
 "Unreleased".

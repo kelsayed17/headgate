@@ -104,7 +104,7 @@ class TestPathRenderer:
         symbol = "BTC/USD"
         assert render_path(t"/v2/positions/{symbol}") == "/v2/positions/BTC%2FUSD"
 
-    def test_traversal_is_neutralised(self) -> None:
+    def test_traversal_is_neutralized(self) -> None:
         """Escape a traversal into one segment."""
         evil = "../../v2/account"
         assert render_path(t"/v2/positions/{evil}") == "/v2/positions/..%2F..%2Fv2%2Faccount"

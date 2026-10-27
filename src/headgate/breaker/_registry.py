@@ -7,7 +7,7 @@
 policy's ``failure_threshold`` and ``recovery_timeout``. Every client that addresses an origin with the same thresholds
 shares one breaker; a client that asks for different thresholds gets a breaker of its own for that origin, with exactly
 the thresholds it asked for. The alternative, the first client to address an origin fixing the thresholds every later
-client gets, makes a client's breaker behaviour depend on which client happened to call first.
+client gets, makes a client's breaker behavior depend on which client happened to call first.
 
 **Bounds.** A registry holds at most ``max_hosts`` breakers. Past that, the least recently used closed breaker is
 dropped (a closed breaker holds at most a few failures, which a fresh one relearns); only when every breaker is open

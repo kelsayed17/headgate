@@ -13,7 +13,7 @@ hide:
 # headgate
 
 **An async API-client base for Python, built on [httpx2](https://pypi.org/project/httpx2/).** Subclass
-`AsyncBaseClient`, declare what each endpoint answers, and every client you build gets the same production behaviour.
+`AsyncBaseClient`, declare what each endpoint answers, and every client you build gets the same production behavior.
 Each endpoint method stays one line.
 
 [Get started](#install){ .md-button .md-button--primary }

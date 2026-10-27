@@ -94,7 +94,7 @@ cannot:
     </div>
 
     **Pick stamina or tenacity** to retry something that is not an HTTP call, such as a database query. stamina's
-    `on=` hook (25.2 and later) and tenacity's `wait_exception` can honour `Retry-After` with a little code. backoff's
+    `on=` hook (25.2 and later) and tenacity's `wait_exception` can honor `Retry-After` with a little code. backoff's
     repository is archived, and it has not been released since 2022.
 
 === "Rate limits"

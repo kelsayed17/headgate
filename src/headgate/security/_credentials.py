@@ -75,7 +75,7 @@ class CredentialGuard:
         cookie_jar: bool,
         middleware: Iterable[object] = (),
     ) -> None:
-        """Trust *base_url*'s origin and *trusted_origins* (normalised origin text); withhold *auth*'s credentials.
+        """Trust *base_url*'s origin and *trusted_origins* (normalized origin text); withhold *auth*'s credentials.
 
         *cookie_jar* says whether the client keeps a cookie jar, in which case ``Cookie`` is left to it. Each of
         *middleware* that is a :class:`~headgate._core.CredentialCarrier` has its declared credentials withheld too.

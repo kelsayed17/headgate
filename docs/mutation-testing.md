@@ -37,8 +37,8 @@ tests written for that run's survivors:
 | killed by a timeout | 59 |
 | survived, every one equivalent (listed below) | 131 |
 
-That is 5,968 of 6,099 detected (97.9%), and every mutant that changes behaviour is detected. The same run before
-those tests left 184 survivors; the 53 that changed behaviour (a reader's empty-body and refusal options, codecs built
+That is 5,968 of 6,099 detected (97.9%), and every mutant that changes behavior is detected. The same run before
+those tests left 184 survivors; the 53 that changed behavior (a reader's empty-body and refusal options, codecs built
 at run time, the conformance check's messages, a degraded cache fetch with a streamed body, a hedge refused by the rate
 budget, among others) each now fail a test.
 
@@ -50,7 +50,7 @@ few families:
 - **header-name case**: httpx2 headers are case-insensitive, so `headers.get("ETag")` and `headers.get("etag")` read
   the same field;
 - **codec, distribution and method names**: `"ascii"`/`"ASCII"`, `"latin-1"`/`"LATIN-1"`, `"utf-8"`/`"UTF-8"`,
-  `metadata.version("HEADGATE")` and `MethodFilter({"get"})` (names are normalised);
+  `metadata.version("HEADGATE")` and `MethodFilter({"get"})` (names are normalized);
 - **falsy stand-ins**: `None` for `False` or `""` where the value is only tested for truth;
 - **defaults spelt out**: an argument equal to the callee's default (`to_bytes(8, "big")`, `zip(..., strict=False)`,
   `secrets.token_bytes(32)`, `copy_with(userinfo=None)`, which clears userinfo exactly as `b""` does);
@@ -74,7 +74,7 @@ few families:
 | `headgate._deprecation` | `deprecation_of #5` | header-name case |
 | `headgate._deprecation` | `deprecation_of #9` | header-name case |
 | `headgate._deprecation` | `deprecation_of #10` | header-name case |
-| `headgate._user_agent` | `headgate_version #3` | distribution names are normalised, so `HEADGATE` finds `headgate` |
+| `headgate._user_agent` | `headgate_version #3` | distribution names are normalized, so `HEADGATE` finds `headgate` |
 | `headgate.pydantic` | `_adapter #1` | `typing.cast` ignores its type argument at runtime |
 | `headgate.pydantic` | `_adapter #5` | `typing.cast` ignores its type argument at runtime |
 | `headgate.pydantic` | `_adapter #6` | `typing.cast` ignores its type argument at runtime |
@@ -89,7 +89,7 @@ few families:
 | `headgate.pydantic` | `PydanticCodec.describe #16` | the message reads only each error's `loc` and `msg`, which these flags do not change |
 | `headgate.pydantic` | `PydanticCodec.describe #17` | the message reads only each error's `loc` and `msg`, which these flags do not change |
 | `headgate.pydantic` | `PydanticCodec.describe #18` | the message reads only each error's `loc` and `msg`, which these flags do not change |
-| `headgate.pydantic` | `to_builtins #6` | pydantic-core's `to_jsonable_python` serialises a model by alias already |
+| `headgate.pydantic` | `to_builtins #6` | pydantic-core's `to_jsonable_python` serializes a model by alias already |
 | `headgate.msgspec` | `encoder #3` | `MsgspecCodec.encoder` drops the type expression: msgspec encodes a value by its own type |
 | `headgate._client` | `AsyncBaseClient.with_options #17` | `_owns_pool` is only tested for truth |
 | `headgate._client` | `AsyncBaseClient.stream #16` | header-name case |

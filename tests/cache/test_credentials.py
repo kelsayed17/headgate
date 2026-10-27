@@ -188,7 +188,7 @@ async def test_a_shared_partition_serves_every_credential(storage: AsyncSqliteSt
 
 
 async def test_an_anonymous_client_and_a_shared_one_share_a_namespace(storage: AsyncSqliteStorage) -> None:
-    """A request with no credential at all is stored unlabelled, where a shared client finds it."""
+    """A request with no credential at all is stored unlabeled, where a shared client finds it."""
     network = _Recorder()
     await _client(network, storage, None).get(_URL, expect=RESPONSE)
 
@@ -350,7 +350,7 @@ def test_the_view_drops_every_credential_and_keeps_the_rest_in_order() -> None:
     assert [name for name, _ in headers.multi_items()] == ["host", "accept", "x-trace"]
 
 
-def test_a_view_without_credentials_leaves_the_url_unlabelled() -> None:
+def test_a_view_without_credentials_leaves_the_url_unlabeled() -> None:
     """A request carrying no credential keeps its URL, query untouched, and gets no partition label."""
     url = "https://x/series?b=2&a=1"
 
@@ -382,7 +382,7 @@ def test_labels_separate_auth_classes_with_the_same_identity() -> None:
 
 
 def test_a_shared_scope_never_labels() -> None:
-    """Under ``Partition.SHARED`` no request is labelled, whatever credential it carries."""
+    """Under ``Partition.SHARED`` no request is labeled, whatever credential it carries."""
     shared = CredentialScope(_KeyAuth("alice"), partition=Partition.SHARED)
 
     assert _label(shared, _URL, {"Authorization": "Bearer t"}) is None

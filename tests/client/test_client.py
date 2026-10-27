@@ -561,7 +561,7 @@ def _replying(content: bytes) -> StubClient:
     return StubClient(rate=_RATE, base_url="https://api.example", http=HttpOptions(transport=transport))
 
 
-async def test_struct_decode_lax_optin_coerces_strings() -> None:
+async def test_struct_decode_lax_opt_in_coerces_strings() -> None:
     """Check that ``strict=False`` (an explicit opt-out) coerces a string-quoted number into a number field."""
     client = _replying(b'{"price":"%s"}' % _QUOTED_PRICE.encode())
     out = await client.get("x", expect=decoder(_Px, strict=False))
@@ -726,7 +726,7 @@ async def test_an_exact_2xx_declaration_wins_over_the_success_reader() -> None:
     assert await client.post("x", expect=Expect(decoder(_Value)).on(httpx2.codes.NO_CONTENT, nothing)) is None
 
 
-async def test_a_declared_non_2xx_in_an_unrecognised_shape_falls_through_to_the_ladder() -> None:
+async def test_a_declared_non_2xx_in_an_unrecognized_shape_falls_through_to_the_ladder() -> None:
     """Check that a declared status in a shape its reader does not know raises with its real status."""
     client = _serving(httpx2.Response(httpx2.codes.BAD_REQUEST, content=b"<html>gateway</html>"))
     with pytest.raises(UpstreamStatusError) as ei:
@@ -813,7 +813,7 @@ async def test_a_refused_reader_never_carries_a_query_string_secret() -> None:
     assert "api_key=%2A%2A%2A" in str(ei.value)
 
 
-async def test_a_declared_403_in_an_unrecognised_shape_raises_auth_error() -> None:
+async def test_a_declared_403_in_an_unrecognized_shape_raises_auth_error() -> None:
     """Check that the fall-through uses the real ladder, so an undecodable declared 403 is still ``AuthError``."""
     client = _serving(httpx2.Response(httpx2.codes.FORBIDDEN, content=b"<html>denied</html>"))
     with pytest.raises(AuthError) as ei:

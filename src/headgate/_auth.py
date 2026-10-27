@@ -253,7 +253,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     """Bearer auth for providers that mint a short-lived token over the network.
 
     The token comes from an endpoint, so it is cached, refreshed before it expires, and refreshed again if it is
-    rejected early. A subclass gets three behaviours:
+    rejected early. A subclass gets three behaviors:
 
     * **A lock-guarded mint.** httpx2 runs requests concurrently, so an unguarded refresh would let N in-flight
       requests each fire their own token exchange.
@@ -424,7 +424,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         msg = (
             f"{provider}'s token endpoint returned a new long-lived credential, which means this key is configured for "
             f"rotating credentials. This client cannot use that: the replacement would have to be persisted durably on "
-            f"every exchange, and the configured {setting} is now dead. Re-authorise with a non-rotating key and set "
+            f"every exchange, and the configured {setting} is now dead. Re-authorize with a non-rotating key and set "
             f"{setting} to the new value."
         )
         raise ClientConfigurationError(msg, source=provider)
@@ -477,7 +477,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
             yield request
             return
 
-        # The 401 path re-sends this request, so a streamed body is buffered before the first send. httpx2 honours
+        # The 401 path re-sends this request, so a streamed body is buffered before the first send. httpx2 honors
         # ``requires_request_body`` only in its default flows, which this method replaces.
         await request.aread()
         # The token a 401 came back for, rather than a "force" flag: each waiter on the lock re-checks the cache

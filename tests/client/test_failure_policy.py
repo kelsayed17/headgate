@@ -4,7 +4,7 @@
 """``AsyncBaseClient``'s failure ladder: every failure raises the matching ``ClientError`` subtype.
 
 Every call declares its ``expect=`` reader, and an undeclared non-success status always raises rather than returning
-``None`` or a raw ``Response``. Deciding that a response means "no data" is a content judgement left to the caller.
+``None`` or a raw ``Response``. Deciding that a response means "no data" is a content judgment left to the caller.
 """
 
 from __future__ import annotations

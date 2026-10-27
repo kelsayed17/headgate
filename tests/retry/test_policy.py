@@ -53,7 +53,7 @@ def test_a_hedge_is_refused_for_a_non_idempotent_method() -> None:
 
 
 def test_the_methods_are_upper_cased_and_the_collections_frozen() -> None:
-    """Normalise the method names and freeze both collections, whatever iterable was given."""
+    """Normalize the method names and freeze both collections, whatever iterable was given."""
     policy = RetryPolicy(methods=frozenset({"get"}), statuses=frozenset({503}))
 
     assert policy.methods == frozenset({"GET"})

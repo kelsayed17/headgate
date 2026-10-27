@@ -98,7 +98,7 @@ class DropMidBody:
 class Slow:
     """Write the whole request, wait ``seconds`` for the server, then take step ``then``.
 
-    The wait honours the request's read timeout: past it, the send raises ``httpx2.ReadTimeout`` after waiting the
+    The wait honors the request's read timeout: past it, the send raises ``httpx2.ReadTimeout`` after waiting the
     timeout.
     """
 

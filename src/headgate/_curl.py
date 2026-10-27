@@ -34,7 +34,7 @@
 
 """The ``curl_cffi`` transport for hosts fronted by TLS-fingerprinting CDNs (the ``headgate[curl]`` extra).
 
-Vendored from ``httpx-curl-cffi`` 0.1.5 (BSD-3-Clause, Copyright (c) 2025 Victor Gavro; the licence is the comment block
+Vendored from ``httpx-curl-cffi`` 0.1.5 (BSD-3-Clause, Copyright (c) 2025 Victor Gavro; the license is the comment block
 above, as clause 1 requires) and cut down to what headgate calls. The upstream package speaks plain ``httpx``; this copy
 speaks ``httpx2``. ``curl_cffi`` itself ships no httpx or httpx2 transport.
 

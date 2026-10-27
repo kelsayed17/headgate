@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The rate budget is spent by a transport, and where it sits in the stack is the behaviour under test.
+"""The rate budget is spent by a transport, and where it sits in the stack is the behavior under test.
 
 ``AsyncBaseClient`` spends its budget from inside its transport stack::
 

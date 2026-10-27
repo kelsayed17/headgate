@@ -5,7 +5,7 @@
 
 ``t"/v2/positions/{symbol}"`` with ``symbol=""`` would render ``DELETE /v2/positions/``: one trailing slash from a
 collection endpoint that closes every position, and a router that strips the slash with a 301 or 308 re-sends the
-DELETE there. ``escape_segment`` refuses the empty value just as it neutralises the ``.`` and ``..`` dot segments.
+DELETE there. ``escape_segment`` refuses the empty value just as it neutralizes the ``.`` and ``..`` dot segments.
 """
 
 from __future__ import annotations

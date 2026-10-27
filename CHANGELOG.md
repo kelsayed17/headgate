@@ -6,6 +6,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Changed
+
+- Messages, docs and docstrings use American spelling. The one message whose text changes is the refusal of a token
+  endpoint that rotates its long-lived credential, which now says "Re-authorize".
+
 ## [0.7.0] - 2026-10-26
 
 Makes headgate codec-agnostic: the core speaks to a serialization library only through a `Codec`, msgspec and pydantic
@@ -223,7 +228,7 @@ layer. Code written against the 0.1.0 source needs the migrations below; there a
   object raises `TypeError`.
 - **Retries** (`headgate.retry`): `RetryPolicy`, `Backoff`, `RetryBudget`, `Hedge`, `NO_RETRY`. Send tracking decides
   whether a write may be re-sent; 425 and HTTP/2 `REFUSED_STREAM` are retried as unprocessed; `x-should-retry` is
-  honoured; a ratio retry budget per client; opt-in hedging; attempt timeouts fitted to the deadline; an attempt history
+  honored; a ratio retry budget per client; opt-in hedging; attempt timeouts fitted to the deadline; an attempt history
   in the error's notes. `IdempotencyKeys` and `idempotency_key=` make a POST safe to retry. `Route` sets a retry policy
   or deadline per path.
 - **A whole-call deadline**: `TransportPolicy(deadline=60.0)` by default, `deadline=` per call.
@@ -290,7 +295,7 @@ layer. Code written against the 0.1.0 source needs the migrations below; there a
 - The `aiolimiter` dependency: pacing is headgate's own GCRA budget.
 - `AsyncBaseClient`'s individual keyword options, `stream_get()`, `Refused`, `Refusal` and `header_names` (see the
   migration table).
-- The repository's `headgate_pytest_alias.py` plugin and the golden retry table, replaced by behaviour and property
+- The repository's `headgate_pytest_alias.py` plugin and the golden retry table, replaced by behavior and property
   tests of the new retry policy.
 
 ### Fixed

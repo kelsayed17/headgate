@@ -13,7 +13,7 @@ describe what each piece does; this describes how they fit together.
 3. **One place per concern.** Each policy lives in one module or subpackage. `_client.py` orchestrates a call and owns
    no policy logic; `_stack.py` assembles the layers.
 4. **Safe by default, explicit to loosen.** Credentials, cache sharing, redirects, retries of writes, the environment
-   and cookies all default to the safe behaviour; loosening each is a named option.
+   and cookies all default to the safe behavior; loosening each is a named option.
 5. **No logging, no environment reads.** Observability is typed events delivered to observers the caller installs.
    Nothing reads `os.environ`; the HTTP client and the default transport are built with `trust_env=False`.
 6. **Injectable time and randomness.** Every clock, sleep and random source is a parameter with a production default.
@@ -133,7 +133,7 @@ context: the client emits `CallStarted`, `CallFinished`, `BreakerChanged` and `D
 
 ## Verification
 
-The suite runs at 100% line and branch coverage with no suppression comments. Beside behaviour tests per area:
+The suite runs at 100% line and branch coverage with no suppression comments. Beside behavior tests per area:
 
 - **property tests** (Hypothesis) drive the retry layer over random `FaultyTransport` schedules, checking that a write
   without an idempotency key is never re-sent after a byte was written, that no attempt or wait outlasts the deadline,

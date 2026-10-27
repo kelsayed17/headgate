@@ -66,7 +66,7 @@ The retry policy applies to each request the client sends: a followed redirect's
 Between attempts the layer waits `factor · 2^n · jitter` before retry *n* (full jitter: `jitter` is a uniform draw in
 `[0, 1)`), capped at `max_wait`. With the defaults that is up to 1 s before the first retry and up to 2 s before the
 second. The draw comes from the operating system's generator rather than `random`, so an application that seeds
-`random` does not synchronise its processes' retries. A failed response is read (a bounded head of its body) and
+`random` does not synchronize its processes' retries. A failed response is read (a bounded head of its body) and
 closed before the wait, so no connection is held through it.
 
 ## Retry-After
@@ -108,7 +108,7 @@ hedge when it is constructed.
 
 ## Idempotency keys
 
-A POST is safe to retry once the server can recognise a re-send. `TransportPolicy(idempotency=IdempotencyKeys())`
+A POST is safe to retry once the server can recognize a re-send. `TransportPolicy(idempotency=IdempotencyKeys())`
 stamps a fresh key on every POST and PATCH, under `Idempotency-Key` by default (`IdempotencyKeys(header=...,
 factory=...)` changes either). A call can pass its own with `idempotency_key=`, and a key set in `headers=` is kept.
 The key is stamped once per call, before the retry layer, so every attempt carries the same one, and a keyed request is

@@ -3,7 +3,7 @@
 
 """``policy_disabled()``: build a client with its transport policy (breaker, retries, pacing) switched off.
 
-The tests pin each of the three behaviours switched off, plus the properties that make it a construction-time switch
+The tests pin each of the three behaviors switched off, plus the properties that make it a construction-time switch
 rather than a global one. They observe what a client does (how many sends a 503 gets, whether an open breaker refuses
 it, the rate each budget is built at) rather than timing, so they cannot flake on a slow machine.
 """

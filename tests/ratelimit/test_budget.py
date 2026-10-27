@@ -244,7 +244,7 @@ async def test_a_turn_past_the_deadline_raises_at_once_and_gives_the_turn_back()
 
 
 async def test_a_pause_that_starts_while_a_call_waits_its_turn_is_waited_too() -> None:
-    """Check the pause again after the paced wait, so a call queued before a 429 still honours it."""
+    """Check the pause again after the paced wait, so a call queued before a 429 still honors it."""
     clock = TestClock()
 
     async def sleep(seconds: float, /) -> None:

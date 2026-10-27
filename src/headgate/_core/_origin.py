@@ -3,7 +3,7 @@
 
 """Origins (RFC 6454 / RFC 9110 section 4.3.1): the scheme, host and effective port a URL addresses.
 
-``httpx2.Origin`` does the normalisation (lower-case scheme and host, the default port filled in, IPv6 in canonical
+``httpx2.Origin`` does the normalization (lower-case scheme and host, the default port filled in, IPv6 in canonical
 form); these helpers name the operations every layer that keys or compares by origin needs.
 """
 
