@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Final
 import httpx2
 
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
-from headgate._core import origin_of, origin_text
+from headgate._core import check_fragment, origin_of, origin_text, path_has_fragment
 from headgate._failures import DEFAULT_REQUEST_ID_HEADERS
 from headgate.breaker import BreakerPolicy
 from headgate.retry import RetryPolicy
@@ -42,10 +42,12 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DEFAULT_LIMITS",
+    "DEFAULT_TIMEOUTS",
     "KEYED_METHODS",
     "HttpOptions",
     "IdempotencyKeys",
     "Route",
+    "SecurityOptions",
     "Timeouts",
     "TransportPolicy",
     "check_timeout_fits",
@@ -90,50 +92,61 @@ def _check_positive(name: str, value: float) -> None:
         raise ValueError(msg)
 
 
+#: The timeout phases, in the order ``httpx2.Timeout`` names them.
+_PHASES: Final = ("connect", "read", "write", "pool")
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Timeouts:
-    """Per-phase timeouts in seconds: obtaining a connection from the pool, connecting, writing, reading."""
+    """Per-phase timeouts in seconds: obtaining a connection from the pool, connecting, writing, reading.
 
-    connect: float = 10.0
-    read: float = 30.0
-    write: float = 10.0
-    pool: float = 15.0
+    A phase left ``None`` takes its value from the layer beneath: a call's from its view's or its client's, and a
+    client's from :data:`DEFAULT_TIMEOUTS` (connect 10 s, read 30 s, write 10 s, pool 15 s). So
+    ``timeout=Timeouts(read=300.0)`` lengthens the read timeout and keeps every other phase as it was.
+    """
+
+    connect: float | None = None
+    read: float | None = None
+    write: float | None = None
+    pool: float | None = None
 
     def __post_init__(self) -> None:
         """Refuse a timeout that is not positive."""
-        for name in ("connect", "read", "write", "pool"):
-            _check_positive(name, getattr(self, name))
+        for name, value in self.phases():
+            _check_positive(name, value)
+
+    def phases(self) -> list[tuple[str, float]]:
+        """Return the phases this sets, with their timeouts, in ``httpx2.Timeout``'s order."""
+        return [(name, value) for name in _PHASES if (value := getattr(self, name)) is not None]
+
+    def over(self, base: Timeouts) -> Timeouts:
+        """Return *base* with the phases this sets in place of its own."""
+        return replace(base, **dict(self.phases()))
 
 
-def httpx_timeout(client: Timeouts | float, call: Timeouts | float | None = None) -> httpx2.Timeout:
-    """Return the ``httpx2.Timeout`` for a request: the *client*'s timeouts with the *call*'s applied.
+#: The timeouts of every phase a client leaves unset.
+DEFAULT_TIMEOUTS: Final = Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)
 
-    A bare number is a read timeout: on the client it keeps the other defaults, on a call the client's other values.
-    A ``Timeouts`` replaces all four.
-    """
-    base = client if isinstance(client, Timeouts) else Timeouts(read=client)
+
+def httpx_timeout(client: Timeouts, call: Timeouts | None = None) -> httpx2.Timeout:
+    """Return the ``httpx2.Timeout`` for a request: the *call*'s phases over the *client*'s, over the defaults."""
+    resolved = client.over(DEFAULT_TIMEOUTS)
     if call is not None:
-        base = call if isinstance(call, Timeouts) else replace(base, read=call)
-    return httpx2.Timeout(connect=base.connect, read=base.read, write=base.write, pool=base.pool)
+        resolved = call.over(resolved)
+    return httpx2.Timeout(connect=resolved.connect, read=resolved.read, write=resolved.write, pool=resolved.pool)
 
 
-def check_timeout_fits(timeout: Timeouts | float, deadline: float | None) -> None:
+def check_timeout_fits(timeout: Timeouts, deadline: float | None) -> None:
     """Refuse a *timeout* someone set that is longer than the *deadline* it runs under, since it could never apply.
 
-    A bare number is the read timeout. Of a ``Timeouts``, only the phases set away from their defaults are checked, so
-    a short deadline over the default timeouts stays valid: there the deadline cuts each attempt's timeouts, as meant.
+    Only the phases *timeout* sets are checked, so a short deadline over the default timeouts stays valid: there the
+    deadline cuts each attempt's timeouts, as meant.
 
     :raises ValueError: naming the phase, its timeout and the deadline.
     """
     if deadline is None:
         return
-    defaults = Timeouts()
-    if isinstance(timeout, Timeouts):
-        phases = [(name, getattr(timeout, name)) for name in ("connect", "read", "write", "pool")]
-        chosen = [(name, limit) for name, limit in phases if limit != getattr(defaults, name)]
-    else:
-        chosen = [("read", timeout)]
-    for name, limit in chosen:
+    for name, limit in timeout.phases():
         if limit > deadline:
             msg = (
                 f"{name} timeout {limit:g}s is longer than the {deadline:g}s deadline it runs under, so it can never "
@@ -172,7 +185,7 @@ KEYED_METHODS: Final = frozenset({"POST", "PATCH"})
 
 @dataclass(frozen=True, slots=True)
 class Route:
-    """Overrides for the requests whose URL path contains ``fragment``: their own retry policy and deadline.
+    """Overrides for the requests whose URL path holds ``fragment``'s segments: their own retry policy and deadline.
 
     Matched like :class:`~headgate.RateRule`, the first matching route winning, so an endpoint's retry and deadline
     change in the client's configuration rather than in the endpoint method. ``None`` keeps the policy's own value; a
@@ -185,17 +198,15 @@ class Route:
     deadline: float | None = None
 
     def __post_init__(self) -> None:
-        """Refuse an empty fragment, which would match every path, and a deadline that is not positive."""
-        if not self.fragment:
-            msg = "fragment must not be empty"
-            raise ValueError(msg)
+        """Refuse a fragment that names no path segment, which would match every path, and a deadline not positive."""
+        check_fragment(self.fragment)
         if self.deadline is not None:
             _check_positive("deadline", self.deadline)
 
 
 def match_route(routes: tuple[Route, ...], path: str) -> Route | None:
-    """Return the first of *routes* whose fragment occurs in *path*, or ``None``."""
-    return next((route for route in routes if route.fragment in path), None)
+    """Return the first of *routes* whose fragment *path* holds, or ``None``."""
+    return next((route for route in routes if path_has_fragment(path, route.fragment)), None)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -274,6 +285,33 @@ def _check_hooks(name: str, values: Iterable[object]) -> None:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class SecurityOptions:
+    """Where a client's requests and credentials may go, passed as ``HttpOptions(security=...)``.
+
+    * ``trusted_origins``: origins besides ``base_url``'s that credentials may be sent to (``"https://host[:port]"``);
+      every other origin gets the request without them (see :mod:`headgate.security`).
+    * ``allow_private_hosts``: ``False`` turns on the SSRF guard: a request to a host that is, or resolves to, an
+      address that is not globally routable raises :class:`~headgate.errors.ForbiddenDestinationError`, on every hop,
+      and the default transport connects only to the address it checked. It cannot be combined with
+      ``HttpOptions.proxy``, since a proxy resolves the target itself; over a custom ``HttpOptions.transport`` every hop
+      is checked but not pinned.
+    * ``resolver``: how the SSRF guard resolves names (:data:`~headgate.security.Resolver`), the event loop's
+      ``getaddrinfo`` by default; only with ``allow_private_hosts=False``.
+    """
+
+    trusted_origins: frozenset[str] = frozenset()
+    allow_private_hosts: bool = True
+    resolver: Resolver | None = None
+
+    def __post_init__(self) -> None:
+        """Refuse a resolver without the SSRF guard, and normalise the trusted origins."""
+        if self.allow_private_hosts and self.resolver is not None:
+            msg = "resolver= is used only by the SSRF guard, so it needs allow_private_hosts=False"
+            raise ValueError(msg)
+        object.__setattr__(self, "trusted_origins", frozenset(map(_normalized_origin, self.trusted_origins)))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class HttpOptions:
     """How a request is sent and its response read.
 
@@ -281,7 +319,7 @@ class HttpOptions:
       its own TLS, pool and proxy: ``ssl_context``, ``limits`` and ``proxy`` configure only the default transport, an
       HTTP/2 ``httpx2.AsyncHTTPTransport``.
     * ``headers``: sent on every request; a call's ``headers=`` wins a clash.
-    * ``timeout``: :class:`Timeouts`, or a number for the read timeout alone.
+    * ``timeout``: :class:`Timeouts`; a phase it leaves unset takes its default (:data:`DEFAULT_TIMEOUTS`).
     * ``follow_redirects`` and ``max_redirects``: the client's default, which a call can override, and the hop limit.
       httpx2 counts an auth flow's hops in the same history as redirects, so each request a
       :class:`~headgate.CachedTokenAuth` mint sends, and a 401 it re-mints after, uses one of ``max_redirects`` too.
@@ -289,14 +327,8 @@ class HttpOptions:
     * ``refusal_check``: a per-host check run on every final response (see :data:`~headgate.RefusalCheck`). It sees
       only the final response, so a refusal written on a followed hop would be skipped, and it therefore requires
       ``follow_redirects=False``.
-    * ``trusted_origins``: origins besides ``base_url``'s that credentials may be sent to (``"https://host[:port]"``);
-      every other origin gets the request without them (see :mod:`headgate.security`).
-    * ``allow_private_hosts``: ``False`` turns on the SSRF guard: a request to a host that is, or resolves to, an
-      address that is not globally routable raises :class:`~headgate.errors.ForbiddenDestinationError`, on every hop,
-      and the default transport connects only to the address it checked. It cannot be combined with ``proxy``, since a
-      proxy resolves the target itself; over a custom ``transport`` every hop is checked but not pinned.
-    * ``resolver``: how the SSRF guard resolves names (:data:`~headgate.security.Resolver`), the event loop's
-      ``getaddrinfo`` by default; only with ``allow_private_hosts=False``.
+    * ``security``: where requests and credentials may go (:class:`SecurityOptions`): trusted origins and the SSRF
+      guard.
     * ``user_agent``: a product token sent before headgate's own (``"<user_agent> headgate/<v> httpx2/<v>
       python/<v>"``); without one, headgate's alone.
     * ``cookies``: ``True`` keeps httpx2's cookie jar; by default no cookie a response sets is stored or sent back.
@@ -309,14 +341,12 @@ class HttpOptions:
 
     transport: httpx2.AsyncBaseTransport | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
-    timeout: Timeouts | float = field(default_factory=Timeouts)
+    timeout: Timeouts = field(default_factory=Timeouts)
     follow_redirects: bool = True
     max_redirects: int = 5
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
     refusal_check: RefusalCheck | None = None
-    trusted_origins: frozenset[str] = frozenset()
-    allow_private_hosts: bool = True
-    resolver: Resolver | None = None
+    security: SecurityOptions = field(default_factory=SecurityOptions)
     ssl_context: ssl.SSLContext | None = None
     limits: httpx2.Limits = field(default_factory=lambda: DEFAULT_LIMITS)
     proxy: str | None = None
@@ -329,8 +359,6 @@ class HttpOptions:
     def __post_init__(self) -> None:
         """Validate every option, and freeze and normalise the collections."""
         self._check_transport()
-        if not isinstance(self.timeout, Timeouts):
-            _check_positive("timeout", self.timeout)
         _check_positive("max_response_bytes", self.max_response_bytes)
         if self.max_redirects < 0:
             msg = f"max_redirects must be >= 0 (got {self.max_redirects})"
@@ -349,17 +377,13 @@ class HttpOptions:
         _check_hooks("observers", self.observers)
         _check_hooks("middleware", self.middleware)
         object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
-        object.__setattr__(self, "trusted_origins", frozenset(map(_normalized_origin, self.trusted_origins)))
         object.__setattr__(self, "request_id_headers", names)
         object.__setattr__(self, "observers", tuple(self.observers))
         object.__setattr__(self, "middleware", tuple(self.middleware))
 
     def _check_guard(self) -> None:
-        """Refuse a resolver without the SSRF guard, and the guard with a proxy, which would resolve past it."""
-        if self.allow_private_hosts and self.resolver is not None:
-            msg = "resolver= is used only by the SSRF guard, so it needs allow_private_hosts=False"
-            raise ValueError(msg)
-        if not self.allow_private_hosts and self.proxy is not None:
+        """Refuse the SSRF guard with a proxy, which would resolve the target past it."""
+        if not self.security.allow_private_hosts and self.proxy is not None:
             msg = "allow_private_hosts=False cannot be combined with proxy=: the proxy resolves the target itself"
             raise ValueError(msg)
 

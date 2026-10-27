@@ -44,6 +44,7 @@ from headgate._core import (
     BREAKER_GATE,
     SILENT,
     BreakerChanged,
+    BudgetBacklogError,
     CallContext,
     CallFinished,
     CallInfo,
@@ -79,8 +80,9 @@ from headgate._request_body import check_one_body, request_content
 from headgate._responses import Expect, Reader, RefusedError, nothing
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import render_path, route_template, sanitize_url
-from headgate._view import KEEP, ROOT_DEFAULTS, Keep, overlay_timeout
-from headgate.breaker import BreakerOpenError, CircuitBreaker
+from headgate._view import KEEP, ROOT_DEFAULTS, Keep
+from headgate.breaker import CircuitBreaker
+from headgate.breaker._breaker import BreakerOpenError
 from headgate.breaker._registry import NO_BREAKER
 from headgate.breaker._scope import scoped_registry
 from headgate.cache._transport import host_untested, store_accepted
@@ -93,9 +95,10 @@ from headgate.errors import (
     RateLimitError,
 )
 from headgate.pagination import PageRequest, Paginated
-from headgate.ratelimit import BudgetBacklogError, BudgetPausedError
-from headgate.retry import NO_RETRY, REPLAYABLE_BODY, RetryPolicy
-from headgate.retry._policy import NETWORK_ERRORS, RETRY_OUTCOME, RETRY_POLICY
+from headgate.ratelimit import UNLIMITED
+from headgate.ratelimit._budget import BudgetPausedError
+from headgate.retry import NO_RETRY, RetryPolicy
+from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY
 from headgate.streaming import Stream
 
 if TYPE_CHECKING:
@@ -103,9 +106,9 @@ if TYPE_CHECKING:
     from types import TracebackType
 
     from headgate._options import Route
-    from headgate._request_body import Body, UploadFiles
+    from headgate._request_body import Body, EncodedBody, UploadFiles
     from headgate._responses import RefusalCheck
-    from headgate.breaker import Transition, Verdict
+    from headgate.breaker._breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
     from headgate.pagination import PageLimit, Pager
     from headgate.ratelimit import Rate, RateBudget
@@ -127,7 +130,7 @@ _STREAM_ERROR_HEAD_BYTES = 4096
 _LOCAL_FAILURES = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2.PoolTimeout, httpx2.TooManyRedirects)
 
 #: The request options that make a body, which a page (a GET) cannot carry.
-_BODY_OPTIONS = ("json", "data", "content", "files")
+_BODY_OPTIONS = ("body", "json", "data", "content", "files")
 
 #: The option groups a client gets when it passes none: frozen, so one instance serves every client.
 _DEFAULT_POLICY = TransportPolicy()
@@ -141,13 +144,15 @@ class RequestOptions(TypedDict, total=False):
       to no narrower mapping). Its values are encoded the way httpx2 encodes a mapping: a list or tuple repeats the key
       once per item, and any value that is not a ``str``, number, bool or ``None`` is sent as its ``str()``.
     * ``headers``: added to the client's; a clash is won by the call.
-    * ``json`` / ``data``: a JSON body (build it with a codec flavor's ``to_builtins``) or a form body.
+    * ``body``: an :class:`~headgate.EncodedBody` a codec flavor's ``encoder`` wrote (``body=NEW_ORDER(order)``), sent
+      with its ``Content-Type`` unless ``headers=`` sets one. It combines with no other body option.
+    * ``json`` / ``data``: a JSON body of builtins (a codec flavor's ``to_builtins`` builds one) or a form body.
     * ``content``: a raw body: ``bytes``; an async iterable of ``bytes``, streamed once, so the call is never re-sent
       and a redirect that asks for the body again is not followed; or a callable returning one, called once for each
       send, so the call stays retryable. It combines with no other body option.
     * ``files``: a multipart body, as httpx2 takes it (``{"name": file}``, or ``(filename, file, content_type)``
       tuples), with ``data=`` as its form fields.
-    * ``timeout``: :class:`~headgate.Timeouts` replacing the client's, or a number replacing its read timeout.
+    * ``timeout``: :class:`~headgate.Timeouts` whose set phases replace the view's or the client's.
     * ``deadline``: seconds this call may take in all, or ``None`` for no deadline; absent, the view's, the route's or
       the policy's applies.
     * ``idempotency_key``: the idempotency key this call carries on every attempt, under the policy's
@@ -156,11 +161,12 @@ class RequestOptions(TypedDict, total=False):
 
     params: Mapping[str, object] | None
     headers: Mapping[str, str]
+    body: EncodedBody
     json: object
     data: Mapping[str, object]
     content: Body
     files: UploadFiles
-    timeout: Timeouts | float
+    timeout: Timeouts
     deadline: float | None
     idempotency_key: str
 
@@ -220,7 +226,7 @@ class AsyncBaseClient:
       quota refusal a reader found inside a 2xx;
     * ``UpstreamStatusError``: a 5xx that survived retries, a status the call did not declare, or a refusal carrying
       the status it arrived with (401/403 become ``AuthError``);
-    * ``ForbiddenDestinationError``: a hop the SSRF guard refused (``HttpOptions(allow_private_hosts=False)``);
+    * ``ForbiddenDestinationError``: a hop the SSRF guard refused (``SecurityOptions(allow_private_hosts=False)``);
     * ``ResponseParseError``: a 2xx body the reader could not read;
     * ``ResponseTooLargeError``: a body past ``HttpOptions.max_response_bytes``.
 
@@ -249,7 +255,7 @@ class AsyncBaseClient:
         self,
         *,
         base_url: str,
-        rate: Rate | RateBudget,
+        rate: Rate | RateBudget = UNLIMITED,
         auth: httpx2.Auth | None = None,
         policy: TransportPolicy = _DEFAULT_POLICY,
         http: HttpOptions = _DEFAULT_HTTP,
@@ -257,7 +263,10 @@ class AsyncBaseClient:
         """Build the transport stack for *base_url*, spending from *rate*, signing requests with *auth*.
 
         *rate* is a :class:`~headgate.Rate`, from which the client builds a budget of its own, or a
-        :class:`~headgate.RateBudget` it shares with every other client given the same one.
+        :class:`~headgate.RateBudget` it shares with every other client given the same one. Without one the client
+        paces nothing itself (:data:`~headgate.ratelimit.UNLIMITED`), but still waits out the pauses the server asks
+        for: a 429 or 503 with ``Retry-After``, and a spent ``RateLimit`` quota. Pass a rate when the provider states
+        its quota.
 
         *policy* configures retries, the deadline, the breaker, per-path rates, the cache, idempotency keys and
         per-route overrides (:class:`~headgate.TransportPolicy`); *http* the network transport, headers, timeouts,
@@ -306,14 +315,14 @@ class AsyncBaseClient:
         self,
         *,
         headers: Mapping[str, str] | None = None,
-        timeout: Timeouts | float | None = None,
+        timeout: Timeouts | None = None,
         deadline: float | Literal[Keep.KEEP] | None = KEEP,
         retry: bool | RetryPolicy | None = None,
     ) -> Self:
         """Return a view of this client whose calls take different defaults; the client itself is unchanged.
 
         * ``headers``: sent on every call of the view, over the client's; a call's ``headers=`` still wins a clash.
-        * ``timeout``: replaces the client's :class:`~headgate.Timeouts` (a number replaces the read timeout only).
+        * ``timeout``: :class:`~headgate.Timeouts` whose set phases replace the client's; the others are kept.
         * ``deadline``: seconds each call may take, or ``None`` for no deadline.
         * ``retry``: ``False`` sends once, a :class:`~headgate.RetryPolicy` replaces the client's, ``True`` restores it.
 
@@ -336,7 +345,7 @@ class AsyncBaseClient:
         vars(view).update(
             _view=layered,
             _owns_pool=False,
-            _timeout=self._timeout if timeout is None else overlay_timeout(self._timeout, timeout),
+            _timeout=self._timeout if timeout is None else timeout.over(self._timeout),
         )
         return view
 
@@ -602,8 +611,11 @@ class AsyncBaseClient:
         options = call.options
         params = options.get("params")
         files = options.get("files")
-        check_one_body(content=options.get("content"), json=options.get("json"), data=options.get("data"), files=files)
-        content, replayable = request_content(options.get("content"))
+        body = options.get("body")
+        check_one_body(
+            body=body, content=options.get("content"), json=options.get("json"), data=options.get("data"), files=files
+        )
+        content, replayable = request_content(options.get("content") if body is None else body.content)
         try:
             request = self._http_client.build_request(
                 call.method,
@@ -618,6 +630,8 @@ class AsyncBaseClient:
             )
         except httpx2.InvalidURL as exc:
             raise _invalid_url(exc, CallSite(self._source, call.method, log_url)) from exc
+        if body is not None:
+            request.headers.setdefault("Content-Type", body.content_type)
         # The absolute URL is for observers only (an OpenTelemetry span's url.full and server.address).
         full_url = sanitize_url(str(request.url)) if self._emitter.active else None
         info = CallInfo(method=call.method, url=log_url, route=route, full_url=full_url)

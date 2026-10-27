@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, override
 import httpx2
 from hishel import BaseFilter, Request, Response
 
+from headgate._core import check_fragment, path_has_fragment
+
 if TYPE_CHECKING:
     from hishel import AsyncBaseStorage, FilterPolicy
 
@@ -77,10 +79,15 @@ class HttpCache:
 
 
 class PathFragmentFilter(BaseFilter[Request]):
-    """Cache a request whose URL path contains any of *fragments*."""
+    """Cache a request whose URL path holds any of *fragments*, each one or more whole segments, as a rule matches."""
 
     def __init__(self, fragments: tuple[str, ...]) -> None:
-        """Match a path containing any of *fragments*."""
+        """Match a path holding any of *fragments*.
+
+        :raises ValueError: for a fragment that names no path segment, which would match every path.
+        """
+        for fragment in fragments:
+            check_fragment(fragment)
         self._fragments = fragments
 
     @override
@@ -90,9 +97,9 @@ class PathFragmentFilter(BaseFilter[Request]):
 
     @override
     def apply(self, item: Request, body: bytes | None) -> bool:
-        """Return whether *item*'s path contains one of the fragments."""
+        """Return whether *item*'s path holds one of the fragments."""
         path = httpx2.URL(item.url).path
-        return any(fragment in path for fragment in self._fragments)
+        return any(path_has_fragment(path, fragment) for fragment in self._fragments)
 
 
 class MethodFilter(BaseFilter[Request]):

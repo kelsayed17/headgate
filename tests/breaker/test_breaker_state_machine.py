@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING, override
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, initialize, invariant, precondition, rule
 
-from headgate.breaker import BreakerOpenError, BreakerState, CircuitBreaker, Verdict
+from headgate.breaker import BreakerState, CircuitBreaker
+from headgate.breaker._breaker import BreakerOpenError, Verdict
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager

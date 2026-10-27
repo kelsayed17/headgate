@@ -76,7 +76,7 @@ makes a page's redirect raise as its 3xx, and `cache_ttl=` is each page's cache 
 | Strategy | The next page is | Last page |
 | --- | --- | --- |
 | `Cursor(items=, next=, param=)` | the same request with `param` set to the cursor `next(page)` returns | `next` returns `None` or `""`, or a page with no items |
-| `Offset(items=, limit=, param="offset", start=0)` | the same request with `param` advanced by the items this page held | a page with fewer than `limit` items |
+| `Offset(items=, page_size=, param="offset", start=0)` | the same request with `param` advanced by the items this page held | a page with fewer than `page_size` items |
 | `LinkHeader(items=)` | the target of the response's `Link: <...>; rel="next"` (RFC 8288) | no `rel="next"` link, or a page with no items |
 | `NextUrl(items=, next=)` | the URL `next(page)` returns, absolute or relative | `next` returns `None` or `""`, or a page with no items |
 

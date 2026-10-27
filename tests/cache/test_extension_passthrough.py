@@ -60,7 +60,7 @@ async def test_the_timeout_survives_the_cache_layer(storage: AsyncSqliteStorage)
     base = _RecordingTransport()
     client = stub_client(
         transport=base,
-        http=HttpOptions(timeout=_CLIENT_TIMEOUT),
+        http=HttpOptions(timeout=Timeouts(read=_CLIENT_TIMEOUT)),
         cache=HttpCache(policy=series_policy(), storage=storage),
     )
 
@@ -77,7 +77,7 @@ async def test_a_per_call_timeout_still_wins_through_the_cache(storage: AsyncSql
     base = _RecordingTransport()
     client = stub_client(
         transport=base,
-        http=HttpOptions(timeout=_CLIENT_TIMEOUT),
+        http=HttpOptions(timeout=Timeouts(read=_CLIENT_TIMEOUT)),
         cache=HttpCache(policy=series_policy(), storage=storage),
     )
 
@@ -108,7 +108,7 @@ async def test_a_black_holing_host_times_out_through_the_cache(storage: AsyncSql
         base_url=f"http://127.0.0.1:{port}",
         rate=UNLIMITED,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), cache=HttpCache(policy=series_policy(), storage=storage)),
-        http=HttpOptions(timeout=_SHORT_TIMEOUT),
+        http=HttpOptions(timeout=Timeouts(read=_SHORT_TIMEOUT)),
     )
     started = time.monotonic()
     try:

@@ -38,6 +38,6 @@ What "off" means:
   ``rate_limits`` rules build, and a shared ``RateBudget`` passed in.
 """
 
-from headgate._core import policy_disabled, policy_is_disabled
+from headgate._core import policy_disabled
 
-__all__ = ["policy_disabled", "policy_is_disabled"]
+__all__ = ["policy_disabled"]

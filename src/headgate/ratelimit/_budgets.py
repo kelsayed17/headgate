@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from headgate._core import SYSTEM_TIMING, policy_is_disabled
+from headgate._core import SYSTEM_TIMING, path_has_fragment, policy_is_disabled
 from headgate.ratelimit._budget import RateBudget
 from headgate.ratelimit._rate import UNLIMITED, Rate
 
@@ -43,7 +43,7 @@ def as_budget(rate: Rate | RateBudget, timing: Timing = SYSTEM_TIMING) -> RateBu
 class PathBudgets:
     """A client's budgets, chosen by URL path (see the module docstring for why not by extension).
 
-    Every budget is resolved at construction. The first rule whose fragment occurs in the URL path wins; any other
+    Every budget is resolved at construction. The first rule whose fragment the URL path holds wins; any other
     request spends from :attr:`default`.
     """
 
@@ -59,4 +59,4 @@ class PathBudgets:
     def for_request(self, request: httpx2.Request) -> RateBudget:
         """Return the budget *request* spends from: the first matching rule's, else :attr:`default`."""
         path = request.url.path
-        return next((budget for fragment, budget in self._rules if fragment in path), self.default)
+        return next((budget for fragment, budget in self._rules if path_has_fragment(path, fragment)), self.default)

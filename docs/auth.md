@@ -27,7 +27,7 @@ For a provider that mints short-lived tokens over the network. A subclass suppli
 it:
 
 - **one mint at a time.** Concurrent requests that need a token wait for a single mint instead of each firing one;
-- **refresh before expiry**, `refresh_margin_s` (120 s) before the token expires, or at half its life when that is
+- **refresh before expiry**, `refresh_margin` (120 s) before the token expires, or at half its life when that is
   shorter, because a token expiring mid-flight fails a request that may be a write;
 - **one re-mint on a 401**, for a token revoked early, and never a loop. A token minted in the last 60 seconds is not
   re-minted: a 401 on it is a permissions problem, which reaches the caller as the `AuthError` it is.

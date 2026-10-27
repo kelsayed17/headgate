@@ -29,6 +29,7 @@ from headgate import (
     RateLimitError,
     RefusedError,
     RetryPolicy,
+    SecurityOptions,
     TransportPolicy,
     json_reader,
     nothing,
@@ -101,7 +102,7 @@ def _client(
             max_response_bytes=options.max_response_bytes,
             refusal_check=options.refusal_check,
             follow_redirects=options.follow_redirects,
-            allow_private_hosts=options.allow_private_hosts,
+            security=options.security,
             max_redirects=options.max_redirects,
         ),
     )
@@ -278,7 +279,7 @@ async def _forbidden_destination() -> None:
         base_url="https://127.0.0.1:8443",
         rate=UNLIMITED,
         policy=TransportPolicy(retry=NO_RETRY, breaker=None),
-        http=HttpOptions(transport=Script().transport(), allow_private_hosts=False),
+        http=HttpOptions(transport=Script().transport(), security=SecurityOptions(allow_private_hosts=False)),
     ) as client:
         await client.get("admin" + _KEYED_QUERY, expect=nothing)
 

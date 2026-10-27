@@ -46,7 +46,7 @@ async def test_a_hedge_spends_the_retry_budget() -> None:
             await clock.sleep(_SLOW)
         return httpx2.Response(200)
 
-    fake = FakeTransport().route("GET", "/v1/x", first_hangs_then_slow)
+    fake = FakeTransport().reply("GET", "/v1/x", first_hangs_then_slow)
     policy = TransportPolicy(retry=RetryPolicy(hedge=_HEDGE, budget=_ONE_RETRY))
     with clock.install():
         built = client(fake, policy=policy, http=HttpOptions(observers=(recorder,)))
@@ -72,7 +72,7 @@ async def test_a_hedged_call_is_charged_to_the_breaker_once() -> None:
         return httpx2.Response(503)
 
     clock = TestClock()
-    fake = FakeTransport().route("GET", "/v1/x", first_fails_after_the_hedge, hedge_unavailable)
+    fake = FakeTransport().reply("GET", "/v1/x", first_fails_after_the_hedge, hedge_unavailable)
     policy = TransportPolicy(
         retry=RetryPolicy(attempts=2, hedge=_HEDGE), breaker=BreakerPolicy(failure_threshold=len(("a", "b")))
     )
@@ -101,7 +101,7 @@ async def test_a_hedge_losers_failure_is_not_charged_when_the_call_succeeds() ->
         return httpx2.Response(200)
 
     clock = TestClock()
-    fake = FakeTransport().route("GET", "/v1/x", first_fails_after_the_hedge, hedge_answers)
+    fake = FakeTransport().reply("GET", "/v1/x", first_fails_after_the_hedge, hedge_answers)
     policy = TransportPolicy(retry=RetryPolicy(hedge=_HEDGE), breaker=BreakerPolicy(failure_threshold=1))
     with clock.install(), isolated_breakers() as registry:
         built = client(fake, policy=policy)

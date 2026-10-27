@@ -47,21 +47,21 @@ bound the whole body.
 
 ## Timeouts
 
-`HttpOptions(timeout=Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0))` are the defaults, per phase, in
-seconds: obtaining a pooled connection (`pool`), connecting, writing the request, and waiting for each read. A bare
-number replaces the read timeout only: `HttpOptions(timeout=60.0)` keeps the other three defaults.
+`Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)` are the defaults, per phase, in seconds: obtaining a pooled
+connection (`pool`), connecting, writing the request, and waiting for each read. A `Timeouts` sets only the phases it
+names, so `HttpOptions(timeout=Timeouts(read=60.0))` keeps the other three defaults.
 
-A call overrides them with `timeout=`: a `Timeouts` replaces all four, a number the read timeout alone. A view made with
-`with_options(timeout=...)` does the same for its calls. Every value must be positive.
+The layers stack the same way: a view made with `with_options(timeout=...)` replaces the phases it sets over the
+client's, and a call's `timeout=` the phases it sets over the view's. Every value must be positive.
 
 A timeout must fit the deadline it runs under, or it could never take effect: each attempt's timeouts are cut to the
 time left. So a timeout longer than that deadline is refused with `ValueError` where it is set: on the client (against
-the policy's deadline), on a view, or on a call. A bare number is checked as the read timeout, and a `Timeouts` by the
-phases set away from their defaults. Shortening the deadline instead is always allowed; cutting the timeouts is what a
-short deadline is for. To give a slow endpoint a long read timeout, raise the deadline with it:
+the policy's deadline), on a view, or on a call. Only the phases a `Timeouts` sets are checked. Shortening the deadline
+instead is always allowed; cutting the timeouts is what a short deadline is for. To give a slow endpoint a long read
+timeout, raise the deadline with it:
 
 ```python
-reports = client.with_options(timeout=300.0, deadline=600.0)
+reports = client.with_options(timeout=Timeouts(read=300.0), deadline=600.0)
 ```
 
 ## Choosing values

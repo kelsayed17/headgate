@@ -78,10 +78,10 @@ class _VettingBackend(httpcore2.AsyncNetworkBackend):
 class PinnedHTTPTransport(httpx2.AsyncHTTPTransport):
     """httpx2's HTTP/2-capable transport, connecting only to addresses an :class:`AddressGuard` vetted.
 
-    The transport ``AsyncBaseClient`` builds when ``HttpOptions(allow_private_hosts=False)`` and no custom transport is
-    given. A refused address raises :class:`~headgate.errors.ForbiddenDestinationError` from the send; a name that does
-    not resolve raises ``httpx2.ConnectError``, as it would unguarded. It reads no environment and cannot use a proxy,
-    since a proxy resolves the target itself.
+    The transport ``AsyncBaseClient`` builds when ``SecurityOptions(allow_private_hosts=False)`` and no custom transport
+    is given. A refused address raises :class:`~headgate.errors.ForbiddenDestinationError` from the send; a name that
+    does not resolve raises ``httpx2.ConnectError``, as it would unguarded. It reads no environment and cannot use a
+    proxy, since a proxy resolves the target itself.
     """
 
     def __init__(self, guard: AddressGuard, *, ssl_context: ssl.SSLContext | None, limits: httpx2.Limits) -> None:

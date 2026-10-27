@@ -248,9 +248,9 @@ class _ThreeHops(CachedTokenAuth):
 
 def _hopping_client(max_redirects: int) -> tuple[StubClient, FakeTransport]:
     """Return a client minting through :class:`_ThreeHops` with *max_redirects*, and its network."""
-    fake = FakeTransport().route("GET", "/v1/x", 200)
+    fake = FakeTransport().reply("GET", "/v1/x", 200)
     for hop in range(_ThreeHops.hops):
-        fake.route("GET", f"/step/{hop}", 200)
+        fake.reply("GET", f"/step/{hop}", 200)
     auth = _ThreeHops()
     http = HttpOptions(transport=fake, max_redirects=max_redirects)
     return StubClient(base_url="https://api.example.test/v1", rate=UNLIMITED, auth=auth, http=http), fake

@@ -32,7 +32,7 @@ from headgate import (
     TransportPolicy,
     nothing,
 )
-from headgate.msgspec import decode, decoder, to_builtins
+from headgate.msgspec import decode, decoder, encoder
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -103,6 +103,7 @@ def orders_on(page: list[Order]) -> list[Order]:
 
 
 ORDER = decoder(Order)
+NEW_ORDER = encoder(NewOrder)
 ORDER_OR_REJECTION = Expect(ORDER).on(HTTPStatus.UNPROCESSABLE_ENTITY, decoder(Rejection))
 ORDER_PAGES = LinkHeader(items=orders_on)
 
@@ -144,7 +145,7 @@ class OrdersClient(AsyncBaseClient):
 
     async def place_order(self, order: NewOrder) -> Order | Rejection:
         """Place *order*: the order as created, or the API's documented rejection."""
-        return await self.post("orders", expect=ORDER_OR_REJECTION, json=to_builtins(order))
+        return await self.post("orders", body=NEW_ORDER(order), expect=ORDER_OR_REJECTION)
 
     async def cancel_order(self, order_id: str) -> None:
         """Cancel the order *order_id*."""

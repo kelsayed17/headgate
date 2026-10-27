@@ -14,7 +14,7 @@ returns a response of its own to stop there.
 a middleware adds; :class:`MiddlewareTransport` runs it again below the last middleware, on every attempt of every hop.
 A middleware that declares the headers and query parameters it stamps (``credential_headers`` and
 ``credential_params``, the shape every headgate auth has) has them removed from a hop addressed to any origin other than
-``base_url``'s and ``HttpOptions.trusted_origins``. One that declares nothing is trusted to check the destination
+``base_url``'s and ``SecurityOptions.trusted_origins``. One that declares nothing is trusted to check the destination
 itself.
 """
 

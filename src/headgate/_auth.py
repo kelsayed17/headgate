@@ -36,7 +36,7 @@ from headgate._core import CallContext, origin_text
 from headgate._failures import CallSite, loggable_url, mint_error
 from headgate._url import register_secret_params
 from headgate.errors import ClientConfigurationError
-from headgate.security import CHAIN_ORIGIN
+from headgate.security._credentials import CHAIN_ORIGIN
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable, Mapping
@@ -248,7 +248,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
 
     * **A lock-guarded mint.** httpx2 runs requests concurrently, so an unguarded refresh would let N in-flight
       requests each fire their own token exchange.
-    * **An expiry margin.** The token is re-minted ``refresh_margin_s`` before it expires (at half-life when the
+    * **An expiry margin.** The token is re-minted ``refresh_margin`` before it expires (at half-life when the
       lifetime is shorter than twice the margin), because a token that expires mid-flight fails a request that may be
       a write that cannot be repeated.
     * **One forced re-mint on a 401**, never a loop, for a token revoked server-side before its stated lifetime, and
@@ -308,10 +308,10 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     #: The headers :meth:`attach` sets. A subclass whose :meth:`attach` sets others declares them here.
     token_headers: ClassVar[frozenset[str]] = frozenset({"Authorization"})
 
-    def __init__(self, *, refresh_margin_s: float = 120.0) -> None:
-        """Start with an empty cache that refreshes *refresh_margin_s* seconds before a token expires."""
+    def __init__(self, *, refresh_margin: float = 120.0) -> None:
+        """Start with an empty cache that refreshes *refresh_margin* seconds before a token expires."""
         self._identity = secrets.token_bytes(32)
-        self._refresh_margin_s = refresh_margin_s
+        self._refresh_margin_s = refresh_margin
         self._held: _Held[TokenT] | None = None
         self._lock = asyncio.Lock()
 

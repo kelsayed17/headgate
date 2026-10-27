@@ -26,9 +26,9 @@ from headgate._client import AsyncBaseClient
 from headgate._responses import Expect, RefusalCheck, RefusedError, as_bytes, nothing
 from headgate.errors import AuthError, RateLimitError, ResponseParseError, TransportError, UpstreamStatusError
 from headgate.msgspec import decoder
-from headgate.ratelimit import Rate, RateBudget
+from headgate.ratelimit import UNLIMITED, Rate, RateBudget
 from headgate.retry import Backoff, RetryPolicy
-from headgate.testing import TestClock
+from headgate.testing import FakeTransport, TestClock
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
@@ -89,12 +89,12 @@ async def test_a_client_reports_its_failures_to_the_shared_breaker(httpx2_mock: 
 # --- Construction ---
 
 
-@pytest.mark.parametrize("name", ["base_url", "rate"])
-def test_base_url_and_rate_are_required_keyword_only_arguments(name: str) -> None:
-    """Check that a client must state its base URL and its rate: neither has a default nobody chose."""
-    parameter = inspect.signature(AsyncBaseClient.__init__).parameters[name]
-    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
-    assert parameter.default is inspect.Parameter.empty
+def test_base_url_is_required_and_rate_defaults_to_unlimited() -> None:
+    """Check that a client must state its base URL, and paces nothing itself unless it states a rate."""
+    parameters = inspect.signature(AsyncBaseClient.__init__).parameters
+    assert {parameters[name].kind for name in ("base_url", "rate")} == {inspect.Parameter.KEYWORD_ONLY}
+    assert parameters["base_url"].default is inspect.Parameter.empty
+    assert parameters["rate"].default is UNLIMITED
 
 
 async def test_each_client_has_its_own_http_client() -> None:
@@ -117,7 +117,7 @@ async def test_each_client_has_its_own_http_client() -> None:
     ("build", "match"),
     [
         (lambda: TransportPolicy(retry=RetryPolicy(attempts=0)), "attempts"),
-        (lambda: HttpOptions(timeout=0), "timeout"),
+        (lambda: HttpOptions(timeout=Timeouts(read=0)), "read"),
         (lambda: HttpOptions(max_response_bytes=0), "max_response_bytes"),
     ],
 )
@@ -363,16 +363,16 @@ async def test_a_form_body_rides_data() -> None:
 @pytest.mark.parametrize(
     ("per_call", "expected"),
     [
-        pytest.param(5.0, {"connect": 10.0, "read": 5.0, "write": 10.0, "pool": 15.0}, id="a-number-is-the-read"),
+        pytest.param(Timeouts(read=5.0), {"connect": 10.0, "read": 5.0, "write": 10.0, "pool": 15.0}, id="one-phase"),
         pytest.param(
             Timeouts(connect=1.0, read=2.0, write=3.0, pool=4.0),
             {"connect": 1.0, "read": 2.0, "write": 3.0, "pool": 4.0},
-            id="timeouts-replace-all",
+            id="every-phase",
         ),
     ],
 )
-async def test_timeout_named_param_forwarded_to_httpx(per_call: Timeouts | float, expected: dict[str, float]) -> None:
-    """Check that a per-call ``timeout=`` number replaces the read timeout, and ``Timeouts`` every one of them."""
+async def test_timeout_named_param_forwarded_to_httpx(per_call: Timeouts, expected: dict[str, float]) -> None:
+    """Check that a per-call ``timeout=`` replaces the phases it sets, and the defaults fill in the rest."""
     captured: dict[str, object] = {}
 
     def handler(req: httpx2.Request) -> httpx2.Response:
@@ -763,7 +763,7 @@ async def test_a_refused_reader_becomes_its_kind_with_the_real_status_and_code()
 
     client = _serving(httpx2.Response(httpx2.codes.OK, json={"status": "REQUEST_NOT_PROCESSED"}))
     with pytest.raises(RateLimitError) as ei:
-        await client.get("x", expect=decoder(_Status, check=check))
+        await client.get("x", expect=decoder(_Status, refusal_check=check))
     assert (ei.value.status_code, ei.value.code, ei.value.source) == (
         httpx2.codes.OK,
         "REQUEST_NOT_PROCESSED",
@@ -818,3 +818,20 @@ async def test_a_declared_403_in_an_unrecognised_shape_raises_auth_error() -> No
     with pytest.raises(AuthError) as ei:
         await client.post("x", expect=Expect(decoder(_Value)).on(httpx2.codes.FORBIDDEN, decoder(_Answer)))
     assert ei.value.status_code == httpx2.codes.FORBIDDEN
+
+
+@pytest.mark.transport_policy
+async def test_a_client_without_a_rate_paces_nothing_but_obeys_a_server_pause() -> None:
+    """Send back to back without ``rate=``, and wait out the pause a 429's ``Retry-After`` asks for."""
+    fake = FakeTransport().reply("GET", "/x", 200, 200, httpx2.Response(429, headers={"Retry-After": "2"}), 200)
+    clock = TestClock()
+    with clock.install():
+        client = AsyncBaseClient(base_url="https://api.example", http=HttpOptions(transport=fake))
+    async with client:
+        for _ in range(2):
+            await client.get("x", expect=nothing)
+        assert clock.sleeps == []
+        with pytest.raises(RateLimitError):
+            await client.get("x", expect=nothing, retry=False)
+        await client.get("x", expect=nothing)
+    assert clock.sleeps == [2.0]

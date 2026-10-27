@@ -3,8 +3,8 @@
 
 """A miss is stored only once the call's reader accepts the response.
 
-Many providers report a refusal inside a 200 (a spent quota, a bad key), which a reader's ``check`` turns into an
-error. Stored on the way through, that refusal would be served for the entry's whole lifetime without the provider
+Many providers report a refusal inside a 200 (a spent quota, a bad key), which a reader's ``refusal_check`` turns into
+an error. Stored on the way through, that refusal would be served for the entry's whole lifetime without the provider
 being asked again. Stored on accept, a response any reader refuses is never stored, while one it accepts is, as before.
 """
 

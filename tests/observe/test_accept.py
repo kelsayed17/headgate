@@ -22,7 +22,7 @@ _BODY = b'{"ok": true}'
 def _answering(content_type: str | None, *, status: int = 200, content: bytes = _BODY) -> FakeTransport:
     """Return a fake answering ``GET /v1/x`` with *content* declared as *content_type*."""
     headers = {} if content_type is None else {"content-type": content_type}
-    return FakeTransport().route("GET", "/v1/x", httpx2.Response(status, content=content, headers=headers))
+    return FakeTransport().reply("GET", "/v1/x", httpx2.Response(status, content=content, headers=headers))
 
 
 @pytest.mark.parametrize(

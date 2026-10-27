@@ -7,15 +7,43 @@ change the public API; such changes are listed under **Changed** and **Removed**
 ## [Unreleased]
 
 Makes the public API smaller and more regular: the auth hooks lose their underscores, `head()` and `paginate()` take
-what the other verbs take, and the root package re-exports only what a client is written with. Each change below says
-what to write instead.
+what the other verbs take, path rules match whole segments, timeouts are always a `Timeouts`, request bodies get a writer to
+mirror `expect=`, and each package exports only what a client is written with. Each change below says what to write instead.
+
+### Added
+
+- A request-body writer, the mirror of `expect=`: each codec flavor's `encoder(Type, *, drop_none=False)` builds a
+  `Writer[Type]`, and a call sends what it wrote as `body=`: `NEW_ORDER = encoder(NewOrder)`, then
+  `await self.post("orders", body=NEW_ORDER(order), expect=ORDER)`. The writer takes only its own type, msgspec
+  encodes a struct straight to bytes, and the body is sent as `application/json` unless `headers=` sets another
+  `Content-Type`. `EncodedBody`, `Writer` and `json_writer` (for a codec of your own) are exported from `headgate`.
+- `rate=` is optional: without it a client paces nothing itself (`headgate.ratelimit.UNLIMITED`) but still waits out
+  the pauses the server asks for, a 429 or 503 with `Retry-After` and a spent `RateLimit` quota.
+- `Rate.per_hour(requests)`, for a provider that states its quota hourly.
 
 ### Changed
 
+- `HttpOptions`' `trusted_origins`, `allow_private_hosts` and `resolver` move into a group of their own,
+  `SecurityOptions`, exported from `headgate`: write `HttpOptions(security=SecurityOptions(allow_private_hosts=False))`
+  where you wrote `HttpOptions(allow_private_hosts=False)`.
 - `CachedTokenAuth`'s subclass hooks are public: override `mint_token`, `mint_flow`, `attach` and `skips` where you
   overrode `_mint_token`, `_mint_flow`, `_attach` and `_skips`. A hook under its old name is no longer called, so a
   subclass that defines only `_mint_token` or `_mint_flow` fails when it is defined.
 - `head()` reads `expect=nothing` when no `expect=` is given: `await client.head(url)` returns `None`.
+- `RateRule`, `Route` and `PathFragmentFilter` match whole path segments instead of any substring: `"/exports"`
+  matches `/v2/exports/orders.csv` but no longer `/v2/exports-archive`. A fragment that names no segment (`""`, `"/"`)
+  is refused with `ValueError`, by `RateRule` and `PathFragmentFilter` too, which used to accept it and match every
+  request.
+- `timeout=` takes only a `Timeouts`, on `HttpOptions`, `with_options()` and every call; a bare number is no longer
+  accepted. A `Timeouts` now sets only the phases it names: a phase left unset takes the view's, the client's or the
+  default (connect 10 s, read 30 s, write 10 s, pool 15 s), so write `Timeouts(read=60.0)` where you wrote `60.0`. A
+  call's or a view's `Timeouts` used to replace all four phases.
+- A decoder's `check=` is `refusal_check=`, the name `HttpOptions` already uses for the same job on the response head:
+  `decoder(Envelope, refusal_check=refusal_in)`. `json_reader` takes it under the same name.
+- `CachedTokenAuth(refresh_margin_s=)` is `CachedTokenAuth(refresh_margin=)`, in seconds like every other duration.
+- In `headgate.testing`, `Respond(status=)` is `Respond(status_code=)`, and `FakeTransport.route()` is
+  `FakeTransport.reply()`, so it no longer shares a name with `headgate.Route`.
+- `Offset(limit=)` is `Offset(page_size=)`, so it no longer shares a name with `paginate(limit=)`, the page budget.
 - `paginate()` takes `follow_redirects=` and `cache_ttl=`, applied to every page as on `get()`. Its options are typed
   by the new `PageOptions`, `RequestOptions` plus those two.
 
@@ -36,6 +64,15 @@ what to write instead.
   - `headgate.pagination`: `Pager`, `PageRequest`;
   - `headgate.events`: `Observer`;
   - `headgate.streaming`: `Stream`.
+- From the subpackages, the machinery the client assembles itself from, which no client calls:
+  - `headgate.retry`: `RetryTransport`, `SendTrackingTransport`, `REPLAYABLE_BODY`;
+  - `headgate.ratelimit`: `RateLimitTransport`, `PathBudgets`, and the `BudgetBacklogError` and `BudgetPausedError`
+    signals, which a call raises as `ClientTimeoutError` and `RateLimitError`;
+  - `headgate.breaker`: `BreakerOpenError` (raised as `CircuitOpenError`), `Transition`, `Verdict`,
+    `DEFAULT_REGISTRY`, `DEFAULT_MAX_HOSTS`;
+  - `headgate.security`: `CredentialGuard`, `CHAIN_ORIGIN`, `address_hook`, `refuse_https_downgrade`.
+- `BreakerState` from `headgate.events` and `headgate.health`: import it from `headgate.breaker`, its one home.
+- `headgate.policy.policy_is_disabled`; `policy_disabled` stays.
 
 ## [0.5.0] - 2026-10-26
 

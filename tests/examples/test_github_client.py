@@ -22,7 +22,7 @@ _RESET_IN = 3600
 
 async def test_a_repository_is_read_with_githubs_headers() -> None:
     """Read a repository, sending the token and GitHub's media type and API version."""
-    fake = FakeTransport().route("GET", "/repos/octo/hello", httpx2.Response(200, json=_REPO))
+    fake = FakeTransport().reply("GET", "/repos/octo/hello", httpx2.Response(200, json=_REPO))
     async with example.GitHub("t0ken", transport=fake) as github:
         repository = await github.repository("octo", "hello")
 
@@ -35,7 +35,7 @@ async def test_a_repository_is_read_with_githubs_headers() -> None:
 
 async def test_a_missing_repository_is_none() -> None:
     """Answer ``None`` for the 404 GitHub sends for a repository that does not exist or that the token cannot see."""
-    fake = FakeTransport().route("GET", "/repos/octo/gone", httpx2.Response(404, json={"message": "Not Found"}))
+    fake = FakeTransport().reply("GET", "/repos/octo/gone", httpx2.Response(404, json={"message": "Not Found"}))
     async with example.GitHub("t0ken", transport=fake) as github:
         assert await github.repository("octo", "gone") is None
 
@@ -48,7 +48,7 @@ async def test_open_issues_follow_the_link_header() -> None:
         headers={"Link": f'<{_PAGE_2}>; rel="next", <{_PAGE_2}>; rel="last"'},
     )
     last = httpx2.Response(200, json=[{"number": 0, "title": "First"}])
-    fake = FakeTransport().route("GET", "/repos/octo/hello/issues", first).route("GET", "/repositories/1/issues", last)
+    fake = FakeTransport().reply("GET", "/repos/octo/hello/issues", first).reply("GET", "/repositories/1/issues", last)
     async with example.GitHub("t0ken", transport=fake) as github:
         issues = [issue async for issue in github.open_issues("octo", "hello")]
 
@@ -65,7 +65,7 @@ async def test_open_issues_follow_the_link_header() -> None:
 async def test_a_spent_hourly_limit_pauses_every_call_until_the_reset() -> None:
     """Stop sending once GitHub reports the hourly limit spent: a call that cannot wait for the reset fails at once."""
     spent = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(time.time()) + _RESET_IN)}
-    fake = FakeTransport().route("GET", "/repos/octo/hello", httpx2.Response(200, json=_REPO, headers=spent))
+    fake = FakeTransport().reply("GET", "/repos/octo/hello", httpx2.Response(200, json=_REPO, headers=spent))
     async with example.GitHub("t0ken", transport=fake) as github:
         await github.repository("octo", "hello")
         with pytest.raises(RateLimitError) as raised:

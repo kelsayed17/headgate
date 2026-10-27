@@ -115,22 +115,22 @@ class Cursor[P, I]:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Offset[P, I]:
-    """Pages of at most ``limit`` items, addressed by the offset of their first item, sent as the query ``param``.
+    """Pages of at most ``page_size`` items, addressed by the offset of their first item, sent as the query ``param``.
 
     The offset starts at ``start`` and advances by the number of items each page held. A page holding fewer than
-    ``limit`` items (or none) is the last. The page size itself is the caller's to send, in ``params=`` under whatever
-    name the endpoint uses, since that name varies (``limit``, ``per_page``, ``page_size``).
+    ``page_size`` items (or none) is the last. The page size itself is the caller's to send, in ``params=`` under
+    whatever name the endpoint uses, since that name varies (``limit``, ``per_page``, ``page_size``).
     """
 
     items: Callable[[P], Sequence[I]]
-    limit: int
+    page_size: int
     param: str = "offset"
     start: int = 0
 
     def __post_init__(self) -> None:
         """Refuse a page size below one, a negative start and an empty parameter name."""
-        if self.limit < 1:
-            msg = f"limit must be >= 1 (got {self.limit})"
+        if self.page_size < 1:
+            msg = f"page_size must be >= 1 (got {self.page_size})"
             raise ValueError(msg)
         if self.start < 0:
             msg = f"start must be >= 0 (got {self.start})"
@@ -149,7 +149,7 @@ class Offset[P, I]:
         """Return *request* at the offset after *page*'s items, or ``None`` when *page* was short."""
         del response
         count = len(self.items(page))
-        if count < self.limit:
+        if count < self.page_size:
             return None
         offset = (request.params or {}).get(self.param)
         current = offset if isinstance(offset, int) else self.start

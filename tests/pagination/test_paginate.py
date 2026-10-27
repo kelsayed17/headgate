@@ -19,6 +19,7 @@ from hypothesis import strategies as st
 from headgate import (
     ClientError,
     Cursor,
+    EncodedBody,
     Expect,
     HttpOptions,
     LinkHeader,
@@ -148,7 +149,7 @@ async def test_offset_pages_advance_by_the_items_received_until_a_short_page() -
         return _page(request, [i for i in range(offset, offset + 2) if i < total])
 
     api = _Api(answer)
-    pages = Offset(items=items_of, limit=2, start=0)
+    pages = Offset(items=items_of, page_size=2, start=0)
     items = [
         item.id async for item in api.client().paginate("items", expect=decoder(Page), pages=pages, params={"limit": 2})
     ]
@@ -165,14 +166,14 @@ async def test_offset_stops_at_an_empty_page_and_counts_from_start() -> None:
         return _page(request, [skip] if skip < end else [])
 
     api = _Api(answer)
-    pages = Offset(items=items_of, limit=1, param="skip", start=10)
+    pages = Offset(items=items_of, page_size=1, param="skip", start=10)
     assert [item.id async for item in api.client().paginate("items", expect=decoder(Page), pages=pages)] == [10, 11]
     assert [url.params["skip"] for url in api.sent] == ["10", "11", "12"]
 
 
 def test_offset_resumes_from_start_when_the_request_lacks_its_parameter() -> None:
     """Treat a request without the offset parameter as being at ``start``."""
-    pages = Offset(items=items_of, limit=1, start=3)
+    pages = Offset(items=items_of, page_size=1, start=3)
     following = pages.next_page(Page([Item(1)]), PageRequest("items"), httpx2.Response(200))
     assert following == PageRequest("items", {"offset": 4})
 
@@ -341,10 +342,16 @@ async def test_a_repeating_cursor_on_a_template_url_raises() -> None:
 
 
 #: One request body of each kind.
-_BODIES: list[RequestOptions] = [{"json": {}}, {"data": {}}, {"content": b"x"}, {"files": {"f": b"x"}}]
+_BODIES: list[RequestOptions] = [
+    {"body": EncodedBody(b"{}")},
+    {"json": {}},
+    {"data": {}},
+    {"content": b"x"},
+    {"files": {"f": b"x"}},
+]
 
 
-@pytest.mark.parametrize("body", _BODIES, ids=["json", "data", "content", "files"])
+@pytest.mark.parametrize("body", _BODIES, ids=["body", "json", "data", "content", "files"])
 def test_a_body_option_is_refused(body: RequestOptions) -> None:
     """Refuse a request body: every page is a GET."""
     client = _Api(_by_cursor).client()
@@ -356,11 +363,11 @@ def test_a_body_option_is_refused(body: RequestOptions) -> None:
     "build",
     [
         lambda: Cursor(items=items_of, next=cursor_of, param=""),
-        lambda: Offset(items=items_of, limit=0),
-        lambda: Offset(items=items_of, limit=1, start=-1),
-        lambda: Offset(items=items_of, limit=1, param=""),
+        lambda: Offset(items=items_of, page_size=0),
+        lambda: Offset(items=items_of, page_size=1, start=-1),
+        lambda: Offset(items=items_of, page_size=1, param=""),
     ],
-    ids=["empty-cursor-param", "zero-limit", "negative-start", "empty-offset-param"],
+    ids=["empty-cursor-param", "zero-page-size", "negative-start", "empty-offset-param"],
 )
 def test_a_strategy_refuses_a_bad_configuration(build: Callable[[], object]) -> None:
     """Refuse a strategy that could not page."""

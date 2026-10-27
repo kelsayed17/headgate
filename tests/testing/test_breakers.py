@@ -8,7 +8,8 @@ from __future__ import annotations
 import pytest
 
 from headgate import BreakerPolicy, HttpOptions, Rate, TransportPolicy, nothing
-from headgate.breaker import DEFAULT_REGISTRY, BreakerRegistry, BreakerState, CircuitBreaker
+from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
+from headgate.breaker._registry import DEFAULT_REGISTRY
 from headgate.errors import CircuitOpenError, UpstreamStatusError
 from headgate.health import breaker_states
 from headgate.retry import NO_RETRY
@@ -34,7 +35,7 @@ def _client(fake: FakeTransport, breaker: BreakerPolicy = _TRIP_AT_ONCE) -> Stub
 
 async def test_failures_open_a_breaker_only_in_the_isolated_registry() -> None:
     """Open the host's breaker in the yielded registry and leave the default registry untouched."""
-    fake = FakeTransport().route("GET", "/x", 503)
+    fake = FakeTransport().reply("GET", "/x", 503)
     with isolated_breakers() as registry:
         client = _client(fake)
     with pytest.raises(UpstreamStatusError):
@@ -50,7 +51,7 @@ async def test_failures_open_a_breaker_only_in_the_isolated_registry() -> None:
 async def test_a_client_with_its_own_registry_keeps_it() -> None:
     """Leave a client configured with a registry of its own alone."""
     own = BreakerRegistry()
-    fake = FakeTransport().route("GET", "/x", 503)
+    fake = FakeTransport().reply("GET", "/x", 503)
     with isolated_breakers() as registry:
         client = _client(fake, BreakerPolicy(failure_threshold=1, registry=own))
     with pytest.raises(UpstreamStatusError):
@@ -61,7 +62,7 @@ async def test_a_client_with_its_own_registry_keeps_it() -> None:
 
 async def test_a_client_without_a_breaker_stays_without_one() -> None:
     """Build no breaker for a client whose policy turns the breaker off."""
-    fake = FakeTransport().route("GET", "/x", 503)
+    fake = FakeTransport().reply("GET", "/x", 503)
     with isolated_breakers() as registry:
         client = StubClient(
             base_url=f"https://{_HOST}",
@@ -76,7 +77,7 @@ async def test_a_client_without_a_breaker_stays_without_one() -> None:
 
 async def test_the_registry_reads_the_test_clock() -> None:
     """Run a breaker's cooldown on the test clock it was built under."""
-    fake = FakeTransport().route("GET", "/x", 503, 200)
+    fake = FakeTransport().reply("GET", "/x", 503, 200)
     clock = TestClock()
     with clock.install(), isolated_breakers() as registry:
         client = _client(fake)

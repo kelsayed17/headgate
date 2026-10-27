@@ -19,7 +19,9 @@ reports = AsyncBaseClient(
 
 ## Rates and budgets
 
-`Rate(requests, period)` is a value: `Rate.per_second(5)` and `Rate.per_minute(300)` are the same rate. A client given
+`Rate(requests, period)` is a value: `Rate.per_second(5)` and `Rate.per_minute(300)` are the same rate, and
+`Rate.per_hour(5000)` states an hourly quota as a provider does. Up to `requests` may go out back to back, so state a
+large hourly quota per minute or per second for a steadier pace. A client given
 a `Rate` builds a budget of its own. A `RateBudget` is the budget as an object: pass one instance to several clients
 (or rules) and they spend from it together, across tasks, event loops and threads, because its state is plain numbers
 under a `threading.Lock` and nothing in it is bound to a loop.
@@ -40,10 +42,12 @@ under a `threading.Lock` and nothing in it is bound to a loop.
 
 ## Per-path lanes
 
-`TransportPolicy(rate_limits=(RateRule(fragment, rate), ...))` gives the requests whose URL path contains `fragment`
-a budget of their own: the first matching rule wins, and a matching request spends from the rule's budget **instead
-of** the client's. A rule's `rate` is a `Rate` (a budget per client) or a shared `RateBudget`. The fragment is a plain
-substring of the path, like the cache's `PathFragmentFilter` and the policy's `Route`.
+`TransportPolicy(rate_limits=(RateRule(fragment, rate), ...))` gives the requests whose URL path holds `fragment` a
+budget of their own: the first matching rule wins, and a matching request spends from the rule's budget **instead
+of** the client's. A rule's `rate` is a `Rate` (a budget per client) or a shared `RateBudget`. The fragment is one or
+more whole path segments, matched anywhere in the path: `"/exports"` matches `/v2/exports` and
+`/v2/exports/orders.csv`, but not `/v2/exports-archive`. The cache's `PathFragmentFilter` and the policy's `Route`
+match the same way.
 
 ## Server feedback
 

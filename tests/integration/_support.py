@@ -47,9 +47,7 @@ def client(
             middleware=options.middleware,
             headers=options.headers,
             timeout=options.timeout,
-            trusted_origins=options.trusted_origins,
-            allow_private_hosts=options.allow_private_hosts,
-            resolver=options.resolver,
+            security=options.security,
             follow_redirects=options.follow_redirects,
         ),
     )

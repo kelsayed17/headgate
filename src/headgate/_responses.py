@@ -72,7 +72,7 @@ class RefusedError(Exception):
     """A provider's refusal, as a reader or a host check saw it.
 
     A reader raises it for a refusal written inside a body (an error envelope, a ``REQUEST_NOT_PROCESSED`` status, a
-    vendor error code); a ``decoder`` ``check`` and a client's ``refusal_check`` return one instead. The base client is
+    vendor error code); a ``decoder``'s and a client's ``refusal_check`` return one instead. The base client is
     its only catcher, and turns it into ``kind(message, status_code=<the status the wire sent>, code=code, ...)``, so
     a refusal in a 200 body carries 200.
 
@@ -216,20 +216,20 @@ def json_reader[T](
     decode: Callable[[bytes], T],
     *,
     allow_empty_body: bool = False,
-    check: Callable[[T], RefusedError | None] | None = None,
+    refusal_check: Callable[[T], RefusedError | None] | None = None,
 ) -> Reader[T]:
     """Build a reader around a codec's bytes-to-value function.
 
-    Each codec flavor's ``decoder`` builds on this, so the empty-body rule and the ``check`` hook behave identically
-    across flavors.
+    Each codec flavor's ``decoder`` builds on this, so the empty-body rule and the ``refusal_check`` hook behave
+    identically across flavors.
 
     ``allow_empty_body`` reads an empty body (zero bytes or only whitespace) as the empty array ``[]``. It suits only a
     list-shaped type, for a provider whose no-data answer is a zero-byte 200 or a 204. For every other provider an empty
     200 is corruption, and decoding it fails.
 
-    ``check`` runs on the decoded value and returns a :class:`RefusedError` for a refusal written inside a 2xx body, or
-    ``None``; the reader raises what it returns. Type a check over a small structural ``Protocol`` naming only the
-    envelope fields it reads. Have it refuse only codes every consumer of the endpoint would read as failure (auth,
+    ``refusal_check`` runs on the decoded value and returns a :class:`RefusedError` for a refusal written inside a 2xx
+    body, or ``None``; the reader raises what it returns. Type a check over a small structural ``Protocol`` naming only
+    the envelope fields it reads. Have it refuse only codes every consumer of the endpoint would read as failure (auth,
     quota, rate limit, server, a malformed request, any undocumented code) and leave a code about the subject (an
     unknown instrument, a rejected order) in the value for the caller.
     """
@@ -239,7 +239,7 @@ def json_reader[T](
         if allow_empty_body and not content.strip():
             content = b"[]"
         value = decode(content)
-        if check is not None and (refused := check(value)) is not None:
+        if refusal_check is not None and (refused := refusal_check(value)) is not None:
             raise refused
         return value
 

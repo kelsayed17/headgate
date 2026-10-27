@@ -15,9 +15,9 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import CachedTokenAuth, HttpOptions, Minted, QueryParamAuth, StaticHeaderAuth
+from headgate import CachedTokenAuth, HttpOptions, Minted, QueryParamAuth, SecurityOptions, StaticHeaderAuth
 from headgate._core import CredentialStamper
-from headgate.security import CHAIN_ORIGIN, CredentialGuard
+from headgate.security._credentials import CHAIN_ORIGIN, CredentialGuard
 from tests.security._web import BASE, Web
 from tests.support.responses import RESPONSE
 from tests.support.tokens import premint
@@ -116,7 +116,7 @@ async def test_a_same_origin_redirect_keeps_the_credential(auth: httpx2.Auth) ->
 async def test_a_trusted_origin_keeps_the_credential(auth: httpx2.Auth) -> None:
     """Send the credential to an origin listed in ``trusted_origins``, given in any normalisable form."""
     web = Web()
-    trusted = HttpOptions(trusted_origins=frozenset({"HTTPS://FILES.example:443"}))
+    trusted = HttpOptions(security=SecurityOptions(trusted_origins=frozenset({"HTTPS://FILES.example:443"})))
     async with web.client(auth=auth, http=trusted) as client:
         await client.get("https://files.example/signed", expect=RESPONSE)
 
@@ -126,7 +126,7 @@ async def test_a_trusted_origin_keeps_the_credential(auth: httpx2.Auth) -> None:
 async def test_a_trusted_origin_keeps_a_redirected_credential() -> None:
     """Keep a stamped header on a redirect to a trusted origin (httpx2 drops ``Authorization`` there by itself)."""
     web = Web({f"{BASE}/start": "https://files.example/signed"})
-    trusted = HttpOptions(trusted_origins=frozenset({"https://files.example"}))
+    trusted = HttpOptions(security=SecurityOptions(trusted_origins=frozenset({"https://files.example"})))
     async with web.client(auth=StaticHeaderAuth({"X-Api-Key": "k"}), http=trusted) as client:
         await client.get("start", expect=RESPONSE)
 
@@ -266,7 +266,9 @@ async def test_a_middlewares_declared_credentials_stay_off_a_foreign_redirect_ho
 async def test_a_middlewares_credentials_reach_a_trusted_origin() -> None:
     """Keep a middleware's credentials on a hop to an origin in ``trusted_origins``."""
     web = Web({f"{BASE}/start": "https://files.example/signed"})
-    http = HttpOptions(middleware=(_Signer(),), trusted_origins=frozenset({"https://files.example"}))
+    http = HttpOptions(
+        middleware=(_Signer(),), security=SecurityOptions(trusted_origins=frozenset({"https://files.example"}))
+    )
     async with web.client(http=http) as client:
         await client.get("start", expect=RESPONSE)
 

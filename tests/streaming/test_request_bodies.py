@@ -14,7 +14,7 @@ import pytest
 from headgate import HttpOptions, RequestOptions, as_bytes, nothing
 from headgate._core import CallContext
 from headgate.ratelimit import Rate
-from headgate.retry import REPLAYABLE_BODY
+from headgate.retry._policy import REPLAYABLE_BODY
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:

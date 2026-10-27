@@ -4,8 +4,9 @@
 """The defaults a view made by :meth:`~headgate.AsyncBaseClient.with_options` lays over its client's calls.
 
 A view is the same client with different defaults for its calls: extra headers, a retry policy and a deadline (its
-timeouts replace the client's directly). :class:`ViewDefaults` holds them, and the client consults it where it applies
-a call's own options, so the precedence is the call's, then the view's, then the route's, then the policy's.
+timeouts lie over the client's directly, through ``Timeouts.over``). :class:`ViewDefaults` holds them, and the client
+consults it where it applies a call's own options, so the precedence is the call's, then the view's, then the route's,
+then the policy's.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ from typing import TYPE_CHECKING, Final, Literal
 
 import httpx2
 
-from headgate._options import Timeouts
 from headgate.retry import NO_RETRY
 
 if TYPE_CHECKING:
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
     from headgate.retry import RetryPolicy
 
-__all__ = ["KEEP", "ROOT_DEFAULTS", "Keep", "ViewDefaults", "overlay_timeout"]
+__all__ = ["KEEP", "ROOT_DEFAULTS", "Keep", "ViewDefaults"]
 
 
 class Keep(Enum):
@@ -91,14 +91,6 @@ def _retry_override(*, retry: bool | RetryPolicy) -> RetryPolicy | None:
     if retry is False:
         return NO_RETRY
     return retry
-
-
-def overlay_timeout(base: Timeouts | float, view: Timeouts | float) -> Timeouts:
-    """Return *base* with a view's timeout applied: a ``Timeouts`` replaces all four, a number the read timeout."""
-    if isinstance(view, Timeouts):
-        return view
-    current = base if isinstance(base, Timeouts) else Timeouts(read=base)
-    return replace(current, read=view)
 
 
 #: The defaults of a client that is not a view: nothing added.

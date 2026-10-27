@@ -9,9 +9,12 @@ picks a codec flavor by importing ``headgate.msgspec`` or ``headgate.pydantic``.
 written with:
 
 * the client and its options: :class:`AsyncBaseClient`, :data:`Method`, :class:`RequestOptions`, :class:`PageOptions`,
-  :class:`TransportPolicy`, :class:`HttpOptions`, :class:`Timeouts`, :class:`IdempotencyKeys`, :class:`Route`,
+  :class:`TransportPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`, :class:`Timeouts`,
+  :class:`IdempotencyKeys`, :class:`Route`,
   :class:`Middleware`;
 * declared responses: :class:`Expect`, :data:`Reader` and the readers, :data:`RefusalCheck`, :class:`RefusedError`;
+* request bodies: :class:`EncodedBody`, :data:`Writer` and :func:`json_writer`, each codec flavor's ``encoder`` built on
+  it;
 * auth: :class:`StaticHeaderAuth`, :class:`QueryParamAuth`, :class:`CachedTokenAuth`, :class:`Minted`,
   :data:`MAX_MINT_RESPONSE_BYTES`;
 * the policy values a client usually sets: :class:`RetryPolicy`, :class:`BreakerPolicy`, :class:`Rate`,
@@ -29,7 +32,8 @@ events and their ``Observer`` (:mod:`headgate.events`) and the testing kit (:mod
 from headgate._auth import MAX_MINT_RESPONSE_BYTES, CachedTokenAuth, Minted, QueryParamAuth, StaticHeaderAuth
 from headgate._client import AsyncBaseClient, Method, PageOptions, RequestOptions
 from headgate._middleware import Middleware
-from headgate._options import HttpOptions, IdempotencyKeys, Route, Timeouts, TransportPolicy
+from headgate._options import HttpOptions, IdempotencyKeys, Route, SecurityOptions, Timeouts, TransportPolicy
+from headgate._request_body import EncodedBody, Writer, json_writer
 from headgate._responses import Expect, Reader, RefusalCheck, RefusedError, as_bytes, event_stream, json_reader, nothing
 from headgate.breaker import BreakerPolicy
 from headgate.cache import HttpCache
@@ -65,6 +69,7 @@ __all__ = [
     "ClientTimeoutError",
     "Cursor",
     "DecodeError",
+    "EncodedBody",
     "Expect",
     "ForbiddenDestinationError",
     "HttpCache",
@@ -94,13 +99,16 @@ __all__ = [
     "ResponseTooLargeError",
     "RetryPolicy",
     "Route",
+    "SecurityOptions",
     "StaticHeaderAuth",
     "Timeouts",
     "TransportError",
     "TransportPolicy",
     "UpstreamStatusError",
+    "Writer",
     "as_bytes",
     "event_stream",
     "json_reader",
+    "json_writer",
     "nothing",
 ]

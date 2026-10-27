@@ -54,7 +54,20 @@ a body (see [responses](responses.md#readers)).
 
 ## Request bodies
 
-A verb takes `json=` (build it with a codec's `to_builtins`), `data=` (form fields), or one of:
+A verb takes **`body=`**, a value a codec flavor's `encoder` wrote: the mirror of `expect=`, built once at import, so
+a writer takes only its own type.
+
+```python
+from headgate.msgspec import encoder
+
+NEW_ORDER = encoder(NewOrder)
+...
+await self.post("orders", body=NEW_ORDER(order), expect=ORDER)
+```
+
+It is sent as `application/json` unless `headers=` sets another `Content-Type`, and it is bytes, so the call stays
+retryable. A verb also takes `json=` (builtins, which a codec's `to_builtins` builds), `data=` (form fields), or one
+of:
 
 - **`content=`**, a raw body:
   - `bytes`, sent as they are, and retryable;

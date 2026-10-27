@@ -20,7 +20,8 @@ from headgate import pydantic as pydantic_flavor
 from headgate._failures import CallSite, status_error
 from headgate._url import escape_segment, redact_secrets, render_path, sanitize_url
 from headgate.breaker import CircuitBreaker
-from headgate.ratelimit import PathBudgets, Rate, RateBudget, RateRule
+from headgate.ratelimit import Rate, RateBudget, RateRule
+from headgate.ratelimit._budgets import PathBudgets
 from headgate.retry import RetryPolicy
 
 if TYPE_CHECKING:

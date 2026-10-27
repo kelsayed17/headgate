@@ -55,7 +55,7 @@ def test_a_zoneless_http_date_is_utc() -> None:
 
 def _headers_call(headers: dict[str, str]) -> tuple[FakeTransport, Recorder]:
     """Return a fake answering ``GET /v1/old`` with *headers*, and a recorder."""
-    return FakeTransport().route("GET", "/v1/old", httpx2.Response(200, headers=headers)), Recorder()
+    return FakeTransport().reply("GET", "/v1/old", httpx2.Response(200, headers=headers)), Recorder()
 
 
 async def test_a_deprecated_endpoint_reports_its_date_sunset_and_links() -> None:
@@ -108,7 +108,7 @@ async def test_nothing_valid_announces_nothing(headers: dict[str, str]) -> None:
 
 async def test_a_streamed_call_reports_its_deprecation() -> None:
     """Announce from a streamed response's head too."""
-    fake = FakeTransport().route("GET", "/v1/old", httpx2.Response(200, content=b"a", headers={"Deprecation": "true"}))
+    fake = FakeTransport().reply("GET", "/v1/old", httpx2.Response(200, content=b"a", headers={"Deprecation": "true"}))
     recorder = Recorder()
     async with client(fake, recorder).stream("GET", "old") as stream:
         chunks = [chunk async for chunk in stream.aiter_bytes()]

@@ -25,7 +25,7 @@ from tests.support.tokens import TEST_BEARER, premint
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
-#: The default ``refresh_margin_s``.
+#: The default ``refresh_margin``.
 _MARGIN_S = 120.0
 #: A lifetime well past the margin, so only the margin decides when the token is due.
 _LIFETIME_S = 1200.0

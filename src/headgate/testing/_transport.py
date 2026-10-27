@@ -51,10 +51,10 @@ class _Route:
 class FakeTransport(httpx2.AsyncBaseTransport):
     """Answer requests from a route table keyed by method and path, and record every request in :attr:`calls`.
 
-    Give it to a client as ``HttpOptions(transport=FakeTransport().route(...))``::
+    Give it to a client as ``HttpOptions(transport=FakeTransport().reply(...))``::
 
         fake = FakeTransport()
-        fake.route("GET", "/v1/series/GDP", httpx2.Response(503), httpx2.Response(200, json={"id": "GDP"}))
+        fake.reply("GET", "/v1/series/GDP", httpx2.Response(503), httpx2.Response(200, json={"id": "GDP"}))
 
     A route's replies are served in order to the requests that match it, the last one repeating, so a retry sequence
     is one route. A path is matched exactly against the request's path as sent: percent-encoded, as a t-string URL
@@ -74,7 +74,7 @@ class FakeTransport(httpx2.AsyncBaseTransport):
         self._calls: list[httpx2.Request] = []
         self.closed = False
 
-    def route(self, method: str, path: str, *replies: Reply) -> Self:
+    def reply(self, method: str, path: str, *replies: Reply) -> Self:
         """Answer *method* requests to *path* with *replies*, replacing any route there; return the transport."""
         self._routes[method.upper(), path] = _Route(replies)
         return self

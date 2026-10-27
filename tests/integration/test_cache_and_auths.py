@@ -64,7 +64,7 @@ def _cached(storage: AsyncSqliteStorage) -> TransportPolicy:
 @pytest.mark.parametrize("name", sorted(_HOLDERS))
 async def test_two_credentials_never_share_an_entry(name: str, storage: AsyncSqliteStorage) -> None:
     """Make each credential fetch its own copy of a URL the other has cached, and then hit only its own."""
-    fake = FakeTransport().route("GET", "/v1/x", httpx2.Response(200, content=b"private"))
+    fake = FakeTransport().reply("GET", "/v1/x", httpx2.Response(200, content=b"private"))
     alice, bob = (_HOLDERS[name](secret) for secret in ("alice-secret", "bob-secret"))
     alice_client = client(fake, auth=alice, policy=_cached(storage))
     bob_client = client(fake, auth=bob, policy=_cached(storage))
@@ -78,7 +78,7 @@ async def test_two_credentials_never_share_an_entry(name: str, storage: AsyncSql
 @pytest.mark.parametrize("name", sorted(_HOLDERS))
 async def test_one_credential_shares_its_entries_between_clients(name: str, storage: AsyncSqliteStorage) -> None:
     """Serve a second client holding the same credential from the first one's entry, even with its own token."""
-    fake = FakeTransport().route("GET", "/v1/x", httpx2.Response(200, content=b"private"))
+    fake = FakeTransport().reply("GET", "/v1/x", httpx2.Response(200, content=b"private"))
     first, second = (_HOLDERS[name]("shared-secret") for _ in range(2))
 
     await client(fake, auth=first, policy=_cached(storage)).get("x", expect=as_bytes)
@@ -89,7 +89,7 @@ async def test_one_credential_shares_its_entries_between_clients(name: str, stor
 
 async def test_two_cached_token_auths_share_nothing_by_default(storage: AsyncSqliteStorage) -> None:
     """Keep two ``CachedTokenAuth`` instances apart unless they name their credential: each is its own identity."""
-    fake = FakeTransport().route("GET", "/v1/x", httpx2.Response(200, content=b"private"))
+    fake = FakeTransport().reply("GET", "/v1/x", httpx2.Response(200, content=b"private"))
     first, second = seeded(), seeded()
 
     await client(fake, auth=first, policy=_cached(storage)).get("x", expect=as_bytes)

@@ -16,7 +16,7 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate import ForbiddenDestinationError, HttpOptions, NextUrl, StaticHeaderAuth, nothing
+from headgate import ForbiddenDestinationError, HttpOptions, NextUrl, SecurityOptions, StaticHeaderAuth, nothing
 from headgate.msgspec import decoder
 from headgate.testing import FakeTransport
 from tests.integration._support import BASE, FAST, Page, client, items_of, next_of
@@ -36,12 +36,12 @@ async def _resolve(host: str, _port: int) -> Sequence[str]:
     return [_ADDRESSES[host]]
 
 
-_GUARDED = HttpOptions(allow_private_hosts=False, resolver=_resolve)
+_GUARDED = HttpOptions(security=SecurityOptions(allow_private_hosts=False, resolver=_resolve))
 
 
 async def test_a_stream_to_a_private_address_is_refused() -> None:
     """Refuse to open a stream to a host that resolves to a private address, sending nothing."""
-    fake = FakeTransport().route("GET", "/admin", 200)
+    fake = FakeTransport().reply("GET", "/admin", 200)
     built = client(fake, http=_GUARDED)
 
     with pytest.raises(ForbiddenDestinationError, match=r"10\.0\.0\.7.*private"):
@@ -62,7 +62,7 @@ async def test_a_stream_through_the_pinning_transport_is_refused() -> None:
 async def test_a_next_page_url_to_a_private_address_is_refused() -> None:
     """Refuse the page a response points at when its host resolves to a private address, after the first page."""
     first = httpx2.Response(200, content=msgspec.json.encode(Page(data=[1], next=_INTERNAL)))
-    fake = FakeTransport().route("GET", "/v1/items", first).route("GET", "/admin", 200)
+    fake = FakeTransport().reply("GET", "/v1/items", first).reply("GET", "/admin", 200)
     built = client(fake, http=_GUARDED)
     items = aiter(built.paginate("items", expect=decoder(Page), pages=NextUrl(items=items_of, next=next_of)))
 
@@ -75,7 +75,7 @@ async def test_a_next_page_url_to_a_private_address_is_refused() -> None:
 async def test_a_redirect_to_a_private_address_is_refused() -> None:
     """Refuse a redirect hop whose host resolves to a private address, before it is sent."""
     moved = httpx2.Response(302, headers={"Location": _INTERNAL})
-    fake = FakeTransport().route("GET", "/v1/x", moved).route("GET", "/admin", 200)
+    fake = FakeTransport().reply("GET", "/v1/x", moved).reply("GET", "/admin", 200)
     built = client(fake, http=_GUARDED)
 
     with pytest.raises(ForbiddenDestinationError):
@@ -86,7 +86,7 @@ async def test_a_redirect_to_a_private_address_is_refused() -> None:
 
 async def test_a_stream_to_another_origin_carries_no_credential() -> None:
     """Open a stream to another origin without the auth's header, and to the API's own origin with it."""
-    fake = FakeTransport().route("GET", "/v1/file", 200).route("GET", "/file", 200)
+    fake = FakeTransport().reply("GET", "/v1/file", 200).reply("GET", "/file", 200)
     built = client(fake, auth=StaticHeaderAuth({"X-Api-Key": "secret"}))
 
     async with built.stream("GET", "file"):

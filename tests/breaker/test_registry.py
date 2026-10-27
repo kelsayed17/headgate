@@ -19,7 +19,8 @@ import pytest
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
 
-from headgate.breaker import DEFAULT_MAX_HOSTS, BreakerRegistry, BreakerState, CircuitBreaker
+from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
+from headgate.breaker._registry import DEFAULT_MAX_HOSTS
 
 #: A registry small enough for Hypothesis to fill, and more origins than it holds.
 _MAX = 3

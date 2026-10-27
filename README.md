@@ -297,8 +297,9 @@ How the pieces fit together, for contributors and the curious: [design](https://
 
 ## Configuration
 
-`AsyncBaseClient(*, base_url, rate, auth=None, policy=TransportPolicy(), http=HttpOptions())`. `rate` is a `Rate` (a
-budget of the client's own) or a `RateBudget` shared with other clients. `TransportPolicy` says what the stack does to
+`AsyncBaseClient(*, base_url, rate=UNLIMITED, auth=None, policy=TransportPolicy(), http=HttpOptions())`. `rate` is a
+`Rate` (a budget of the client's own) or a `RateBudget` shared with other clients; without one the client paces nothing
+itself but still waits out the pauses the server asks for. `TransportPolicy` says what the stack does to
 every request, `HttpOptions` how requests are sent and read. Both are frozen and validate on construction.
 
 <details>
@@ -345,8 +346,8 @@ class OrdersClient(AsyncBaseClient):
 | `deadline` | `60.0` seconds per call | | `headers` | none beyond `User-Agent` |
 | `breaker` | `BreakerPolicy()`: 5 failures, 60 s | | `follow_redirects`, `max_redirects` | `True`, `5` |
 | `rate_limits` | none | | `max_response_bytes` | 32 MiB |
-| `cache` | none | | `trusted_origins` | `base_url`'s origin only |
-| `idempotency` | none | | `allow_private_hosts` | `True` (SSRF guard off) |
+| `cache` | none | | `security` | `SecurityOptions()`: credentials to `base_url`'s origin only, SSRF guard off |
+| `idempotency` | none | | `refusal_check` | none |
 | `routes` | none | | `observers`, `middleware` | none |
 
 Every option, its validation and the precedence of call, view, route and policy:
@@ -355,11 +356,10 @@ Every option, its validation and the precedence of call, view, route and policy:
 ## Per-call options
 
 Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`) takes the URL, `expect=` (on `head`, `nothing` unless
-given), and optionally `retry=False` or
-a `RetryPolicy`, `follow_redirects=`, `cache_ttl=`, `timeout=`, `deadline=`, `idempotency_key=`, and the request
-options `params=`, `headers=`, `json=`, `data=`, `content=` and `files=`. `client.with_options(headers=...,
-timeout=..., deadline=..., retry=...)` returns a view with other defaults that shares the pool, the budgets and the
-breakers; the client it came from owns the pool.
+given), and optionally `retry=False` or a `RetryPolicy`, `follow_redirects=`, `cache_ttl=`, `timeout=`, `deadline=`,
+`idempotency_key=`, and the request options `params=`, `headers=`, `body=` (what a codec's `encoder` wrote), `json=`,
+`data=`, `content=` and `files=`. `client.with_options(headers=..., timeout=..., deadline=..., retry=...)` returns a
+view with other defaults that shares the pool, the budgets and the breakers; the client it came from owns the pool.
 
 ## Errors
 
@@ -413,7 +413,7 @@ GDP = {"id": "GDP", "title": "Gross domestic product", "values": [27.4, 28.1]}
 
 async def test_find_series_reads_a_404_as_none() -> None:
     """Return ``None`` for the 404 the endpoint documents, signing the request with the key."""
-    fake = FakeTransport().route("GET", "/v1/series/RETIRED", 404)
+    fake = FakeTransport().reply("GET", "/v1/series/RETIRED", 404)
     async with CatalogClient("test-key", transport=fake) as catalog:
         assert await catalog.find_series("RETIRED") is None
     assert fake.calls[0].headers["Authorization"] == "Bearer test-key"
@@ -421,7 +421,7 @@ async def test_find_series_reads_a_404_as_none() -> None:
 
 async def test_a_503_is_retried_after_the_wait_it_asks_for() -> None:
     """Retry a 503 once its ``Retry-After`` has passed, on a test clock that makes the wait instant."""
-    fake = FakeTransport().route(
+    fake = FakeTransport().reply(
         "GET",
         "/v1/series/GDP",
         httpx2.Response(503, headers={"Retry-After": "2"}),
@@ -440,7 +440,7 @@ Fault schedules, cassettes and switching the policy off: [testing](https://kelsa
 
 ## Codec flavors
 
-The core imports no codec. A client picks one by import, and both flavors expose `decode`, `decoder` and
+The core imports no codec. A client picks one by import, and both flavors expose `decode`, `decoder`, `encoder` and
 `to_builtins` with the same behaviour: strict typing (a field that changes type fails), unknown fields ignored, and a
 mismatch raised as `DecodeError`, which the client turns into `ResponseParseError`.
 

@@ -3,10 +3,10 @@
 
 """Credentials stay on trusted origins: one request hook, run before every hop.
 
-A credential may be sent only to ``base_url``'s origin and the origins in ``HttpOptions.trusted_origins``. httpx2 runs
-request hooks after the auth flow has stamped the request and before every hop it sends, so :class:`CredentialGuard`
-sees the first request (an absolute cursor URL included), every redirect hop and every hop an auth flow yields. On any
-of them addressed elsewhere it removes:
+A credential may be sent only to ``base_url``'s origin and the origins in ``SecurityOptions.trusted_origins``. httpx2
+runs request hooks after the auth flow has stamped the request and before every hop it sends, so
+:class:`CredentialGuard` sees the first request (an absolute cursor URL included), every redirect hop and every hop an
+auth flow yields. On any of them addressed elsewhere it removes:
 
 * every header and query parameter the client's auth declares it stamps (a
   :class:`~headgate._core.CredentialStamper`: every auth in headgate);

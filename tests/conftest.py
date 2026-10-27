@@ -17,7 +17,7 @@ import anysqlite
 import pytest
 from hishel import AsyncSqliteStorage
 
-from headgate.breaker import DEFAULT_REGISTRY
+from headgate.breaker._registry import DEFAULT_REGISTRY
 from headgate.ratelimit import RateBudget
 from headgate.testing import instant_retries
 

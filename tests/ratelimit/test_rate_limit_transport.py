@@ -30,7 +30,9 @@ from hishel import AsyncSqliteStorage, FilterPolicy
 
 from headgate import HttpOptions, TransportPolicy
 from headgate.cache import HttpCache, PathFragmentFilter, StatusCodeFilter
-from headgate.ratelimit import PathBudgets, Rate, RateBudget, RateLimitTransport, RateRule
+from headgate.ratelimit import Rate, RateBudget, RateRule
+from headgate.ratelimit._budgets import PathBudgets
+from headgate.ratelimit._transport import RateLimitTransport
 from headgate.retry import RetryPolicy
 from tests.support.budgets import default_budget, rate_limit_transport
 from tests.support.clients import StubClient

@@ -12,7 +12,8 @@ import pytest
 
 from headgate import BreakerPolicy, HttpOptions, TransportPolicy
 from headgate._responses import nothing
-from headgate.breaker import DEFAULT_REGISTRY, BreakerState
+from headgate.breaker import BreakerState
+from headgate.breaker._registry import DEFAULT_REGISTRY
 from headgate.errors import ClientError, TransportError
 from headgate.ratelimit import Rate
 from headgate.retry import RetryPolicy

@@ -16,18 +16,11 @@ import time
 import httpx2
 import pytest
 
-from headgate._core import CallContext, CallInfo, Emitter, RateLimited, Timing
+from headgate._core import BudgetBacklogError, CallContext, CallInfo, Emitter, RateLimited, Timing
 from headgate.policy import policy_disabled
-from headgate.ratelimit import (
-    UNLIMITED,
-    Adaptive,
-    BudgetBacklogError,
-    BudgetPausedError,
-    PathBudgets,
-    Rate,
-    RateBudget,
-    RateRule,
-)
+from headgate.ratelimit import UNLIMITED, Adaptive, Rate, RateBudget, RateRule
+from headgate.ratelimit._budget import BudgetPausedError
+from headgate.ratelimit._budgets import PathBudgets
 from headgate.testing import TestClock
 from tests.support.events import Recorder
 

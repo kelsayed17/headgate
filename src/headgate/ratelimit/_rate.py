@@ -9,6 +9,8 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from headgate._core import check_fragment
+
 if TYPE_CHECKING:
     from headgate.ratelimit._budget import RateBudget
 
@@ -44,6 +46,15 @@ class Rate:
     def per_minute(cls, requests: float) -> Rate:
         """Return a rate of *requests* per minute."""
         return cls(requests=requests, period=60.0)
+
+    @classmethod
+    def per_hour(cls, requests: float) -> Rate:
+        """Return a rate of *requests* per hour, for a provider that states its quota hourly.
+
+        Up to *requests* may still go out back to back, as with every rate: for a steadier pace, state the same quota
+        per minute or per second (``Rate.per_hour(3600)`` bursts 3600, ``Rate.per_second(1)`` one).
+        """
+        return cls(requests=requests, period=3600.0)
 
     @property
     def interval(self) -> float:
@@ -90,14 +101,18 @@ class Adaptive:
 
 @dataclass(frozen=True, slots=True)
 class RateRule:
-    """A budget of their own for the requests whose URL path contains ``fragment``.
+    """A budget of their own for the requests whose URL path holds ``fragment``'s segments.
 
     ``rate`` is a :class:`Rate`, from which the client builds a budget of its own, or a
-    :class:`~headgate.ratelimit.RateBudget` shared with whoever else holds it. The fragment is matched as a substring of
-    the URL path, the same idiom :class:`headgate.PathFragmentFilter` uses to scope the cache, and enough for a rule
-    that names one endpoint. The first matching rule wins, and a matching request spends from that rule's budget
-    instead of the client's, not from both.
+    :class:`~headgate.ratelimit.RateBudget` shared with whoever else holds it. The fragment is one or more whole path
+    segments, matched anywhere in the path (``"/exports"`` matches ``/v2/exports/orders.csv``, not
+    ``/v2/exports-archive``), as :class:`~headgate.Route` and the cache's path filter match. The first matching rule
+    wins, and a matching request spends from that rule's budget instead of the client's, not from both.
     """
 
     fragment: str
     rate: Rate | RateBudget
+
+    def __post_init__(self) -> None:
+        """Refuse a fragment that names no path segment, which would match every request."""
+        check_fragment(self.fragment)
