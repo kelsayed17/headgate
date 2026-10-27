@@ -38,8 +38,10 @@ __all__ = ["CallContext", "SendProgress", "Slot"]
 
 #: The one request extension headgate keeps its per-call state in.
 _EXTENSION: Final = "headgate.call"
-#: The extension holding a request's timeouts as they were before :meth:`CallContext.fit_timeouts` first cut them.
+#: The extension holding a request's requested phase limits, including explicit overrides since a previous fit.
 _REQUESTED_TIMEOUT: Final = "headgate.requested_timeout"
+#: The last fitted phase values, copied so an in-place middleware override remains detectable.
+_FITTED_TIMEOUT: Final = "headgate.fitted_timeout"
 
 
 #: A request's httpx2 timeouts as ``(phase, seconds)`` pairs sorted by phase; ``None`` is a phase without a limit.
@@ -194,19 +196,28 @@ class CallContext:
         if remaining is None or not isinstance(timeout, dict):
             return
         # Recorded on the request itself: a call's hops (a token mint, say) may ask for timeouts of their own.
-        request.extensions.setdefault(_REQUESTED_TIMEOUT, timeout)
+        request.extensions[_REQUESTED_TIMEOUT] = dict(self.requested_timeouts(request))
         left = max(remaining, floor)
         request.extensions["timeout"] = {
             phase: left if limit is None else min(limit, left) for phase, limit in timeout.items()
         }
+        request.extensions[_FITTED_TIMEOUT] = dict(request.extensions["timeout"])
 
     @staticmethod
     def requested_timeouts(request: httpx2.Request) -> PhaseTimeouts:
         """Return the httpx2 timeouts *request* asked for, before :meth:`fit_timeouts` cut any of them to a deadline.
 
-        Before any fit, they are its own ``timeout`` extension (none without one).
+        Before any fit, they are its own ``timeout`` extension (none without one). A phase explicitly changed since
+        the last fit is a new requested limit, including a middleware override on a later retry. An override equal to
+        the last fitted value is treated as unchanged.
         """
-        return _named(request.extensions.get(_REQUESTED_TIMEOUT, request.extensions.get("timeout")))
+        current = _named(request.extensions.get("timeout"))
+        original = dict(_named(request.extensions.get(_REQUESTED_TIMEOUT)))
+        fitted = dict(_named(request.extensions.get(_FITTED_TIMEOUT)))
+        return tuple(
+            (phase, original.get(phase, limit) if phase in fitted and limit == fitted[phase] else limit)
+            for phase, limit in current
+        )
 
     @staticmethod
     def timeouts_cut(request: httpx2.Request) -> bool:

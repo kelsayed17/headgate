@@ -23,7 +23,7 @@ import httpx2
 import pytest
 from hishel import FilterPolicy
 
-from headgate import HttpCache, HttpOptions, TransportError, TransportPolicy, UpstreamStatusError
+from headgate import HttpCache, HttpOptions, Timeouts, TransportError, TransportPolicy, UpstreamStatusError
 from headgate._core import CallContext, CallInfo
 from headgate._responses import as_bytes
 from headgate.cache import MethodFilter
@@ -40,6 +40,7 @@ if TYPE_CHECKING:
 
     from hishel import AsyncSqliteStorage
 
+    from headgate._middleware import Next
     from headgate.cache._transport import ResilientCacheTransport
 
 _URL = "https://example.test/files/2025.zip"
@@ -536,14 +537,15 @@ def _due_in(seconds: float) -> httpx2.Request:
         pytest.param(120.0, 1, id="the-timeout-it-asked-for"),
     ],
 )
+@pytest.mark.parametrize("error_type", [httpx2.ReadTimeout, httpx2.TimeoutException])
 async def test_a_timeout_the_deadline_cut_short_is_not_shared(
-    first_due_in: float, calls: int, storage: AsyncSqliteStorage
+    first_due_in: float, calls: int, error_type: type[httpx2.TimeoutException], storage: AsyncSqliteStorage
 ) -> None:
     """A waiting GET with more time left fetches for itself when the first one timed out on its own deadline.
 
-    A timeout of the read timeout both asked for is shared like any other network failure.
+    A timeout of the read timeout both asked for is shared like any other network failure, even without a known phase.
     """
-    network = _GatedNetwork(exc=httpx2.ReadTimeout("slow"))
+    network = _GatedNetwork(exc=error_type("slow"))
     transport = cache_transport(storage, network, policy=_cache_no_get())
 
     first = asyncio.create_task(transport.handle_async_request(_due_in(first_due_in)))
@@ -553,5 +555,132 @@ async def test_a_timeout_the_deadline_cut_short_is_not_shared(
     network.gate.set()
     results = await asyncio.gather(first, waiting, return_exceptions=True)
 
-    assert all(isinstance(result, httpx2.ReadTimeout) for result in results), results
+    assert all(isinstance(result, error_type) for result in results), results
     assert network.calls == calls
+
+
+class _FirstTimeoutNetwork(_GatedNetwork):
+    """The first fetch times out; a later fetch succeeds without sleeping."""
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        self.calls += 1
+        first = self.calls == 1
+        await self.gate.wait()
+        if first:
+            msg = "first deadline"
+            raise httpx2.ReadTimeout(msg, request=request)
+        return httpx2.Response(httpx2.codes.OK, content=_BODY, request=request)
+
+
+@pytest.mark.parametrize(
+    ("error_type", "phase"),
+    [
+        (httpx2.ConnectTimeout, "connect"),
+        (httpx2.ReadTimeout, "read"),
+        (httpx2.WriteTimeout, "write"),
+        (httpx2.PoolTimeout, "pool"),
+        (httpx2.TimeoutException, "unknown"),
+    ],
+)
+@pytest.mark.parametrize("clipped", [False, True])
+async def test_timeout_sharing_uses_only_the_failed_phase(
+    storage: AsyncSqliteStorage, error_type: type[httpx2.TimeoutException], phase: str, *, clipped: bool
+) -> None:
+    """Known-phase timeouts ignore clipping elsewhere; unknown phases preserve deadline handoff."""
+    network = _GatedNetwork(exc=error_type("phase timeout"))
+    limits = dict.fromkeys(("connect", "read", "write", "pool"), 120.0)
+    if not clipped and phase != "unknown":
+        limits[phase] = 1.0
+    transport = cache_transport(storage, network, policy=_cache_no_get())
+    requests = [httpx2.Request("GET", _URL, extensions={"timeout": dict(limits)}) for _ in range(_CONCURRENT)]
+    for request in requests:
+        context = CallContext(CallInfo(method="GET", url=_URL), deadline_after=60.0)
+        context.attach(request)
+        context.fit_timeouts(request)
+    tasks = [asyncio.create_task(transport.handle_async_request(request)) for request in requests]
+    await _eventually(lambda: network.calls == 1)
+    await _let_waiters_arrive()
+    network.gate.set()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    assert all(isinstance(result, error_type) for result in results), results
+    assert network.calls == (_CONCURRENT if clipped or phase == "unknown" else 1)
+
+
+class _TimeoutOverride:
+    """Explicitly set each request's read timeout after the retry layer fitted its deadline."""
+
+    def __init__(self, *, same: bool) -> None:
+        self.calls = 0
+        self.same = same
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        """Override just read, keeping the other phases' independently fitted limits."""
+        self.calls += 1
+        request.extensions["timeout"] = {
+            **request.extensions["timeout"],
+            "read": 1.0 if self.same else float(self.calls),
+        }
+        return await call_next(request)
+
+
+@pytest.mark.parametrize("same", [True, False])
+async def test_middleware_timeout_overrides_define_sharing(storage: AsyncSqliteStorage, *, same: bool) -> None:
+    """Different explicit limits stay separate; the same limit shares its failure without an extra send."""
+    network = _GatedNetwork(exc=httpx2.ReadTimeout("explicit phase limit"))
+    middleware = _TimeoutOverride(same=same)
+    client = StubClient(
+        base_url="https://example.test",
+        rate=UNLIMITED,
+        policy=TransportPolicy(retry=NO_RETRY, deadline=60.0, cache=HttpCache(policy=_cache_no_get(), storage=storage)),
+        http=HttpOptions(
+            transport=network,
+            timeout=Timeouts(connect=30.0, read=30.0, write=30.0, pool=30.0),
+            middleware=(middleware,),
+        ),
+    )
+    async with client:
+        tasks = [asyncio.create_task(client.get("files/2025.zip", expect=as_bytes)) for _ in range(_CONCURRENT)]
+        await _eventually(lambda: middleware.calls == _CONCURRENT)
+        await _eventually(lambda: network.calls == (1 if same else _CONCURRENT))
+        await _let_waiters_arrive()
+        network.gate.set()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    assert all(isinstance(result, TransportError) for result in results), results
+    assert network.calls == (1 if same else _CONCURRENT)
+
+
+class _RetriedTimeoutNetwork(_FirstTimeoutNetwork):
+    """Record the limits actually sent on both attempts of one client call."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reads: list[float] = []
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        self.reads.append(request.extensions["timeout"]["read"])
+        return await super().handle_async_request(request)
+
+
+async def test_middleware_can_change_the_timeout_on_a_later_retry(storage: AsyncSqliteStorage) -> None:
+    """The normal retry path sends the new explicit limit instead of restoring the first attempt's request."""
+    network = _RetriedTimeoutNetwork()
+    network.gate.set()
+    middleware = _TimeoutOverride(same=False)
+    client = StubClient(
+        base_url="https://example.test",
+        rate=UNLIMITED,
+        policy=TransportPolicy(
+            retry=RetryPolicy(attempts=2), deadline=60.0, cache=HttpCache(policy=_cache_no_get(), storage=storage)
+        ),
+        http=HttpOptions(
+            transport=network,
+            timeout=Timeouts(connect=30.0, read=30.0, write=30.0, pool=30.0),
+            middleware=(middleware,),
+        ),
+    )
+    async with client:
+        assert await client.get("files/2025.zip", expect=as_bytes) == _BODY
+    assert network.reads == [1.0, 2.0]
+    assert middleware.calls == len(network.reads)

@@ -6,6 +6,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Fixed
+
+- Concurrent GETs that a middleware gives different timeouts no longer share one download. When a shared download
+  times out in a known phase, a waiting GET fetches for itself only if that phase was one the first request's deadline
+  shortened, rather than if any phase was. A timeout of no known phase still hands off when any phase was shortened.
+
 ## [0.7.0] - 2026-10-26
 
 Makes headgate codec-agnostic: the core speaks to a serialization library only through a `Codec`, msgspec and pydantic

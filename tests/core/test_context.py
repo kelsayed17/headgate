@@ -143,3 +143,19 @@ def test_a_withdrawn_attempt_does_not_count() -> None:
     context.begin_attempt()
     context.withdraw_attempt()
     assert context.attempt == 1
+
+
+def test_fitting_after_an_override_updates_only_the_changed_requested_phase() -> None:
+    """A later attempt uses the override, without treating a previously fitted phase as its original limit."""
+    clock = TestClock()
+    context = _context(clock, deadline_after=10.0)
+    request = httpx2.Request("GET", _URL, extensions={"timeout": {"read": 120.0, "connect": 120.0}})
+    context.fit_timeouts(request)
+    request.extensions["timeout"]["read"] = 1.0
+    clock.advance(1.0)
+    context.fit_timeouts(request)
+    assert context.requested_timeouts(request) == (("connect", 120.0), ("read", 1.0))
+    assert request.extensions["timeout"] == {"read": 1.0, "connect": 9.0}
+    request.extensions["timeout"] = {"pool": None}
+    context.fit_timeouts(request)
+    assert context.requested_timeouts(request) == (("pool", None),)
