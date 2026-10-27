@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 from collections.abc import MutableMapping
 from typing import Protocol
 
@@ -13,7 +14,7 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate._responses import Expect, RefusedError, as_bytes, nothing
+from headgate._responses import Expect, RefusedError, as_bytes, json_reader, nothing
 from headgate.errors import DecodeError, RateLimitError, UpstreamStatusError
 from headgate.msgspec import decode, decoder
 from tests.support.responses import response
@@ -94,6 +95,20 @@ def test_a_check_never_sees_a_body_that_did_not_decode() -> None:
     with pytest.raises(DecodeError):
         decoder(_Env, refusal_check=check)(response(b"not json"))
     assert seen == []
+
+
+def test_a_json_reader_reads_an_empty_body_as_the_empty_array_when_allowed() -> None:
+    """Hand *decode* the empty JSON array for an empty body, only when ``allow_empty_body`` is set."""
+    assert json_reader(json.loads, allow_empty_body=True)(response(b"  ")) == []
+    assert json_reader(json.loads, allow_empty_body=True)(response(b'[{"x": 1}]')) == [{"x": 1}]
+
+
+def test_a_json_reader_raises_the_refused_its_check_returns() -> None:
+    """Run ``refusal_check`` on what *decode* returned, as a codec's reader does."""
+    read = json_reader(lambda content: _Env(**json.loads(content)), refusal_check=_quota_check)
+    with pytest.raises(RefusedError, match="refused: QUOTA"):
+        read(response(b'{"status": "QUOTA"}'))
+    assert read(response(b'{"status": "OK"}')) == _Env(status="OK")
 
 
 def test_as_bytes_hands_back_the_body_undecoded() -> None:
