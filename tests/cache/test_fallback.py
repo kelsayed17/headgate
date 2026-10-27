@@ -494,7 +494,7 @@ async def test_a_storage_fault_while_an_unheld_body_streams_is_a_value_free_tran
     """
     network = TrackingNetwork((b"x" * 10,) * 10)
     storer = stub_client(transport=network, cache=HttpCache(policy=every_get_policy(), storage=storage))
-    async with storer.stream("GET", "big") as stream:
+    async with storer.stream("big") as stream:
         await _Received().drain(stream.aiter_bytes())
     await storer.aclose()
     client = stub_client(
@@ -505,7 +505,7 @@ async def test_a_storage_fault_while_an_unheld_body_streams_is_a_value_free_tran
     received = _Received()
     try:
         with pytest.raises(TransportError) as raised:
-            async with client.stream("GET", "big") as stream:
+            async with client.stream("big") as stream:
                 await received.drain(stream.aiter_bytes())
     finally:
         await client.aclose()

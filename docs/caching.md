@@ -5,16 +5,13 @@ A client caches when its policy says so: `TransportPolicy(cache=HttpCache(...))`
 above the rate budget, so a hit returns before any retry and spends no rate turn.
 
 ```python
-from hishel import AsyncSqliteStorage, FilterPolicy
+from hishel import AsyncSqliteStorage
 
-from headgate import HttpCache, MethodFilter, PathFragmentFilter, StatusCodeFilter, TransportPolicy
+from headgate import HttpCache, TransportPolicy
 
 cache = HttpCache(
-    policy=FilterPolicy(
-        request_filters=[MethodFilter(frozenset({"GET"})), PathFragmentFilter(("/series", "/releases"))],
-        response_filters=[StatusCodeFilter(frozenset({200}))],
-    ),
     storage=AsyncSqliteStorage(database_path="api-cache.db"),  # yours to close; many clients may share it
+    paths=("/series", "/releases"),  # the GETs it keeps, and only their 200s
     ttl=3600,
 )
 policy = TransportPolicy(cache=cache)
@@ -25,16 +22,19 @@ policy = TransportPolicy(cache=cache)
 
 ## What is stored, and for how long
 
-`HttpCache(policy, storage, ttl=None, partition=Partition.CREDENTIAL)`:
+`HttpCache(*, storage, ttl=None, partition=Partition.CREDENTIAL, methods=None, paths=None, statuses=None,
+policy=None)`:
 
-- **`policy`** is a hishel `FilterPolicy`. headgate supplies three filters: `PathFragmentFilter(fragments)` (the URL path
-  contains one of them), `MethodFilter(methods)` and `StatusCodeFilter(codes)`. A `FilterPolicy` stores whenever a
-  request filter matches and an allowed status comes back, **even past a `no-store`**, which is the point for a
-  provider that sends no cache headers, or wrong ones. Body-keyed POST caching is hishel's own
-  `FilterPolicy.use_body_key`.
+- **What is stored**: a request whose method is in `methods` (`{"GET"}` by default) and whose path holds one of
+  `paths` (every path by default; whole segments, as a `RateRule` matches), answered with a status in `statuses`
+  (`{200}` by default). It is stored **even past a `no-store`**, which is the point for a provider that sends no cache
+  headers, or wrong ones.
+- **`policy`** replaces those three with a hishel `FilterPolicy` of your own, built from `headgate.cache`'s
+  `MethodFilter`, `PathFragmentFilter` and `StatusCodeFilter` or your own filters; it cannot be combined with them.
+  Body-keyed POST caching is hishel's own `FilterPolicy.use_body_key`.
 - **Stored on accept.** A response the policy allows is written to storage only once the call's `expect=` reader has
   accepted it. A call whose reader raises stores nothing, so the cache never serves an answer the client refused:
-  a refusal inside a 200 that a `check` catches, an undecodable body, an undeclared status. A declared non-2xx
+  a refusal inside a 200 that a reader's `refusal_check` catches, an undecodable body, an undeclared status. A declared non-2xx
   (`Expect(...).on(404, ...)`) is stored when the filters allow its status. A `stream()` has no reader, so passing its
   head checks accepts it. A write that fails then is counted as a degradation; the call keeps its answer.
 - **`ttl`** is the client's default lifetime in seconds; a call's `cache_ttl=` overrides it.
@@ -100,7 +100,7 @@ back. The call sends `If-None-Match` / `If-Modified-Since` and returns `Fresh(va
 representation, or `NotModified(validator)` for a 304. headgate stores nothing; the representation is yours.
 
 ```python
-from headgate import Fresh, NotModified, Validator, conditional
+from headgate.cache import Fresh, NotModified, Validator, conditional
 from headgate.msgspec import decoder
 
 

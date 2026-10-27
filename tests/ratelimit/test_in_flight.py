@@ -19,8 +19,10 @@ import httpx2
 import pytest
 
 from headgate import HttpOptions
-from headgate.ratelimit import PathBudgets, Rate, RateBudget, RateLimitTransport
+from headgate.ratelimit import Rate, RateBudget
+from headgate.ratelimit._budgets import PathBudgets
 from headgate.ratelimit._inflight import InFlightLimit
+from headgate.ratelimit._transport import RateLimitTransport
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 

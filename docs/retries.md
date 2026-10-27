@@ -9,7 +9,8 @@ Configure it once with `TransportPolicy(retry=RetryPolicy(...))`; override it fo
 turn it off with `retry=False`, or set it per route with `Route(fragment, retry=...)`.
 
 ```python
-from headgate import Backoff, Hedge, RetryBudget, RetryPolicy, TransportPolicy
+from headgate import RetryPolicy, TransportPolicy
+from headgate.retry import Backoff, Hedge, RetryBudget
 
 policy = TransportPolicy(
     retry=RetryPolicy(

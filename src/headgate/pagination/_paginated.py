@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from contextlib import aclosing
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, final
+from typing import TYPE_CHECKING, Literal, Protocol, final
 
 from headgate._failures import loggable_url
 from headgate.errors import ClientError, PageLimitError
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
     from headgate.pagination._pager import Pager, PageRequest
 
-__all__ = ["PageLimit", "Paginated"]
+__all__ = ["PageLimit", "PageWalk", "Paginated"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,8 +48,7 @@ type Fetch[P] = Callable[[PageRequest], Awaitable[tuple[P, httpx2.Response]]]
 """Fetches one page through the client, returning what the call's reader read and the response it read it from."""
 
 
-@final
-class Paginated[P, I]:
+class Paginated[P, I](Protocol):
     """The pages of a paginated endpoint and the items on them, fetched one page at a time as iteration reaches them.
 
     ``async for item in paginated`` yields every item; :meth:`pages` yields the pages themselves; :meth:`collect`
@@ -61,6 +60,23 @@ class Paginated[P, I]:
     instead of looping forever; the requests made are remembered for that, one small key per page. A walk with a
     :class:`PageLimit` fetches at most its ``max_pages``, then raises ``PageLimitError`` or stops, as it says.
     """
+
+    def __aiter__(self) -> AsyncIterator[I]:
+        """Iterate the items of every page, in order."""
+        ...
+
+    def pages(self) -> AsyncIterator[P]:
+        """Iterate the pages, in order."""
+        ...
+
+    async def collect(self, *, max_items: int | None = None) -> list[I]:
+        """Return every item of the walk, in order; with *max_items*, at most that many."""
+        ...
+
+
+@final
+class PageWalk[P, I]:
+    """The :class:`Paginated` :meth:`AsyncBaseClient.paginate <headgate.AsyncBaseClient.paginate>` builds."""
 
     __slots__ = ("_fetch", "_first", "_limit", "_pager", "_source")
 

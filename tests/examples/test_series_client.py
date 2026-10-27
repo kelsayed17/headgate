@@ -18,7 +18,7 @@ _BODY = {"series_id": "GDP", "values": [1.0, 2.5]}
 
 async def test_msgspec_and_pydantic_clients_agree() -> None:
     """Check that both flavors decode the same body to the same values, sending the key as a query parameter."""
-    fakes = [FakeTransport().route("GET", _PATH, httpx2.Response(200, json=_BODY)) for _ in range(2)]
+    fakes = [FakeTransport().reply("GET", _PATH, httpx2.Response(200, json=_BODY)) for _ in range(2)]
     async with example.MsgspecClient("k", transport=fakes[0]) as msgspec_client:
         a = await msgspec_client.get_series("GDP")
     async with example.PydanticClient("k", transport=fakes[1]) as pydantic_client:
@@ -34,7 +34,7 @@ async def test_both_flavors_raise_on_a_drifted_body(
 ) -> None:
     """Check that both flavors raise ``ResponseParseError`` on a body that drifted from the model."""
     drifted = {"series_id": "GDP", "values": "not-a-list"}
-    fake = FakeTransport().route("GET", _PATH, httpx2.Response(200, json=drifted))
+    fake = FakeTransport().reply("GET", _PATH, httpx2.Response(200, json=drifted))
     async with client("k", transport=fake) as api:
         with pytest.raises(ResponseParseError):
             await api.get_series("GDP")

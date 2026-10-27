@@ -95,9 +95,7 @@ class _DowngradedMint(CachedTokenAuth):
         self.hop_answer: httpx2.Response | None = None
 
     @override
-    async def _mint_flow(
-        self, request: httpx2.Request
-    ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         self.hop_answer = yield httpx2.Request("POST", "https://login.example/token")
         yield Minted("token", 3600.0)
 

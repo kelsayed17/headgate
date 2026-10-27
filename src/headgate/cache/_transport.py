@@ -58,13 +58,13 @@ from hishel.httpx2 import AsyncCacheTransport
 
 from headgate._core import CacheOutcome, CacheResult, CallContext
 from headgate.cache._credentials import CredentialScope
+from headgate.cache._policy import filter_policy_of
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Generator, Mapping
 
     from headgate.cache._policy import HttpCache
-
 
 __all__ = [
     "CACHE_DEGRADATIONS",
@@ -548,7 +548,9 @@ class ResilientCacheTransport(AsyncCacheTransport):
 
         Without a *scope*, requests are viewed as a client with no auth would send them.
         """
-        super().__init__(_RestoreRequest(next_transport), storage=_GuardedStorage(cache.storage), policy=cache.policy)
+        super().__init__(
+            _RestoreRequest(next_transport), storage=_GuardedStorage(cache.storage), policy=filter_policy_of(cache)
+        )
         self._backend = cache.storage
         self._scope = CredentialScope() if scope is None else scope
         self._live = next_transport

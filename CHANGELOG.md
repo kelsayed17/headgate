@@ -6,6 +6,96 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+Makes the public API smaller and more regular: the auth hooks lose their underscores, `head()` and `paginate()` take
+what the other verbs take, path rules match whole segments, timeouts are always a `Timeouts`, request bodies get a writer to
+mirror `expect=`, and each package exports only what a client is written with. Each change below says what to write instead.
+
+### Added
+
+- A request-body writer, the mirror of `expect=`: each codec flavor's `encoder(Type, *, drop_none=False)` builds a
+  `Writer[Type]`, and a call sends what it wrote as `body=`: `NEW_ORDER = encoder(NewOrder)`, then
+  `await self.post("orders", body=NEW_ORDER(order), expect=ORDER)`. The writer takes only its own type, msgspec
+  encodes a struct straight to bytes, and the body is sent as `application/json` unless `headers=` sets another
+  `Content-Type`. `EncodedBody`, `Writer` and `json_writer` (for a codec of your own) are exported from `headgate`.
+- `rate=` is optional: without it a client paces nothing itself (`headgate.ratelimit.UNLIMITED`) but still waits out
+  the pauses the server asks for, a 429 or 503 with `Retry-After` and a spent `RateLimit` quota.
+- `Rate.per_hour(requests)`, for a provider that states its quota hourly.
+- `BearerAuth(token)`, for the most common `StaticHeaderAuth({"Authorization": f"Bearer {token}"})`.
+- `HttpCache(methods=, paths=, statuses=)` say what is stored without hishel's `FilterPolicy`: the GETs of `paths`
+  (every path by default) answered with a status in `statuses` (200 by default). `policy=` stays, now optional, for
+  a `FilterPolicy` of your own.
+- `Next`, the type of a middleware's `call_next`, and `ViewOptions`, the options `with_options()` takes, are exported
+  from `headgate`.
+- `FakeTransport.reply()` takes a `Respond`, the step `FaultyTransport` answers with, beside a response, a status or a
+  function: `Respond(503, retry_after=2.0)`.
+
+### Changed
+
+- `HttpOptions`' `trusted_origins`, `allow_private_hosts` and `resolver` move into a group of their own,
+  `SecurityOptions`, exported from `headgate`: write `HttpOptions(security=SecurityOptions(allow_private_hosts=False))`
+  where you wrote `HttpOptions(allow_private_hosts=False)`.
+- `CachedTokenAuth`'s subclass hooks are public: override `mint_token`, `mint_flow`, `attach` and `skips` where you
+  overrode `_mint_token`, `_mint_flow`, `_attach` and `_skips`. A hook under its old name is no longer called, so a
+  subclass that defines only `_mint_token` or `_mint_flow` fails when it is defined.
+- `head()` reads `expect=nothing` when no `expect=` is given: `await client.head(url)` returns `None`.
+- `RateRule`, `Route` and `PathFragmentFilter` match whole path segments instead of any substring: `"/exports"`
+  matches `/v2/exports/orders.csv` but no longer `/v2/exports-archive`. A fragment that names no segment (`""`, `"/"`)
+  is refused with `ValueError`, by `RateRule` and `PathFragmentFilter` too, which used to accept it and match every
+  request.
+- `timeout=` takes only a `Timeouts`, on `HttpOptions`, `with_options()` and every call; a bare number is no longer
+  accepted. A `Timeouts` now sets only the phases it names: a phase left unset takes the view's, the client's or the
+  default (connect 10 s, read 30 s, write 10 s, pool 15 s), so write `Timeouts(read=60.0)` where you wrote `60.0`. A
+  call's or a view's `Timeouts` used to replace all four phases.
+- A decoder's `check=` is `refusal_check=`, the name `HttpOptions` already uses for the same job on the response head:
+  `decoder(Envelope, refusal_check=refusal_in)`. `json_reader` takes it under the same name.
+- `CachedTokenAuth(refresh_margin_s=)` is `CachedTokenAuth(refresh_margin=)`, in seconds like every other duration.
+- In `headgate.testing`, `Respond(status=)` is `Respond(status_code=)`, and `FakeTransport.route()` is
+  `FakeTransport.reply()`, so it no longer shares a name with `headgate.Route`.
+- `stream()` takes the URL first and the method as `method=`, a GET by default: `client.stream("export.csv")`, and
+  `client.stream("jobs", method="POST")` where you wrote `client.stream("POST", "jobs")`.
+- `with_options()` takes its options as `ViewOptions`, and an option left out keeps the outer setting: passing
+  `headers=None`, `timeout=None` or `retry=None` to mean "keep" is no longer accepted; leave the option out.
+- The `event_stream` reader returns each event whole (`httpx2.ServerSentEvent`, with `event`, `data`, `id` and
+  `retry`), as `Stream.aiter_events()` yields them; read `.data` where you used the bytes it returned.
+- `HttpCache`'s filters take any iterable (`MethodFilter({"GET"})`, `StatusCodeFilter([200])`), and `MethodFilter`
+  matches a method in any case.
+- `CachedTokenAuth.reject_credential_rotation` is an instance method named for the auth class, as every mint failure
+  is: call `self.reject_credential_rotation(returned, configured, setting=...)` without `provider=`.
+- `RateBudget.pause_remaining` is a property.
+- `Paginated` and `Stream` are protocols: what `paginate()` and `stream()` return, typed, but not built directly.
+- `Offset(limit=)` is `Offset(page_size=)`, so it no longer shares a name with `paginate(limit=)`, the page budget.
+- `paginate()` takes `follow_redirects=` and `cache_ttl=`, applied to every page as on `get()`. Its options are typed
+  by the new `PageOptions`, `RequestOptions` plus those two.
+
+### Fixed
+
+- `paginate()` sends an `Expect`'s `headers` and `accept` on every page and checks each page's `Content-Type` against
+  `accept`, as a verb does; it used to drop both.
+
+### Removed
+
+- From the root `headgate` package, names that live in a subpackage and are rarely needed to write a client. Import
+  them from there:
+  - `headgate.retry`: `Backoff`, `Hedge`, `RetryBudget`, `NO_RETRY`;
+  - `headgate.ratelimit`: `Adaptive`;
+  - `headgate.breaker`: `BreakerRegistry`;
+  - `headgate.cache`: `Fresh`, `MethodFilter`, `NotModified`, `Partition`, `PathFragmentFilter`, `StatusCodeFilter`,
+    `Validator`, `conditional`;
+  - `headgate.pagination`: `Pager`, `PageRequest`;
+  - `headgate.events`: `Observer`;
+  - `headgate.streaming`: `Stream`.
+- From the subpackages, the machinery the client assembles itself from, which no client calls:
+  - `headgate.retry`: `RetryTransport`, `SendTrackingTransport`, `REPLAYABLE_BODY`;
+  - `headgate.ratelimit`: `RateLimitTransport`, `PathBudgets`, and the `BudgetBacklogError` and `BudgetPausedError`
+    signals, which a call raises as `ClientTimeoutError` and `RateLimitError`;
+  - `headgate.breaker`: `BreakerOpenError` (raised as `CircuitOpenError`), `Transition`, `Verdict`,
+    `DEFAULT_REGISTRY`, `DEFAULT_MAX_HOSTS`;
+  - `headgate.security`: `CredentialGuard`, `CHAIN_ORIGIN`, `address_hook`, `refuse_https_downgrade`.
+- `BreakerState` from `headgate.events` and `headgate.health`: import it from `headgate.breaker`, its one home.
+- `headgate.policy.policy_is_disabled`; `policy_disabled` stays.
+- `RateBudget.wait()`, `observe()`, `occupy()` and `now()`, which only the client's rate-limit layer called, and
+  `Expect.accepts()`, which only the client called.
+
 ## [0.5.0] - 2026-10-26
 
 Adds `Paginated.collect()`, so a walk becomes a list in one call, bounded by items as well as pages. Nothing changes for

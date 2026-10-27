@@ -148,7 +148,7 @@ from http import HTTPStatus
 
 import msgspec
 
-from headgate import AsyncBaseClient, Expect, HttpOptions, LinkHeader, Rate, RateBudget, StaticHeaderAuth, nothing
+from headgate import AsyncBaseClient, BearerAuth, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
 from headgate.msgspec import decoder
 
 
@@ -171,7 +171,7 @@ class GitHub(AsyncBaseClient):
         super().__init__(
             base_url="https://api.github.com",
             rate=RateBudget(Rate.per_second(10), max_in_flight=50),
-            auth=StaticHeaderAuth({"Authorization": f"Bearer {token}"}),
+            auth=BearerAuth(token),
             http=HttpOptions(headers={"Accept": "application/vnd.github+json"}),
         )
 

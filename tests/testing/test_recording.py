@@ -79,9 +79,7 @@ class _FlowAuth(CachedTokenAuth):
     """A token auth that mints through the client's own stack, so its hop passes the middleware."""
 
     @override
-    async def _mint_flow(
-        self, request: httpx2.Request
-    ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         del request
         response = yield httpx2.Request("POST", _MINT_URL)
         yield Minted(response.json()["token"], 3600.0)
@@ -100,7 +98,7 @@ async def test_a_token_mint_is_skipped_and_the_call_itself_is_recorded() -> None
         recorded["call"] = cassettes.before_record_request(_VcrRequest(str(request.url))) is not None
         return httpx2.Response(200, content=b"ok")
 
-    fake = FakeTransport().route("POST", "/token", token).route("GET", "/data", answer)
+    fake = FakeTransport().reply("POST", "/token", token).reply("GET", "/data", answer)
     client = StubClient(
         base_url=_BASE,
         rate=Rate.per_second(1000),

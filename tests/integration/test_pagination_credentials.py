@@ -13,7 +13,7 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate import HttpOptions, NextUrl
+from headgate import HttpOptions, NextUrl, SecurityOptions
 from headgate.msgspec import decoder
 from headgate.testing import FakeTransport
 from tests.integration._support import Page, carried, client, items_of, next_of, real_auths
@@ -27,7 +27,7 @@ def _pages(next_url: str) -> FakeTransport:
     """Return a network serving a first page that links to *next_url*, and the page there."""
     first = httpx2.Response(200, content=msgspec.json.encode(Page(data=[1], next=next_url)))
     second = httpx2.Response(200, content=msgspec.json.encode(Page(data=[2])))
-    return FakeTransport().route("GET", "/v1/items", first).route("GET", "/v1/page2", second)
+    return FakeTransport().reply("GET", "/v1/items", first).reply("GET", "/v1/page2", second)
 
 
 @pytest.mark.parametrize("name", sorted(_AUTHS))
@@ -51,7 +51,7 @@ async def test_a_next_url_on_a_trusted_origin_keeps_the_credentials(name: str) -
     """Send the credentials to a next-page origin the client trusts, exactly as to its own."""
     auth = _AUTHS[name]
     fake = _pages(f"{_FOREIGN}/v1/page2")
-    built = client(fake, auth=auth, http=HttpOptions(trusted_origins=frozenset({_FOREIGN})))
+    built = client(fake, auth=auth, http=HttpOptions(security=SecurityOptions(trusted_origins=frozenset({_FOREIGN}))))
 
     _ = [item async for item in built.paginate("items", expect=decoder(Page), pages=_PAGES)]
 

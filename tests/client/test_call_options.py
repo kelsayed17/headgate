@@ -147,7 +147,7 @@ async def test_a_stream_sends_once_with_retry_false() -> None:
     script = Script(*_FLAKY)
 
     with pytest.raises(UpstreamStatusError):
-        async with _client(script).stream("GET", "events", retry=False):
+        async with _client(script).stream("events", retry=False):
             pass
 
     assert len(script.sent) == 1
@@ -157,7 +157,7 @@ async def test_a_streams_last_event_id_joins_the_calls_own_headers() -> None:
     """Send ``Last-Event-ID`` beside the headers the call passed, not instead of them."""
     script = Script()
 
-    async with _client(script).stream("GET", "events", headers={"X-Trace": "t-1"}, last_event_id="41"):
+    async with _client(script).stream("events", headers={"X-Trace": "t-1"}, last_event_id="41"):
         pass
 
     sent = script.sent[0].headers

@@ -32,12 +32,13 @@ from headgate import (
     TransportPolicy,
     nothing,
 )
-from headgate.msgspec import decode, decoder, to_builtins
+from headgate.msgspec import decode, decoder, encoder
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
-    from headgate import Observer, Paginated
+    from headgate import Paginated
+    from headgate.events import Observer
 
 #: Where tokens are minted: another origin than the API's, trusted for the mint's own hops only.
 MINT_ENDPOINT = "https://auth.shop.example/oauth/token"
@@ -87,9 +88,7 @@ class ShopTokenAuth(CachedTokenAuth):
         return f"{self._form['client_id']}\0{self._form['client_secret']}".encode()
 
     @override
-    async def _mint_flow(
-        self, request: httpx2.Request
-    ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         del request  # the hop needs nothing of the call: it is sent with the call's timeouts already
         # The client's stack paces the hop, retries it when safe, maps its failures, and hands the response back read.
         response = yield httpx2.Request("POST", MINT_ENDPOINT, data=self._form)
@@ -104,6 +103,7 @@ def orders_on(page: list[Order]) -> list[Order]:
 
 
 ORDER = decoder(Order)
+NEW_ORDER = encoder(NewOrder)
 ORDER_OR_REJECTION = Expect(ORDER).on(HTTPStatus.UNPROCESSABLE_ENTITY, decoder(Rejection))
 ORDER_PAGES = LinkHeader(items=orders_on)
 
@@ -145,7 +145,7 @@ class OrdersClient(AsyncBaseClient):
 
     async def place_order(self, order: NewOrder) -> Order | Rejection:
         """Place *order*: the order as created, or the API's documented rejection."""
-        return await self.post("orders", expect=ORDER_OR_REJECTION, json=to_builtins(order))
+        return await self.post("orders", body=NEW_ORDER(order), expect=ORDER_OR_REJECTION)
 
     async def cancel_order(self, order_id: str) -> None:
         """Cancel the order *order_id*."""
@@ -158,6 +158,6 @@ class OrdersClient(AsyncBaseClient):
 
     async def export_orders(self, write: Callable[[bytes], object]) -> None:
         """Stream the CSV export of every order into *write*, a chunk at a time, never holding it whole."""
-        async with self.stream("GET", "exports/orders.csv") as export:
+        async with self.stream("exports/orders.csv") as export:
             async for chunk in export.aiter_bytes():
                 write(chunk)

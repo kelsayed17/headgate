@@ -17,11 +17,13 @@ wire.
 
 from __future__ import annotations
 
+from typing import assert_type
+
 import httpx2
 import msgspec
 import pytest
 
-from headgate import HttpOptions, TransportPolicy
+from headgate import HttpOptions, TransportPolicy, Writer
 from headgate import msgspec as flavor
 from headgate._client import AsyncBaseClient
 from headgate._responses import as_bytes, nothing
@@ -121,6 +123,73 @@ async def test_post_json_body_reaches_content_with_json_content_type() -> None:
     assert wire.last.headers.get("content-type") == "application/json"
 
 
+class _Order(msgspec.Struct, frozen=True, omit_defaults=True):
+    """A request body with a renamed field and an optional one."""
+
+    sku: str = msgspec.field(name="SKU")
+    note: str | None = None
+
+
+_NEW_ORDER = flavor.encoder(_Order)
+
+
+async def test_body_sends_what_an_encoder_wrote_with_its_content_type() -> None:
+    """Send an encoder's bytes, renames and ``omit_defaults`` applied, as ``application/json``."""
+    assert_type(_NEW_ORDER, Writer[_Order])
+    wire = _Wire(body={"value": _VALUE})
+    async with _client(wire) as c:
+        await c.post("orders", body=_NEW_ORDER(_Order(sku="A-1")), expect=decoder(_Model))
+
+    assert wire.last.content == b'{"SKU":"A-1"}'
+    assert wire.last.headers["content-type"] == "application/json"
+
+
+async def test_a_calls_content_type_wins_over_the_writers() -> None:
+    """Keep the ``Content-Type`` a call's ``headers=`` set, as for any header the call sets."""
+    wire = _Wire(body={"value": _VALUE})
+    async with _client(wire) as c:
+        body = _NEW_ORDER(_Order(sku="A-1"))
+        await c.put("orders/1", body=body, headers={"Content-Type": "application/merge-patch+json"}, expect=nothing)
+
+    assert wire.last.headers["content-type"] == "application/merge-patch+json"
+
+
+async def test_an_encoded_body_is_sent_again_on_a_retry() -> None:
+    """Re-send the whole encoded body on a retry, since it is bytes."""
+    statuses = iter((503, 200))
+    sent: list[bytes] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request.content)
+        return httpx2.Response(next(statuses))
+
+    client = AsyncBaseClient(base_url="https://example.test", http=HttpOptions(transport=httpx2.MockTransport(answer)))
+    async with client:
+        await client.put("orders/1", body=_NEW_ORDER(_Order(sku="A-1", note=None)), expect=nothing)
+
+    assert sent == [b'{"SKU":"A-1"}'] * 2
+
+
+def test_drop_none_leaves_out_none_fields_a_struct_would_send() -> None:
+    """Leave out a ``None`` field that ``omit_defaults`` keeps, because its default is not ``None``."""
+
+    class _Patch(msgspec.Struct, frozen=True):
+        """A partial update whose unset fields must not be sent as ``null``."""
+
+        name: str | None = "unchanged"
+        size: int | None = None
+
+    assert flavor.encoder(_Patch, drop_none=True)(_Patch(name=None, size=3)).content == b'{"size":3}'
+    assert flavor.encoder(_Patch)(_Patch(name=None, size=3)).content == b'{"name":null,"size":3}'
+
+
+async def test_body_combines_with_no_other_body_option() -> None:
+    """Refuse ``body=`` beside ``json=``, which httpx2 would drop one of."""
+    async with _client(_Wire()) as c:
+        with pytest.raises(ValueError, match="body= is the whole request body"):
+            await c.post("orders", body=_NEW_ORDER(_Order(sku="A-1")), json={}, expect=nothing)
+
+
 async def test_head_maps_to_head_method() -> None:
     """Check that ``head`` sends a HEAD."""
     wire = _Wire()
@@ -129,6 +198,16 @@ async def test_head_maps_to_head_method() -> None:
 
     assert wire.last.method == "HEAD"
     assert out.status_code == httpx2.codes.OK
+
+
+async def test_head_reads_nothing_by_default() -> None:
+    """Send a HEAD with no ``expect=`` and return ``None``, as ``expect=nothing`` would."""
+    wire = _Wire()
+    async with _client(wire) as c:
+        out = await c.head("thing")
+
+    assert wire.last.method == "HEAD"
+    assert out is None
 
 
 @pytest.mark.parametrize(

@@ -20,8 +20,9 @@ import httpx2
 import pytest
 
 from headgate._core import BREAKER_GATE, BudgetBacklogError, CallContext, CallInfo, Emitter, RetryScheduled
-from headgate.retry import Backoff, Hedge, RetryBudget, RetryPolicy, RetryTransport
+from headgate.retry import Backoff, Hedge, RetryBudget, RetryPolicy
 from headgate.retry._tracking import head_size
+from headgate.retry._transport import RetryTransport
 from headgate.testing import FaultyTransport, Respond, TestClock
 
 if TYPE_CHECKING:

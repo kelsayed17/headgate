@@ -75,7 +75,7 @@ def test_decoder_reads_a_union_of_shapes() -> None:
 
 def test_a_check_that_refuses_raises_the_refused_it_returned() -> None:
     """Raise the ``RefusedError`` a check returns, with its code and kind."""
-    read = decoder(_Env, check=_quota_check)
+    read = decoder(_Env, refusal_check=_quota_check)
     with pytest.raises(RefusedError) as ei:
         read(response(b'{"status": "QUOTA"}'))
     assert (ei.value.code, ei.value.kind) == ("QUOTA", RateLimitError)
@@ -92,7 +92,7 @@ def test_a_check_never_sees_a_body_that_did_not_decode() -> None:
         return None
 
     with pytest.raises(DecodeError):
-        decoder(_Env, check=check)(response(b"not json"))
+        decoder(_Env, refusal_check=check)(response(b"not json"))
     assert seen == []
 
 

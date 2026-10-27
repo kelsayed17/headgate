@@ -50,7 +50,8 @@ of its own for that origin, with exactly the thresholds it asked for, rather tha
 to call happened to set.
 
 ```python
-from headgate import BreakerPolicy, BreakerRegistry, TransportPolicy
+from headgate import BreakerPolicy, TransportPolicy
+from headgate.breaker import BreakerRegistry
 
 critical = BreakerRegistry(max_hosts=256)
 policy = TransportPolicy(breaker=BreakerPolicy(failure_threshold=3, recovery_timeout=30.0, registry=critical))

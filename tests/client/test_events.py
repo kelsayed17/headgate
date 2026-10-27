@@ -37,7 +37,7 @@ class _Broken:
 
 def _get(path: str, *replies: Reply) -> FakeTransport:
     """Return a fake network answering ``GET /v1/<path>`` with *replies*."""
-    return FakeTransport().route("GET", f"/v1/{path}", *replies)
+    return FakeTransport().reply("GET", f"/v1/{path}", *replies)
 
 
 def _client(
@@ -167,7 +167,7 @@ async def test_a_streamed_get_reports_its_start_and_end() -> None:
     """Report a ``stream`` call like any other, its status included."""
     recorder = Recorder()
     client = _client(_get("f", httpx2.Response(200, content=b"abc")), recorder)
-    async with client.stream("GET", "f") as stream:
+    async with client.stream("f") as stream:
         chunks = [chunk async for chunk in stream.aiter_bytes()]
 
     assert b"".join(chunks) == b"abc"

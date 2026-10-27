@@ -44,10 +44,10 @@ def _every_layer(storage: AsyncSqliteStorage, recorder: Recorder) -> StubClient:
     """Build a client with every reporting layer: retries, a cache, a breaker that trips at once, observers."""
     fake = (
         FakeTransport()
-        .route("GET", "/v1/cached", httpx2.Response(200, headers=_DEPRECATED))
-        .route("GET", "/v1/flaky", 503, 200)
-        .route("GET", "/v1/limited", _LIMITED)
-        .route("GET", "/v1/down", 503)
+        .reply("GET", "/v1/cached", httpx2.Response(200, headers=_DEPRECATED))
+        .reply("GET", "/v1/flaky", 503, 200)
+        .reply("GET", "/v1/limited", _LIMITED)
+        .reply("GET", "/v1/down", 503)
     )
     policy = TransportPolicy(
         cache=HttpCache(policy=every_get_policy(), storage=storage), breaker=BreakerPolicy(failure_threshold=1)

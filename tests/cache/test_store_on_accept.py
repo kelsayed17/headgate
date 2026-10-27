@@ -3,8 +3,8 @@
 
 """A miss is stored only once the call's reader accepts the response.
 
-Many providers report a refusal inside a 200 (a spent quota, a bad key), which a reader's ``check`` turns into an
-error. Stored on the way through, that refusal would be served for the entry's whole lifetime without the provider
+Many providers report a refusal inside a 200 (a spent quota, a bad key), which a reader's ``refusal_check`` turns into
+an error. Stored on the way through, that refusal would be served for the entry's whole lifetime without the provider
 being asked again. Stored on accept, a response any reader refuses is never stored, while one it accepts is, as before.
 """
 
@@ -102,7 +102,7 @@ async def test_a_stream_is_stored_once_its_head_is_accepted(storage: AsyncSqlite
     network = _Provider(_ANSWER)
     client = stub_client(transport=network, cache=HttpCache(policy=every_get_policy(), storage=storage))
     try:
-        async with client.stream("GET", "reading") as stream:
+        async with client.stream("reading") as stream:
             assert [chunk async for chunk in stream.aiter_bytes()] == [_ANSWER]
         assert await client.get("reading", expect=as_bytes) == _ANSWER
     finally:

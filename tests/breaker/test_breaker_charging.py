@@ -19,8 +19,9 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage, FilterPolicy
 
-from headgate import BreakerPolicy, BreakerRegistry, HttpCache, HttpOptions, TransportPolicy
+from headgate import BreakerPolicy, HttpCache, HttpOptions, TransportPolicy
 from headgate._core import BREAKER_GATE, BreakerChanged, BreakerState, CallContext
+from headgate.breaker import BreakerRegistry
 from headgate.cache import StatusCodeFilter
 from headgate.errors import ClientError, RateLimitError, UpstreamStatusError
 from headgate.ratelimit import Rate

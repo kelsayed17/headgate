@@ -22,15 +22,15 @@ from tests.support.clients import StubClient
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-#: Longer than the default 60 s deadline.
-_LONG = 120.0
+#: A read timeout longer than the default 60 s deadline.
+_LONG = Timeouts(read=120.0)
 #: The default timeouts, all within the default deadline.
 _DEFAULTS = Timeouts()
 
 
-def _client(*, timeout: Timeouts | float = _DEFAULTS, deadline: float | None = 60.0) -> StubClient:
+def _client(*, timeout: Timeouts = _DEFAULTS, deadline: float | None = 60.0) -> StubClient:
     """Build a client answering every GET with 200, with *timeout* under *deadline*."""
-    fake = FakeTransport().route("GET", "/x", 200)
+    fake = FakeTransport().reply("GET", "/x", 200)
     return StubClient(
         base_url="https://api.example.test",
         rate=UNLIMITED,
@@ -48,7 +48,7 @@ def _client(*, timeout: Timeouts | float = _DEFAULTS, deadline: float | None = 6
         ),
         pytest.param(lambda: _client().with_options(timeout=_LONG), "read timeout 120s", id="a-view"),
         pytest.param(
-            lambda: _client().with_options(deadline=5.0).with_options(timeout=10.0),
+            lambda: _client().with_options(deadline=5.0).with_options(timeout=Timeouts(read=10.0)),
             "read timeout 10s is longer than the 5s deadline",
             id="a-view-over-a-view",
         ),

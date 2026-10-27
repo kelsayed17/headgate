@@ -6,12 +6,12 @@ should not be held whole: a large download, or a server-sent event stream that n
 ## Streams
 
 ```python
-async with client.stream("GET", "exports/2026.csv") as stream:
+async with client.stream("exports/2026.csv") as stream:
     async for chunk in stream.aiter_bytes():
         sink.write(chunk)
 ```
 
-`client.stream(method, url, *, retry=..., follow_redirects=..., last_event_id=None, **options)` sends the request when
+`client.stream(url, *, method="GET", retry=..., follow_redirects=..., last_event_id=None, **options)` sends the request when
 the block is entered and hands it a `Stream` once a 2xx head has arrived. It runs through the same stack and failure
 ladder as a verb, except that:
 
@@ -34,12 +34,12 @@ A `Stream` has `status_code`, `headers` and `request_id`, and three ways to read
 ## Server-sent events
 
 ```python
-async with client.stream("GET", "events", headers={"Accept": "text/event-stream"}) as stream:
+async with client.stream("events", headers={"Accept": "text/event-stream"}) as stream:
     async for event in stream.aiter_events():
         handle(event.event, event.data)
     resume_from = stream.last_event_id
 
-async with client.stream("GET", "events", last_event_id=resume_from) as stream:
+async with client.stream("events", last_event_id=resume_from) as stream:
     ...
 ```
 
@@ -49,12 +49,25 @@ async with client.stream("GET", "events", last_event_id=resume_from) as stream:
 `ResponseTooLargeError`. `stream.last_event_id` is the last `id` seen; pass it as `last_event_id=` when re-opening, and
 the request carries `Last-Event-ID` so the server resumes after it.
 
-For an event stream that is short and bounded, the buffered `event_stream` reader returns the `data` of every event in
-a body (see [responses](responses.md#readers)).
+For an event stream that is short and bounded, the buffered `event_stream` reader returns every event in a body, in the
+shape `aiter_events()` yields them (see [responses](responses.md#readers)).
 
 ## Request bodies
 
-A verb takes `json=` (build it with a codec's `to_builtins`), `data=` (form fields), or one of:
+A verb takes **`body=`**, a value a codec flavor's `encoder` wrote: the mirror of `expect=`, built once at import, so
+a writer takes only its own type.
+
+```python
+from headgate.msgspec import encoder
+
+NEW_ORDER = encoder(NewOrder)
+...
+await self.post("orders", body=NEW_ORDER(order), expect=ORDER)
+```
+
+It is sent as `application/json` unless `headers=` sets another `Content-Type`, and it is bytes, so the call stays
+retryable. A verb also takes `json=` (builtins, which a codec's `to_builtins` builds), `data=` (form fields), or one
+of:
 
 - **`content=`**, a raw body:
   - `bytes`, sent as they are, and retryable;

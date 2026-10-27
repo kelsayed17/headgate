@@ -10,11 +10,9 @@ import json
 import pytest
 
 from headgate import (
-    Backoff,
     HttpOptions,
     IdempotencyKeys,
     RateLimitError,
-    RetryBudget,
     RetryPolicy,
     TransportPolicy,
     UpstreamStatusError,
@@ -24,6 +22,7 @@ from headgate import (
 from headgate._core import RetryScheduled, Timing, timing_override
 from headgate.errors import TransportError
 from headgate.ratelimit import Rate
+from headgate.retry import Backoff, RetryBudget
 from headgate.testing import ConnectFail, FaultyTransport, Respond, Slow, TestClock
 from tests.support.breakers import failures
 from tests.support.clients import StubClient

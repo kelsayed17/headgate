@@ -58,7 +58,7 @@ A client is a subclass. The configuration lives in `__init__`, and each endpoint
 of [`examples/github_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/github_client.py), a tested client for the GitHub REST API:
 
 ```python
-from headgate import AsyncBaseClient, Expect, HttpOptions, LinkHeader, Rate, RateBudget, StaticHeaderAuth, nothing
+from headgate import AsyncBaseClient, BearerAuth, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
 from headgate.msgspec import decoder
 
 # Readers and pagers are values: build them once, at import, where a bad declaration fails.
@@ -77,7 +77,7 @@ class GitHub(AsyncBaseClient):
             base_url=API,
             # Well under the 5,000 requests an hour a token gets, and never more than 50 at once.
             rate=RateBudget(Rate.per_second(10), max_in_flight=50),
-            auth=StaticHeaderAuth({"Authorization": f"Bearer {token}"}),
+            auth=BearerAuth(token),
             http=HttpOptions(
                 transport=transport,
                 headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
@@ -164,7 +164,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
-from headgate import AsyncBaseClient, Cursor, Expect, HttpOptions, Rate, StaticHeaderAuth, nothing
+from headgate import AsyncBaseClient, BearerAuth, Cursor, Expect, HttpOptions, Rate, nothing
 from headgate.msgspec import decoder
 
 if TYPE_CHECKING:
@@ -219,7 +219,7 @@ class CatalogClient(AsyncBaseClient):
         super().__init__(
             base_url="https://api.catalog.example/v1",
             rate=Rate.per_second(10),
-            auth=StaticHeaderAuth({"Authorization": f"Bearer {api_key}"}),
+            auth=BearerAuth(api_key),
             http=HttpOptions(transport=transport),
         )
 
@@ -297,8 +297,9 @@ How the pieces fit together, for contributors and the curious: [design](https://
 
 ## Configuration
 
-`AsyncBaseClient(*, base_url, rate, auth=None, policy=TransportPolicy(), http=HttpOptions())`. `rate` is a `Rate` (a
-budget of the client's own) or a `RateBudget` shared with other clients. `TransportPolicy` says what the stack does to
+`AsyncBaseClient(*, base_url, rate=UNLIMITED, auth=None, policy=TransportPolicy(), http=HttpOptions())`. `rate` is a
+`Rate` (a budget of the client's own) or a `RateBudget` shared with other clients; without one the client paces nothing
+itself but still waits out the pauses the server asks for. `TransportPolicy` says what the stack does to
 every request, `HttpOptions` how requests are sent and read. Both are frozen and validate on construction.
 
 <details>
@@ -345,8 +346,8 @@ class OrdersClient(AsyncBaseClient):
 | `deadline` | `60.0` seconds per call | | `headers` | none beyond `User-Agent` |
 | `breaker` | `BreakerPolicy()`: 5 failures, 60 s | | `follow_redirects`, `max_redirects` | `True`, `5` |
 | `rate_limits` | none | | `max_response_bytes` | 32 MiB |
-| `cache` | none | | `trusted_origins` | `base_url`'s origin only |
-| `idempotency` | none | | `allow_private_hosts` | `True` (SSRF guard off) |
+| `cache` | none | | `security` | `SecurityOptions()`: credentials to `base_url`'s origin only, SSRF guard off |
+| `idempotency` | none | | `refusal_check` | none |
 | `routes` | none | | `observers`, `middleware` | none |
 
 Every option, its validation and the precedence of call, view, route and policy:
@@ -354,11 +355,11 @@ Every option, its validation and the precedence of call, view, route and policy:
 
 ## Per-call options
 
-Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`) takes the URL, `expect=`, and optionally `retry=False` or
-a `RetryPolicy`, `follow_redirects=`, `cache_ttl=`, `timeout=`, `deadline=`, `idempotency_key=`, and the request
-options `params=`, `headers=`, `json=`, `data=`, `content=` and `files=`. `client.with_options(headers=...,
-timeout=..., deadline=..., retry=...)` returns a view with other defaults that shares the pool, the budgets and the
-breakers; the client it came from owns the pool.
+Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`) takes the URL, `expect=` (on `head`, `nothing` unless
+given), and optionally `retry=False` or a `RetryPolicy`, `follow_redirects=`, `cache_ttl=`, `timeout=`, `deadline=`,
+`idempotency_key=`, and the request options `params=`, `headers=`, `body=` (what a codec's `encoder` wrote), `json=`,
+`data=`, `content=` and `files=`. `client.with_options(headers=..., timeout=..., deadline=..., retry=...)` returns a
+view with other defaults that shares the pool, the budgets and the breakers; the client it came from owns the pool.
 
 ## Errors
 
@@ -402,17 +403,16 @@ More in [errors](https://kelsayed17.github.io/headgate/errors/).
 for the network, and a `TestClock` makes every wait instant.
 
 ```python
-import httpx2
 from quickstart import CatalogClient
 
-from headgate.testing import FakeTransport, TestClock, isolated_breakers
+from headgate.testing import FakeTransport, Respond, TestClock, isolated_breakers
 
 GDP = {"id": "GDP", "title": "Gross domestic product", "values": [27.4, 28.1]}
 
 
 async def test_find_series_reads_a_404_as_none() -> None:
     """Return ``None`` for the 404 the endpoint documents, signing the request with the key."""
-    fake = FakeTransport().route("GET", "/v1/series/RETIRED", 404)
+    fake = FakeTransport().reply("GET", "/v1/series/RETIRED", 404)
     async with CatalogClient("test-key", transport=fake) as catalog:
         assert await catalog.find_series("RETIRED") is None
     assert fake.calls[0].headers["Authorization"] == "Bearer test-key"
@@ -420,12 +420,7 @@ async def test_find_series_reads_a_404_as_none() -> None:
 
 async def test_a_503_is_retried_after_the_wait_it_asks_for() -> None:
     """Retry a 503 once its ``Retry-After`` has passed, on a test clock that makes the wait instant."""
-    fake = FakeTransport().route(
-        "GET",
-        "/v1/series/GDP",
-        httpx2.Response(503, headers={"Retry-After": "2"}),
-        httpx2.Response(200, json=GDP),
-    )
+    fake = FakeTransport().reply("GET", "/v1/series/GDP", Respond(503, retry_after=2.0), Respond(json=GDP))
     clock = TestClock()
     with clock.install(), isolated_breakers():  # the clients built in the block use them
         catalog = CatalogClient("test-key", transport=fake)
@@ -439,7 +434,7 @@ Fault schedules, cassettes and switching the policy off: [testing](https://kelsa
 
 ## Codec flavors
 
-The core imports no codec. A client picks one by import, and both flavors expose `decode`, `decoder` and
+The core imports no codec. A client picks one by import, and both flavors expose `decode`, `decoder`, `encoder` and
 `to_builtins` with the same behaviour: strict typing (a field that changes type fails), unknown fields ignored, and a
 mismatch raised as `DecodeError`, which the client turns into `ResponseParseError`.
 

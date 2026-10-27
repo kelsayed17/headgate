@@ -17,8 +17,8 @@ import anysqlite
 import pytest
 from hishel import AsyncSqliteStorage
 
-from headgate.breaker import DEFAULT_REGISTRY
-from headgate.ratelimit import RateBudget
+from headgate.breaker._registry import DEFAULT_REGISTRY
+from headgate.ratelimit._budget import Pacer
 from headgate.testing import instant_retries
 
 if TYPE_CHECKING:
@@ -54,10 +54,10 @@ def no_rate_limit(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatc
     if request.node.get_closest_marker("transport_policy"):
         return
 
-    async def admit_at_once(_budget: RateBudget, _context: CallContext) -> None:
+    async def admit_at_once(_budget: Pacer, _context: CallContext) -> None:
         """Admit the request without waiting for its turn or a server pause."""
 
-    monkeypatch.setattr(RateBudget, "wait", admit_at_once)
+    monkeypatch.setattr(Pacer, "wait", admit_at_once)
 
 
 @pytest.fixture

@@ -19,6 +19,7 @@ from hypothesis import strategies as st
 from headgate import (
     ClientError,
     Cursor,
+    EncodedBody,
     Expect,
     HttpOptions,
     LinkHeader,
@@ -26,18 +27,19 @@ from headgate import (
     Offset,
     PageLimit,
     PageLimitError,
-    PageRequest,
     RequestOptions,
+    ResponseParseError,
     UpstreamStatusError,
 )
 from headgate.msgspec import decoder
+from headgate.pagination import PageRequest
 from headgate.ratelimit import Rate
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from headgate import Pager
+    from headgate.pagination import Pager
 
 _BASE = "https://api.test"
 _RATE = Rate.per_second(100)
@@ -147,7 +149,7 @@ async def test_offset_pages_advance_by_the_items_received_until_a_short_page() -
         return _page(request, [i for i in range(offset, offset + 2) if i < total])
 
     api = _Api(answer)
-    pages = Offset(items=items_of, limit=2, start=0)
+    pages = Offset(items=items_of, page_size=2, start=0)
     items = [
         item.id async for item in api.client().paginate("items", expect=decoder(Page), pages=pages, params={"limit": 2})
     ]
@@ -164,14 +166,14 @@ async def test_offset_stops_at_an_empty_page_and_counts_from_start() -> None:
         return _page(request, [skip] if skip < end else [])
 
     api = _Api(answer)
-    pages = Offset(items=items_of, limit=1, param="skip", start=10)
+    pages = Offset(items=items_of, page_size=1, param="skip", start=10)
     assert [item.id async for item in api.client().paginate("items", expect=decoder(Page), pages=pages)] == [10, 11]
     assert [url.params["skip"] for url in api.sent] == ["10", "11", "12"]
 
 
 def test_offset_resumes_from_start_when_the_request_lacks_its_parameter() -> None:
     """Treat a request without the offset parameter as being at ``start``."""
-    pages = Offset(items=items_of, limit=1, start=3)
+    pages = Offset(items=items_of, page_size=1, start=3)
     following = pages.next_page(Page([Item(1)]), PageRequest("items"), httpx2.Response(200))
     assert following == PageRequest("items", {"offset": 4})
 
@@ -236,6 +238,65 @@ async def test_each_page_goes_through_the_stack() -> None:
     assert received == [1, 2, 3]
 
 
+async def test_every_page_carries_the_walks_cache_ttl() -> None:
+    """Stamp ``cache_ttl=`` on every page's GET, as on one ``get``."""
+    ttl = 30.0
+    stamped: list[object] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        stamped.append(request.extensions.get("hishel_ttl"))
+        return _by_cursor(request)
+
+    pages = Cursor(items=items_of, next=cursor_of, param="after")
+    paginated = _Api(answer).client().paginate("items", expect=decoder(Page), pages=pages, cache_ttl=ttl)
+    assert len([item async for item in paginated]) == len((1, 2, 3, 4))
+    assert stamped == [ttl, ttl, ttl]
+
+
+async def test_a_walk_that_does_not_follow_redirects_raises_a_pages_redirect() -> None:
+    """Raise a page's redirect as its 3xx with ``follow_redirects=False``, as on one ``get``."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/moved":
+            return httpx2.Response(302, headers={"Location": f"{_BASE}/items"}, request=request)
+        return _by_cursor(request)
+
+    pages = Cursor(items=items_of, next=cursor_of, param="after")
+    api = _Api(answer)
+    with pytest.raises(UpstreamStatusError) as raised:
+        await api.client().paginate("moved", expect=decoder(Page), pages=pages, follow_redirects=False).collect()
+    assert raised.value.status_code == httpx2.codes.FOUND
+    assert [url.path for url in api.sent] == ["/moved"]
+
+
+async def test_every_page_sends_the_expects_headers_and_accept() -> None:
+    """Send an ``Expect``'s ``headers`` and ``accept`` on every page, as one ``get`` does."""
+    sent: list[httpx2.Request] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        page = _by_cursor(request)
+        return httpx2.Response(200, json=msgspec.json.decode(page.content), request=request)
+
+    expect = Expect(decoder(Page), headers={"X-Api-Version": "2"}, accept="application/json")
+    pages = Cursor(items=items_of, next=cursor_of, param="after")
+    assert len(await _Api(answer).client().paginate("items", expect=expect, pages=pages).collect()) == len((1, 2, 3, 4))
+    assert [(r.headers["X-Api-Version"], r.headers["Accept"]) for r in sent] == [("2", "application/json")] * 3
+
+
+async def test_a_page_of_another_media_type_than_the_expect_accepts_raises() -> None:
+    """Refuse a page whose ``Content-Type`` the ``Expect`` does not accept, before its reader runs."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        page = _by_cursor(request)
+        return httpx2.Response(200, content=page.content, headers={"Content-Type": "text/html"}, request=request)
+
+    expect = Expect(decoder(Page), accept="application/json")
+    paginated = _Api(answer).client().paginate("items", expect=expect, pages=LinkHeader(items=items_of))
+    with pytest.raises(ResponseParseError, match="text/html"):
+        await paginated.collect()
+
+
 async def test_a_declared_answer_is_a_page() -> None:
     """Read a status the call declared with ``Expect.on`` as a page."""
 
@@ -281,10 +342,16 @@ async def test_a_repeating_cursor_on_a_template_url_raises() -> None:
 
 
 #: One request body of each kind.
-_BODIES: list[RequestOptions] = [{"json": {}}, {"data": {}}, {"content": b"x"}, {"files": {"f": b"x"}}]
+_BODIES: list[RequestOptions] = [
+    {"body": EncodedBody(b"{}")},
+    {"json": {}},
+    {"data": {}},
+    {"content": b"x"},
+    {"files": {"f": b"x"}},
+]
 
 
-@pytest.mark.parametrize("body", _BODIES, ids=["json", "data", "content", "files"])
+@pytest.mark.parametrize("body", _BODIES, ids=["body", "json", "data", "content", "files"])
 def test_a_body_option_is_refused(body: RequestOptions) -> None:
     """Refuse a request body: every page is a GET."""
     client = _Api(_by_cursor).client()
@@ -296,11 +363,11 @@ def test_a_body_option_is_refused(body: RequestOptions) -> None:
     "build",
     [
         lambda: Cursor(items=items_of, next=cursor_of, param=""),
-        lambda: Offset(items=items_of, limit=0),
-        lambda: Offset(items=items_of, limit=1, start=-1),
-        lambda: Offset(items=items_of, limit=1, param=""),
+        lambda: Offset(items=items_of, page_size=0),
+        lambda: Offset(items=items_of, page_size=1, start=-1),
+        lambda: Offset(items=items_of, page_size=1, param=""),
     ],
-    ids=["empty-cursor-param", "zero-limit", "negative-start", "empty-offset-param"],
+    ids=["empty-cursor-param", "zero-page-size", "negative-start", "empty-offset-param"],
 )
 def test_a_strategy_refuses_a_bad_configuration(build: Callable[[], object]) -> None:
     """Refuse a strategy that could not page."""

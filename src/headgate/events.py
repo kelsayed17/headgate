@@ -13,7 +13,6 @@ observer's exception never reaches the call; it is counted in :func:`headgate.he
 from headgate._core import (
     AttemptFinished,
     BreakerChanged,
-    BreakerState,
     CacheOutcome,
     CacheResult,
     CallEvent,
@@ -30,7 +29,6 @@ from headgate._core import (
 __all__ = [
     "AttemptFinished",
     "BreakerChanged",
-    "BreakerState",
     "CacheOutcome",
     "CacheResult",
     "CallEvent",

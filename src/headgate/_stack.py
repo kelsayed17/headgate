@@ -22,7 +22,7 @@ redirect or an auth flow:
 
 * request hooks: the credential guard (:class:`~headgate.security.CredentialGuard`, which also runs below the last
   middleware, where what a middleware stamps is visible), then, over a custom network
-  transport with ``HttpOptions(allow_private_hosts=False)``, the SSRF guard's vetting
+  transport with ``SecurityOptions(allow_private_hosts=False)``, the SSRF guard's vetting
   (:func:`~headgate.security.address_hook`); the default transport pins vetted addresses itself
   (:class:`~headgate.security.PinnedHTTPTransport`);
 * response hooks: the https-downgrade refusal, the refusal to re-send a one-shot body on a redirect, and the drop of a
@@ -50,9 +50,14 @@ from headgate._redirects import drop_followed_redirect_body, refuse_unreplayable
 from headgate._user_agent import user_agent
 from headgate.cache._credentials import credential_scope
 from headgate.cache._transport import ResilientCacheTransport
-from headgate.ratelimit import PathBudgets, RateLimitTransport
-from headgate.retry import RetryTransport, SendTrackingTransport
-from headgate.security import AddressGuard, CredentialGuard, PinnedHTTPTransport, address_hook, refuse_https_downgrade
+from headgate.ratelimit._budgets import PathBudgets
+from headgate.ratelimit._transport import RateLimitTransport
+from headgate.retry._tracking import SendTrackingTransport
+from headgate.retry._transport import RetryTransport
+from headgate.security import AddressGuard, PinnedHTTPTransport
+from headgate.security._credentials import CredentialGuard
+from headgate.security._downgrade import refuse_https_downgrade
+from headgate.security._transport import address_hook
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -83,7 +88,7 @@ class Credentials:
         guard = CredentialGuard(
             auth=auth,
             base_url=httpx2.URL(base_url),
-            trusted_origins=http.trusted_origins,
+            trusted_origins=http.security.trusted_origins,
             cookie_jar=http.cookies,
             middleware=http.middleware,
         )
@@ -156,9 +161,10 @@ def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
 
 def _address_guard(http: HttpOptions) -> AddressGuard | None:
     """Return the SSRF guard *http* asks for, or ``None`` when it allows private hosts."""
-    if http.allow_private_hosts:
+    security = http.security
+    if security.allow_private_hosts:
         return None
-    return AddressGuard() if http.resolver is None else AddressGuard(http.resolver)
+    return AddressGuard() if security.resolver is None else AddressGuard(security.resolver)
 
 
 def _request_hooks(

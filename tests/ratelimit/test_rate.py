@@ -15,9 +15,10 @@ _HALF = 0.5
 
 
 def test_rate_units_are_in_the_constructor() -> None:
-    """Name the unit in the constructor: ``per_second`` is a 1 s period, ``per_minute`` a 60 s one."""
+    """Name the unit in the constructor: ``per_second`` is a 1 s period, ``per_minute`` 60 s, ``per_hour`` 3600 s."""
     assert Rate.per_second(2) == Rate(requests=2, period=1.0)
     assert Rate.per_minute(120) == Rate(requests=120, period=60.0)
+    assert Rate.per_hour(5000) == Rate(requests=5000, period=3600.0)
 
 
 @pytest.mark.parametrize(

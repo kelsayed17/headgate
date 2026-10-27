@@ -4,7 +4,8 @@
 """The pydantic codec flavor: strict JSON validation into pydantic models, and request-body preparation.
 
 The same surface as :mod:`headgate.msgspec`, so switching flavor is changing one import
-(``from headgate.pydantic import decoder, to_builtins``). Wire models are frozen, strict ``BaseModel`` classes::
+(``from headgate.pydantic import decoder, encoder, to_builtins``). Wire models are frozen, strict ``BaseModel``
+classes::
 
     class Row(BaseModel):
         model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
@@ -33,6 +34,7 @@ except ImportError as exc:
 
 from headgate._codec import drop_none as _drop_none
 from headgate._failures import shorten
+from headgate._request_body import json_writer
 from headgate._responses import json_reader
 from headgate.errors import DecodeError
 
@@ -41,9 +43,10 @@ if TYPE_CHECKING:
 
     from typing_extensions import TypeForm
 
+    from headgate._request_body import Writer
     from headgate._responses import Reader, RefusedError
 
-__all__ = ["decode", "decoder", "to_builtins"]
+__all__ = ["decode", "decoder", "encoder", "to_builtins"]
 
 #: How many of a validation's failures a ``DecodeError`` message names; the count of the rest follows them.
 _ERRORS_SHOWN = 5
@@ -100,16 +103,31 @@ def decoder[T](
     *,
     strict: bool = True,
     allow_empty_body: bool = False,
-    check: Callable[[T], RefusedError | None] | None = None,
+    refusal_check: Callable[[T], RefusedError | None] | None = None,
 ) -> Reader[T]:
     """Build a reader that validates the body as strict JSON against the type expression *type_*.
 
     Accepts the same shapes as :func:`headgate.msgspec.decoder` (an enveloped model, ``list[Row]``,
     ``dict[str, Row]``, a union of shapes). One malformed element fails the whole body. ``allow_empty_body`` and
-    ``check`` are documented on :func:`~headgate._responses.json_reader`.
+    ``refusal_check`` are documented on :func:`~headgate._responses.json_reader`.
     """
     decode_body = functools.partial(_validate_with, _adapter(type_), strict=strict)
-    return json_reader(decode_body, allow_empty_body=allow_empty_body, check=check)
+    return json_reader(decode_body, allow_empty_body=allow_empty_body, refusal_check=refusal_check)
+
+
+def encoder[T](type_: TypeForm[T], *, drop_none: bool = False) -> Writer[T]:
+    """Build a writer that encodes a value of the type expression *type_* as a JSON request body.
+
+    The mirror of :func:`decoder`: build it once, at import (``NEW_ORDER = encoder(NewOrder)``), and send with
+    ``body=NEW_ORDER(order)``. The value is serialized by *type_*'s ``TypeAdapter``, with field aliases applied, as
+    :func:`to_builtins` applies them. ``drop_none=True`` leaves out ``None``-valued fields.
+    """
+    adapter = _adapter(type_)
+
+    def encode(value: T) -> bytes:
+        return adapter.dump_json(value, by_alias=True, exclude_none=drop_none)
+
+    return json_writer(encode)
 
 
 @overload

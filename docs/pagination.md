@@ -1,6 +1,6 @@
 # Pagination
 
-`client.paginate(url, *, expect, pages, retry=True, **options)` follows a paginated endpoint and returns a
+`client.paginate(url, *, expect, pages, retry=True, limit=None, **options)` follows a paginated endpoint and returns a
 `Paginated[P, I]`: `async for` yields the items `I`, and `.pages()` yields the pages `P`. Each page is a GET through
 the whole stack (rate budget, retries, breaker, cache, credential rules), fetched only when the iteration reaches it.
 
@@ -68,14 +68,15 @@ Set the budget where the client calls `paginate`, so every caller of that endpoi
 
 `paginate` sends GETs, so it refuses body options (`json`, `data`, `content`, `files`) with `ValueError`. Its `params=`
 are the first page's query, and a pager's parameter is added to them. `expect=` may be an `Expect`: a page can be a
-declared answer like any other.
+declared answer like any other. Every other option applies to each page as it does to one `get`: `follow_redirects=False`
+makes a page's redirect raise as its 3xx, and `cache_ttl=` is each page's cache lifetime.
 
 ## Strategies
 
 | Strategy | The next page is | Last page |
 | --- | --- | --- |
 | `Cursor(items=, next=, param=)` | the same request with `param` set to the cursor `next(page)` returns | `next` returns `None` or `""`, or a page with no items |
-| `Offset(items=, limit=, param="offset", start=0)` | the same request with `param` advanced by the items this page held | a page with fewer than `limit` items |
+| `Offset(items=, page_size=, param="offset", start=0)` | the same request with `param` advanced by the items this page held | a page with fewer than `page_size` items |
 | `LinkHeader(items=)` | the target of the response's `Link: <...>; rel="next"` (RFC 8288) | no `rel="next"` link, or a page with no items |
 | `NextUrl(items=, next=)` | the URL `next(page)` returns, absolute or relative | `next` returns `None` or `""`, or a page with no items |
 
@@ -97,7 +98,7 @@ A scheme the four do not cover implements the `Pager[P, I]` protocol:
 ```python
 import httpx2
 
-from headgate import PageRequest
+from headgate.pagination import PageRequest
 
 
 class PageNumbers:

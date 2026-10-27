@@ -20,8 +20,7 @@ from headgate import IdempotencyKeys, TransportPolicy, nothing
 from headgate._core import CallContext, CallInfo
 from headgate.errors import TransportError
 from headgate.ratelimit import Rate
-from headgate.retry import SendTrackingTransport
-from headgate.retry._tracking import head_size
+from headgate.retry._tracking import SendTrackingTransport, head_size
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:

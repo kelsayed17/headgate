@@ -25,7 +25,8 @@ import httpx2
 import pytest
 
 from headgate import BreakerPolicy, HttpOptions, TransportPolicy
-from headgate.breaker import DEFAULT_REGISTRY, BreakerState, CircuitBreaker
+from headgate.breaker import BreakerState, CircuitBreaker
+from headgate.breaker._registry import DEFAULT_REGISTRY
 from headgate.errors import (
     CircuitOpenError,
     ClientConfigurationError,

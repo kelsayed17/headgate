@@ -38,7 +38,7 @@ async def test_a_breaker_opening_mid_sequence_stops_the_retries() -> None:
         _fail_once(breakers[0])
         return httpx2.Response(503)
 
-    fake = FakeTransport().route("GET", _PATH, unavailable_while_another_call_fails, 200)
+    fake = FakeTransport().reply("GET", _PATH, unavailable_while_another_call_fails, 200)
     with isolated_breakers() as registry:
         built = client(fake, policy=_POLICY)
     breakers.append(registry.breaker_for(BASE, failure_threshold=1, recovery_timeout=_COOLDOWN))
@@ -56,7 +56,7 @@ async def test_a_half_open_probe_keeps_its_retries() -> None:
     """Let the half-open breaker's one probe use its whole retry sequence, and close the breaker when it succeeds."""
     clock = TestClock()
     recorder = Recorder()
-    fake = FakeTransport().route("GET", _PATH, 503, 502, 200)
+    fake = FakeTransport().reply("GET", _PATH, 503, 502, 200)
     with clock.install(), isolated_breakers() as registry:
         built = client(fake, policy=_POLICY, http=HttpOptions(observers=(recorder,)))
     breaker = registry.breaker_for(BASE, failure_threshold=1, recovery_timeout=_COOLDOWN)

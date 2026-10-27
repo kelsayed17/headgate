@@ -28,6 +28,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+import weakref
 from typing import TYPE_CHECKING, Final
 
 import httpx2
@@ -43,7 +44,17 @@ if TYPE_CHECKING:
     from headgate._core import CallContext, Clock, Timing
     from headgate.ratelimit._feedback import Feedback
 
-__all__ = ["DEFAULT_ADAPTIVE", "PACED", "PAUSED", "PUSHBACK", "THROTTLED", "BudgetPausedError", "RateBudget"]
+__all__ = [
+    "DEFAULT_ADAPTIVE",
+    "PACED",
+    "PAUSED",
+    "PUSHBACK",
+    "THROTTLED",
+    "BudgetPausedError",
+    "Pacer",
+    "RateBudget",
+    "pacer_of",
+]
 
 #: Adaptive throttling with its default factors: what a budget gets unless it is given ``adaptive=None``.
 DEFAULT_ADAPTIVE: Final = Adaptive()
@@ -57,7 +68,7 @@ PUSHBACK: Final = "pushback"
 
 
 class BudgetPausedError(Exception):
-    """Raised by :meth:`RateBudget.wait` when the server's pause outlasts the call's deadline.
+    """Raised by :meth:`Pacer.wait` when the server's pause outlasts the call's deadline.
 
     ``AsyncBaseClient`` raises it to its caller as :class:`headgate.errors.RateLimitError`. ``retry_after`` is the
     seconds left in the pause; ``status_code`` is the status of the response that asked for it.
@@ -71,17 +82,14 @@ class BudgetPausedError(Exception):
 
 
 def _release_nothing() -> None:
-    """Release no slot: what :meth:`RateBudget.occupy` returns for a budget without a concurrency limit."""
+    """Release no slot: what :meth:`Pacer.occupy` returns for a budget without a concurrency limit."""
 
 
-class RateBudget:
-    """A shareable budget: pacing at ``rate``, at most ``max_in_flight`` responses open, and server feedback.
+class Pacer:
+    """The state and the operations behind a :class:`RateBudget`: what the rate-limit layer spends from.
 
-    See the module docstring for the algorithm and for what sharing means. *rate* is the configured rate;
-    *max_in_flight* caps how many requests may be in flight at once, a request counting from its send until its
-    response body is closed (``None``: no cap); *adaptive* lowers the rate on pushback (``None``: never). *timing*'s
-    clock (monotonic seconds) and sleep pace requests and wait out pauses; *wall_clock* is Unix time, for the absolute
-    times some rate-limit headers carry.
+    One pacer per budget, found with :func:`pacer_of`; every client given the same budget spends through it. See the
+    module docstring for the algorithm and for what sharing means.
     """
 
     __slots__ = (
@@ -279,3 +287,74 @@ class RateBudget:
         """Build the error for a pause of *pause* seconds that outlasts a call's deadline."""
         msg = f"rate budget paused for {pause:.3g}s at the server's request, past the call's deadline"
         return BudgetPausedError(msg, retry_after=pause, status_code=self._pause_status)
+
+
+class RateBudget:
+    """A shareable budget: pacing at ``rate``, at most ``max_in_flight`` responses open, and server feedback.
+
+    See the module docstring for the algorithm and for what sharing means. *rate* is the configured rate;
+    *max_in_flight* caps how many requests may be in flight at once, a request counting from its send until its
+    response body is closed (``None``: no cap); *adaptive* lowers the rate on pushback (``None``: never). *timing*'s
+    clock (monotonic seconds) and sleep pace requests and wait out pauses; *wall_clock* is Unix time, for the absolute
+    times some rate-limit headers carry.
+
+    Two clients given the same budget pace together. What it reports (its rate, its effective rate after adaptive
+    throttling, how many requests are in flight, how long a server pause has left) is read here; what spends from it is
+    the client's own.
+
+    :raises ValueError: for a *max_in_flight* below one.
+    """
+
+    __slots__ = ("__weakref__", "_pacer")
+
+    def __init__(
+        self,
+        rate: Rate,
+        *,
+        max_in_flight: int | None = None,
+        adaptive: Adaptive | None = DEFAULT_ADAPTIVE,
+        timing: Timing = SYSTEM_TIMING,
+        wall_clock: Clock = time.time,
+    ) -> None:
+        """Build a budget and the pacer it spends through; see the class docstring for the parameters."""
+        self._pacer = Pacer(rate, max_in_flight=max_in_flight, adaptive=adaptive, timing=timing, wall_clock=wall_clock)
+        _PACERS[self] = self._pacer
+
+    @property
+    def rate(self) -> Rate:
+        """The configured rate."""
+        return self._pacer.rate
+
+    @property
+    def adaptive(self) -> Adaptive | None:
+        """How the rate adapts to pushback, or ``None`` when it does not."""
+        return self._pacer.adaptive
+
+    @property
+    def max_in_flight(self) -> int | None:
+        """How many requests may be in flight at once, or ``None`` for no cap."""
+        return self._pacer.max_in_flight
+
+    @property
+    def in_flight(self) -> int:
+        """How many requests are in flight now."""
+        return self._pacer.in_flight
+
+    @property
+    def effective_rate(self) -> Rate:
+        """The rate pacing runs at now: the configured rate, scaled down by adaptive throttling."""
+        return self._pacer.effective_rate
+
+    @property
+    def pause_remaining(self) -> float:
+        """The seconds left in a pause the server asked for, or 0."""
+        return self._pacer.pause_remaining()
+
+
+#: Each live budget's pacer. Weak, so a budget nobody holds any more goes with its pacer.
+_PACERS: Final[weakref.WeakKeyDictionary[RateBudget, Pacer]] = weakref.WeakKeyDictionary()
+
+
+def pacer_of(budget: RateBudget) -> Pacer:
+    """Return the pacer *budget* spends through."""
+    return _PACERS[budget]

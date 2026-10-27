@@ -19,7 +19,6 @@ from headgate import (
     HttpOptions,
     RateBudget,
     RateLimitError,
-    RetryBudget,
     RetryPolicy,
     TransportPolicy,
     UpstreamStatusError,
@@ -27,7 +26,7 @@ from headgate import (
 )
 from headgate.events import RateLimited
 from headgate.ratelimit import Rate
-from headgate.retry import NO_RETRY
+from headgate.retry import NO_RETRY, RetryBudget
 from headgate.testing import FakeTransport, TestClock, isolated_breakers
 from tests.integration._support import client
 from tests.support.events import Recorder
@@ -41,7 +40,7 @@ _PAUSE = 5.0
 
 async def test_a_view_spends_its_clients_retry_budget() -> None:
     """Find the one retry the budget allows already spent by the client, so the view's 503 is not retried."""
-    fake = FakeTransport().route("GET", "/v1/client", 503, 200).route("GET", "/v1/view", 503, 200)
+    fake = FakeTransport().reply("GET", "/v1/client", 503, 200).reply("GET", "/v1/view", 503, 200)
     built = client(fake, policy=TransportPolicy(retry=RetryPolicy(budget=_ONE_RETRY)))
     view = built.with_options(headers={"X-View": "1"})
 
@@ -59,7 +58,7 @@ async def test_a_view_waits_out_a_pause_its_client_was_asked_for() -> None:
     clock = TestClock()
     recorder = Recorder()
     limited = httpx2.Response(429, headers={"Retry-After": f"{_PAUSE:g}"})
-    fake = FakeTransport().route("GET", "/v1/client", limited).route("GET", "/v1/view", 200)
+    fake = FakeTransport().reply("GET", "/v1/client", limited).reply("GET", "/v1/view", 200)
     budget = RateBudget(Rate.per_second(100), timing=clock.timing, wall_clock=clock)
     with clock.install():
         built = client(
@@ -80,7 +79,7 @@ async def test_a_view_waits_out_a_pause_its_client_was_asked_for() -> None:
 
 async def test_a_view_is_refused_by_a_breaker_its_client_opened() -> None:
     """Refuse the view's call without sending it once the client's failure opened the origin's breaker."""
-    fake = FakeTransport().route("GET", "/v1/x", 503, 200)
+    fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
     policy = TransportPolicy(retry=NO_RETRY, breaker=BreakerPolicy(failure_threshold=1))
     with isolated_breakers():
         built = client(fake, policy=policy)
