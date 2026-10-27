@@ -537,14 +537,15 @@ def _due_in(seconds: float) -> httpx2.Request:
         pytest.param(120.0, 1, id="the-timeout-it-asked-for"),
     ],
 )
+@pytest.mark.parametrize("error_type", [httpx2.ReadTimeout, httpx2.TimeoutException])
 async def test_a_timeout_the_deadline_cut_short_is_not_shared(
-    first_due_in: float, calls: int, storage: AsyncSqliteStorage
+    first_due_in: float, calls: int, error_type: type[httpx2.TimeoutException], storage: AsyncSqliteStorage
 ) -> None:
     """A waiting GET with more time left fetches for itself when the first one timed out on its own deadline.
 
-    A timeout of the read timeout both asked for is shared like any other network failure.
+    A timeout of the read timeout both asked for is shared like any other network failure, even without a known phase.
     """
-    network = _GatedNetwork(exc=httpx2.ReadTimeout("slow"))
+    network = _GatedNetwork(exc=error_type("slow"))
     transport = cache_transport(storage, network, policy=_cache_no_get())
 
     first = asyncio.create_task(transport.handle_async_request(_due_in(first_due_in)))
@@ -554,7 +555,7 @@ async def test_a_timeout_the_deadline_cut_short_is_not_shared(
     network.gate.set()
     results = await asyncio.gather(first, waiting, return_exceptions=True)
 
-    assert all(isinstance(result, httpx2.ReadTimeout) for result in results), results
+    assert all(isinstance(result, error_type) for result in results), results
     assert network.calls == calls
 
 
@@ -586,7 +587,7 @@ class _FirstTimeoutNetwork(_GatedNetwork):
 async def test_timeout_sharing_uses_only_the_failed_phase(
     storage: AsyncSqliteStorage, error_type: type[httpx2.TimeoutException], phase: str, *, clipped: bool
 ) -> None:
-    """Clipping another phase never turns one failure into five sends, even with retries disabled."""
+    """Known-phase timeouts ignore clipping elsewhere; unknown phases preserve deadline handoff."""
     network = _GatedNetwork(exc=error_type("phase timeout"))
     limits = dict.fromkeys(("connect", "read", "write", "pool"), 120.0)
     if not clipped and phase != "unknown":
@@ -603,7 +604,7 @@ async def test_timeout_sharing_uses_only_the_failed_phase(
     network.gate.set()
     results = await asyncio.gather(*tasks, return_exceptions=True)
     assert all(isinstance(result, error_type) for result in results), results
-    assert network.calls == (_CONCURRENT if clipped and phase != "unknown" else 1)
+    assert network.calls == (_CONCURRENT if clipped or phase == "unknown" else 1)
 
 
 class _TimeoutOverride:

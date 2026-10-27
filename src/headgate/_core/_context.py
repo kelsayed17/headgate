@@ -208,7 +208,8 @@ class CallContext:
         """Return the httpx2 timeouts *request* asked for, before :meth:`fit_timeouts` cut any of them to a deadline.
 
         Before any fit, they are its own ``timeout`` extension (none without one). A phase explicitly changed since
-        the last fit is a new requested limit, including a middleware override on a later retry.
+        the last fit is a new requested limit, including a middleware override on a later retry. An override equal to
+        the last fitted value is treated as unchanged.
         """
         current = _named(request.extensions.get("timeout"))
         original = dict(_named(request.extensions.get(_REQUESTED_TIMEOUT)))

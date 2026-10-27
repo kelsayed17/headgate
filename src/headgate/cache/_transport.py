@@ -495,8 +495,8 @@ def _cut_short(request: httpx2.Request, failure: Exception) -> bool:
     """Return whether *failure* is a timeout of *request*'s own deadline-fitted timeouts, not of the ones it asked for.
 
     The requests waiting on it asked for the same timeouts, but each has a deadline of its own: one with more time left
-    must fetch for itself rather than inherit a timeout it would not have hit. Only the phase that failed matters;
-    an unknown timeout type retains the shared-failure behavior.
+    must fetch for itself rather than inherit a timeout it would not have hit. When the failed phase is known, only
+    that phase matters; a timeout of no known phase is handed off when any phase was shortened.
     """
     for error_type, phase in (
         (httpx2.ConnectTimeout, "connect"),
@@ -508,7 +508,8 @@ def _cut_short(request: httpx2.Request, failure: Exception) -> bool:
             requested = dict(CallContext.requested_timeouts(request))
             current = request.extensions.get("timeout")
             return isinstance(current, dict) and phase in current and bool(current[phase] != requested.get(phase))
-    return False
+    # A timeout of no known phase may be any of them: hand off when the deadline shortened any.
+    return isinstance(failure, httpx2.TimeoutException) and CallContext.timeouts_cut(request)
 
 
 class ResilientCacheTransport(AsyncCacheTransport):
