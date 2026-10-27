@@ -72,7 +72,13 @@ jobs:
       - run: uv venv "$RUNNER_TEMP/core" && uv pip install --python "$RUNNER_TEMP/core/bin/python" .
       - run: >-
           "$RUNNER_TEMP/core/bin/python" -c
-          "import headgate, headgate.msgspec, headgate.health, headgate.policy; from headgate import AsyncBaseClient"
+          "import headgate, headgate.health, headgate.policy; from headgate import AsyncBaseClient, Codec"
+      # No codec comes with the core: without its extra, the msgspec codec fails naming the extra to install.
+      - run: |
+          out=$("$RUNNER_TEMP/core/bin/python" -c "import headgate.msgspec" 2>&1) && exit 1
+          grep -q 'pip install headgate\[msgspec\]' <<<"$out"
+      - run: uv pip install --python "$RUNNER_TEMP/core/bin/python" ".[msgspec]"
+      - run: '"$RUNNER_TEMP/core/bin/python" -c "import headgate.msgspec"'
 
   audit:
     name: Dependency vulnerability audit
