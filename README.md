@@ -1,5 +1,6 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/kelsayed17/headgate/main/docs/assets/logo.png" alt="headgate logo: a gate metering a stream of requests" width="160">
+  <img src="https://raw.githubusercontent.com/kelsayed17/headgate/main/docs/assets/logo.png"
+    alt="headgate logo: a gate metering a stream of requests" width="160">
 </p>
 
 <h1 align="center">headgate</h1>
@@ -13,10 +14,14 @@
 <p align="center">
   <a href="https://pypi.org/project/headgate/"><img src="https://img.shields.io/pypi/v/headgate" alt="PyPI"></a>
   <a href="https://pypi.org/project/headgate/"><img src="https://img.shields.io/pypi/pyversions/headgate" alt="Python versions"></a>
-  <a href="https://github.com/kelsayed17/headgate/actions/workflows/ci.yml"><img src="https://github.com/kelsayed17/headgate/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://github.com/kelsayed17/headgate/blob/main/CONTRIBUTING.md"><img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="Coverage: 100%"></a>
-  <a href="https://kelsayed17.github.io/headgate/"><img src="https://img.shields.io/badge/docs-kelsayed17.github.io%2Fheadgate-blue" alt="Docs"></a>
-  <a href="https://github.com/kelsayed17/headgate/blob/main/LICENSE"><img src="https://img.shields.io/pypi/l/headgate" alt="Licence: MIT"></a>
+  <a href="https://github.com/kelsayed17/headgate/actions/workflows/ci.yml"><img
+    src="https://github.com/kelsayed17/headgate/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/kelsayed17/headgate/blob/main/CONTRIBUTING.md"><img
+    src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="Coverage: 100%"></a>
+  <a href="https://kelsayed17.github.io/headgate/"><img
+    src="https://img.shields.io/badge/docs-kelsayed17.github.io%2Fheadgate-blue" alt="Docs"></a>
+  <a href="https://github.com/kelsayed17/headgate/blob/main/LICENSE"><img
+    src="https://img.shields.io/pypi/l/headgate" alt="Licence: MIT"></a>
 </p>
 
 <p align="center">
@@ -48,8 +53,9 @@ pagination (RFC 8288), `Idempotency-Key`, `Deprecation` and `Sunset`, and more.
 
 ## A client in one screen
 
-A client is a subclass. The configuration lives in `__init__`, and each endpoint method stays one line. This is part
-of [`examples/github_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/github_client.py), a tested client for the GitHub REST API:
+A client is a subclass. The configuration lives in `__init__`, and each endpoint method stays one line. This is part of
+[`examples/github_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/github_client.py), a tested
+client for the GitHub REST API:
 
 ```python
 from headgate import AsyncBaseClient, BearerAuth, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
@@ -128,7 +134,8 @@ go, and nothing needs to. Those come from the base class.
 | RFC 9457 problem details parsed | ✅ | ➖ | ➖ | ➖ |
 | Test fakes | ✅ | 🧩 | 🧩 | 🧩 |
 
-The [full comparison](https://kelsayed17.github.io/headgate/comparison/) covers about 30 libraries, and says when each is the better pick.
+The [full comparison](https://kelsayed17.github.io/headgate/comparison/) covers about 30 libraries, and says when each
+is the better pick.
 
 ## Install
 
@@ -255,10 +262,12 @@ async def main(api_key: str) -> tuple[float, Series | None, list[str]]:
 
 Nothing in those methods mentions retries, rate limits, timeouts or credentials, and nothing needs to:
 `get_series("GDP")` is paced by the client's budget, bounded by a 60-second deadline, retried on a 503 or a dropped
-connection, refused fast while the origin's breaker is open, and fails with an error that names the client, the
-request line, the status, the request id and every attempt. [`examples/`](https://github.com/kelsayed17/headgate/tree/main/examples/) has this client, the same client
-in both codec flavors, and a fuller one ([`orders_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/orders_client.py)): a minted OAuth token, an
-idempotent POST, a declared business refusal, `Link`-header pages and a streamed export.
+connection, refused fast while the origin's breaker is open, and fails with an error that names the client, the request
+line, the status, the request id and every attempt.
+[`examples/`](https://github.com/kelsayed17/headgate/tree/main/examples/) has this client, the same client in both codec
+flavors, and a fuller one
+([`orders_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/orders_client.py)): a minted OAuth
+token, an idempotent POST, a declared business refusal, `Link`-header pages and a streamed export.
 
 ## What every client gets
 
@@ -473,9 +482,10 @@ uv run --only-group docs zensical serve   # preview the docs site at http://loca
 ```
 
 Lint selects every ruff rule, ty treats every rule as an error, and suppression comments are not accepted. See
-[CONTRIBUTING.md](https://github.com/kelsayed17/headgate/blob/main/CONTRIBUTING.md) for the rules a change must keep, [CODE_OF_CONDUCT.md](https://github.com/kelsayed17/headgate/blob/main/CODE_OF_CONDUCT.md) for how we
-work together, and [SECURITY.md](https://github.com/kelsayed17/headgate/blob/main/SECURITY.md) to report a vulnerability privately. The changes in each release are in
-[CHANGELOG.md](https://github.com/kelsayed17/headgate/blob/main/CHANGELOG.md).
+[CONTRIBUTING.md](https://github.com/kelsayed17/headgate/blob/main/CONTRIBUTING.md) for the rules a change must keep,
+[CODE_OF_CONDUCT.md](https://github.com/kelsayed17/headgate/blob/main/CODE_OF_CONDUCT.md) for how we work together, and
+[SECURITY.md](https://github.com/kelsayed17/headgate/blob/main/SECURITY.md) to report a vulnerability privately. The
+changes in each release are in [CHANGELOG.md](https://github.com/kelsayed17/headgate/blob/main/CHANGELOG.md).
 
 ## Licence
 

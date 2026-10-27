@@ -1,0 +1,47 @@
+# markdownlint rules for every Markdown file in the repository.
+# Run with: npx markdownlint-cli2 "**/*.md"
+
+default: true
+
+# Prose is wrapped at 120 characters, the same as the code. Code blocks and tables keep their own line lengths.
+MD013:
+  line_length: 120
+  code_blocks: false
+  tables: false
+
+# The README hero and the docs site's cards, chips and pipeline are written in HTML.
+MD033:
+  allowed_elements:
+    - a
+    - b
+    - br
+    - code
+    - details
+    - div
+    - h1
+    - img
+    - li
+    - ol
+    - p
+    - span
+    - strong
+    - summary
+
+# Each CHANGELOG release has its own "Added", "Changed" and "Fixed".
+MD024:
+  siblings_only: true
+
+# A docs page's front-matter title is metadata for the site, and its "# Title" is the page heading.
+MD025:
+  front_matter_title: ""
+
+# The README opens with its logo before the <h1>.
+MD041:
+  allow_preamble: true
+
+# The docs site's card grids indent their content under "-   ", Material's card layout, while other lists use "- ".
+MD030: false
+
+# Content tabs (=== "pip") and admonitions (!!! tip) indent their content four spaces, which markdownlint reads as an
+# indented code block. Code itself is always fenced.
+MD046: false

@@ -160,9 +160,9 @@ await client.get(
 )
 ```
 
-plus `body=` (what a codec's `encoder` wrote), `json=`, `data=`, `content=` or `files=` for a body and `idempotency_key=` for a write. `stream()` takes the same
-options without `expect=` and `cache_ttl=`, and `paginate()` takes `expect=`, `pages=`, `limit=` and every other option
-but a body, applied to each page.
+plus `body=` (what a codec's `encoder` wrote), `json=`, `data=`, `content=` or `files=` for a body and
+`idempotency_key=` for a write. `stream()` takes the same options without `expect=` and `cache_ttl=`, and `paginate()`
+takes `expect=`, `pages=`, `limit=` and every other option but a body, applied to each page.
 
 ### Views
 

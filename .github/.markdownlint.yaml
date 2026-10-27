@@ -1,0 +1,4 @@
+# GitHub templates are fragments of a pull request or issue body, so they start below the top heading.
+extends: ../.markdownlint.yaml
+
+MD041: false

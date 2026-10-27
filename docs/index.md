@@ -135,9 +135,9 @@ retried, a retry spends its own rate turn, and one deadline bounds the lot.
     ```
 
 The `msgspec` extra brings the codec the examples use; `headgate[pydantic]` brings pydantic's, and any other library
-plugs in as a [codec](codecs.md) of its own. headgate needs **Python 3.14** or newer: endpoint paths are [template strings](https://peps.python.org/pep-0750/), so
-each value is escaped into its own path segment by default. It runs on **httpx2**, pydantic's fork of httpx; see
-[why httpx2](comparison.md#why-httpx2).
+plugs in as a [codec](codecs.md) of its own. headgate needs **Python 3.14** or newer: endpoint paths are [template
+strings](https://peps.python.org/pep-0750/), so each value is escaped into its own path segment by default. It runs on
+**httpx2**, pydantic's fork of httpx; see [why httpx2](comparison.md#why-httpx2).
 
 ## A real client
 

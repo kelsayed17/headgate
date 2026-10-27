@@ -20,8 +20,10 @@ Every hop goes through the same checks, not only the first request: each redirec
 auth flow sends.
 
 <ol class="hg-pipeline">
-  <li><strong>Origin check</strong><span>not your origin or a trusted one? Credentials, <code>Authorization</code> and <code>Cookie</code> are removed, and it goes out unsigned</span></li>
-  <li><strong>Address check</strong><span>with the SSRF guard on, every address the host resolves to must be public, or nothing is sent</span></li>
+  <li><strong>Origin check</strong><span>not your origin or a trusted one? Credentials, <code>Authorization</code> and
+    <code>Cookie</code> are removed, and it goes out unsigned</span></li>
+  <li><strong>Address check</strong><span>with the SSRF guard on, every address the host resolves to must be public, or
+    nothing is sent</span></li>
   <li><strong>Pinned connect</strong><span>the connection goes to the address that was checked, so DNS cannot swap it</span></li>
   <li><strong>Response check</strong><span>an https-to-http redirect is refused, and a one-shot body is never sent twice</span></li>
 </ol>
@@ -61,8 +63,8 @@ from any hop not addressed to `base_url`'s origin or a trusted one. An auth flow
 middleware's credentials: the middleware did not choose it.
 
 A third-party `httpx2.Auth` that is not a `CredentialStamper`, or a middleware that declares nothing, and puts its
-credential in another header or in the query is not covered; declare the names to have them withheld. A cache refuses such an auth unless told the data is public (see
-[caching](caching.md#partitions)).
+credential in another header or in the query is not covered; declare the names to have them withheld. A cache refuses
+such an auth unless told the data is public (see [caching](caching.md#partitions)).
 
 ## Redirects
 
@@ -94,8 +96,8 @@ name, so TLS still sends it as SNI and verifies the certificate against it, and 
 - A custom transport (`HttpOptions(transport=...)`, the curl transport included) resolves names itself: every hop is
   still vetted before it is sent, but the transport's own lookup is not pinned.
 - The guard cannot be combined with `proxy=`, since a proxy resolves the target itself.
-- `HttpOptions(security=SecurityOptions(resolver=...))` replaces the event loop's `getaddrinfo` (an async function of host and port returning
-  addresses as text), and is accepted only with the guard on.
+- `HttpOptions(security=SecurityOptions(resolver=...))` replaces the event loop's `getaddrinfo` (an async function of
+  host and port returning addresses as text), and is accepted only with the guard on.
 
 ## Paths built from values
 

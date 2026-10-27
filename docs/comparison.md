@@ -16,8 +16,8 @@ This page shows what that buys you, library by library, and when another tool is
 
 ## HTTP clients
 
-requests, niquests, httpx and aiohttp send HTTP requests, and do it well. headgate runs on httpx2 (pydantic's fork of httpx) and
-adds everything a client for someone else's API needs on top. It can also send through
+requests, niquests, httpx and aiohttp send HTTP requests, and do it well. headgate runs on httpx2 (pydantic's fork of
+httpx) and adds everything a client for someone else's API needs on top. It can also send through
 [curl_cffi](configuration.md#the-curl-transport) when you need libcurl.
 
 <div class="hg-matrix hg-compare" markdown>
