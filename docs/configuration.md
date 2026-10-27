@@ -4,7 +4,7 @@
 AsyncBaseClient(
     *,
     base_url: str,
-    rate: Rate | RateBudget,
+    rate: Rate | RateBudget = UNLIMITED,
     auth: httpx2.Auth | None = None,
     policy: TransportPolicy = TransportPolicy(),
     http: HttpOptions = HttpOptions(),

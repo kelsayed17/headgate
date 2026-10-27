@@ -14,6 +14,7 @@ ClientError                      also: an unparseable URL, a pagination loop
 ├── ResponseParseError           a 2xx body the reader could not read
 ├── ResponseTooLargeError        a body past max_response_bytes
 ├── ForbiddenDestinationError    a hop the SSRF guard refused
+├── PageLimitError               a paginated walk spent its page budget with pages left
 └── ClientConfigurationError     our own setup is wrong
 ```
 
