@@ -6,6 +6,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-27
+
+Pages endpoints whose query is a POST body: `paginate()` walks POSTs, and `BodyCursor` and `BodyOffset` carry the page
+token or offset in the body. A walk of GETs is written as before; the refusals and messages that changed are listed
+under **Changed**, so this is a minor release.
+
 ### Added
 
 - Walks of POSTs: `paginate()` takes a `PageRequest(url, params, body=..., write=...)` as its first argument, and each
@@ -24,7 +30,6 @@ change the public API; such changes are listed under **Changed** and **Removed**
   refuse a walk with a body. A `PageLimitError` or pagination-loop `ClientError` from a walk of POSTs names `POST` as
   its method. The message for a body option on `paginate()` is now "paginate takes no body option: a walk of POSTs
   passes its body in a PageRequest".
-
 - Messages, docs and docstrings use American spelling. The one message whose text changes is the refusal of a token
   endpoint that rotates its long-lived credential, which now says "Re-authorize".
 
@@ -387,7 +392,8 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/kelsayed17/headgate/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/kelsayed17/headgate/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/kelsayed17/headgate/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kelsayed17/headgate/compare/v0.4.0...v0.5.0
