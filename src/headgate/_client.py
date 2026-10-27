@@ -488,17 +488,17 @@ class AsyncBaseClient:
             options["headers"] = {**options.get("headers", {}), "Last-Event-ID": last_event_id}
         return self._streamed(_Call(method, url, options, retry=retry, follow_redirects=follow_redirects))
 
-    def paginate[P, I](
+    def paginate[P, I, B](
         self,
-        url: str | Template,
+        url: str | Template | PageRequest[B],
         *,
         expect: Reader[P] | Expect[P],
-        pages: Pager[P, I],
+        pages: Pager[P, I, B],
         retry: bool | RetryPolicy = True,
         limit: PageLimit | None = None,
         **options: Unpack[PageOptions],
     ) -> Paginated[P, I]:
-        """Return the pages *pages* follows from the GET of *url*, each read through *expect*, iterated lazily.
+        """Return the pages *pages* follows from *url*, each read through *expect*, iterated lazily.
 
         ``async for item in client.paginate(...)`` yields the items of each page in turn; ``.pages()`` yields the
         pages. Each page is a GET through the whole stack, fetched only when the iteration reaches it, and a next-page
@@ -506,28 +506,59 @@ class AsyncBaseClient:
         other. Iterating again starts again from the first page. ``retry=``, ``follow_redirects=``, ``cache_ttl=`` and
         the request options apply to every page, as they do to one :meth:`get`.
 
+        A walk of POSTs passes its first request as *url*: a :class:`~headgate.pagination.PageRequest` with a
+        ``body``, the caller's own value, which a pager (:class:`~headgate.BodyCursor`, :class:`~headgate.BodyOffset`)
+        rewrites for each next page. Each page's body is sent as ``body=write(body)``, or as ``json=`` when the
+        request has no ``write``. A page is then a :meth:`post` in every respect: in particular it is re-sent only
+        when that is safe, unless ``retry=`` says otherwise.
+
         *limit* is a page budget (:class:`~headgate.PageLimit`): at most ``max_pages`` pages are fetched. When more
         would follow, the walk raises :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or
         with ``on_limit="stop"`` ends there. A walk that ends within the budget is unaffected.
 
-        :raises ValueError: for a body option (``json``, ``data``, ``content``, ``files``): pages are GETs.
+        :raises ValueError: for a body option (``body``, ``json``, ``data``, ``content``, ``files``), as a walk's body
+            is its first request's; for ``params=`` beside a ``PageRequest``, which carries its own query; and for an
+            idempotency key (``idempotency_key=``, or the policy's header in ``headers=``) on a walk of POSTs, as one
+            key on pages with different bodies would have the server replay the first page's answer.
         """
         if any(name in options for name in _BODY_OPTIONS):
-            msg = "paginate sends GETs, so it takes no request body"
+            msg = "paginate takes no body option: a walk of POSTs passes its body in a PageRequest"
+            raise ValueError(msg)
+        call_options = options.copy()
+        params = call_options.pop("params", None)
+        if not isinstance(url, PageRequest):
+            first: PageRequest[B] = PageRequest(url, params)
+        elif "params" in options:
+            msg = "a PageRequest carries its own query, so paginate takes no params= beside one"
+            raise ValueError(msg)
+        else:
+            first = url
+        if first.body is not None and self._one_key_for_every_page(options):
+            msg = "an idempotency key would be sent with every page's body; a walk of POSTs takes none"
             raise ValueError(msg)
         spec: Expect[P] = expect if isinstance(expect, Expect) else Expect(expect)
         answers = {status: _paired(read) for status, read in spec.answers.items()}
         paired = Expect(_paired(spec.ok), answers, headers=spec.headers, accept=spec.accept)
-        call_options = options.copy()
-        first = PageRequest(url, call_options.pop("params", None))
 
-        async def fetch(request: PageRequest) -> tuple[P, httpx2.Response]:
+        async def fetch(request: PageRequest[B]) -> tuple[P, httpx2.Response]:
             page_options = call_options.copy()
             page_options["params"] = request.params
-            # A page's follow_redirects and cache_ttl land on get's own parameters of those names.
-            return await self.get(request.url, expect=paired, retry=retry, **page_options)
+            # A page's follow_redirects and cache_ttl land on the verb's own parameters of those names.
+            if request.body is None:
+                return await self.get(request.url, expect=paired, retry=retry, **page_options)
+            if request.write is None:
+                page_options["json"] = request.body
+            else:
+                page_options["body"] = request.write(request.body)
+            return await self.post(request.url, expect=paired, retry=retry, **page_options)
 
         return PageWalk(fetch, pages, first, source=self._source, limit=limit)
+
+    def _one_key_for_every_page(self, options: PageOptions) -> bool:
+        """Return whether *options* fix one idempotency key for every call they go with."""
+        keys = self._policy.idempotency
+        header = ("Idempotency-Key" if keys is None else keys.header).lower()
+        return "idempotency_key" in options or any(name.lower() == header for name in options.get("headers", {}))
 
     # A call, end to end.
 

@@ -355,7 +355,7 @@ _BODIES: list[RequestOptions] = [
 def test_a_body_option_is_refused(body: RequestOptions) -> None:
     """Refuse a request body: every page is a GET."""
     client = _Api(_by_cursor).client()
-    with pytest.raises(ValueError, match="no request body"):
+    with pytest.raises(ValueError, match="no body option"):
         client.paginate("items", expect=decoder(Page), pages=LinkHeader(items=items_of), **body)
 
 

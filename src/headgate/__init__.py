@@ -63,7 +63,7 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
-from headgate.pagination import Cursor, LinkHeader, NextUrl, Offset, PageLimit, Paginated
+from headgate.pagination import BodyCursor, BodyOffset, Cursor, LinkHeader, NextUrl, Offset, PageLimit, Paginated
 from headgate.ratelimit import Rate, RateBudget, RateRule
 from headgate.retry import RetryPolicy
 
@@ -72,6 +72,8 @@ __all__ = [
     "AsyncBaseClient",
     "AuthError",
     "BearerAuth",
+    "BodyCursor",
+    "BodyOffset",
     "BreakerPolicy",
     "CachedTokenAuth",
     "CircuitOpenError",

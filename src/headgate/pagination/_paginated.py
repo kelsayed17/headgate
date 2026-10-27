@@ -44,7 +44,7 @@ class PageLimit:
             raise ValueError(msg)
 
 
-type Fetch[P] = Callable[[PageRequest], Awaitable[tuple[P, httpx2.Response]]]
+type Fetch[P, B] = Callable[[PageRequest[B]], Awaitable[tuple[P, httpx2.Response]]]
 """Fetches one page through the client, returning what the call's reader read and the response it read it from."""
 
 
@@ -57,7 +57,8 @@ class Paginated[P, I](Protocol):
     early fetches nothing more.
 
     A page that leads back to a request already made (a cursor or next URL that repeats) raises ``ClientError``
-    instead of looping forever; the requests made are remembered for that, one small key per page. A walk with a
+    instead of looping forever; the requests made are remembered for that, one key per page (its URL, query and, for a
+    POST, the ``repr`` of its body). A walk with a
     :class:`PageLimit` fetches at most its ``max_pages``, then raises ``PageLimitError`` or stops, as it says.
     """
 
@@ -75,13 +76,19 @@ class Paginated[P, I](Protocol):
 
 
 @final
-class PageWalk[P, I]:
+class PageWalk[P, I, B]:
     """The :class:`Paginated` :meth:`AsyncBaseClient.paginate <headgate.AsyncBaseClient.paginate>` builds."""
 
     __slots__ = ("_fetch", "_first", "_limit", "_pager", "_source")
 
     def __init__(
-        self, fetch: Fetch[P], pager: Pager[P, I], first: PageRequest, *, source: str, limit: PageLimit | None = None
+        self,
+        fetch: Fetch[P, B],
+        pager: Pager[P, I, B],
+        first: PageRequest[B],
+        *,
+        source: str,
+        limit: PageLimit | None = None,
     ) -> None:
         """Fetch pages with *fetch*, linked by *pager*, starting at *first*, for the client named *source*.
 
@@ -99,7 +106,7 @@ class PageWalk[P, I]:
 
     async def pages(self) -> AsyncIterator[P]:
         """Iterate the pages, in order."""
-        request: PageRequest | None = self._pager.first(self._first)
+        request: PageRequest[B] | None = self._pager.first(self._first)
         seen: set[str] = set()
         while request is not None:
             if self._limit is not None and len(seen) == self._limit.max_pages:
@@ -141,7 +148,7 @@ class PageWalk[P, I]:
             for item in self._pager.page_items(page):
                 yield item
 
-    def _limit_error(self, request: PageRequest, fetched: int) -> PageLimitError:
+    def _limit_error(self, request: PageRequest[B], fetched: int) -> PageLimitError:
         """Build the error for *request*, the page after the *fetched* pages the budget allowed."""
         url = loggable_url(request.url) if isinstance(request.url, str) else None
         where = "" if url is None else f" ({url})"
@@ -149,17 +156,22 @@ class PageWalk[P, I]:
             f"pagination reached its limit of {fetched} pages with more to come{where}; the result is incomplete. "
             "Raise PageLimit.max_pages, or set on_limit='stop' to end the walk there"
         )
-        return PageLimitError(msg, pages=fetched, source=self._source, method="GET", url=url)
+        return PageLimitError(msg, pages=fetched, source=self._source, method=_method(request), url=url)
 
-    def _loop_error(self, request: PageRequest, fetched: int) -> ClientError:
+    def _loop_error(self, request: PageRequest[B], fetched: int) -> ClientError:
         """Build the error for *request*, which repeats one of the *fetched* pages' requests."""
         url = loggable_url(request.url) if isinstance(request.url, str) else None
         where = "" if url is None else f" ({url})"
         msg = f"pagination loop: the page after page {fetched} repeats an earlier page's request{where}"
-        return ClientError(msg, source=self._source, method="GET", url=url)
+        return ClientError(msg, source=self._source, method=_method(request), url=url)
 
 
-def _key(request: PageRequest) -> str:
-    """Return a text key identifying *request*'s URL (a string or a template, by its parts) and query."""
+def _key[B](request: PageRequest[B]) -> str:
+    """Return a text key identifying *request*'s URL (a string or a template, by its parts), query and body."""
     query = None if request.params is None else tuple(request.params.items())
-    return repr((request.url, query))
+    return repr((request.url, query, request.body))
+
+
+def _method[B](request: PageRequest[B]) -> Literal["GET", "POST"]:
+    """Return the method *request* is sent with: a POST when it has a body."""
+    return "GET" if request.body is None else "POST"
