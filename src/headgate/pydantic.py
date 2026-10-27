@@ -1,9 +1,10 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The pydantic codec flavor: strict JSON validation into pydantic models, and request-body preparation.
+"""The pydantic codec: strict JSON validation into pydantic models, and request bodies written back.
 
-The same surface as :mod:`headgate.msgspec`, so switching flavor is changing one import
+:data:`CODEC` is pydantic as a :class:`~headgate.Codec`, with the same shortcuts as :mod:`headgate.msgspec`, so
+switching codec is changing one import
 (``from headgate.pydantic import decoder, encoder, to_builtins``). Wire models are frozen, strict ``BaseModel``
 classes::
 
@@ -23,7 +24,7 @@ Requires the ``pydantic`` extra: ``pip install headgate[pydantic]``.
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, Any, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, overload
 
 try:
     from pydantic import BaseModel, RootModel, TypeAdapter, ValidationError
@@ -32,11 +33,8 @@ except ImportError as exc:
     msg = "headgate.pydantic needs pydantic: pip install headgate[pydantic]"
     raise ImportError(msg) from exc
 
+from headgate._codec import decode_with, decoder_for, encoder_for
 from headgate._codec import drop_none as _drop_none
-from headgate._failures import shorten
-from headgate._request_body import json_writer
-from headgate._responses import json_reader
-from headgate.errors import DecodeError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -46,7 +44,7 @@ if TYPE_CHECKING:
     from headgate._request_body import Writer
     from headgate._responses import Reader, RefusedError
 
-__all__ = ["decode", "decoder", "encoder", "to_builtins"]
+__all__ = ["CODEC", "PydanticCodec", "decode", "decoder", "encoder", "to_builtins"]
 
 #: How many of a validation's failures a ``DecodeError`` message names; the count of the rest follows them.
 _ERRORS_SHOWN = 5
@@ -69,22 +67,61 @@ def _adapter[T](type_: TypeForm[T]) -> TypeAdapter[T]:
     return cast("TypeAdapter[T]", _cached_adapter(type_))
 
 
-def _validate_with[T](adapter: TypeAdapter[T], content: bytes, *, strict: bool) -> T:
-    """Validate *content* as JSON with *adapter*, raising :class:`DecodeError` for malformed or mistyped JSON."""
-    try:
-        return adapter.validate_json(content, strict=strict)
-    except ValidationError as exc:
-        raise DecodeError(_describe(exc)) from exc
+class PydanticCodec:
+    """JSON through pydantic, as a :class:`~headgate.Codec`: each type expression's cached ``TypeAdapter``.
+
+    *strict* (the default) rejects pydantic's lax coercions, so a JSON string where an ``int`` is declared is wire
+    drift. Field aliases are the wire's names both ways. *drop_none* leaves ``None``-valued fields out of what it
+    encodes.
+    """
+
+    __slots__ = ("_drop_none", "_strict")
+
+    media_type: ClassVar[str] = "application/json"
+    #: Invalid JSON and a type mismatch both raise it.
+    errors: ClassVar[tuple[type[Exception], ...]] = (ValidationError,)
+
+    def __init__(self, *, strict: bool = True, drop_none: bool = False) -> None:
+        """Validate strictly unless *strict* is false; encode without ``None`` fields when *drop_none* is true."""
+        self._strict = strict
+        self._drop_none = drop_none
+
+    def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
+        """Return a function validating JSON against *type_*'s cached adapter."""
+        adapter = _adapter(type_)
+        strict = self._strict
+
+        def decode(content: bytes) -> T:
+            return adapter.validate_json(content, strict=strict)
+
+        return decode
+
+    def encoder[T](self, type_: TypeForm[T], /) -> Callable[[T], bytes]:
+        """Return a function serializing a value by *type_*'s cached adapter, by alias."""
+        adapter = _adapter(type_)
+        drop_none = self._drop_none
+
+        def encode(value: T) -> bytes:
+            return adapter.dump_json(value, by_alias=True, exclude_none=drop_none)
+
+        return encode
+
+    def describe(self, error: Exception, /) -> str:
+        """Summarize a ``ValidationError`` without any input value: its first failures, and how many there were."""
+        exc = cast("ValidationError", error)  # the only one of :attr:`errors`
+        errors = exc.errors(include_input=False, include_url=False, include_context=False)[:_ERRORS_SHOWN]
+        shown = "; ".join(f"{'.'.join(map(str, error['loc'])) or '<body>'}: {error['msg']}" for error in errors)
+        count = exc.error_count()
+        more = f" (+{count - len(errors)} more)" if count > len(errors) else ""
+        noun = "error" if count == 1 else "errors"
+        return f"{count} validation {noun} for {exc.title}: {shown}{more}"
 
 
-def _describe(exc: ValidationError) -> str:
-    """Summarize *exc* without any input value: its first :data:`_ERRORS_SHOWN` failures, and the count, bounded."""
-    errors = exc.errors(include_input=False, include_url=False, include_context=False)[:_ERRORS_SHOWN]
-    shown = "; ".join(f"{'.'.join(map(str, error['loc'])) or '<body>'}: {error['msg']}" for error in errors)
-    count = exc.error_count()
-    more = f" (+{count - len(errors)} more)" if count > len(errors) else ""
-    noun = "error" if count == 1 else "errors"
-    return shorten(f"{count} validation {noun} for {exc.title}: {shown}{more}")
+#: pydantic, validating strictly: the codec every shortcut here uses unless told otherwise.
+CODEC: Final = PydanticCodec()
+
+_LAX: Final = PydanticCodec(strict=False)
+_DROPPING_NONE: Final = PydanticCodec(drop_none=True)
 
 
 def decode[T](content: bytes, type_: TypeForm[T], *, strict: bool = True) -> T:
@@ -95,7 +132,7 @@ def decode[T](content: bytes, type_: TypeForm[T], *, strict: bool = True) -> T:
 
     :raises DecodeError: if *content* is not JSON or does not match *type_*.
     """
-    return _validate_with(_adapter(type_), content, strict=strict)
+    return decode_with(CODEC if strict else _LAX, content, type_)
 
 
 def decoder[T](
@@ -109,10 +146,10 @@ def decoder[T](
 
     Accepts the same shapes as :func:`headgate.msgspec.decoder` (an enveloped model, ``list[Row]``,
     ``dict[str, Row]``, a union of shapes). One malformed element fails the whole body. ``allow_empty_body`` and
-    ``refusal_check`` are documented on :func:`~headgate._responses.json_reader`.
+    ``refusal_check`` are documented on :func:`~headgate.decoder_for`.
     """
-    decode_body = functools.partial(_validate_with, _adapter(type_), strict=strict)
-    return json_reader(decode_body, allow_empty_body=allow_empty_body, refusal_check=refusal_check)
+    codec = CODEC if strict else _LAX
+    return decoder_for(codec, type_, allow_empty_body=allow_empty_body, refusal_check=refusal_check)
 
 
 def encoder[T](type_: TypeForm[T], *, drop_none: bool = False) -> Writer[T]:
@@ -122,12 +159,7 @@ def encoder[T](type_: TypeForm[T], *, drop_none: bool = False) -> Writer[T]:
     ``body=NEW_ORDER(order)``. The value is serialized by *type_*'s ``TypeAdapter``, with field aliases applied, as
     :func:`to_builtins` applies them. ``drop_none=True`` leaves out ``None``-valued fields.
     """
-    adapter = _adapter(type_)
-
-    def encode(value: T) -> bytes:
-        return adapter.dump_json(value, by_alias=True, exclude_none=drop_none)
-
-    return json_writer(encode)
+    return encoder_for(_DROPPING_NONE if drop_none else CODEC, type_)
 
 
 @overload

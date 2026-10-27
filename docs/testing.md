@@ -9,15 +9,17 @@ with nothing private patched. Two seams make that possible:
   managers set. Build the client inside them; entering one around a client that already exists changes nothing.
 
 ```python
+from collections.abc import Iterator
+
 import pytest
 
-from headgate.testing import instant_retries, isolated_breakers
+from headgate.testing import FakeTransport, Respond, instant_retries, isolated_breakers
 
 
 @pytest.fixture
 def catalog() -> Iterator[CatalogClient]:
     with instant_retries(), isolated_breakers():
-        yield CatalogClient("test-key", transport=FakeTransport().reply("GET", "/v1/series/GDP", 200))
+        yield CatalogClient("test-key", transport=FakeTransport().reply("GET", "/v1/series/GDP", Respond(json=GDP)))
 ```
 
 ## FakeTransport
@@ -121,6 +123,8 @@ route asks for), no breaker (the client never reads a registry, so it cannot be 
 and an effectively unlimited rate, also for its `rate_limits` rules and a shared `RateBudget` passed in.
 
 ```python
+from collections.abc import Iterator
+
 import pytest
 
 from headgate.policy import policy_disabled

@@ -210,6 +210,18 @@ async def test_an_oserror_from_the_storage_itself_is_still_a_storage_fault(stora
     assert resp.extensions[CACHE_DEGRADED_EXT].endswith(": OSError")
 
 
+async def test_a_degraded_fetch_reads_a_streamed_body_whole_and_closes_it(storage: AsyncSqliteStorage) -> None:
+    """The live redo's body is read inside the layer: the response comes back whole, the network's closed."""
+    network = TrackingNetwork()
+    faulty = FaultyStorage(storage, StorageTimeoutError("timeout"), failing="get_entries")
+
+    resp = await cache_transport(faulty, network).handle_async_request(httpx2.Request("GET", _URL))
+
+    assert await resp.aread() == NETWORK_BODY
+    assert resp.extensions[CACHE_DEGRADED_EXT].endswith(": StorageTimeoutError")
+    assert network.streams[0].closed
+
+
 async def test_a_network_failure_in_the_degraded_fetch_is_raised_and_closes_it(storage: AsyncSqliteStorage) -> None:
     """The live redo's body is read inside the layer too: a network failure there surfaces as itself, closed."""
     network = _FlakyNetwork()
@@ -244,6 +256,29 @@ async def test_a_bug_inside_hishel_propagates_rather_than_degrading(storage: Asy
 
     assert network.calls == 0
     assert CACHE_DEGRADATIONS[_HOST] == degraded_before
+
+
+async def test_a_bug_inside_hishel_after_the_send_closes_the_network_response(storage: AsyncSqliteStorage) -> None:
+    """A response filter's bug surfaces as itself, and the network response hishel abandoned with it is closed."""
+
+    class _BrokenFilter(BaseFilter[Response]):
+        @override
+        def needs_body(self) -> bool:
+            return False
+
+        @override
+        def apply(self, item: Response, body: bytes | None) -> bool:
+            msg = "a bug in a filter"
+            raise RuntimeError(msg)
+
+    network = TrackingNetwork()
+    transport = cache_transport(storage, network, policy=FilterPolicy(response_filters=[_BrokenFilter()]))
+
+    with pytest.raises(RuntimeError, match="a bug in a filter"):
+        await transport.handle_async_request(httpx2.Request("GET", _URL))
+
+    assert len(network.urls) == 1
+    assert network.streams[0].closed
 
 
 async def test_healthy_cache_hit_never_touches_the_network(storage: AsyncSqliteStorage) -> None:

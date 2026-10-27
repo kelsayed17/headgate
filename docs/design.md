@@ -30,7 +30,9 @@ src/headgate/
   _responses.py      Reader, Expect, RefusedError and the built-in readers
   _failures.py       the ClientError a failed exchange becomes
   _auth.py           StaticHeaderAuth, QueryParamAuth, CachedTokenAuth
-  _body.py, _request_body.py, _redirects.py, _middleware.py, _attempts.py, _deprecation.py, _view.py, _url.py
+  _codec.py          the Codec protocol, and the readers and writers built on one
+  _body.py, _request_body.py, _redirects.py, _middleware.py, _attempts.py, _deprecation.py, _view.py, _url.py,
+  _user_agent.py, _curl.py
   _core/             shared seams only: time, origins, CallContext, events, the policy switch
   retry/             RetryPolicy and its values, RetryTransport, send tracking, the budget ledger
   breaker/           BreakerPolicy, BreakerRegistry, CircuitBreaker
@@ -49,8 +51,9 @@ whether the breaker opened, the rate budget and the retry layer reading `Retry-A
 seam defined in `_core` and wired in `_stack.py` or `_client.py`. `tests/package/test_boundaries.py` parses every
 import, including those under `TYPE_CHECKING`, and fails on a crossing.
 
-The codec flavors are the other boundary: the core imports neither msgspec nor pydantic at runtime, and
-`tests/package/test_import_isolation.py` checks it.
+The codecs are the other boundary: the core imports no serialization library at runtime, and
+`tests/package/test_import_isolation.py` checks it. It reaches one only through the `Codec` protocol
+(`headgate/_codec.py`), which `headgate.msgspec` and `headgate.pydantic` implement and any library can.
 
 ## A call, top to bottom
 

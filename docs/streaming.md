@@ -54,7 +54,7 @@ shape `aiter_events()` yields them (see [responses](responses.md#readers)).
 
 ## Request bodies
 
-A verb takes **`body=`**, a value a codec flavor's `encoder` wrote: the mirror of `expect=`, built once at import, so
+A verb takes **`body=`**, a value a codec's `encoder` wrote: the mirror of `expect=`, built once at import, so
 a writer takes only its own type.
 
 ```python

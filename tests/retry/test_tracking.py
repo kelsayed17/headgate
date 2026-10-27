@@ -35,9 +35,13 @@ _OK = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
 type _Handler = Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]]
 
 
-async def _read_head(reader: asyncio.StreamReader) -> bytes:
-    """Read a request head, up to its blank line."""
-    return await reader.readuntil(b"\r\n\r\n")
+async def _read_request(reader: asyncio.StreamReader) -> None:
+    """Read a request head, up to its blank line, and the body its ``Content-Length`` declares."""
+    head = await reader.readuntil(b"\r\n\r\n")
+    length = next(
+        (int(line.split(b":")[1]) for line in head.split(b"\r\n") if line.lower().startswith(b"content-length")), 0
+    )
+    await reader.readexactly(length)
 
 
 @contextlib.asynccontextmanager
@@ -61,18 +65,18 @@ async def _server(handler: _Handler) -> AsyncGenerator[str]:
         await server.wait_closed()
 
 
-async def _drop_after_head(reader: asyncio.StreamReader, _writer: asyncio.StreamWriter) -> None:
-    """Read the request head, then hang up without answering."""
-    await _read_head(reader)
+async def _drop_unanswered(reader: asyncio.StreamReader, _writer: asyncio.StreamWriter) -> None:
+    """Read the whole request, then hang up without answering.
+
+    Reading the body too makes the hang-up a clean close: a socket closed with bytes still unread is reset instead on
+    macOS, which the client reports as a ``ReadError`` rather than the server disconnecting.
+    """
+    await _read_request(reader)
 
 
 async def _answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     """Read the request head and body, then answer 200."""
-    head = await _read_head(reader)
-    length = next(
-        (int(line.split(b":")[1]) for line in head.split(b"\r\n") if line.lower().startswith(b"content-length")), 0
-    )
-    await reader.readexactly(length)
+    await _read_request(reader)
     writer.write(_OK)
     await writer.drain()
 
@@ -97,7 +101,7 @@ async def _network() -> AsyncGenerator[SendTrackingTransport]:
 
 async def test_a_request_dropped_after_its_head_was_written_counts_the_head_and_body() -> None:
     """Record a connection and every byte written when the server hangs up without answering."""
-    async with _server(_drop_after_head) as url, _network() as transport:
+    async with _server(_drop_unanswered) as url, _network() as transport:
         request = httpx2.Request("POST", f"{url}/orders", content=_BODY)
         context = _tracked(request)
         with pytest.raises(httpx2.RemoteProtocolError):
@@ -109,7 +113,7 @@ async def test_a_request_dropped_after_its_head_was_written_counts_the_head_and_
 
 async def test_a_refused_connection_records_nothing_sent() -> None:
     """Record no connection and no bytes when the connection is refused."""
-    async with _server(_drop_after_head) as url:
+    async with _server(_drop_unanswered) as url:
         pass
     async with _network() as transport:
         request = httpx2.Request("POST", f"{url}/orders", content=_BODY)
@@ -223,7 +227,7 @@ async def test_a_post_whose_head_reached_the_server_is_not_resent_end_to_end() -
     async def count_and_drop(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         nonlocal connections
         connections += 1
-        await _drop_after_head(reader, writer)
+        await _drop_unanswered(reader, writer)
 
     async with _server(count_and_drop) as url:
         client = StubClient(base_url=url, rate=Rate.per_second(1000))
@@ -242,7 +246,7 @@ async def test_a_keyed_post_whose_head_reached_the_server_is_resent_end_to_end()
     async def count_and_drop(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         nonlocal connections
         connections += 1
-        await _drop_after_head(reader, writer)
+        await _drop_unanswered(reader, writer)
 
     async with _server(count_and_drop) as url:
         client = StubClient(

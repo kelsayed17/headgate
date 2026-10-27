@@ -189,7 +189,12 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.msgspec]
   '''
   module headgate.msgspec
-  __all__ = ['decode', 'decoder', 'encoder', 'to_builtins']
+  __all__ = ['CODEC', 'MsgspecCodec', 'decode', 'decoder', 'encoder', 'to_builtins']
+  CODEC = <headgate.msgspec.MsgspecCodec object at 0x…>
+  class MsgspecCodec(object)(*, strict: 'bool' = True, drop_none: 'bool' = False) -> 'None'
+      def decoder(self, type_: 'TypeForm[T]', /) -> 'Callable[[bytes], T]'
+      def describe(self, error: 'Exception', /) -> 'str'
+      def encoder(self, type_: 'TypeForm[T]', /) -> 'Callable[[T], bytes]'
   def decode(content: 'bytes', type_: 'TypeForm[T]', *, strict: 'bool' = True) -> 'T'
   def decoder(type_: 'TypeForm[T]', *, strict: 'bool' = True, allow_empty_body: 'bool' = False, refusal_check: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
   def encoder(type_: 'TypeForm[T]', *, drop_none: 'bool' = False) -> 'Writer[T]'
@@ -270,7 +275,12 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.pydantic]
   '''
   module headgate.pydantic
-  __all__ = ['decode', 'decoder', 'encoder', 'to_builtins']
+  __all__ = ['CODEC', 'PydanticCodec', 'decode', 'decoder', 'encoder', 'to_builtins']
+  CODEC = <headgate.pydantic.PydanticCodec object at 0x…>
+  class PydanticCodec(object)(*, strict: 'bool' = True, drop_none: 'bool' = False) -> 'None'
+      def decoder(self, type_: 'TypeForm[T]', /) -> 'Callable[[bytes], T]'
+      def describe(self, error: 'Exception', /) -> 'str'
+      def encoder(self, type_: 'TypeForm[T]', /) -> 'Callable[[T], bytes]'
   def decode(content: 'bytes', type_: 'TypeForm[T]', *, strict: 'bool' = True) -> 'T'
   def decoder(type_: 'TypeForm[T]', *, strict: 'bool' = True, allow_empty_body: 'bool' = False, refusal_check: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
   def encoder(type_: 'TypeForm[T]', *, drop_none: 'bool' = False) -> 'Writer[T]'
@@ -370,7 +380,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.testing]
   '''
   module headgate.testing
-  __all__ = ['CassetteFilter', 'ConnectFail', 'DropMidBody', 'FakeTransport', 'FaultCall', 'FaultyTransport', 'PoolFull', 'RecordedRequest', 'RefusedStream', 'Reply', 'Respond', 'Slow', 'Step', 'TestClock', 'UnmatchedRequestError', 'instant_retries', 'isolated_breakers']
+  __all__ = ['CassetteFilter', 'ConnectFail', 'DropMidBody', 'FakeTransport', 'FaultCall', 'FaultyTransport', 'PoolFull', 'RecordedRequest', 'RefusedStream', 'Reply', 'Respond', 'Slow', 'Step', 'TestClock', 'UnmatchedRequestError', 'check_codec', 'instant_retries', 'isolated_breakers']
   class CassetteFilter(object)(*, auths: 'Iterable[object]' = (), headers: 'Iterable[str]' = (), params: 'Iterable[str]' = ()) -> 'None'
       def __call__(self, request: 'httpx2.Request', call_next: 'Next') -> 'httpx2.Response'
       def before_record_request(self, request: 'R') -> 'R | None'
@@ -420,6 +430,7 @@
       def sleep(self, seconds: 'float', /) -> 'None'
       property timing
   class UnmatchedRequestError(AssertionError)(no signature)
+  def check_codec(codec: 'Codec', *, record: 'TypeForm[object] | None' = None) -> 'None'
   def instant_retries() -> 'Generator[None]'
   def isolated_breakers() -> 'Generator[BreakerRegistry]'
   '''
@@ -427,7 +438,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['MAX_MINT_RESPONSE_BYTES', 'AsyncBaseClient', 'AuthError', 'BearerAuth', 'BreakerPolicy', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Cursor', 'DecodeError', 'EncodedBody', 'Expect', 'ForbiddenDestinationError', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'LinkHeader', 'Method', 'Middleware', 'Minted', 'Next', 'NextUrl', 'Offset', 'PageLimit', 'PageLimitError', 'PageOptions', 'Paginated', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'SecurityOptions', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'event_stream', 'json_reader', 'json_writer', 'nothing']
+  __all__ = ['MAX_MINT_RESPONSE_BYTES', 'AsyncBaseClient', 'AuthError', 'BearerAuth', 'BreakerPolicy', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Codec', 'Cursor', 'DecodeError', 'EncodedBody', 'Expect', 'ForbiddenDestinationError', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'LinkHeader', 'Method', 'Middleware', 'Minted', 'Next', 'NextUrl', 'Offset', 'PageLimit', 'PageLimitError', 'PageOptions', 'Paginated', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'SecurityOptions', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'decode_with', 'decoder_for', 'encoder_for', 'event_stream', 'json_reader', 'json_writer', 'nothing']
   MAX_MINT_RESPONSE_BYTES = 1048576
   class AsyncBaseClient(object)(*, base_url: 'str', rate: 'Rate | RateBudget' = Rate(requests=1000000, period=1.0), auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryBudget(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=<headgate.breaker._registry.BreakerRegistry object at 0x…>), rate_limits=(), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), timeout=Timeouts(connect=None, read=None, write=None, pool=None), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, refusal_check=None, security=SecurityOptions(trusted_origins=frozenset(), allow_private_hosts=True, resolver=None), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray'), observers=(), middleware=())) -> 'None'
       def aclose(self) -> 'None'
@@ -467,6 +478,12 @@
       property retryable
       property url
   class ClientTimeoutError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+  class Codec(Protocol)(*args, **kwargs)
+      def decoder(self, type_: 'TypeForm[T]', /) -> 'Callable[[bytes], T]'
+      def describe(self, error: 'Exception', /) -> 'str'
+      def encoder(self, type_: 'TypeForm[T]', /) -> 'Callable[[T], bytes]'
+      property errors
+      property media_type
   class Cursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
@@ -659,6 +676,9 @@
       key retry: bool | RetryPolicy (optional)
   type Writer[T] = Callable[[T], EncodedBody]
   def as_bytes(resp: 'httpx2.Response', /) -> 'bytes'
+  def decode_with(codec: 'Codec', content: 'bytes', type_: 'TypeForm[T]') -> 'T'
+  def decoder_for(codec: 'Codec', type_: 'TypeForm[T]', *, allow_empty_body: 'bool' = False, refusal_check: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
+  def encoder_for(codec: 'Codec', type_: 'TypeForm[T]') -> 'Writer[T]'
   def event_stream(resp: 'httpx2.Response', /) -> 'list[httpx2.ServerSentEvent]'
   def json_reader(decode: 'Callable[[bytes], T]', *, allow_empty_body: 'bool' = False, refusal_check: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
   def json_writer(encode: 'Callable[[T], bytes]') -> 'Writer[T]'

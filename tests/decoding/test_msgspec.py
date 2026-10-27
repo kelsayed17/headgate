@@ -17,7 +17,7 @@ import pytest
 
 from headgate._failures import MESSAGE_TEXT_LIMIT
 from headgate.errors import DecodeError
-from headgate.msgspec import decode, decoder, to_builtins
+from headgate.msgspec import MsgspecCodec, decode, decoder, to_builtins
 from tests.support.responses import response
 
 
@@ -56,6 +56,25 @@ def test_decode_is_the_bytes_level_primitive() -> None:
     assert decode(b"[]", list[_Struct] | _Struct) == []
     with pytest.raises(DecodeError):
         decode(b'{"x": "1"}', _Struct)
+
+
+def test_decode_coerces_when_lax() -> None:
+    """Coerce a quoted number with ``decode(..., strict=False)``, as the reader does."""
+    assert decode(b'{"x": "3"}', _Struct, strict=False) == _Struct(x=3)
+
+
+class _Noted(msgspec.Struct, frozen=True):
+    x: int
+    note: str | None = None
+
+
+def test_a_codec_built_at_run_time_is_strict_and_keeps_none_by_default() -> None:
+    """Decode strictly and write ``None`` fields unless told otherwise, for a codec of the caller's own."""
+    with pytest.raises(msgspec.ValidationError):
+        MsgspecCodec().decoder(_Struct)(b'{"x": "3"}')
+    assert MsgspecCodec(strict=False).decoder(_Struct)(b'{"x": "3"}') == _Struct(x=3)
+    assert MsgspecCodec().encoder(_Noted)(_Noted(x=1)) == b'{"x":1,"note":null}'
+    assert MsgspecCodec(drop_none=True).encoder(_Noted)(_Noted(x=1)) == b'{"x":1}'
 
 
 # --- decoder(list[cls]): a bare top-level JSON array ---

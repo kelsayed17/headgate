@@ -7,8 +7,9 @@
   top-level statements is one of that code's statements (a class may show only some of its members). Those modules are
   linted, type-checked and run by the tests beside this one, so a README sample that drifts from the API fails here.
 * Every Python block in ``docs/`` parses, and every name it imports from headgate exists.
+* Every dotted headgate name the prose of ``README.md`` and ``docs/`` spells out, such as ``headgate.health``, exists.
 * Every relative link in ``README.md``, ``CHANGELOG.md`` and ``docs/`` names a file that exists, and a heading in it
-  when it names one.
+  when it names one; so does every absolute link to the docs site, which the README uses so it works on PyPI too.
 """
 
 from __future__ import annotations
@@ -30,6 +31,12 @@ _FENCE = re.compile(r"^```(\w*)\n(.*?)^```$", re.MULTILINE | re.DOTALL)
 
 #: A Markdown link or image target, up to an optional title.
 _LINK = re.compile(r"\]\(([^)\s]+)\)")
+
+#: A link into the published docs site: the page's name (empty for the home page) and an optional anchor.
+_SITE_LINK = re.compile(r"https://kelsayed17\.github\.io/headgate/([\w-]*)/?(?:#([\w-]+))?")
+
+#: A dotted headgate name in inline code, such as ``headgate.testing.check_codec``.
+_DOTTED_NAME = re.compile(r"`(headgate(?:\.\w+)+)`")
 
 #: A heading line.
 _HEADING = re.compile(r"^#{1,6} +(.+?) *$", re.MULTILINE)
@@ -91,9 +98,27 @@ def _anchors(path: Path) -> set[str]:
     return {_slug(heading) for heading in _HEADING.findall(path.read_text(encoding="utf-8"))}
 
 
+def _resolves(dotted: str) -> bool:
+    """Return whether *dotted* names a headgate module, or an attribute reached from the longest module prefix."""
+    parts = dotted.split(".")
+    for split in range(len(parts), 0, -1):
+        try:
+            found: object = importlib.import_module(".".join(parts[:split]))
+        except ImportError:
+            continue
+        for part in parts[split:]:
+            if not hasattr(found, part):
+                return False
+            found = getattr(found, part)
+        return True
+    return False
+
+
 _README_BLOCKS = _python_blocks(_README)
 _DOC_BLOCKS = [(path, line, code) for path in _DOCS for line, code in _python_blocks(path)]
 _PAGES = [_README, _ROOT / "CHANGELOG.md", *_DOCS]
+#: The pages that describe the current API; the changelog names what was removed, so it is left out.
+_CURRENT_PAGES = [_README, *_DOCS]
 
 
 def test_the_docs_have_samples_to_check() -> None:
@@ -144,3 +169,21 @@ def test_every_relative_link_resolves(page: Path) -> None:
         if not linked.exists() or (anchor and linked.suffix == ".md" and anchor not in _anchors(linked)):
             broken.append(target)
     assert not broken, f"{page.name}: broken links {broken}"
+
+
+@pytest.mark.parametrize("page", _CURRENT_PAGES, ids=[page.name for page in _CURRENT_PAGES])
+def test_every_dotted_name_in_the_prose_exists(page: Path) -> None:
+    """Import or reach every ``headgate.…`` name *page* spells out in inline code."""
+    missing = sorted({name for name in _DOTTED_NAME.findall(page.read_text(encoding="utf-8")) if not _resolves(name)})
+    assert not missing, f"{page.name}: no such headgate names {missing}"
+
+
+@pytest.mark.parametrize("page", _PAGES, ids=[page.name for page in _PAGES])
+def test_every_docs_site_link_resolves(page: Path) -> None:
+    """Find the guide each docs-site link on *page* names, and the heading its anchor names."""
+    broken: list[str] = []
+    for match in _SITE_LINK.finditer(page.read_text(encoding="utf-8")):
+        guide = _ROOT / "docs" / f"{match[1] or 'index'}.md"
+        if not guide.exists() or (match[2] and match[2] not in _anchors(guide)):
+            broken.append(match[0])
+    assert not broken, f"{page.name}: broken docs-site links {broken}"

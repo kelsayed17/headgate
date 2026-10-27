@@ -102,6 +102,6 @@ A `User-Agent` in `HttpOptions(headers=...)` replaces it entirely.
 `headgate.health` reads the process-wide state that says something is degraded, as fresh copies a metrics callback can
 poll:
 
-- `breaker_states(registry=DEFAULT_REGISTRY)`: a `BreakerSnapshot(state, refusing)` per origin;
+- `breaker_states(registry=...)`: a `BreakerSnapshot(state, refusing)` per origin, of the shared registry by default;
 - `cache_degradations()`: per host, how many requests found the cache broken and went to the network;
 - `observer_failures()`: per observer class, how many events its `notify` raised on.

@@ -3,7 +3,7 @@
 
 """A call's request body: an encoded ``body=``, raw ``content=`` (bytes, a stream, or a stream factory) and ``files=``.
 
-``body=`` is the write side of ``expect=``: a codec flavor's ``encoder(Type)`` builds a :data:`Writer`, a function from
+``body=`` is the write side of ``expect=``: a codec's ``encoder(Type)`` builds a :data:`Writer`, a function from
 a value of that type to the :class:`EncodedBody` the call sends, its bytes and their ``Content-Type``.
 
 A streamed body is either replayable or not, and the retry layer has to know which: a stream given as an iterable is

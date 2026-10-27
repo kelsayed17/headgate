@@ -135,12 +135,15 @@ The [full comparison](https://kelsayed17.github.io/headgate/comparison/) covers 
 Python 3.14 or newer.
 
 ```bash
-pip install headgate               # or: uv add headgate. Brings httpx2[http2], hishel and msgspec
-pip install 'headgate[pydantic]'   # + the pydantic codec flavor
+pip install 'headgate[msgspec]'    # or: uv add 'headgate[msgspec]'. headgate, and the msgspec codec
+pip install 'headgate[pydantic]'   # headgate, and the pydantic codec
 pip install 'headgate[curl]'       # + AsyncCurlTransport: a browser's TLS fingerprint, via curl_cffi
 pip install 'headgate[otel]'       # + OpenTelemetryObserver (opentelemetry-api only)
 pip install 'headgate[cache]'      # + what hishel's AsyncSqliteStorage needs (hishel[async]: anysqlite)
 ```
+
+`pip install headgate` alone brings no serialization library: httpx2 and hishel only. Pick a codec as an extra, or
+bring your own (see [codecs](https://kelsayed17.github.io/headgate/codecs/)).
 
 <details>
 <summary><b>Why Python 3.14, and why httpx2?</b></summary>
@@ -388,6 +391,7 @@ ClientError                      also: an unparseable URL, a pagination loop
 ├── ResponseParseError           a 2xx body the reader could not read
 ├── ResponseTooLargeError        a body past max_response_bytes
 ├── ForbiddenDestinationError    a hop the SSRF guard refused
+├── PageLimitError               a paginated walk spent its page budget with pages left
 └── ClientConfigurationError     our own setup is wrong
 ```
 
@@ -444,14 +448,17 @@ async def test_a_503_is_retried_after_the_wait_it_asks_for() -> None:
 
 Fault schedules, cassettes and switching the policy off: [testing](https://kelsayed17.github.io/headgate/testing/).
 
-## Codec flavors
+## Codecs
 
-The core imports no codec. A client picks one by import, and both flavors expose `decode`, `decoder`, `encoder` and
-`to_builtins` with the same behaviour: strict typing (a field that changes type fails), unknown fields ignored, and a
-mismatch raised as `DecodeError`, which the client turns into `ResponseParseError`.
+The core imports no serialization library. `headgate.msgspec` (`headgate[msgspec]`) and `headgate.pydantic`
+(`headgate[pydantic]`) are two codecs with the same shortcuts, `decode`, `decoder`, `encoder` and `to_builtins`, so
+switching is changing one import. Both decode strictly (a field that changes type fails), ignore unknown fields, and
+raise a mismatch as `DecodeError`, which the client turns into `ResponseParseError`.
 
-- `headgate.msgspec` decodes into `msgspec.Struct` and any msgspec type, and comes with the core install.
-- `headgate.pydantic` decodes into `pydantic.BaseModel` and any pydantic type; install `headgate[pydantic]`.
+Any other library plugs in as a `Codec`: an object naming its media type, the errors it raises, a decoder and an
+encoder per type, and a description that never quotes the input. `decoder_for(codec, Type)` and
+`encoder_for(codec, Type)` build a reader and a writer on it, and `headgate.testing.check_codec` holds it to the
+promises the built-in codecs keep. See [codecs](https://kelsayed17.github.io/headgate/codecs/).
 
 ## Development
 

@@ -423,6 +423,45 @@ async def test_a_hedge_the_budget_cannot_admit_leaves_the_first_send_to_answer()
     assert context.attempt == 1
 
 
+class _HedgeRefusedLater(_Held):
+    """A held network whose rate budget refuses every send after the first, once the test lets it."""
+
+    def __init__(self, changes: _Changes) -> None:
+        """Hold every refusal until :attr:`refuse` is set."""
+        super().__init__(changes)
+        self.refuse = asyncio.Event()
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        if self.started:
+            await self.refuse.wait()
+            raise _backlog()
+        return await super().handle_async_request(request)
+
+
+async def test_a_hedge_refused_after_the_first_send_failed_ends_with_that_failure() -> None:
+    """End with the failure in hand when the last send still running is one the budget refuses, rather than raise."""
+    changes = _Changes()
+    network, gate = _HedgeRefusedLater(changes), _Gate(changes)
+    retry = RetryTransport(
+        transport=network, policy=RetryPolicy(budget=None, hedge=Hedge(after=_HEDGE_AFTER)), sleep=gate.sleep
+    )
+    request, context = _request(TestClock())
+
+    call = asyncio.create_task(retry.handle_async_request(request))
+    await changes.until(lambda: network.started and gate.waits)
+    gate.opened.set()
+    await _settle()
+    network.started[0].set_result(503)
+    await _settle()
+    network.refuse.set()
+
+    response = await call
+    assert response.status_code == httpx2.codes.SERVICE_UNAVAILABLE
+    assert await response.aread() == b"answer"
+    assert context.attempt == 1, "neither refused send counts as an attempt"
+
+
 # --- Exact bounds of a wait ---
 
 

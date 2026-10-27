@@ -11,6 +11,30 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - Middleware timeout overrides remain part of download sharing, including on later retries. A shared fetch is handed
   off only when the specific phase that timed out was shortened by the leader's deadline.
 
+## [0.7.0] - 2026-10-26
+
+Makes headgate codec-agnostic: the core speaks to a serialization library only through a `Codec`, msgspec and pydantic
+are two codecs among any, and a plain `pip install headgate` brings neither. An install that relies on msgspec needs
+the `headgate[msgspec]` extra, so this is a minor release: see **Changed**.
+
+### Added
+
+- `Codec`, the protocol a serialization library implements to plug in: its `media_type`, the `errors` it raises for a
+  body of the wrong shape, a `decoder` and an `encoder` per type, and a `describe` that never quotes the input.
+  `decoder_for(codec, Type)`, `encoder_for(codec, Type)` and `decode_with(codec, content, Type)` build a reader, a
+  writer and a decode on any codec; a codec's own errors are raised as `DecodeError`, so a call raises them as
+  `ResponseParseError` instead of outside the `ClientError` tree. See the new
+  [codecs guide](https://kelsayed17.github.io/headgate/codecs/).
+- `headgate.msgspec.CODEC` and `headgate.pydantic.CODEC` (`MsgspecCodec`, `PydanticCodec`): the two built-in codecs,
+  under the shortcuts each module already had.
+- `headgate.testing.check_codec(codec, record=...)`, which holds a codec to the promises the built-in ones keep:
+  strict types, malformed bytes refused, unknown fields ignored, and messages that never repeat the input.
+
+### Changed
+
+- msgspec is an extra: install `headgate[msgspec]` where you installed `headgate`, as `headgate[pydantic]` already
+  was. `import headgate.msgspec` without it fails with an `ImportError` naming the extra.
+
 ## [0.6.0] - 2026-10-26
 
 Makes the public API smaller and more regular: the auth hooks lose their underscores, `head()` and `paginate()` take
@@ -346,7 +370,8 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/kelsayed17/headgate/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/kelsayed17/headgate/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kelsayed17/headgate/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kelsayed17/headgate/compare/v0.3.0...v0.4.0

@@ -48,6 +48,7 @@ for as long as you keep asking. `limit=PageLimit(max_pages)` bounds the walk:
 
 ```python
 from headgate import PageLimit, PageLimitError
+from headgate.msgspec import decoder
 
 orders = client.paginate("orders", expect=decoder(Page), pages=ORDER_PAGES, limit=PageLimit(50))
 try:

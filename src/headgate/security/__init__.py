@@ -9,7 +9,7 @@ redirect from ``https`` to ``http`` is not followed. The SSRF guard (``SecurityO
 refuses hosts that are, or resolve to, addresses that are not globally routable, raising
 :class:`~headgate.errors.ForbiddenDestinationError`.
 
-What is public here plugs into the guard: a :data:`Resolver` (``HttpOptions(resolver=...)``), and
+What is public here plugs into the guard: a :data:`Resolver` (``SecurityOptions(resolver=...)``), and
 :class:`AddressGuard` and :class:`PinnedHTTPTransport`, so that a test can reach a loopback server through the real
 pinning transport (``AddressGuard(check=...)``). :func:`forbidden_reason` is the default :data:`AddressCheck`, and
 :func:`resolve_with_loop` the default resolver.

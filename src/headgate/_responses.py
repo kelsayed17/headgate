@@ -41,6 +41,7 @@ __all__ = [
     "event_stream",
     "json_reader",
     "nothing",
+    "reader_over",
 ]
 
 
@@ -229,10 +230,10 @@ def json_reader[T](
     allow_empty_body: bool = False,
     refusal_check: Callable[[T], RefusedError | None] | None = None,
 ) -> Reader[T]:
-    """Build a reader around a codec's bytes-to-value function.
+    """Build a reader around a JSON bytes-to-value function, for a decoder that is not a :class:`~headgate.Codec`.
 
-    Each codec flavor's ``decoder`` builds on this, so the empty-body rule and the ``refusal_check`` hook behave
-    identically across flavors.
+    :func:`~headgate.decoder_for`, which every codec's ``decoder`` builds on, shares this reader's empty-body rule and
+    ``refusal_check`` hook, so they behave identically whichever builds the reader.
 
     ``allow_empty_body`` reads an empty body (zero bytes or only whitespace) as the empty array ``[]``. It suits only a
     list-shaped type, for a provider whose no-data answer is a zero-byte 200 or a 204. For every other provider an empty
@@ -244,11 +245,25 @@ def json_reader[T](
     quota, rate limit, server, a malformed request, any undocumented code) and leave a code about the subject (an
     unknown instrument, a rejected order) in the value for the caller.
     """
+    return reader_over(decode, empty=b"[]" if allow_empty_body else None, refusal_check=refusal_check)
+
+
+def reader_over[T](
+    decode: Callable[[bytes], T],
+    *,
+    empty: bytes | None,
+    refusal_check: Callable[[T], RefusedError | None] | None,
+) -> Reader[T]:
+    """Build a reader that decodes the body with *decode*, reading an empty body as *empty* when it is given.
+
+    An empty body is zero bytes or only whitespace. *empty* is the encoding of an empty array in the body's format
+    (``b"[]"`` for JSON), or ``None`` to decode an empty body as it is, which fails for every format worth declaring.
+    """
 
     def _read(resp: httpx2.Response, /) -> T:
         content = resp.content
-        if allow_empty_body and not content.strip():
-            content = b"[]"
+        if empty is not None and not content.strip():
+            content = empty
         value = decode(content)
         if refusal_check is not None and (refused := refusal_check(value)) is not None:
             raise refused
