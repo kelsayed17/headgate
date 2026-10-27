@@ -55,17 +55,41 @@
   margin: 0.2rem 0.4rem 0.2rem 0;
 }
 
+/* On a phone the hero stacks and reads left to right: a smaller logo, then the text, then buttons that share rows. */
 @media screen and (max-width: 44.9375em) {
   .hg-hero {
     grid-template-columns: 1fr;
-    justify-items: center;
-    text-align: center;
+    gap: 1rem;
+    margin: 0 0 1.5rem;
   }
 
   .hg-hero img {
-    width: 6rem;
-    height: 6rem;
-    border-radius: 1.1rem;
+    width: 4rem;
+    height: 4rem;
+    border-radius: 0.9rem;
+    box-shadow: 0 0.3rem 1rem rgba(10, 130, 224, 0.35);
+  }
+
+  .hg-hero p {
+    font-size: 0.85rem;
+  }
+
+  .md-typeset .hg-hero p:has(> .md-button) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .md-typeset .hg-hero .md-button {
+    flex: 1 1 0;
+    margin: 0;
+    padding-inline: 1em;
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  .md-typeset .hg-hero .md-button--primary {
+    flex-basis: 100%;
   }
 }
 
@@ -112,9 +136,61 @@
   min-width: 12rem;
 }
 
+/* On a phone a matrix fits the screen, headgate's column included: the library names turn on their side, so each
+   icon column needs only a line's width and the row names keep the rest. */
 @media screen and (max-width: 44.9375em) {
-  .hg-matrix table td:first-child {
-    min-width: 8rem;
+  .md-typeset .hg-matrix table:not([class]) {
+    display: table;
+    width: 100%;
+  }
+
+  .md-typeset .hg-matrix table:not([class]) th,
+  .md-typeset .hg-matrix table:not([class]) td {
+    min-width: 0;
+    padding: 0.55em 0.35em;
+  }
+
+  .md-typeset .hg-matrix table:not([class]) th:first-child,
+  .md-typeset .hg-matrix table:not([class]) td:first-child {
+    min-width: 0;
+    padding-left: 0.6em;
+  }
+
+  .md-typeset .hg-matrix table:not([class]) th:not(:first-child) {
+    padding: 0.6em 0.35em;
+    white-space: nowrap;
+    vertical-align: bottom;
+    text-align: left;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+  }
+}
+
+/* A wide table still scrolls on a phone; its first column stays put, so each row keeps its name. The wrapper is what
+   scrolls, so the table itself must not clip, or the column would stick to a box that never moves. */
+@media screen and (max-width: 44.9375em) {
+  .md-typeset .md-typeset__scrollwrap table:not([class]) {
+    overflow: visible;
+  }
+
+  .md-typeset table:not([class]) td:first-child {
+    min-width: 6rem;
+  }
+
+  .md-typeset table:not([class]) th:first-child,
+  .md-typeset table:not([class]) td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background-color: var(--md-default-bg-color);
+    box-shadow: inset -1px 0 0 var(--md-typeset-table-color);
+  }
+
+  /* A linked API name broken mid-word (``BreakerPolic`` / ``y``) is harder to read than a table that scrolls a little.
+     Prose code in a description may still wrap, or one long dotted name would widen the whole table. */
+  .md-typeset table:not([class]) td a > code {
+    white-space: nowrap;
+    word-break: normal;
   }
 }
 
@@ -243,4 +319,16 @@
   font-size: 0.7rem;
   line-height: 1.4;
   color: var(--md-default-fg-color--light);
+}
+
+/* On a phone the pipeline takes two steps a row rather than one, so the whole call fits on a screen or two. */
+@media screen and (max-width: 44.9375em) {
+  .md-typeset ol.hg-pipeline {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .md-typeset ol.hg-pipeline li {
+    padding: 0.55rem 0.65rem;
+  }
 }
