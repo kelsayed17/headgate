@@ -6,8 +6,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-26
+
 Makes headgate codec-agnostic: the core speaks to a serialization library only through a `Codec`, msgspec and pydantic
-are two codecs among any, and a plain `pip install headgate` brings neither.
+are two codecs among any, and a plain `pip install headgate` brings neither. An install that relies on msgspec needs
+the `headgate[msgspec]` extra, so this is a minor release: see **Changed**.
 
 ### Added
 
@@ -362,7 +365,8 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/kelsayed17/headgate/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/kelsayed17/headgate/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kelsayed17/headgate/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kelsayed17/headgate/compare/v0.3.0...v0.4.0
