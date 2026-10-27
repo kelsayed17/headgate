@@ -40,7 +40,8 @@ What the stack does to every request.
 A `Route` changes an endpoint's retry policy or deadline in configuration, so the endpoint method stays one line:
 
 ```python
-from headgate import NO_RETRY, Route, TransportPolicy
+from headgate import Route, TransportPolicy
+from headgate.retry import NO_RETRY
 
 policy = TransportPolicy(routes=(Route("/charges", retry=NO_RETRY), Route("/reports", deadline=300.0)))
 ```
@@ -53,14 +54,12 @@ How requests are sent and responses read.
 | --- | --- | --- |
 | `transport` | `None` | a custom network transport (a test double, `headgate.curl.AsyncCurlTransport`); the default is an HTTP/2 `httpx2.AsyncHTTPTransport` |
 | `headers` | `{}` | sent on every request; a call's `headers=` wins a clash |
-| `timeout` | `Timeouts()` | per-phase timeouts, or a number for the read timeout alone |
+| `timeout` | `Timeouts()` | per-phase timeouts; a phase left unset takes its default |
 | `follow_redirects` | `True` | the client's default; a call can override it |
 | `max_redirects` | `5` | the hop limit, auth-flow hops included |
 | `max_response_bytes` | 32 MiB | the cap on a buffered body, counted after decompression; `stream()` is uncapped |
 | `refusal_check` | `None` | a host-wide check of every final response; requires `follow_redirects=False` |
-| `trusted_origins` | `frozenset()` | origins besides `base_url`'s that may receive credentials |
-| `allow_private_hosts` | `True` | `False` turns on the SSRF guard |
-| `resolver` | `None` | how the SSRF guard resolves names; only with the guard on |
+| `security` | `SecurityOptions()` | where requests and credentials may go: see below |
 | `ssl_context` | `None` | TLS for the default transport: a private CA, mutual TLS, pinning |
 | `limits` | 10 connections, 5 kept alive | the default transport's pool |
 | `proxy` | `None` | an `http`, `https` or `socks5` proxy URL for the default transport |
@@ -69,6 +68,15 @@ How requests are sent and responses read.
 | `request_id_headers` | `x-request-id`, `request-id`, `x-amzn-requestid`, `x-ms-request-id`, `cf-ray` | where `request_id` is read from |
 | `observers` | `()` | receive the client's [events](observability.md#events) |
 | `middleware` | `()` | per-attempt hooks; see [middleware](#middleware) |
+
+`SecurityOptions`, passed as `HttpOptions(security=SecurityOptions(...))`, groups the settings that decide where
+requests and credentials may go:
+
+| Field | Default | |
+| --- | --- | --- |
+| `trusted_origins` | `frozenset()` | origins besides `base_url`'s that may receive credentials |
+| `allow_private_hosts` | `True` | `False` turns on the SSRF guard |
+| `resolver` | `None` | how the SSRF guard resolves names; only with the guard on |
 
 `ssl_context`, `limits` and `proxy` configure the default transport, so passing any of them with `transport=` is a
 `ValueError`; a custom transport owns its own TLS, pool and proxy. The SSRF guard cannot be combined with `proxy=`.
@@ -104,9 +112,10 @@ timestamp, a nonce) belongs in a middleware:
 import hashlib
 import hmac
 import time
-from collections.abc import Awaitable, Callable
 
 import httpx2
+
+from headgate import Next
 
 
 class HmacSigner:
@@ -117,9 +126,7 @@ class HmacSigner:
     def __init__(self, secret: bytes) -> None:
         self._secret = secret
 
-    async def __call__(
-        self, request: httpx2.Request, call_next: Callable[[httpx2.Request], Awaitable[httpx2.Response]]
-    ) -> httpx2.Response:
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
         stamp = str(int(time.time()))
         payload = b"\n".join((request.method.encode(), request.url.raw_path, stamp.encode(), request.content))
         request.headers["X-Timestamp"] = stamp
@@ -136,7 +143,8 @@ buffered body; a streamed body is not readable there.
 
 ## Per-call options
 
-Every verb, `get`, `post`, `put`, `patch`, `delete` and `head`, has the same signature:
+Every verb, `get`, `post`, `put`, `patch`, `delete` and `head`, has the same signature, except that `head` reads
+`expect=nothing` unless it is given another reader, since a HEAD has no body:
 
 ```python
 await client.get(
@@ -147,14 +155,14 @@ await client.get(
     cache_ttl=None,  # this response's cache lifetime, over HttpCache.ttl
     params={"q": "gdp"},  # a list or tuple value repeats the key
     headers={"Accept-Language": "en"},
-    timeout=5.0,  # a Timeouts, or a number for the read timeout
+    timeout=Timeouts(read=5.0),  # the phases it sets replace the view's or the client's
     deadline=10.0,  # seconds for this call, or None for none
 )
 ```
 
-plus `json=`, `data=`, `content=`, `files=` for a body and `idempotency_key=` for a write. `stream()` takes the same
-options without `expect=` and `cache_ttl=`, and `paginate()` takes `expect=`, `pages=`, `retry=` and the non-body
-options.
+plus `body=` (what a codec's `encoder` wrote), `json=`, `data=`, `content=` or `files=` for a body and `idempotency_key=` for a write. `stream()` takes the same
+options without `expect=` and `cache_ttl=`, and `paginate()` takes `expect=`, `pages=`, `limit=` and every other option
+but a body, applied to each page.
 
 ### Views
 

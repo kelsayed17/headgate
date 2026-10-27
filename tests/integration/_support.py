@@ -47,9 +47,7 @@ def client(
             middleware=options.middleware,
             headers=options.headers,
             timeout=options.timeout,
-            trusted_origins=options.trusted_origins,
-            allow_private_hosts=options.allow_private_hosts,
-            resolver=options.resolver,
+            security=options.security,
             follow_redirects=options.follow_redirects,
         ),
     )
@@ -76,7 +74,7 @@ class Bearer(CachedTokenAuth):
     """A bearer auth whose exchange never runs: :func:`seeded` caches its token."""
 
     @override
-    async def _mint_token(self) -> tuple[str, float]:
+    async def mint_token(self) -> tuple[str, float]:
         raise NotImplementedError
 
 

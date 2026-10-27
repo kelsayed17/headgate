@@ -11,29 +11,30 @@ cache and rate-limit transports, the circuit breaker, the size-capped body read,
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import gzip
 import itertools
-from typing import TYPE_CHECKING
+import uuid
+from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING, override
 
-import anysqlite
 import httpx2
 import msgspec
-from hishel import AsyncSqliteStorage, FilterPolicy
+from hishel import AsyncBaseStorage, Entry, EntryMeta, FilterPolicy, Request, Response
 
 from headgate import (
     AsyncBaseClient,
     HttpCache,
     HttpOptions,
-    MethodFilter,
     QueryParamAuth,
     Rate,
     RetryPolicy,
-    StatusCodeFilter,
     TransportPolicy,
     as_bytes,
 )
 from headgate import msgspec as msgspec_flavor
 from headgate._core import Timing, timing_override
+from headgate.cache import MethodFilter, StatusCodeFilter
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -64,6 +65,67 @@ _SERIES = msgspec_flavor.decoder(Series)
 def _ok(request: httpx2.Request) -> httpx2.Response:
     """Answer every request with the same small JSON body."""
     return httpx2.Response(_OK, content=_BODY, headers={"content-type": "application/json"}, request=request)
+
+
+async def _replay(body: bytes) -> AsyncIterator[bytes]:
+    """Yield a stored *body* as one chunk."""
+    yield body
+
+
+class _MemoryStorage(AsyncBaseStorage):
+    """A dict-backed hishel storage, so a cache hit measures headgate's cache layer, not a database.
+
+    hishel's SQLite storage runs every query on a worker thread; the thread handoffs are system calls, which CodSpeed's
+    CPU simulation cannot measure, and their cost is the backend's, not headgate's.
+    """
+
+    def __init__(self) -> None:
+        """Start empty."""
+        self._entries: dict[str, list[tuple[Entry, bytes]]] = {}
+
+    @override
+    async def create_entry(self, request: Request, response: Response, key: str, id_: uuid.UUID | None = None) -> Entry:
+        entry = Entry(
+            id=uuid.uuid4() if id_ is None else id_,
+            request=request,
+            meta=EntryMeta(),
+            response=response,
+            cache_key=key.encode(),
+        )
+        stream = response.stream
+        if isinstance(stream, Iterator):
+            msg = "an async storage was handed a synchronous body"
+            raise TypeError(msg)
+
+        async def stored() -> AsyncIterator[bytes]:
+            # Kept once the body has streamed through, as a real storage writes it.
+            chunks = [chunk async for chunk in stream]
+            self._entries.setdefault(key, []).append((entry, b"".join(chunks)))
+            for chunk in chunks:
+                yield chunk
+
+        return dataclasses.replace(entry, response=dataclasses.replace(response, stream=stored()))
+
+    @override
+    async def get_entries(self, key: str) -> list[Entry]:
+        return [
+            dataclasses.replace(entry, response=dataclasses.replace(entry.response, stream=_replay(body)))
+            for entry, body in self._entries.get(key, [])
+        ]
+
+    @override
+    async def update_entry(self, id: uuid.UUID, new_entry: Entry | Callable[[Entry], Entry]) -> Entry | None:
+        msg = "a cache hit never updates an entry"
+        raise NotImplementedError(msg)
+
+    @override
+    async def remove_entry(self, id: uuid.UUID) -> None:
+        msg = "a cache hit never removes an entry"
+        raise NotImplementedError(msg)
+
+    @override
+    async def close(self) -> None:
+        self._entries.clear()
 
 
 def _client(
@@ -142,8 +204,8 @@ def test_get_retried_once(run_batch: Callable[[Operation], None]) -> None:
 
 
 def test_get_cache_hit(runner: asyncio.Runner, run_batch: Callable[[Operation], None]) -> None:
-    """Measure a GET served from the HTTP cache (in-memory SQLite storage)."""
-    storage = AsyncSqliteStorage(connection=runner.run(anysqlite.connect(":memory:")))
+    """Measure a GET served from the HTTP cache, from a dict-backed storage (see :class:`_MemoryStorage`)."""
+    storage = _MemoryStorage()
     policy = FilterPolicy(
         request_filters=[MethodFilter(frozenset({"GET"}))],
         response_filters=[StatusCodeFilter(frozenset({_OK}))],
@@ -185,7 +247,7 @@ def test_stream(benchmark: BenchmarkFixture, runner: asyncio.Runner) -> None:
     client = _client(lambda request: httpx2.Response(_OK, content=payload, request=request))
 
     async def drain() -> int:
-        async with client.stream("GET", "file") as stream:
+        async with client.stream("file") as stream:
             return sum([len(chunk) async for chunk in stream.aiter_bytes()])
 
     benchmark(lambda: runner.run(drain()))

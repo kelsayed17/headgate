@@ -27,7 +27,7 @@ def test_shipped_code_keeps_the_contract(contract: str) -> None:
     offenders = [
         f"{path.relative_to(_ROOT)}:{n}: {line.strip()}"
         for path in _SHIPPED
-        for n, line in enumerate(path.read_text().splitlines(), 1)
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
         if pattern.search(line)
     ]
     assert not offenders, "\n".join(offenders)

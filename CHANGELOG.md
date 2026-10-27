@@ -8,9 +8,164 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
-- Concurrent identical GETs share downloads when their configured timeouts exceed the remaining deadline. Each call
-  retains its own deadline, and a deadline-shortened phase timeout does not fail another waiting call.
+- Middleware timeout overrides remain part of download sharing, including on later retries. A shared fetch is handed
+  off only when the specific phase that timed out was shortened by the leader's deadline.
 
+## [0.6.0] - 2026-10-26
+
+Makes the public API smaller and more regular: the auth hooks lose their underscores, `head()` and `paginate()` take
+what the other verbs take, path rules match whole segments, timeouts are always a `Timeouts`, request bodies get a
+writer to mirror `expect=`, and each package exports only what a client is written with. Much of it changes existing
+code, so this is a minor release: each change below says what to write instead.
+
+### Added
+
+- A request-body writer, the mirror of `expect=`: each codec flavor's `encoder(Type, *, drop_none=False)` builds a
+  `Writer[Type]`, and a call sends what it wrote as `body=`: `NEW_ORDER = encoder(NewOrder)`, then
+  `await self.post("orders", body=NEW_ORDER(order), expect=ORDER)`. The writer takes only its own type, msgspec
+  encodes a struct straight to bytes, and the body is sent as `application/json` unless `headers=` sets another
+  `Content-Type`. `EncodedBody`, `Writer` and `json_writer` (for a codec of your own) are exported from `headgate`.
+- `rate=` is optional: without it a client paces nothing itself (`headgate.ratelimit.UNLIMITED`) but still waits out
+  the pauses the server asks for, a 429 or 503 with `Retry-After` and a spent `RateLimit` quota.
+- `Rate.per_hour(requests)`, for a provider that states its quota hourly.
+- `BearerAuth(token)`, for the most common `StaticHeaderAuth({"Authorization": f"Bearer {token}"})`.
+- `HttpCache(methods=, paths=, statuses=)` say what is stored without hishel's `FilterPolicy`: the GETs of `paths`
+  (every path by default) answered with a status in `statuses` (200 by default). `policy=` stays, now optional, for
+  a `FilterPolicy` of your own.
+- `Next`, the type of a middleware's `call_next`, and `ViewOptions`, the options `with_options()` takes, are exported
+  from `headgate`.
+- `FakeTransport.reply()` takes a `Respond`, the step `FaultyTransport` answers with, beside a response, a status or a
+  function: `Respond(503, retry_after=2.0)`.
+
+### Changed
+
+- `HttpOptions`' `trusted_origins`, `allow_private_hosts` and `resolver` move into a group of their own,
+  `SecurityOptions`, exported from `headgate`: write `HttpOptions(security=SecurityOptions(allow_private_hosts=False))`
+  where you wrote `HttpOptions(allow_private_hosts=False)`.
+- `CachedTokenAuth`'s subclass hooks are public: override `mint_token`, `mint_flow`, `attach` and `skips` where you
+  overrode `_mint_token`, `_mint_flow`, `_attach` and `_skips`. A hook under its old name is no longer called, so a
+  subclass that defines only `_mint_token` or `_mint_flow` fails when it is defined.
+- `head()` reads `expect=nothing` when no `expect=` is given: `await client.head(url)` returns `None`.
+- `RateRule`, `Route` and `PathFragmentFilter` match whole path segments instead of any substring: `"/exports"`
+  matches `/v2/exports/orders.csv` but no longer `/v2/exports-archive`. A fragment that names no segment (`""`, `"/"`)
+  is refused with `ValueError`, by `RateRule` and `PathFragmentFilter` too, which used to accept it and match every
+  request.
+- `timeout=` takes only a `Timeouts`, on `HttpOptions`, `with_options()` and every call; a bare number is no longer
+  accepted. A `Timeouts` now sets only the phases it names: a phase left unset takes the view's, the client's or the
+  default (connect 10 s, read 30 s, write 10 s, pool 15 s), so write `Timeouts(read=60.0)` where you wrote `60.0`. A
+  call's or a view's `Timeouts` used to replace all four phases.
+- A decoder's `check=` is `refusal_check=`, the name `HttpOptions` already uses for the same job on the response head:
+  `decoder(Envelope, refusal_check=refusal_in)`. `json_reader` takes it under the same name.
+- `CachedTokenAuth(refresh_margin_s=)` is `CachedTokenAuth(refresh_margin=)`, in seconds like every other duration.
+- In `headgate.testing`, `Respond(status=)` is `Respond(status_code=)`, and `FakeTransport.route()` is
+  `FakeTransport.reply()`, so it no longer shares a name with `headgate.Route`.
+- `stream()` takes the URL first and the method as `method=`, a GET by default: `client.stream("export.csv")`, and
+  `client.stream("jobs", method="POST")` where you wrote `client.stream("POST", "jobs")`.
+- `with_options()` takes its options as `ViewOptions`, and an option left out keeps the outer setting: passing
+  `headers=None`, `timeout=None` or `retry=None` to mean "keep" is no longer accepted; leave the option out.
+- The `event_stream` reader returns each event whole (`httpx2.ServerSentEvent`, with `event`, `data`, `id` and
+  `retry`), as `Stream.aiter_events()` yields them; read `.data` where you used the bytes it returned.
+- `HttpCache`'s filters take any iterable (`MethodFilter({"GET"})`, `StatusCodeFilter([200])`), and `MethodFilter`
+  matches a method in any case.
+- `CachedTokenAuth.reject_credential_rotation` is an instance method named for the auth class, as every mint failure
+  is: call `self.reject_credential_rotation(returned, configured, setting=...)` without `provider=`.
+- `RateBudget.pause_remaining` is a property.
+- `Paginated` and `Stream` are protocols: what `paginate()` and `stream()` return, typed, but not built directly.
+- `Offset(limit=)` is `Offset(page_size=)`, so it no longer shares a name with `paginate(limit=)`, the page budget.
+- `paginate()` takes `follow_redirects=` and `cache_ttl=`, applied to every page as on `get()`. Its options are typed
+  by the new `PageOptions`, `RequestOptions` plus those two.
+
+### Fixed
+
+- `paginate()` sends an `Expect`'s `headers` and `accept` on every page and checks each page's `Content-Type` against
+  `accept`, as a verb does; it used to drop both.
+
+### Removed
+
+- From the root `headgate` package, names that live in a subpackage and are rarely needed to write a client. Import
+  them from there:
+  - `headgate.retry`: `Backoff`, `Hedge`, `RetryBudget`, `NO_RETRY`;
+  - `headgate.ratelimit`: `Adaptive`;
+  - `headgate.breaker`: `BreakerRegistry`;
+  - `headgate.cache`: `Fresh`, `MethodFilter`, `NotModified`, `Partition`, `PathFragmentFilter`, `StatusCodeFilter`,
+    `Validator`, `conditional`;
+  - `headgate.pagination`: `Pager`, `PageRequest`;
+  - `headgate.events`: `Observer`;
+  - `headgate.streaming`: `Stream`.
+- From the subpackages, the machinery the client assembles itself from, which no client calls:
+  - `headgate.retry`: `RetryTransport`, `SendTrackingTransport`, `REPLAYABLE_BODY`;
+  - `headgate.ratelimit`: `RateLimitTransport`, `PathBudgets`, and the `BudgetBacklogError` and `BudgetPausedError`
+    signals, which a call raises as `ClientTimeoutError` and `RateLimitError`;
+  - `headgate.breaker`: `BreakerOpenError` (raised as `CircuitOpenError`), `Transition`, `Verdict`,
+    `DEFAULT_REGISTRY`, `DEFAULT_MAX_HOSTS`;
+  - `headgate.security`: `CredentialGuard`, `CHAIN_ORIGIN`, `address_hook`, `refuse_https_downgrade`.
+- `BreakerState` from `headgate.events` and `headgate.health`: import it from `headgate.breaker`, its one home.
+- `headgate.policy.policy_is_disabled`; `policy_disabled` stays.
+- `RateBudget.wait()`, `observe()`, `occupy()` and `now()`, which only the client's rate-limit layer called, and
+  `Expect.accepts()`, which only the client called.
+
+## [0.5.0] - 2026-10-26
+
+Adds `Paginated.collect()`, so a walk becomes a list in one call, bounded by items as well as pages. Nothing changes for
+existing code.
+
+### Added
+
+- `Paginated.collect(max_items=None)` returns a walk's items as a list; with `max_items`, at most that many, fetching
+  no page past the one that fills it ([#19](https://github.com/kelsayed17/headgate/issues/19)).
+- A [standards page](https://kelsayed17.github.io/headgate/standards/) mapping each RFC and draft headgate follows to
+  what it does, and a comparison with about 30 HTTP, retry, rate-limit, cache, breaker and testing libraries.
+
+## [0.4.0] - 2026-10-26
+
+Bounds `paginate()`: a page budget, and a stop at pages with no items. The stop changes what three pagers do by
+default, so this is a minor release: see **Changed**.
+
+### Added
+
+- A page budget for `paginate()`: `limit=PageLimit(max_pages)` raises the new `PageLimitError` once the budget is spent
+  with pages still to come, or with `on_limit="stop"` ends the walk there
+  ([#14](https://github.com/kelsayed17/headgate/issues/14)).
+- A documentation site at <https://kelsayed17.github.io/headgate/>, built from `docs/`, with a page comparing headgate
+  with tenacity, stamina and a hand-rolled client.
+- `examples/github_client.py`: a tested client for a few GitHub REST endpoints.
+
+### Changed
+
+- `Cursor`, `NextUrl` and `LinkHeader` stop at a page with no items, as `Offset` already did, instead of following its
+  link: a link that advances while returning nothing made the walk spend requests for nothing. Pass
+  `stop_on_empty=False` for an endpoint that sends empty pages mid-walk
+  ([#15](https://github.com/kelsayed17/headgate/issues/15)).
+
+## [0.3.0] - 2026-10-26
+
+Fixes four bugs where a call's deadline, its timeouts, the rate budget and the cache disagreed. One of them makes a
+configuration that could never work an error, so this is a minor release: see **Changed**.
+
+### Added
+
+- `headgate.ratelimit.BudgetBacklogError`, raised by `RateBudget.wait` when a call's paced turn comes after its deadline.
+
+### Changed
+
+- A timeout longer than the deadline it runs under is refused with `ValueError` on the client, a view or a call, since
+  it could never take effect ([#6](https://github.com/kelsayed17/headgate/issues/6)). Raise the deadline with it, e.g.
+  `with_options(timeout=300.0, deadline=600.0)`.
+- A body past `max_response_bytes` is no longer stored in the cache, since it is not held to be written on accept.
+
+### Fixed
+
+- A cached miss is stored only once the call's reader accepts it, so a refusal inside a 200, an undecodable body or an
+  undeclared status is no longer served from the cache for the entry's lifetime
+  ([#9](https://github.com/kelsayed17/headgate/issues/9)). A `stream()` is accepted when its head checks pass.
+- Identical concurrent GETs share one cached download again when their timeouts are longer than the time their deadline
+  leaves; the sharing key now uses the timeouts the call asked for, not the deadline-cut ones
+  ([#4](https://github.com/kelsayed17/headgate/issues/4)).
+- A call whose rate-budget turn comes after its deadline fails at once with `ClientTimeoutError` saying it was never
+  sent, with `retryable=True` and `retry_after`, instead of waiting and failing like a slow upstream; a retry that
+  cannot be sent in time ends the call with the failure it already has, and such a hedge is not sent. A deadline that
+  passes before an attempt is sent says so, and `attempts` counts only the sends made
+  ([#5](https://github.com/kelsayed17/headgate/issues/5)).
 
 ## [0.2.0] - 2026-10-25
 
@@ -191,6 +346,10 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/159a3c2...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/kelsayed17/headgate/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/kelsayed17/headgate/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/kelsayed17/headgate/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/kelsayed17/headgate/compare/159a3c2...v0.3.0
 [0.2.0]: https://github.com/kelsayed17/headgate/compare/f319ad8...159a3c2
 [0.1.0]: https://github.com/kelsayed17/headgate/commit/f319ad8

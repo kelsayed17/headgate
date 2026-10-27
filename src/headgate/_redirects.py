@@ -19,7 +19,7 @@ from typing import Final
 import httpx2
 
 from headgate._core import CallContext
-from headgate.retry import REPLAYABLE_BODY
+from headgate.retry._policy import REPLAYABLE_BODY
 
 __all__ = ["drop_followed_redirect_body", "refuse_unreplayable_redirect"]
 

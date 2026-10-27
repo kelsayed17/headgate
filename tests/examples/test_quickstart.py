@@ -28,7 +28,7 @@ from headgate import (
     ResponseParseError,
     UpstreamStatusError,
 )
-from headgate.testing import FakeTransport, TestClock, isolated_breakers
+from headgate.testing import FakeTransport, Respond, TestClock, isolated_breakers
 
 pytestmark = pytest.mark.transport_policy
 
@@ -37,7 +37,7 @@ GDP = {"id": "GDP", "title": "Gross domestic product", "values": [27.4, 28.1]}
 
 async def test_find_series_reads_a_404_as_none() -> None:
     """Return ``None`` for the 404 the endpoint documents, signing the request with the key."""
-    fake = FakeTransport().route("GET", "/v1/series/RETIRED", 404)
+    fake = FakeTransport().reply("GET", "/v1/series/RETIRED", 404)
     async with CatalogClient("test-key", transport=fake) as catalog:
         assert await catalog.find_series("RETIRED") is None
     assert fake.calls[0].headers["Authorization"] == "Bearer test-key"
@@ -45,12 +45,7 @@ async def test_find_series_reads_a_404_as_none() -> None:
 
 async def test_a_503_is_retried_after_the_wait_it_asks_for() -> None:
     """Retry a 503 once its ``Retry-After`` has passed, on a test clock that makes the wait instant."""
-    fake = FakeTransport().route(
-        "GET",
-        "/v1/series/GDP",
-        httpx2.Response(503, headers={"Retry-After": "2"}),
-        httpx2.Response(200, json=GDP),
-    )
+    fake = FakeTransport().reply("GET", "/v1/series/GDP", Respond(503, retry_after=2.0), Respond(json=GDP))
     clock = TestClock()
     with clock.install(), isolated_breakers():  # the clients built in the block use them
         catalog = CatalogClient("test-key", transport=fake)
@@ -64,9 +59,9 @@ async def test_main_reads_a_series_misses_one_and_follows_every_page(monkeypatch
     """Run the README's usage sample: a series, a declared 404, and two pages of releases joined by a cursor."""
     fake = (
         FakeTransport()
-        .route("GET", "/v1/series/GDP", httpx2.Response(200, json=GDP))
-        .route("GET", "/v1/series/RETIRED", 404)
-        .route(
+        .reply("GET", "/v1/series/GDP", httpx2.Response(200, json=GDP))
+        .reply("GET", "/v1/series/RETIRED", 404)
+        .reply(
             "GET",
             "/v1/releases",
             httpx2.Response(200, json={"releases": [{"id": 1, "name": "GDP Q1"}], "next_cursor": "c2"}),
@@ -85,7 +80,7 @@ async def test_main_reads_a_series_misses_one_and_follows_every_page(monkeypatch
 
 async def test_an_undeclared_404_raises_with_the_status_and_the_request_line() -> None:
     """Raise ``UpstreamStatusError`` for a 404 ``get_series`` did not declare, carrying the call's metadata."""
-    fake = FakeTransport().route("GET", "/v1/series/NOPE", httpx2.Response(404, headers={"x-request-id": "r-1"}))
+    fake = FakeTransport().reply("GET", "/v1/series/NOPE", httpx2.Response(404, headers={"x-request-id": "r-1"}))
     async with CatalogClient("test-key", transport=fake) as catalog:
         with pytest.raises(UpstreamStatusError) as caught:
             await catalog.get_series("NOPE")
@@ -97,7 +92,7 @@ async def test_an_undeclared_404_raises_with_the_status_and_the_request_line() -
 
 async def test_a_path_value_is_escaped_as_one_segment() -> None:
     """Escape a slash inside an id, so the value stays one path segment."""
-    fake = FakeTransport().route("GET", "/v1/series/A%2FB", httpx2.Response(200, json={**GDP, "id": "A/B"}))
+    fake = FakeTransport().reply("GET", "/v1/series/A%2FB", httpx2.Response(200, json={**GDP, "id": "A/B"}))
     async with CatalogClient("test-key", transport=fake) as catalog:
         assert (await catalog.get_series("A/B")).id == "A/B"
 

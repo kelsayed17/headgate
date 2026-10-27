@@ -18,10 +18,11 @@ import pytest
 from hishel import AsyncSqliteStorage, Entry, FilterPolicy
 
 from headgate._core import OBSERVER_FAILURES
-from headgate.breaker import DEFAULT_REGISTRY, BreakerRegistry
+from headgate.breaker import BreakerRegistry, BreakerState
+from headgate.breaker._registry import DEFAULT_REGISTRY
 from headgate.cache import HttpCache, MethodFilter, StatusCodeFilter
 from headgate.cache._transport import CACHE_DEGRADATIONS, CACHE_DEGRADED_EXT, ResilientCacheTransport
-from headgate.health import BreakerState, breaker_states, cache_degradations, observer_failures
+from headgate.health import breaker_states, cache_degradations, observer_failures
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

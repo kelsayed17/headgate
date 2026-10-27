@@ -21,15 +21,9 @@ import contextlib
 
 import pytest
 
-from headgate.breaker import (
-    DEFAULT_REGISTRY,
-    BreakerOpenError,
-    BreakerPolicy,
-    BreakerRegistry,
-    BreakerState,
-    CircuitBreaker,
-)
-from headgate.breaker._registry import NO_BREAKER
+from headgate.breaker import BreakerPolicy, BreakerRegistry, BreakerState, CircuitBreaker
+from headgate.breaker._breaker import BreakerOpenError
+from headgate.breaker._registry import DEFAULT_REGISTRY, NO_BREAKER
 
 #: The half-open tests' cooldown, and a sleep that outlasts it.
 _COOLDOWN = 0.001

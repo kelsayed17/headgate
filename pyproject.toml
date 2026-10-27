@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "headgate"
-version = "0.2.0"
+version = "0.6.0"
 description = "The async API-client base on httpx2: safe retries, rate budgets, per-origin breakers, credential-safe caching, typed events and declared responses."
 readme = "README.md"
 requires-python = ">=3.14"
@@ -44,7 +44,7 @@ cache = ["hishel[async]>=1.4.0"]
 
 [project.urls]
 Homepage = "https://github.com/kelsayed17/headgate"
-Documentation = "https://github.com/kelsayed17/headgate/tree/main/docs"
+Documentation = "https://kelsayed17.github.io/headgate/"
 Repository = "https://github.com/kelsayed17/headgate"
 Issues = "https://github.com/kelsayed17/headgate/issues"
 Changelog = "https://github.com/kelsayed17/headgate/blob/main/CHANGELOG.md"
@@ -67,6 +67,7 @@ dev = [
     "mutmut>=3.8",
     "vcrpy>=8.3",
 ]
+docs = ["zensical>=0.0.72"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/headgate"]

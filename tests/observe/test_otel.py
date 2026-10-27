@@ -101,7 +101,7 @@ def _refuse(request: httpx2.Request) -> httpx2.Response:
 async def test_a_call_is_one_client_span_named_by_its_route(telemetry: Telemetry) -> None:
     """Name the span ``GET <route>`` and give it the request's semantic-convention attributes."""
     series_id = "GDP/real"
-    fake = FakeTransport().route("GET", "/v1/series/GDP%2Freal")
+    fake = FakeTransport().reply("GET", "/v1/series/GDP%2Freal")
     await client(fake, http=telemetry.http).get(t"series/{series_id}", expect=nothing)
 
     span = telemetry.span()
@@ -128,7 +128,7 @@ async def test_the_duration_is_the_whole_call_on_the_clients_clock(telemetry: Te
         clock.advance(_SEND_TIME)
         return httpx2.Response(200, request=request)
 
-    fake = FakeTransport().route("GET", "/v1/x", slow)
+    fake = FakeTransport().reply("GET", "/v1/x", slow)
     with clock.install():
         built = client(fake, http=telemetry.http)
     await built.get("x", expect=nothing)
@@ -145,7 +145,7 @@ async def test_the_duration_is_the_whole_call_on_the_clients_clock(telemetry: Te
 
 async def test_retries_are_resends_of_one_span(telemetry: Telemetry) -> None:
     """Report every attempt in one span, counting the re-sends."""
-    fake = FakeTransport().route("GET", "/v1/x", 503, 503, 200)
+    fake = FakeTransport().reply("GET", "/v1/x", 503, 503, 200)
     await client(fake, http=telemetry.http).get("x", expect=nothing)
 
     span = telemetry.span()
@@ -155,7 +155,7 @@ async def test_retries_are_resends_of_one_span(telemetry: Telemetry) -> None:
 
 async def test_an_error_status_is_the_error_type(telemetry: Telemetry) -> None:
     """Report a 4xx as ``error.type`` on the span, which is an error, and on the measurement."""
-    fake = FakeTransport().route("GET", "/v1/x", 404)
+    fake = FakeTransport().reply("GET", "/v1/x", 404)
     with pytest.raises(UpstreamStatusError):
         await client(fake, http=telemetry.http).get("x", expect=nothing)
 
@@ -166,7 +166,7 @@ async def test_an_error_status_is_the_error_type(telemetry: Telemetry) -> None:
 
 async def test_a_status_that_outlasted_the_retries_is_reported(telemetry: Telemetry) -> None:
     """Report the last attempt's 503, which the call raised on rather than returned, as status and error type."""
-    fake = FakeTransport().route("GET", "/v1/x", 503)
+    fake = FakeTransport().reply("GET", "/v1/x", 503)
     with pytest.raises(UpstreamStatusError):
         await client(fake, http=telemetry.http).get("x", expect=nothing)
 
@@ -177,7 +177,7 @@ async def test_a_status_that_outlasted_the_retries_is_reported(telemetry: Teleme
 
 async def test_a_transport_failure_is_named_by_its_error_class(telemetry: Telemetry) -> None:
     """Report a failure without a status as the ``ClientError`` class the call raised."""
-    fake = FakeTransport().route("GET", "/v1/x", _refuse)
+    fake = FakeTransport().reply("GET", "/v1/x", _refuse)
     with pytest.raises(TransportError):
         await client(fake, policy=TransportPolicy(retry=NO_RETRY), http=telemetry.http).get("x", expect=nothing)
 
@@ -188,7 +188,7 @@ async def test_a_transport_failure_is_named_by_its_error_class(telemetry: Teleme
 
 async def test_an_unreadable_body_is_an_error_with_its_status(telemetry: Telemetry) -> None:
     """Report a 2xx whose body could not be read with its status and the parse error."""
-    fake = FakeTransport().route("GET", "/v1/x", httpx2.Response(200, content=b"not json"))
+    fake = FakeTransport().reply("GET", "/v1/x", httpx2.Response(200, content=b"not json"))
     with pytest.raises(ResponseParseError):
         await client(fake, http=telemetry.http).get("x", expect=decoder(dict[str, int]))
 
@@ -202,7 +202,7 @@ async def test_an_unreadable_body_is_an_error_with_its_status(telemetry: Telemet
 
 async def test_no_credential_reaches_a_span(telemetry: Telemetry) -> None:
     """Redact secret query values from ``url.full``; the auth's own parameter never reaches the span."""
-    fake = FakeTransport().route("GET", "/v1/x")
+    fake = FakeTransport().reply("GET", "/v1/x")
     built = client(fake, http=telemetry.http, auth=QueryParamAuth({"api_key": "s3cret"}))
     await built.get("x", expect=nothing, params={"token": "t0k", "page": "2"})
 
@@ -228,7 +228,7 @@ def _traceparent(span: ReadableSpan) -> str:
 
 async def test_every_attempt_carries_the_calls_trace_context(telemetry: Telemetry) -> None:
     """Write the call span's ``traceparent`` on each attempt, re-sends included."""
-    fake = FakeTransport().route("GET", "/v1/x", 503, 200)
+    fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
     await client(fake, http=telemetry.http).get("x", expect=nothing)
 
     expected = _traceparent(telemetry.span())
@@ -242,7 +242,7 @@ async def test_the_call_span_is_a_child_of_the_callers_and_parent_of_the_transpo
         with telemetry.tracer.start_as_current_span("network"):
             return httpx2.Response(200, request=request)
 
-    fake = FakeTransport().route("GET", "/v1/x", traced)
+    fake = FakeTransport().reply("GET", "/v1/x", traced)
     built = client(fake, http=telemetry.http)
     with telemetry.tracer.start_as_current_span("caller"):
         await built.get("x", expect=nothing)
@@ -256,7 +256,7 @@ async def test_the_call_span_is_a_child_of_the_callers_and_parent_of_the_transpo
 
 async def test_as_middleware_alone_it_propagates_the_callers_context(telemetry: Telemetry) -> None:
     """Write the caller's current span on a request of a call it did not observe, and nothing outside a span."""
-    fake = FakeTransport().route("GET", "/v1/x")
+    fake = FakeTransport().reply("GET", "/v1/x")
     built = client(fake, http=HttpOptions(middleware=(telemetry.observer,)))
     await built.get("x", expect=nothing)
     with telemetry.tracer.start_as_current_span("caller"):
@@ -359,7 +359,7 @@ def test_the_global_providers_are_the_default() -> None:
 
 async def test_a_400_is_the_first_error_status(telemetry: Telemetry) -> None:
     """Report a 400 as ``error.type``: the conventions count every status from 400 as a client span's error."""
-    fake = FakeTransport().route("GET", "/v1/x", 400)
+    fake = FakeTransport().reply("GET", "/v1/x", 400)
     with pytest.raises(UpstreamStatusError):
         await client(fake, http=telemetry.http).get("x", expect=nothing)
 
@@ -374,7 +374,7 @@ async def test_spans_and_durations_are_reported_under_headgates_scope_and_the_co
     telemetry: Telemetry,
 ) -> None:
     """Name the instrumentation scope ``headgate`` at its version, and the histogram as the conventions do."""
-    await client(FakeTransport().route("GET", "/v1/x"), http=telemetry.http).get("x", expect=nothing)
+    await client(FakeTransport().reply("GET", "/v1/x"), http=telemetry.http).get("x", expect=nothing)
 
     scope = telemetry.span().instrumentation_scope
     assert scope is not None
@@ -409,7 +409,7 @@ async def test_a_request_of_no_call_passes_through_with_no_trace_context(telemet
 
 async def test_the_callers_span_is_current_again_after_the_call(telemetry: Telemetry) -> None:
     """Restore the caller's current span once the call returns: the call's span is current only while it sends."""
-    built = client(FakeTransport().route("GET", "/v1/x"), http=telemetry.http)
+    built = client(FakeTransport().reply("GET", "/v1/x"), http=telemetry.http)
     with telemetry.tracer.start_as_current_span("caller") as caller:
         await built.get("x", expect=nothing)
 

@@ -61,12 +61,12 @@ class PoolFull:
 
 @dataclass(frozen=True, slots=True)
 class Respond:
-    """Answer with ``status``, ``headers``, and a body: ``json`` encoded if given, else ``content``.
+    """Answer with ``status_code``, ``headers``, and a body: ``json`` encoded if given, else ``content``.
 
     ``retry_after`` adds a ``Retry-After`` header with that many seconds.
     """
 
-    status: int = 200
+    status_code: int = 200
     headers: Mapping[str, str] = field(default_factory=dict)
     json: object = None
     content: bytes = b""
@@ -270,6 +270,6 @@ async def _write(request: httpx2.Request, call: FaultCall, *, limit: int | None 
 def _respond(step: Respond, request: httpx2.Request, call: FaultCall) -> httpx2.Response:
     """Return the response *step* describes, with a body that records its close in *call*."""
     headers, content = step.response()
-    response = httpx2.Response(step.status, headers=headers, stream=_TrackedBody(content, call), request=request)
+    response = httpx2.Response(step.status_code, headers=headers, stream=_TrackedBody(content, call), request=request)
     call.response = response
     return response

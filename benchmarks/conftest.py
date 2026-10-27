@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from headgate.breaker import DEFAULT_REGISTRY
+from headgate.breaker._registry import DEFAULT_REGISTRY
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator

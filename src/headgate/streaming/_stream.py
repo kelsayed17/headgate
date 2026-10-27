@@ -11,7 +11,7 @@ mapping (and the breaker charge that goes with a network failure) is the client'
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, Final, final, override
+from typing import TYPE_CHECKING, Final, Protocol, final, override
 
 import httpx2
 
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from headgate._failures import CallSite
     from headgate.errors import ClientError
 
-__all__ = ["DEFAULT_MAX_EVENT_SIZE", "NetworkFailure", "Stream"]
+__all__ = ["DEFAULT_MAX_EVENT_SIZE", "NetworkFailure", "OpenStream", "Stream"]
 
 type NetworkFailure = Callable[[httpx2.HTTPError | OSError], ClientError]
 """Turns a network failure mid-body into the ``ClientError`` to raise, charging the origin's breaker."""
@@ -37,8 +37,7 @@ DEFAULT_MAX_EVENT_SIZE: Final = 1024 * 1024
 _EVENT_STREAM: Final = "text/event-stream"
 
 
-@final
-class Stream:
+class Stream(Protocol):
     """A response whose head has arrived and whose body is read as it arrives, inside ``client.stream(...)``.
 
     The status is a 2xx (anything else raised before the block was entered) and the client's ``refusal_check`` has
@@ -46,6 +45,55 @@ class Stream:
     response is closed when the block exits, whether or not it was read to the end. A network failure or timeout while
     reading raises ``TransportError`` / ``ClientTimeoutError`` from the iteration.
     """
+
+    @property
+    def status_code(self) -> int:
+        """The response's status."""
+        ...
+
+    @property
+    def headers(self) -> httpx2.Headers:
+        """The response's headers."""
+        ...
+
+    @property
+    def request_id(self) -> str | None:
+        """The upstream's request id, from the client's ``request_id_headers``, bounded; ``None`` without one."""
+        ...
+
+    @property
+    def last_event_id(self) -> str | None:
+        """The last event id :meth:`aiter_events` has seen (``""`` once the server reset it), ``None`` before any.
+
+        Pass it as ``last_event_id=`` when re-opening the stream, so the server resumes after it.
+        """
+        ...
+
+    def aiter_bytes(self, chunk_size: int | None = None) -> AsyncIterator[bytes]:
+        """Iterate the body as bytes, in chunks as they arrive or of *chunk_size* bytes."""
+        ...
+
+    def aiter_lines(self) -> AsyncIterator[str]:
+        """Iterate the body as decoded text lines, without their line endings."""
+        ...
+
+    def aiter_events(
+        self, *, max_event_size: int | None = DEFAULT_MAX_EVENT_SIZE
+    ) -> AsyncIterator[httpx2.ServerSentEvent]:
+        """Iterate the body as server-sent events, each parsed as soon as its blank line arrives.
+
+        Each event carries ``event``, ``data``, ``id`` and ``retry`` as httpx2 parses them (the WHATWG grammar), and
+        its ``id`` is kept as :attr:`last_event_id`. An event past *max_event_size* bytes (``None`` for no limit)
+        raises ``ResponseTooLargeError``.
+
+        :raises ResponseParseError: at once, for a response that does not declare ``text/event-stream``.
+        """
+        ...
+
+
+@final
+class OpenStream:
+    """The :class:`Stream` :meth:`AsyncBaseClient.stream <headgate.AsyncBaseClient.stream>` opens."""
 
     __slots__ = ("_fail", "_last_event_id", "_request_id", "_response", "_site")
 

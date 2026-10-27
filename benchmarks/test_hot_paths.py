@@ -20,7 +20,9 @@ from headgate import pydantic as pydantic_flavor
 from headgate._failures import CallSite, status_error
 from headgate._url import escape_segment, redact_secrets, render_path, sanitize_url
 from headgate.breaker import CircuitBreaker
-from headgate.ratelimit import PathBudgets, Rate, RateBudget, RateRule
+from headgate.ratelimit import Rate, RateRule
+from headgate.ratelimit._budget import Pacer
+from headgate.ratelimit._budgets import PathBudgets
 from headgate.retry import RetryPolicy
 
 if TYPE_CHECKING:
@@ -119,7 +121,7 @@ def test_path_budget_lookup(benchmark: BenchmarkFixture) -> None:
 
 def test_rate_feedback(benchmark: BenchmarkFixture) -> None:
     """Measure feeding a budget a response that carries the IETF rate-limit fields, as every response does."""
-    budget = RateBudget(Rate.per_second(100))
+    budget = Pacer(Rate.per_second(100))
     response = httpx2.Response(
         httpx2.codes.OK, headers={"RateLimit-Policy": '"default";q=100;w=60', "RateLimit": '"default";r=50;t=30'}
     )

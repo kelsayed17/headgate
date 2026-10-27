@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate.ratelimit import RateLimitTransport
+from headgate.ratelimit._transport import RateLimitTransport
 
 if TYPE_CHECKING:
     from headgate._client import AsyncBaseClient

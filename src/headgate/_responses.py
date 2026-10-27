@@ -31,7 +31,17 @@ import httpx2
 
 from headgate.errors import UpstreamStatusError
 
-__all__ = ["Expect", "Reader", "RefusalCheck", "RefusedError", "as_bytes", "event_stream", "json_reader", "nothing"]
+__all__ = [
+    "Expect",
+    "Reader",
+    "RefusalCheck",
+    "RefusedError",
+    "accepts",
+    "as_bytes",
+    "event_stream",
+    "json_reader",
+    "nothing",
+]
 
 
 type Reader[T] = Callable[[httpx2.Response], T]
@@ -72,7 +82,7 @@ class RefusedError(Exception):
     """A provider's refusal, as a reader or a host check saw it.
 
     A reader raises it for a refusal written inside a body (an error envelope, a ``REQUEST_NOT_PROCESSED`` status, a
-    vendor error code); a ``decoder`` ``check`` and a client's ``refusal_check`` return one instead. The base client is
+    vendor error code); a ``decoder``'s and a client's ``refusal_check`` return one instead. The base client is
     its only catcher, and turns it into ``kind(message, status_code=<the status the wire sent>, code=code, ...)``, so
     a refusal in a 200 body carries 200.
 
@@ -125,7 +135,7 @@ class Expect[T]:
     :func:`headgate.cache.conditional`); a header the call sets itself wins.
     ``accept`` names the media types the endpoint answers with (``"application/json"``, or a comma-separated list).
     The client sends it as the request's ``Accept`` header, unless the call sets one in ``headers=``, and checks every
-    non-empty response it hands a reader against it before the reader runs (see :meth:`accepts`). A body of another
+    non-empty response it hands a reader against it before the reader runs (see :func:`accepts`). A body of another
     type raises ``ResponseParseError`` naming the status and the ``Content-Type`` on a 2xx; on a declared non-2xx it
     falls through to the status ladder, as an unreadable body does.
     """
@@ -145,26 +155,6 @@ class Expect[T]:
         if self.accept is not None:
             _media_ranges(self.accept)
 
-    def accepts(self, resp: httpx2.Response) -> bool:
-        """Return whether *resp*'s ``Content-Type`` is one ``accept`` names; always ``True`` without ``accept``.
-
-        Media types compare case-insensitively with their parameters ignored (``application/json; charset=utf-8``
-        is ``application/json``); ``*/*`` and ``type/*`` match as in ``Accept``; and a structured-syntax suffix
-        (RFC 6839) matches its base type, so ``application/problem+json`` is an ``application/json``. An empty body
-        (a 204, a HEAD) has nothing to check, and passes.
-        """
-        if self.accept is None or not resp.content:
-            return True
-        found = _media_type(resp.headers.get("content-type", ""))
-        if found is None:
-            return False
-        kind, subtype = found
-        suffix = subtype.rpartition("+")[2]
-        return any(
-            want_kind in {"*", kind} and want_subtype in {"*", subtype, suffix}
-            for want_kind, want_subtype in _media_ranges(self.accept)
-        )
-
     def on[E](self, status: int, read: Reader[E]) -> Expect[T | E]:
         """Return a new ``Expect`` that also reads *status* with *read*, widening the result type to ``T | E``.
 
@@ -181,6 +171,27 @@ class Expect[T]:
             raise ValueError(msg)
         widened: dict[int, Reader[T | E]] = {**self.answers, status: read}
         return Expect(self.ok, widened, headers=self.headers, accept=self.accept)
+
+
+def accepts[T](expect: Expect[T], resp: httpx2.Response) -> bool:
+    """Return whether *resp*'s ``Content-Type`` is one *expect*'s ``accept`` names; ``True`` without ``accept``.
+
+    Media types compare case-insensitively with their parameters ignored (``application/json; charset=utf-8``
+    is ``application/json``); ``*/*`` and ``type/*`` match as in ``Accept``; and a structured-syntax suffix
+    (RFC 6839) matches its base type, so ``application/problem+json`` is an ``application/json``. An empty body
+    (a 204, a HEAD) has nothing to check, and passes.
+    """
+    if expect.accept is None or not resp.content:
+        return True
+    found = _media_type(resp.headers.get("content-type", ""))
+    if found is None:
+        return False
+    kind, subtype = found
+    suffix = subtype.rpartition("+")[2]
+    return any(
+        want_kind in {"*", kind} and want_subtype in {"*", subtype, suffix}
+        for want_kind, want_subtype in _media_ranges(expect.accept)
+    )
 
 
 #: How many distinct ``accept`` values keep their parsed form: far more than any client declares.
@@ -216,20 +227,20 @@ def json_reader[T](
     decode: Callable[[bytes], T],
     *,
     allow_empty_body: bool = False,
-    check: Callable[[T], RefusedError | None] | None = None,
+    refusal_check: Callable[[T], RefusedError | None] | None = None,
 ) -> Reader[T]:
     """Build a reader around a codec's bytes-to-value function.
 
-    Each codec flavor's ``decoder`` builds on this, so the empty-body rule and the ``check`` hook behave identically
-    across flavors.
+    Each codec flavor's ``decoder`` builds on this, so the empty-body rule and the ``refusal_check`` hook behave
+    identically across flavors.
 
     ``allow_empty_body`` reads an empty body (zero bytes or only whitespace) as the empty array ``[]``. It suits only a
     list-shaped type, for a provider whose no-data answer is a zero-byte 200 or a 204. For every other provider an empty
     200 is corruption, and decoding it fails.
 
-    ``check`` runs on the decoded value and returns a :class:`RefusedError` for a refusal written inside a 2xx body, or
-    ``None``; the reader raises what it returns. Type a check over a small structural ``Protocol`` naming only the
-    envelope fields it reads. Have it refuse only codes every consumer of the endpoint would read as failure (auth,
+    ``refusal_check`` runs on the decoded value and returns a :class:`RefusedError` for a refusal written inside a 2xx
+    body, or ``None``; the reader raises what it returns. Type a check over a small structural ``Protocol`` naming only
+    the envelope fields it reads. Have it refuse only codes every consumer of the endpoint would read as failure (auth,
     quota, rate limit, server, a malformed request, any undocumented code) and leave a code about the subject (an
     unknown instrument, a rejected order) in the value for the caller.
     """
@@ -239,7 +250,7 @@ def json_reader[T](
         if allow_empty_body and not content.strip():
             content = b"[]"
         value = decode(content)
-        if check is not None and (refused := check(value)) is not None:
+        if refusal_check is not None and (refused := refusal_check(value)) is not None:
             raise refused
         return value
 
@@ -268,13 +279,14 @@ def nothing(resp: httpx2.Response, /) -> None:
 _UNSENT_URL: Final = "https://sse.invalid/"
 
 
-def event_stream(resp: httpx2.Response, /) -> list[bytes]:
-    """Return the ``data`` of each server-sent event in the buffered body, in order.
+def event_stream(resp: httpx2.Response, /) -> list[httpx2.ServerSentEvent]:
+    """Return each server-sent event in the buffered body, in order, in the shape ``Stream.aiter_events`` yields.
 
-    Only ``data`` is kept: the ``event``, ``id`` and ``retry`` fields are dropped. httpx2's ``EventSource`` parses the
-    grammar (multi-line ``data``, CRLF, comments) but requires a response that declares ``text/event-stream``, so the
-    body is framed into a response of its own. ``max_event_size=None`` because the body is already buffered and capped
-    by the client, and a large reply is legitimately one event, which httpx2's 1 MiB default would refuse.
+    Each event carries its ``event``, ``data``, ``id`` and ``retry`` as httpx2 parses them. httpx2's ``EventSource``
+    parses the grammar (multi-line ``data``, CRLF, comments) but requires a response that declares
+    ``text/event-stream``, so the body is framed into a response of its own. ``max_event_size=None`` because the body is
+    already buffered and capped by the client, and a large reply is legitimately one event, which httpx2's 1 MiB default
+    would refuse.
 
     ``EventSource`` also yields a block that has no ``data`` field (a ``retry:`` hint, an ``event: ping``), which the
     WHATWG grammar does not dispatch. Such a block is skipped. It cannot be told apart from an event whose ``data`` is
@@ -287,4 +299,4 @@ def event_stream(resp: httpx2.Response, /) -> list[bytes]:
         headers={"content-type": "text/event-stream"},
         request=httpx2.Request("POST", _UNSENT_URL),
     )
-    return [event.data.encode() for event in httpx2.EventSource(framed, max_event_size=None) if event.data]
+    return [event for event in httpx2.EventSource(framed, max_event_size=None) if event.data]

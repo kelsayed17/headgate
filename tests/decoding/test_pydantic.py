@@ -21,7 +21,7 @@ from headgate import msgspec as msgspec_flavor
 from headgate._failures import MESSAGE_TEXT_LIMIT
 from headgate._responses import RefusedError
 from headgate.errors import DecodeError
-from headgate.pydantic import decode, decoder, to_builtins
+from headgate.pydantic import decode, decoder, encoder, to_builtins
 from tests.support.responses import response
 
 if TYPE_CHECKING:
@@ -124,7 +124,7 @@ def test_allow_empty_body_reads_zero_bytes_as_the_empty_array() -> None:
 
 def test_a_check_that_refuses_raises_the_refused_it_returned() -> None:
     """Raise the ``RefusedError`` a check returns, and return the value when it returns ``None``."""
-    read = decoder(_Env, check=_quota_check)
+    read = decoder(_Env, refusal_check=_quota_check)
     with pytest.raises(RefusedError) as caught:
         read(response(b'{"status": "QUOTA"}'))
     assert caught.value.code == "Q"
@@ -261,3 +261,11 @@ def test_each_failure_is_named_and_separated() -> None:
         decode(b"{}", _Pair)
 
     assert str(raised.value) == "2 validation errors for _Pair: a: Field required; b: Field required"
+
+
+def test_the_encoder_applies_aliases_and_can_leave_out_none() -> None:
+    """Encode by alias as JSON, sending ``None`` as ``null`` unless ``drop_none=True``."""
+    order = _Aliased(orderId="a1")
+    written = encoder(_Aliased)(order)
+    assert (written.content, written.content_type) == (b'{"orderId":"a1","note":null}', "application/json")
+    assert encoder(_Aliased, drop_none=True)(order).content == b'{"orderId":"a1"}'

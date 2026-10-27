@@ -17,13 +17,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, NamedTuple
 
 from headgate._core import OBSERVER_FAILURES, BreakerState
-from headgate.breaker import DEFAULT_REGISTRY
+from headgate.breaker._registry import DEFAULT_REGISTRY
 from headgate.cache._transport import CACHE_DEGRADATIONS
 
 if TYPE_CHECKING:
     from headgate.breaker import BreakerRegistry
 
-__all__ = ["BreakerSnapshot", "BreakerState", "breaker_states", "cache_degradations", "observer_failures"]
+__all__ = ["BreakerSnapshot", "breaker_states", "cache_degradations", "observer_failures"]
 
 
 class BreakerSnapshot(NamedTuple):

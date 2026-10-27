@@ -11,11 +11,12 @@ from typing import Self, override
 import httpx2
 
 from headgate._url import sanitize_url
+from headgate.testing.faults import Respond
 
 __all__ = ["FakeTransport", "Reply", "UnmatchedRequestError"]
 
-type Reply = httpx2.Response | int | Callable[[httpx2.Request], httpx2.Response | Awaitable[httpx2.Response]]
-"""What a route answers with: a response, a bare status, or a function of the request (sync or async)."""
+type Reply = Respond | httpx2.Response | int | Callable[[httpx2.Request], httpx2.Response | Awaitable[httpx2.Response]]
+"""What a route answers with: a :class:`Respond`, a response, a bare status, or a function of the request."""
 
 
 class UnmatchedRequestError(AssertionError):
@@ -51,18 +52,19 @@ class _Route:
 class FakeTransport(httpx2.AsyncBaseTransport):
     """Answer requests from a route table keyed by method and path, and record every request in :attr:`calls`.
 
-    Give it to a client as ``HttpOptions(transport=FakeTransport().route(...))``::
+    Give it to a client as ``HttpOptions(transport=FakeTransport().reply(...))``::
 
         fake = FakeTransport()
-        fake.route("GET", "/v1/series/GDP", httpx2.Response(503), httpx2.Response(200, json={"id": "GDP"}))
+        fake.reply("GET", "/v1/series/GDP", Respond(503, retry_after=2.0), Respond(json={"id": "GDP"}))
 
     A route's replies are served in order to the requests that match it, the last one repeating, so a retry sequence
     is one route. A path is matched exactly against the request's path as sent: percent-encoded, as a t-string URL
     escapes it, and with the client's base path (``/v1/series/GDP%2Freal``). A method is matched case-insensitively.
     A request with no route raises :class:`UnmatchedRequestError`, naming the request and the routes there are.
 
-    A reply is an ``httpx2.Response`` built with ``content=``, ``json=`` or ``text=`` (copied for each request, so it
-    can be served many times; a response over a one-shot async stream cannot), a status for an empty response, or a
+    A reply is a :class:`~headgate.testing.Respond`, the step :class:`~headgate.testing.FaultyTransport` answers with
+    too; an ``httpx2.Response`` built with ``content=``, ``json=`` or ``text=`` (copied for each request, so it can be
+    served many times; a response over a one-shot async stream cannot); a status for an empty response; or a
     function of the request returning a response, possibly awaitable, for a reply that depends on what was sent or
     that raises an ``httpx2`` error to simulate a network failure. Every request's body is read before it is logged
     and answered.
@@ -74,7 +76,7 @@ class FakeTransport(httpx2.AsyncBaseTransport):
         self._calls: list[httpx2.Request] = []
         self.closed = False
 
-    def route(self, method: str, path: str, *replies: Reply) -> Self:
+    def reply(self, method: str, path: str, *replies: Reply) -> Self:
         """Answer *method* requests to *path* with *replies*, replacing any route there; return the transport."""
         self._routes[method.upper(), path] = _Route(replies)
         return self
@@ -99,6 +101,9 @@ class FakeTransport(httpx2.AsyncBaseTransport):
             msg = f"no route for {request.method} {sanitize_url(str(request.url))} (routes: {known})"
             raise UnmatchedRequestError(msg)
         reply = route.next_reply()
+        if isinstance(reply, Respond):
+            headers, body = reply.response()
+            return httpx2.Response(reply.status_code, headers=headers, content=body, request=request)
         if isinstance(reply, int):
             return httpx2.Response(reply, request=request)
         if isinstance(reply, httpx2.Response):

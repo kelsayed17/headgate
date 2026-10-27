@@ -21,7 +21,7 @@ import pytest
 
 from headgate.cache import Validator
 from headgate.cache._transport import CACHE_DEGRADED_EXT
-from tests.cache._helpers import FaultyStorage, TrackedStream, cache_transport
+from tests.cache._helpers import FaultyStorage, TrackedStream, accept, cache_transport
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -139,7 +139,7 @@ async def test_a_stored_body_past_the_cap_is_still_reported_as_from_the_cache(st
     network = _Gated()
     network.gate.set()
     stored = await cache_transport(storage, network).handle_async_request(httpx2.Request("GET", _URL))
-    await stored.aread()
+    await accept(stored)
 
     small = cache_transport(storage, network, cap=len(_BODY) // 2)
     response = await small.handle_async_request(httpx2.Request("GET", _URL))

@@ -18,11 +18,13 @@ import pytest
 
 from headgate import HttpOptions, TransportPolicy
 from headgate._client import AsyncBaseClient
+from headgate._core import policy_is_disabled
 from headgate._responses import nothing
-from headgate.breaker import DEFAULT_REGISTRY
+from headgate.breaker._registry import DEFAULT_REGISTRY
 from headgate.errors import TransportError, UpstreamStatusError
-from headgate.policy import policy_disabled, policy_is_disabled
-from headgate.ratelimit import UNLIMITED, Rate, RateBudget, RateRule
+from headgate.policy import policy_disabled
+from headgate.ratelimit import UNLIMITED, Rate, RateRule
+from headgate.ratelimit._budget import Pacer
 from headgate.retry import RetryPolicy
 
 if TYPE_CHECKING:
@@ -121,10 +123,10 @@ class TestPolicyOff:
         """Check that both the default budget and a rule's budget are built unlimited, not at the client's rates."""
         built: list[tuple[float, float]] = []
 
-        async def recording_wait(budget: RateBudget, _context: CallContext) -> None:
+        async def recording_wait(budget: Pacer, _context: CallContext) -> None:
             built.append((budget.rate.requests, budget.rate.period))
 
-        monkeypatch.setattr(RateBudget, "wait", recording_wait)
+        monkeypatch.setattr(Pacer, "wait", recording_wait)
 
         async def rates(client: _Client) -> list[tuple[float, float]]:
             built.clear()

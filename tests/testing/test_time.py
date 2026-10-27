@@ -10,8 +10,9 @@ import math
 import httpx2
 import pytest
 
-from headgate import Backoff, HttpOptions, Rate, RetryPolicy, TransportPolicy, nothing
+from headgate import HttpOptions, Rate, RetryPolicy, TransportPolicy, nothing
 from headgate._core import current_timing
+from headgate.retry import Backoff
 from headgate.testing import FakeTransport, TestClock, instant_retries
 from tests.support.clients import StubClient
 
@@ -45,7 +46,7 @@ async def test_a_sleep_advances_the_clock_and_is_recorded() -> None:
 
 async def test_a_client_built_under_install_waits_on_the_test_clock() -> None:
     """Sleep the retry backoff on the test clock: each wait recorded, and the clock moved by all of them."""
-    fake = FakeTransport().route("GET", "/x", 503, 503, 200)
+    fake = FakeTransport().reply("GET", "/x", 503, 503, 200)
     clock = TestClock()
     with clock.install() as installed:
         assert installed is clock
@@ -73,7 +74,7 @@ async def test_instant_retries_replaces_only_the_sleep() -> None:
 
 async def test_instant_retries_retries_without_waiting() -> None:
     """Retry a mocked failure as production does, sending every attempt."""
-    fake = FakeTransport().route("GET", "/x", httpx2.codes.SERVICE_UNAVAILABLE, httpx2.codes.OK)
+    fake = FakeTransport().reply("GET", "/x", httpx2.codes.SERVICE_UNAVAILABLE, httpx2.codes.OK)
     with instant_retries():
         client = StubClient(base_url="https://h.test", rate=Rate.per_second(1000), http=HttpOptions(transport=fake))
     await client.get("x", expect=nothing)

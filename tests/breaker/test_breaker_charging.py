@@ -19,13 +19,15 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage, FilterPolicy
 
-from headgate import BreakerPolicy, BreakerRegistry, HttpCache, HttpOptions, TransportPolicy
+from headgate import BreakerPolicy, HttpCache, HttpOptions, TransportPolicy
 from headgate._core import BREAKER_GATE, BreakerChanged, BreakerState, CallContext
+from headgate.breaker import BreakerRegistry
 from headgate.cache import StatusCodeFilter
 from headgate.errors import ClientError, RateLimitError, UpstreamStatusError
 from headgate.ratelimit import Rate
 from headgate.retry import NO_RETRY
 from headgate.testing import TestClock
+from tests.cache._helpers import accept, cache_transport
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
 from tests.support.events import Recorder
@@ -109,7 +111,11 @@ async def test_a_network_failure_is_a_host_failure(exc: type[httpx2.TransportErr
 
 
 async def test_a_5xx_served_from_the_cache_is_not_a_host_failure(storage: AsyncSqliteStorage) -> None:
-    """Charge the 503 the network returned once, not the copies the cache serves afterwards."""
+    """Charge nothing for a 503 the cache serves: the host was not asked.
+
+    A client stores only what its call accepted, which a 503 never is, so the 503 here was stored by another user of
+    the same storage (a cache transport accepting what it fetched).
+    """
     served: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -117,12 +123,17 @@ async def test_a_5xx_served_from_the_cache_is_not_a_host_failure(storage: AsyncS
         return httpx2.Response(503, headers={"Cache-Control": "max-age=3600"})
 
     policy = FilterPolicy(response_filters=[StatusCodeFilter(frozenset({503}))])
+    await accept(
+        await cache_transport(storage, httpx2.MockTransport(handler), policy=policy).handle_async_request(
+            httpx2.Request("GET", f"{_ORIGIN}/x")
+        )
+    )
     client = _client(handler, policy=TransportPolicy(retry=NO_RETRY, cache=HttpCache(policy=policy, storage=storage)))
     for _ in range(_THRESHOLD + 1):
         with pytest.raises(UpstreamStatusError):
             await client.get("x", expect=RESPONSE)
-    assert len(served) == 1, "precondition: the later calls were served from the cache"
-    assert failures(_HOST) == 1
+    assert len(served) == 1, "precondition: every call was served from the cache"
+    assert failures(_HOST) == 0
 
 
 # --- Transitions as events ---

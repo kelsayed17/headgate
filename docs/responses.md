@@ -16,7 +16,7 @@ read and capped, because some readers need a header too. headgate ships these:
 | `json_reader(decode)` | what `decode(body_bytes)` returns | a codec of your own |
 | `as_bytes` | the body, undecoded | CSV, ZIP, PDF, a dump another parser reads |
 | `nothing` | `None` | a void write (`DELETE`, a cancel) or a `HEAD` |
-| `event_stream` | the `data` of each server-sent event, in order | a buffered `text/event-stream` body |
+| `event_stream` | each server-sent event (`event`, `data`, `id`, `retry`), in order | a buffered `text/event-stream` body |
 
 A reader that finds the body is not the shape it expected raises: a codec raises `DecodeError`, and the `ValueError`,
 `LookupError` or `TypeError` hand-written code over `response.json()` raises counts the same. On a 2xx the client turns
@@ -77,7 +77,7 @@ how [conditional reads](caching.md#conditional-reads) send their preconditions.
 
 Some providers answer a failure with a 200 and an error envelope. A reader raises `RefusedError` for that, and the
 client turns it into the `ClientError` its `kind` names (`UpstreamStatusError` by default, `AuthError`,
-`RateLimitError`), with the status the wire sent and the provider's `code`. The simplest way is a `decoder`'s `check`,
+`RateLimitError`), with the status the wire sent and the provider's `code`. The simplest way is a `decoder`'s `refusal_check`,
 which runs on the decoded value and returns a refusal or `None`:
 
 ```python
@@ -99,7 +99,7 @@ def refusal_in(envelope: Envelope) -> RefusedError | None:
     return None
 
 
-ROWS = decoder(Envelope, check=refusal_in)
+ROWS = decoder(Envelope, refusal_check=refusal_in)
 ```
 
 Refuse only codes every consumer of the endpoint would read as failure (credentials, quota, a malformed request) and
@@ -114,10 +114,12 @@ such a client raises `ValueError`.
 
 ## Codec flavors
 
-The core imports no codec. `headgate.msgspec` and `headgate.pydantic` expose the same three functions:
+The core imports no codec. `headgate.msgspec` and `headgate.pydantic` expose the same four functions:
 
 - `decode(content, Type, *, strict=True)`: bytes to a value, raising `DecodeError`;
-- `decoder(Type, *, strict=True, allow_empty_body=False, check=None)`: a reader built on `decode`;
+- `decoder(Type, *, strict=True, allow_empty_body=False, refusal_check=None)`: a reader built on `decode`;
+- `encoder(Type, *, drop_none=False)`: the mirror of `decoder`, a writer whose `body=WRITER(value)` sends the value
+  as JSON (see [request bodies](streaming.md#request-bodies));
 - `to_builtins(value, *, drop_none=False)`: a struct or model (or a list or mapping of them) as builtins for `json=` or
   `data=`, with field renames applied and `drop_none=True` removing `None` fields recursively.
 

@@ -32,9 +32,9 @@ class Recorder:
 
 def _shop(*routes: tuple[str, str, tuple[httpx2.Response | int, ...]]) -> FakeTransport:
     """Return a fake shop: the token endpoint, then *routes* as ``(method, path, replies)``."""
-    fake = FakeTransport().route("POST", "/oauth/token", _TOKEN)
+    fake = FakeTransport().reply("POST", "/oauth/token", _TOKEN)
     for method, path, replies in routes:
-        fake.route(method, path, *replies)
+        fake.reply(method, path, *replies)
     return fake
 
 
@@ -54,7 +54,7 @@ async def test_a_token_is_minted_once_and_signs_every_call() -> None:
 
 async def test_a_refused_mint_raises_auth_error() -> None:
     """Raise ``AuthError`` when the token endpoint refuses the client's credentials."""
-    fake = FakeTransport().route("POST", "/oauth/token", 401)
+    fake = FakeTransport().reply("POST", "/oauth/token", 401)
     async with OrdersClient("id", "wrong", transport=fake) as shop:
         with pytest.raises(AuthError, match="token mint failed"):
             await shop.get_order("o-1")

@@ -5,44 +5,46 @@
 
 Built on ``httpx2``; Python 3.14 or newer. A client subclasses :class:`AsyncBaseClient`, configures it with a
 :class:`Rate` (or a shared :class:`RateBudget`) and optionally :class:`TransportPolicy` and :class:`HttpOptions`, and
-picks a codec flavor by importing ``headgate.msgspec`` or ``headgate.pydantic``. Re-exported here:
+picks a codec flavor by importing ``headgate.msgspec`` or ``headgate.pydantic``. Re-exported here is what a client is
+written with:
 
 * the client and its options: :class:`AsyncBaseClient`, :data:`Method`, :class:`RequestOptions`,
-  :class:`TransportPolicy`, :class:`HttpOptions`, :class:`Timeouts`, :class:`IdempotencyKeys`, :class:`Route`,
-  :class:`Middleware`, :class:`Observer`;
+  :class:`PageOptions`, :class:`ViewOptions`, :class:`TransportPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`,
+  :class:`Timeouts`, :class:`IdempotencyKeys`, :class:`Route`, :class:`Middleware` and :data:`Next` (what a
+  middleware calls to continue);
 * declared responses: :class:`Expect`, :data:`Reader` and the readers, :data:`RefusalCheck`, :class:`RefusedError`;
-* auth: :class:`StaticHeaderAuth`, :class:`QueryParamAuth`, :class:`CachedTokenAuth`, :class:`Minted`,
-  :data:`MAX_MINT_RESPONSE_BYTES`;
-* the policy values: retry (:class:`RetryPolicy`, :class:`Backoff`, :class:`RetryBudget`, :class:`Hedge`,
-  :data:`NO_RETRY`), the breaker (:class:`BreakerPolicy`, :class:`BreakerRegistry`), rate limiting (:class:`Rate`,
-  :class:`RateBudget`, :class:`RateRule`, :class:`Adaptive`) and the cache (:class:`HttpCache`, its filters,
-  :class:`Partition`, :func:`conditional`);
-* streams and pages: :class:`Stream`, :meth:`AsyncBaseClient.paginate`'s :class:`Paginated` and its pagers;
+* request bodies: :class:`EncodedBody`, :data:`Writer` and :func:`json_writer`, each codec flavor's ``encoder`` built on
+  it;
+* auth: :class:`BearerAuth`, :class:`StaticHeaderAuth`, :class:`QueryParamAuth`, :class:`CachedTokenAuth`,
+  :class:`Minted`, :data:`MAX_MINT_RESPONSE_BYTES`;
+* the policy values a client usually sets: :class:`RetryPolicy`, :class:`BreakerPolicy`, :class:`Rate`,
+  :class:`RateBudget`, :class:`RateRule` and :class:`HttpCache`;
+* pages: :meth:`AsyncBaseClient.paginate`'s :class:`Paginated`, its pagers and :class:`PageLimit`;
 * the errors, all under :class:`ClientError`.
 
-The policy layers are subpackages with public paths of their own (:mod:`headgate.retry`, :mod:`headgate.breaker`,
-:mod:`headgate.ratelimit`, :mod:`headgate.cache`, :mod:`headgate.security`, :mod:`headgate.streaming`,
-:mod:`headgate.pagination`); events are in :mod:`headgate.events` and the testing kit in :mod:`headgate.testing`.
+Everything else lives once, in its layer's subpackage: the finer policy values (:mod:`headgate.retry`'s ``Backoff``,
+``Hedge``, ``RetryBudget`` and ``NO_RETRY``; :mod:`headgate.ratelimit`'s ``Adaptive``; :mod:`headgate.breaker`'s
+``BreakerRegistry``), the cache's filters, partitions and conditional reads (:mod:`headgate.cache`), what a custom
+pager is written with (:mod:`headgate.pagination`), ``Stream`` (:mod:`headgate.streaming`), :mod:`headgate.security`,
+events and their ``Observer`` (:mod:`headgate.events`) and the testing kit (:mod:`headgate.testing`).
 """
 
-from headgate._auth import MAX_MINT_RESPONSE_BYTES, CachedTokenAuth, Minted, QueryParamAuth, StaticHeaderAuth
-from headgate._client import AsyncBaseClient, Method, RequestOptions
-from headgate._core import Observer
-from headgate._middleware import Middleware
-from headgate._options import HttpOptions, IdempotencyKeys, Route, Timeouts, TransportPolicy
-from headgate._responses import Expect, Reader, RefusalCheck, RefusedError, as_bytes, event_stream, json_reader, nothing
-from headgate.breaker import BreakerPolicy, BreakerRegistry
-from headgate.cache import (
-    Fresh,
-    HttpCache,
-    MethodFilter,
-    NotModified,
-    Partition,
-    PathFragmentFilter,
-    StatusCodeFilter,
-    Validator,
-    conditional,
+from headgate._auth import (
+    MAX_MINT_RESPONSE_BYTES,
+    BearerAuth,
+    CachedTokenAuth,
+    Minted,
+    QueryParamAuth,
+    StaticHeaderAuth,
 )
+from headgate._client import AsyncBaseClient, Method, PageOptions, RequestOptions
+from headgate._middleware import Middleware, Next
+from headgate._options import HttpOptions, IdempotencyKeys, Route, SecurityOptions, Timeouts, TransportPolicy
+from headgate._request_body import EncodedBody, Writer, json_writer
+from headgate._responses import Expect, Reader, RefusalCheck, RefusedError, as_bytes, event_stream, json_reader, nothing
+from headgate._view import ViewOptions
+from headgate.breaker import BreakerPolicy
+from headgate.cache import HttpCache
 from headgate.errors import (
     AuthError,
     CircuitOpenError,
@@ -51,6 +53,7 @@ from headgate.errors import (
     ClientTimeoutError,
     DecodeError,
     ForbiddenDestinationError,
+    PageLimitError,
     Problem,
     RateLimitError,
     ResponseParseError,
@@ -58,20 +61,16 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
-from headgate.pagination import Cursor, LinkHeader, NextUrl, Offset, Pager, PageRequest, Paginated
-from headgate.ratelimit import Adaptive, Rate, RateBudget, RateRule
-from headgate.retry import NO_RETRY, Backoff, Hedge, RetryBudget, RetryPolicy
-from headgate.streaming import Stream
+from headgate.pagination import Cursor, LinkHeader, NextUrl, Offset, PageLimit, Paginated
+from headgate.ratelimit import Rate, RateBudget, RateRule
+from headgate.retry import RetryPolicy
 
 __all__ = [
     "MAX_MINT_RESPONSE_BYTES",
-    "NO_RETRY",
-    "Adaptive",
     "AsyncBaseClient",
     "AuthError",
-    "Backoff",
+    "BearerAuth",
     "BreakerPolicy",
-    "BreakerRegistry",
     "CachedTokenAuth",
     "CircuitOpenError",
     "ClientConfigurationError",
@@ -79,27 +78,23 @@ __all__ = [
     "ClientTimeoutError",
     "Cursor",
     "DecodeError",
+    "EncodedBody",
     "Expect",
     "ForbiddenDestinationError",
-    "Fresh",
-    "Hedge",
     "HttpCache",
     "HttpOptions",
     "IdempotencyKeys",
     "LinkHeader",
     "Method",
-    "MethodFilter",
     "Middleware",
     "Minted",
+    "Next",
     "NextUrl",
-    "NotModified",
-    "Observer",
     "Offset",
-    "PageRequest",
-    "Pager",
+    "PageLimit",
+    "PageLimitError",
+    "PageOptions",
     "Paginated",
-    "Partition",
-    "PathFragmentFilter",
     "Problem",
     "QueryParamAuth",
     "Rate",
@@ -112,20 +107,19 @@ __all__ = [
     "RequestOptions",
     "ResponseParseError",
     "ResponseTooLargeError",
-    "RetryBudget",
     "RetryPolicy",
     "Route",
+    "SecurityOptions",
     "StaticHeaderAuth",
-    "StatusCodeFilter",
-    "Stream",
     "Timeouts",
     "TransportError",
     "TransportPolicy",
     "UpstreamStatusError",
-    "Validator",
+    "ViewOptions",
+    "Writer",
     "as_bytes",
-    "conditional",
     "event_stream",
     "json_reader",
+    "json_writer",
     "nothing",
 ]

@@ -22,13 +22,13 @@ import httpx2
 import pytest
 
 from headgate import (
-    NO_RETRY,
     HttpOptions,
     IdempotencyKeys,
     Rate,
     RateRule,
     RetryPolicy,
     Route,
+    SecurityOptions,
     Timeouts,
     TransportError,
     TransportPolicy,
@@ -37,13 +37,15 @@ from headgate import (
 )
 from headgate._options import DEFAULT_LIMITS
 from headgate._user_agent import DEFAULT_USER_AGENT, headgate_version
+from headgate.retry import NO_RETRY
 from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from headgate import Middleware, Observer
+    from headgate import Middleware
+    from headgate.events import Observer
 
 _RATE = Rate.per_second(1000)
 _BASE = "https://api.example.test"
@@ -127,7 +129,7 @@ def _ok(request: httpx2.Request) -> httpx2.Response:
             lambda: HttpOptions(proxy="//p.test:8080"),
             "proxy must be an http, https or socks5 URL (got a malformed URL)",
         ),
-        (lambda: Route(""), "fragment must not be empty"),
+        (lambda: Route("/"), "fragment must name at least one path segment (got '/')"),
         (lambda: Route("/x", deadline=0.0), "deadline must be > 0 (got 0.0)"),
         (lambda: IdempotencyKeys(header=""), "header must name a header"),
     ],
@@ -142,8 +144,8 @@ def test_a_bad_option_says_exactly_what_is_wrong(build: Callable[[], object], me
 @pytest.mark.parametrize(
     ("build", "match"),
     [
-        (lambda: HttpOptions(timeout=0.0), "timeout"),
-        (lambda: HttpOptions(timeout=float("nan")), "timeout"),
+        (lambda: Timeouts(read=0.0), "read"),
+        (lambda: Timeouts(write=float("nan")), "write"),
         (lambda: Timeouts(connect=0.0), "connect"),
         (lambda: Timeouts(pool=-1.0), "pool"),
         (lambda: HttpOptions(max_redirects=-1), "max_redirects"),
@@ -152,12 +154,12 @@ def test_a_bad_option_says_exactly_what_is_wrong(build: Callable[[], object], me
         (lambda: HttpOptions(request_id_headers=("x-request-id", "")), "request_id_headers"),
         (lambda: HttpOptions(proxy="ftp://proxy.example.test"), "proxy"),
         (lambda: HttpOptions(proxy="http://[::1"), "proxy"),
-        (lambda: HttpOptions(trusted_origins=frozenset({"https://cdn.example.test/files"})), "trusted origin"),
-        (lambda: HttpOptions(trusted_origins=frozenset({"https://cdn.example.test?x=1"})), "trusted origin"),
-        (lambda: HttpOptions(trusted_origins=frozenset({"ftp://cdn.example.test"})), "trusted origin"),
-        (lambda: HttpOptions(trusted_origins=frozenset({"https://user@cdn.example.test"})), "trusted origin"),
-        (lambda: HttpOptions(trusted_origins=frozenset({"https://[::1"})), "trusted origin"),
-        (lambda: HttpOptions(trusted_origins=frozenset({"/relative"})), "trusted origin"),
+        (lambda: SecurityOptions(trusted_origins=frozenset({"https://cdn.example.test/files"})), "trusted origin"),
+        (lambda: SecurityOptions(trusted_origins=frozenset({"https://cdn.example.test?x=1"})), "trusted origin"),
+        (lambda: SecurityOptions(trusted_origins=frozenset({"ftp://cdn.example.test"})), "trusted origin"),
+        (lambda: SecurityOptions(trusted_origins=frozenset({"https://user@cdn.example.test"})), "trusted origin"),
+        (lambda: SecurityOptions(trusted_origins=frozenset({"https://[::1"})), "trusted origin"),
+        (lambda: SecurityOptions(trusted_origins=frozenset({"/relative"})), "trusted origin"),
         (lambda: TransportPolicy(deadline=0.0), "deadline"),
         (lambda: TransportPolicy(deadline=float("inf")), "deadline"),
         (lambda: Route(""), "fragment"),
@@ -190,17 +192,16 @@ def test_options_freeze_and_normalise_what_they_are_given() -> None:
     headers = {"X-A": "1"}
     rules = [RateRule("/r", _RATE)]
     routes = [Route("/reports")]
+    origins = frozenset({"HTTPS://CDN.example.test:443/", "http://files.example.test:8080"})
     options = HttpOptions(
-        headers=headers,
-        trusted_origins=frozenset({"HTTPS://CDN.example.test:443/", "http://files.example.test:8080"}),
-        request_id_headers=("X-Trace-Id",),
+        headers=headers, request_id_headers=("X-Trace-Id",), security=SecurityOptions(trusted_origins=origins)
     )
     policy = TransportPolicy(rate_limits=tuple(rules), routes=tuple(routes))
     headers["X-A"] = "changed"
 
     assert isinstance(options.headers, MappingProxyType)
     assert options.headers == {"X-A": "1"}
-    assert options.trusted_origins == {"https://cdn.example.test", "http://files.example.test:8080"}
+    assert options.security.trusted_origins == {"https://cdn.example.test", "http://files.example.test:8080"}
     assert options.request_id_headers == ("x-trace-id",)
     assert policy.rate_limits == tuple(rules)
     assert policy.routes == tuple(routes)
@@ -421,8 +422,7 @@ def test_the_security_options_have_safe_defaults() -> None:
     options = HttpOptions()
     observers: tuple[Observer, ...] = ()
     middleware: tuple[Middleware, ...] = ()
-    assert options.trusted_origins == frozenset()
-    assert options.allow_private_hosts is True
+    assert options.security == SecurityOptions(trusted_origins=frozenset(), allow_private_hosts=True, resolver=None)
     assert (options.observers, options.middleware) == (observers, middleware)
 
 

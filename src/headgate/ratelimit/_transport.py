@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 
 from headgate._core import CallContext, RateLimited
-from headgate.ratelimit._budget import PUSHBACK
+from headgate.ratelimit._budget import PUSHBACK, pacer_of
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -76,12 +76,13 @@ class RateLimitTransport(httpx2.AsyncBaseTransport):
 
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
-        budget = self._budgets.for_request(request)
+        budget = pacer_of(self._budgets.for_request(request))
         context = CallContext.of(request)
         await budget.wait(context)
         release = await budget.occupy()
         # The waits took some of the call's time: the send that follows gets only what is left.
         context.fit_timeouts(request)
+        context.progress.mark_dispatched()
         sent_at = budget.now()
         try:
             response = await self._transport.handle_async_request(request)

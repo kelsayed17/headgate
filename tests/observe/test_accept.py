@@ -11,6 +11,7 @@ import httpx2
 import pytest
 
 from headgate import Expect, HttpOptions, as_bytes, json_reader, nothing
+from headgate._responses import accepts
 from headgate.errors import ResponseParseError, UpstreamStatusError
 from headgate.testing import FakeTransport
 from tests.observe._support import client
@@ -22,7 +23,7 @@ _BODY = b'{"ok": true}'
 def _answering(content_type: str | None, *, status: int = 200, content: bytes = _BODY) -> FakeTransport:
     """Return a fake answering ``GET /v1/x`` with *content* declared as *content_type*."""
     headers = {} if content_type is None else {"content-type": content_type}
-    return FakeTransport().route("GET", "/v1/x", httpx2.Response(status, content=content, headers=headers))
+    return FakeTransport().reply("GET", "/v1/x", httpx2.Response(status, content=content, headers=headers))
 
 
 @pytest.mark.parametrize(
@@ -120,7 +121,7 @@ def test_a_malformed_accept_is_refused_where_it_is_written(accept: str) -> None:
 
 def test_without_accept_every_response_is_accepted() -> None:
     """Accept any response when ``accept`` is not given."""
-    assert Expect(as_bytes).accepts(httpx2.Response(200, content=b"<html>", headers={"content-type": "text/html"}))
+    assert accepts(Expect(as_bytes), httpx2.Response(200, content=b"<html>", headers={"content-type": "text/html"}))
 
 
 def test_json_reader_refuses_an_empty_body_unless_allowed() -> None:

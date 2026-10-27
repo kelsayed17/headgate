@@ -10,7 +10,7 @@ a custom scheme implements too. :func:`parse_link_header` is the RFC 8288 parser
 
 from headgate.pagination._link import Link, parse_link_header
 from headgate.pagination._pager import Cursor, LinkHeader, NextUrl, Offset, Pager, PageRequest
-from headgate.pagination._paginated import Paginated
+from headgate.pagination._paginated import PageLimit, Paginated
 
 __all__ = [
     "Cursor",
@@ -18,6 +18,7 @@ __all__ = [
     "LinkHeader",
     "NextUrl",
     "Offset",
+    "PageLimit",
     "PageRequest",
     "Pager",
     "Paginated",

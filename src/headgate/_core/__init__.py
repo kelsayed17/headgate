@@ -29,8 +29,9 @@ from headgate._core._events import (
     RetryScheduled,
 )
 from headgate._core._origin import origin_of, origin_text, same_origin
+from headgate._core._paths import check_fragment, path_has_fragment
 from headgate._core._retry_after import RETRY_AFTER_STATUSES, parse_retry_after, retry_after_of
-from headgate._core._seams import BREAKER_GATE, CredentialCarrier, CredentialStamper
+from headgate._core._seams import BREAKER_GATE, BudgetBacklogError, CredentialCarrier, CredentialStamper
 from headgate._core._switch import policy_disabled, policy_is_disabled
 from headgate._core._time import (
     SYSTEM_TIMING,
@@ -53,6 +54,7 @@ __all__ = [
     "AttemptFinished",
     "BreakerChanged",
     "BreakerState",
+    "BudgetBacklogError",
     "CacheOutcome",
     "CacheResult",
     "CallContext",
@@ -75,10 +77,12 @@ __all__ = [
     "Slot",
     "Timing",
     "asyncio_sleep",
+    "check_fragment",
     "current_timing",
     "origin_of",
     "origin_text",
     "parse_retry_after",
+    "path_has_fragment",
     "policy_disabled",
     "policy_is_disabled",
     "retry_after_of",

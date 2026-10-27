@@ -5,8 +5,9 @@
 
 A client picks its flavor by import (``from headgate.msgspec import decoder, to_builtins``), and the base client stays
 an HTTP-policy layer with no serialization knowledge of its own. :func:`decode` is the bytes-level primitive,
-:func:`decoder` builds a response reader on it, and :func:`to_builtins` prepares a request body. Every decode failure
-is the shared :class:`~headgate.errors.DecodeError`.
+:func:`decoder` builds a response reader on it, :func:`encoder` its mirror, a request-body writer, and
+:func:`to_builtins` prepares builtins for ``json=`` or ``data=``. Every decode failure is the shared
+:class:`~headgate.errors.DecodeError`.
 
 A ``DecodeError``'s message is msgspec's own diagnosis (the expected type and the path), bounded, with the one input
 value msgspec quotes (an unknown enum value) left out.
@@ -25,12 +26,13 @@ from __future__ import annotations
 
 import functools
 import re
-from typing import TYPE_CHECKING, overload
+from typing import TYPE_CHECKING, Final, overload
 
 import msgspec
 
 from headgate._codec import drop_none as _drop_none
 from headgate._failures import shorten
+from headgate._request_body import json_writer
 from headgate._responses import json_reader
 from headgate.errors import DecodeError
 
@@ -39,9 +41,13 @@ if TYPE_CHECKING:
 
     from typing_extensions import TypeForm
 
+    from headgate._request_body import Writer
     from headgate._responses import Reader, RefusedError
 
-__all__ = ["decode", "decoder", "to_builtins"]
+__all__ = ["decode", "decoder", "encoder", "to_builtins"]
+
+#: One encoder serves every value: msgspec encodes by the value's own type, so it holds no per-type state.
+_JSON_ENCODER: Final = msgspec.json.Encoder()
 
 #: The one msgspec diagnosis that quotes the input: ``Invalid enum value '<the value>'``, whatever its length, before
 #: the `` - at `$…` `` path when there is one.
@@ -89,7 +95,7 @@ def decoder[T](
     *,
     strict: bool = True,
     allow_empty_body: bool = False,
-    check: Callable[[T], RefusedError | None] | None = None,
+    refusal_check: Callable[[T], RefusedError | None] | None = None,
 ) -> Reader[T]:
     """Build a reader that decodes the body as strict JSON into the type expression *type_*.
 
@@ -99,10 +105,26 @@ def decoder[T](
 
     msgspec decodes the expression atomically, so one malformed element fails the whole body with
     :class:`~headgate.errors.DecodeError`. ``strict=False`` is the deliberate opt-out for a wire that needs lax
-    coercion. ``allow_empty_body`` and ``check`` are documented on :func:`~headgate._responses.json_reader`.
+    coercion. ``allow_empty_body`` and ``refusal_check`` are documented on :func:`~headgate._responses.json_reader`.
     """
     decode_body = functools.partial(_decode_with, _json_decoder(type_, strict=strict))
-    return json_reader(decode_body, allow_empty_body=allow_empty_body, check=check)
+    return json_reader(decode_body, allow_empty_body=allow_empty_body, refusal_check=refusal_check)
+
+
+def encoder[T](type_: TypeForm[T], *, drop_none: bool = False) -> Writer[T]:
+    """Build a writer that encodes a value of the type expression *type_* as a JSON request body.
+
+    The mirror of :func:`decoder`: build it once, at import (``NEW_ORDER = encoder(NewOrder)``), and send with
+    ``body=NEW_ORDER(order)``. msgspec encodes the value straight to bytes, with the same renames, field order and
+    ``omit_defaults`` as :func:`to_builtins`; *type_* types the writer, so it takes only that type. ``drop_none=True``
+    removes ``None``-valued fields recursively, as :func:`to_builtins` does.
+    """
+    del type_  # msgspec encodes by the value's own type; the expression only types the writer
+
+    def encode(value: T) -> bytes:
+        return _JSON_ENCODER.encode(_drop_none(msgspec.to_builtins(value)) if drop_none else value)
+
+    return json_writer(encode)
 
 
 @overload

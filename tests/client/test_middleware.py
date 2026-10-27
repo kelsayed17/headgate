@@ -25,7 +25,7 @@ from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
-    from headgate._middleware import Next
+    from headgate import Next
     from headgate.events import Event
 
 _SECRET = b"shared-secret"

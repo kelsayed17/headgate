@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import httpx2
 
-from headgate.breaker import DEFAULT_REGISTRY
+from headgate.breaker._registry import DEFAULT_REGISTRY
 
 
 def failures(host: str) -> int:

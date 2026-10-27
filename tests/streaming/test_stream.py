@@ -6,12 +6,12 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, assert_type, override
 
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, HttpOptions, Stream, TransportPolicy
+from headgate import BreakerPolicy, HttpOptions, TransportPolicy
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
 from headgate._responses import RefusedError
 from headgate.errors import (
@@ -23,6 +23,7 @@ from headgate.errors import (
     UpstreamStatusError,
 )
 from headgate.ratelimit import Rate
+from headgate.streaming import Stream
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
 
@@ -69,14 +70,14 @@ def _client(
 
 async def _drain(client: StubClient, on_chunk: Callable[[bytes], object] = len) -> None:
     """Stream ``f`` from *client* to its end, handing each chunk to *on_chunk* as it arrives."""
-    async with client.stream("GET", "f") as stream:
+    async with client.stream("f") as stream:
         async for chunk in stream.aiter_bytes():
             on_chunk(chunk)
 
 
 async def _drain_events(client: StubClient, max_event_size: int | None) -> None:
     """Read every event of ``events`` from *client*, with events up to *max_event_size* bytes."""
-    async with client.stream("GET", "events") as stream:
+    async with client.stream("events") as stream:
         async for _ in stream.aiter_events(max_event_size=max_event_size):
             pass
 
@@ -128,7 +129,7 @@ def _streaming(body: _Body, headers: dict[str, str] | None = None) -> Handler:
 async def test_a_body_larger_than_the_response_cap_streams_through() -> None:
     """Check that a stream is not held to the buffered-body cap."""
     client = _client(_answer(httpx2.Response(200, content=b"x" * _BIG_BODY)), max_response_bytes=_SMALL_CAP)
-    async with client.stream("GET", "big.csv") as stream:
+    async with client.stream("big.csv") as stream:
         body = b"".join([chunk async for chunk in stream.aiter_bytes()])
     assert len(body) == _BIG_BODY
 
@@ -136,14 +137,14 @@ async def test_a_body_larger_than_the_response_cap_streams_through() -> None:
 async def test_the_head_is_exposed_with_the_request_id() -> None:
     """Expose the status, the headers and the upstream's request id."""
     headers = {"x-request-id": "req-1", "x-extra": "yes"}
-    async with _client(_answer(httpx2.Response(201, headers=headers))).stream("POST", "jobs") as stream:
+    async with _client(_answer(httpx2.Response(201, headers=headers))).stream("jobs", method="POST") as stream:
         assert (stream.status_code, stream.headers["x-extra"], stream.request_id) == (201, "yes", "req-1")
         assert stream.last_event_id is None
 
 
 async def test_lines_are_iterated_without_their_endings() -> None:
     """Iterate the body as text lines."""
-    async with _client(_answer(httpx2.Response(200, content=b"a,b\r\nc,d\n"))).stream("GET", "f.csv") as stream:
+    async with _client(_answer(httpx2.Response(200, content=b"a,b\r\nc,d\n"))).stream("f.csv") as stream:
         assert [line async for line in stream.aiter_lines()] == ["a,b", "c,d"]
 
 
@@ -151,7 +152,7 @@ async def test_a_large_error_body_is_read_only_to_a_snippet() -> None:
     """Raise a non-2xx on entering the block, reading only a bounded head of its error body."""
     client = _client(_answer(httpx2.Response(400, content=b"bad " * 50_000)))
     with pytest.raises(UpstreamStatusError) as raised:
-        async with client.stream("GET", "big.csv"):
+        async with client.stream("big.csv"):
             pytest.fail("the block runs only for a 2xx")
     assert raised.value.status_code == httpx2.codes.BAD_REQUEST
     assert len(str(raised.value)) < _MESSAGE_BOUND
@@ -161,7 +162,7 @@ async def test_a_redirect_that_is_not_followed_raises() -> None:
     """Raise a 3xx the call does not follow, since only a 2xx opens a stream."""
     client = _client(_answer(httpx2.Response(302, headers={"location": "/elsewhere"})))
     with pytest.raises(UpstreamStatusError) as raised:
-        async with client.stream("GET", "f", follow_redirects=False):
+        async with client.stream("f", follow_redirects=False):
             pytest.fail("the block runs only for a 2xx")
     assert raised.value.status_code == httpx2.codes.FOUND
 
@@ -173,10 +174,10 @@ async def test_a_refusal_check_runs_on_the_head_before_the_block() -> None:
         refusal_check=lambda resp: RefusedError("no") if resp.status_code == httpx2.codes.OK else None,
     )
     with pytest.raises(UpstreamStatusError, match="no"):
-        async with client.stream("GET", "f"):
+        async with client.stream("f"):
             pytest.fail("a refused stream never opens")
     with pytest.raises(ValueError, match="refusal"):
-        async with client.stream("GET", "f", follow_redirects=True):
+        async with client.stream("f", follow_redirects=True):
             pytest.fail("a refusing client never follows redirects")
 
 
@@ -189,11 +190,11 @@ async def test_a_5xx_that_outlasts_retries_raises_and_a_retried_one_opens() -> N
         status = 503 if len(sent) == 1 else 200
         return httpx2.Response(status, content=b"ok", request=request)
 
-    async with _client(flaky).stream("GET", "f") as stream:
+    async with _client(flaky).stream("f") as stream:
         assert [chunk async for chunk in stream.aiter_bytes()] == [b"ok"]
     assert len(sent) == len(("503", "200"))
     with pytest.raises(UpstreamStatusError) as raised:
-        async with _client(_answer(httpx2.Response(503))).stream("GET", "f"):
+        async with _client(_answer(httpx2.Response(503))).stream("f"):
             pytest.fail("the block runs only for a 2xx")
     assert raised.value.status_code == httpx2.codes.SERVICE_UNAVAILABLE
 
@@ -207,16 +208,16 @@ async def test_a_second_stream_works_after_a_failed_one() -> None:
 
     client = _client(handle)
     with pytest.raises(UpstreamStatusError):
-        async with client.stream("GET", "a"):
+        async with client.stream("a"):
             pytest.fail("the block runs only for a 2xx")
-    async with client.stream("GET", "b") as stream:
+    async with client.stream("b") as stream:
         assert await anext(stream.aiter_bytes()) == b"ok"
 
 
 async def test_the_response_is_closed_when_the_block_exits_unread() -> None:
     """Close the response on leaving the block, even when the body was not read to its end."""
     body = _Body(b"one", b"two")
-    async with _client(_streaming(body)).stream("GET", "f") as stream:
+    async with _client(_streaming(body)).stream("f") as stream:
         assert await anext(stream.aiter_bytes()) == b"one"
         assert not body.closed
     assert body.closed
@@ -250,7 +251,7 @@ async def test_an_error_of_the_callers_own_passes_through_and_charges_nothing() 
         """The caller's own failure."""
 
     with pytest.raises(_MineError):
-        async with _client(_answer(httpx2.Response(200))).stream("GET", "f"):
+        async with _client(_answer(httpx2.Response(200))).stream("f"):
             raise _MineError
     assert failures(_HOST) == 0
 
@@ -263,7 +264,7 @@ async def test_the_deadline_bounds_opening_the_stream() -> None:
         return httpx2.Response(200, request=request)
 
     with pytest.raises(ClientTimeoutError, match="deadline exceeded"):
-        async with _client(slow).stream("GET", "f", deadline=_SHORT_DEADLINE):
+        async with _client(slow).stream("f", deadline=_SHORT_DEADLINE):
             pytest.fail("the stream never opens")
 
 
@@ -271,7 +272,7 @@ async def test_the_deadline_does_not_bound_reading_the_body() -> None:
     """Read a body for longer than the deadline once the stream is open."""
     gate = asyncio.Event()
     body = _Body(b"a", b"b", gate=gate)
-    async with _client(_streaming(body)).stream("GET", "f", deadline=_SHORT_DEADLINE) as stream:
+    async with _client(_streaming(body)).stream("f", deadline=_SHORT_DEADLINE) as stream:
         chunks = stream.aiter_bytes()
         assert await anext(chunks) == b"a"
         await asyncio.sleep(_SHORT_DEADLINE * 2)
@@ -283,7 +284,7 @@ async def test_events_are_parsed_as_they_arrive() -> None:
     """Yield each event as soon as its blank line arrives, with its event name, data, id and retry."""
     gate = asyncio.Event()
     body = _Body(b"event: tick\nid: 7\nretry: 1500\ndata: one\ndata: two\n\n", b"data: three\n\n", gate=gate)
-    async with _client(_streaming(body, _SSE)).stream("GET", "events") as stream:
+    async with _client(_streaming(body, _SSE)).stream("events") as stream:
         events = stream.aiter_events()
         first = await anext(events)
         assert (first.event, first.data, first.id, first.retry) == ("tick", "one\ntwo", "7", 1500)
@@ -303,22 +304,22 @@ async def test_a_stream_resumes_after_the_last_event_id() -> None:
         return httpx2.Response(200, headers=_SSE, content=b"id: 41\ndata: x\n\n", request=request)
 
     client = _client(handle)
-    async with client.stream("GET", "events", headers={"x-trace": "1"}) as stream:
+    async with client.stream("events", headers={"x-trace": "1"}) as stream:
         last = [event.id async for event in stream.aiter_events()][-1]
-    async with client.stream("GET", "events", last_event_id=last):
+    async with client.stream("events", last_event_id=last):
         pass
-    async with client.stream("GET", "events", last_event_id=""):
+    async with client.stream("events", last_event_id=""):
         pass
     assert seen == [None, "41", None]
 
 
 async def test_events_require_an_event_stream() -> None:
     """Refuse to read events from a response that does not declare ``text/event-stream``."""
-    async with _client(_answer(httpx2.Response(200, json={"a": 1}))).stream("GET", "events") as stream:
+    async with _client(_answer(httpx2.Response(200, json={"a": 1}))).stream("events") as stream:
         with pytest.raises(ResponseParseError, match="application/json") as raised:
             stream.aiter_events()
     assert raised.value.status_code == httpx2.codes.OK
-    async with _client(_answer(httpx2.Response(200))).stream("GET", "events") as stream:
+    async with _client(_answer(httpx2.Response(200))).stream("events") as stream:
         with pytest.raises(ResponseParseError, match="none"):
             stream.aiter_events()
 
@@ -340,9 +341,10 @@ async def test_a_network_failure_mid_events_is_a_transport_error() -> None:
 
 
 async def test_the_block_receives_a_stream() -> None:
-    """Hand the block a :class:`~headgate.Stream`."""
-    async with _client(_answer(httpx2.Response(200))).stream("GET", "f") as stream:
-        assert isinstance(stream, Stream)
+    """Hand the block a :class:`~headgate.streaming.Stream`, its status already known."""
+    async with _client(_answer(httpx2.Response(200))).stream("f") as stream:
+        assert_type(stream, Stream)
+        assert stream.status_code == httpx2.codes.OK
 
 
 async def test_a_stream_honours_the_policys_breaker() -> None:
@@ -355,10 +357,10 @@ async def test_a_stream_honours_the_policys_breaker() -> None:
     )
     for _ in range(BreakerPolicy().failure_threshold):
         with pytest.raises(UpstreamStatusError):
-            async with client.stream("GET", "f"):
+            async with client.stream("f"):
                 pass
     with pytest.raises(ClientError, match="circuit breaker open"):
-        async with client.stream("GET", "f"):
+        async with client.stream("f"):
             pass
 
 
@@ -371,7 +373,7 @@ _CHUNK = 4
 async def test_bytes_come_in_the_chunk_size_asked_for() -> None:
     """Re-chunk the body to *chunk_size* bytes when the caller asks for it."""
     client = _client(_answer(httpx2.Response(200, content=b"0123456789")))
-    async with client.stream("GET", "f") as stream:
+    async with client.stream("f") as stream:
         chunks = [chunk async for chunk in stream.aiter_bytes(_CHUNK)]
     assert chunks == [b"0123", b"4567", b"89"]
 
@@ -380,7 +382,7 @@ async def test_a_connection_dropping_mid_lines_is_a_transport_error() -> None:
     """Map a network failure while lines arrive to ``TransportError``, as for bytes."""
     body = _Body(b"first\n", then=httpx2.ReadError("connection dropped"))
     with pytest.raises(TransportError):
-        async with _client(_streaming(body)).stream("GET", "f") as stream:
+        async with _client(_streaming(body)).stream("f") as stream:
             _ = [line async for line in stream.aiter_lines()]
 
 
@@ -389,13 +391,13 @@ async def test_an_event_stream_with_parameters_is_an_event_stream() -> None:
     handler = _answer(
         httpx2.Response(200, headers={"content-type": "text/event-stream; charset=utf-8"}, content=b"data: a\n\n")
     )
-    async with _client(handler).stream("GET", "events") as stream:
+    async with _client(handler).stream("events") as stream:
         assert [event.data async for event in stream.aiter_events()] == ["a"]
 
 
 async def test_a_stream_without_a_content_type_is_named_as_such() -> None:
     """Say ``'none'`` when a stream read as events declares no content type."""
-    async with _client(_answer(httpx2.Response(200, content=b"data: a\n\n"))).stream("GET", "events") as stream:
+    async with _client(_answer(httpx2.Response(200, content=b"data: a\n\n"))).stream("events") as stream:
         with pytest.raises(ResponseParseError, match=r"got content type 'none'$"):
             stream.aiter_events()
 

@@ -18,7 +18,14 @@ from typing import TYPE_CHECKING, Final, override
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from headgate import CachedTokenAuth, HttpOptions, QueryParamAuth, StaticHeaderAuth, UpstreamStatusError
+from headgate import (
+    CachedTokenAuth,
+    HttpOptions,
+    QueryParamAuth,
+    SecurityOptions,
+    StaticHeaderAuth,
+    UpstreamStatusError,
+)
 from headgate._core import origin_of
 from tests.security._web import BASE, Web
 from tests.support.responses import RESPONSE
@@ -48,7 +55,7 @@ class _Bearer(CachedTokenAuth):
     """A bearer auth whose exchange never runs: it is seeded."""
 
     @override
-    async def _mint_token(self) -> tuple[str, float]:
+    async def mint_token(self) -> tuple[str, float]:
         raise NotImplementedError
 
 
@@ -81,7 +88,7 @@ def test_no_credential_reaches_an_untrusted_origin(kind: str, first: str, chain:
         redirects[previous] = target + ("?api_key=k" if echo else "")
         previous = target
     web = Web(redirects)
-    options = HttpOptions(trusted_origins=frozenset({_TRUSTED}), max_redirects=_MAX_REDIRECTS)
+    options = HttpOptions(max_redirects=_MAX_REDIRECTS, security=SecurityOptions(trusted_origins=frozenset({_TRUSTED})))
 
     async def run() -> None:
         async with web.client(auth=auth, http=options) as client:

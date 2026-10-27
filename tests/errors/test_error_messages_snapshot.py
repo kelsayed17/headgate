@@ -21,9 +21,7 @@ import pytest
 
 from headgate import (
     AuthError,
-    Backoff,
     BreakerPolicy,
-    BreakerRegistry,
     CachedTokenAuth,
     ClientError,
     HttpOptions,
@@ -31,12 +29,14 @@ from headgate import (
     RateLimitError,
     RefusedError,
     RetryPolicy,
+    SecurityOptions,
     TransportPolicy,
     json_reader,
     nothing,
 )
+from headgate.breaker import BreakerRegistry
 from headgate.ratelimit import UNLIMITED
-from headgate.retry import NO_RETRY
+from headgate.retry import NO_RETRY, Backoff
 from headgate.testing import TestClock
 from tests.support.clients import StubClient
 from tests.support.wire import Script
@@ -102,7 +102,7 @@ def _client(
             max_response_bytes=options.max_response_bytes,
             refusal_check=options.refusal_check,
             follow_redirects=options.follow_redirects,
-            allow_private_hosts=options.allow_private_hosts,
+            security=options.security,
             max_redirects=options.max_redirects,
         ),
     )
@@ -279,7 +279,7 @@ async def _forbidden_destination() -> None:
         base_url="https://127.0.0.1:8443",
         rate=UNLIMITED,
         policy=TransportPolicy(retry=NO_RETRY, breaker=None),
-        http=HttpOptions(transport=Script().transport(), allow_private_hosts=False),
+        http=HttpOptions(transport=Script().transport(), security=SecurityOptions(allow_private_hosts=False)),
     ) as client:
         await client.get("admin" + _KEYED_QUERY, expect=nothing)
 
@@ -288,7 +288,7 @@ class _MintRejected(CachedTokenAuth):
     """Mint on a client of its own against a token endpoint that answers 401."""
 
     @override
-    async def _mint_token(self) -> tuple[str, float]:
+    async def mint_token(self) -> tuple[str, float]:
         transport = httpx2.MockTransport(lambda _request: httpx2.Response(401, text="invalid_client"))
         async with httpx2.AsyncClient(transport=transport) as client:
             response = await client.post("https://auth.example.test/token?client_secret=S3CR3T")
@@ -305,7 +305,7 @@ class _MintUnreadable(CachedTokenAuth):
     """Mint from a token response with no ``access_token``."""
 
     @override
-    async def _mint_token(self) -> tuple[str, float]:
+    async def mint_token(self) -> tuple[str, float]:
         return {"token": "x"}["access_token"], 60.0
 
 
@@ -318,7 +318,7 @@ class _MintUnreachable(CachedTokenAuth):
     """Mint against a token host that refuses the connection."""
 
     @override
-    async def _mint_token(self) -> tuple[str, float]:
+    async def mint_token(self) -> tuple[str, float]:
         request = httpx2.Request("POST", "https://auth.example.test/token?client_secret=S3CR3T")
         msg = "connection refused"
         raise httpx2.ConnectError(msg, request=request)

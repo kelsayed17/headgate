@@ -12,6 +12,12 @@ still decided before the fetch, so a hit is refused while the breaker is open.
 no credential header, parameter or userinfo, and a partition label in the URL fragment. The layer below hishel puts
 the real URL and headers back for the network, so what is sent is exactly what the caller built.
 
+**Stored on accept.** hishel writes a miss to storage as it passes through. Here the storage defers that write: the
+response handed up carries it (:func:`store_accepted`), and ``AsyncBaseClient`` makes it only once the call's reader
+accepted the response. A refusal inside a 200, an undecodable body or an undeclared status is never stored, so it is not
+served again for the entry's lifetime. The policy's filters still decide what may be stored at all. A body past the size
+cap is not held here, so it is not stored.
+
 **Lifetimes.** A client's constant TTL rides the ``hishel_ttl`` request extension: :class:`ResilientCacheTransport`
 stamps :class:`~headgate.cache.HttpCache`'s ``ttl``, and ``AsyncBaseClient`` stamps a per-call ``cache_ttl=``, which
 wins.
@@ -39,6 +45,7 @@ import asyncio
 import contextlib
 import dataclasses
 import enum
+import uuid
 from collections import Counter
 from collections.abc import Iterator
 from contextvars import ContextVar
@@ -46,20 +53,18 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, override
 
 import httpx2
-from hishel import AsyncBaseStorage, Entry, Request, Response
+from hishel import AsyncBaseStorage, Entry, EntryMeta, Request, Response
 from hishel.httpx2 import AsyncCacheTransport
 
 from headgate._core import CacheOutcome, CacheResult, CallContext
-from headgate._core._context import FITTED_TIMEOUTS, ORIGINAL_TIMEOUTS
 from headgate.cache._credentials import CredentialScope
+from headgate.cache._policy import filter_policy_of
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
 
 if TYPE_CHECKING:
-    import uuid
     from collections.abc import AsyncIterator, Callable, Generator, Mapping
 
     from headgate.cache._policy import HttpCache
-
 
 __all__ = [
     "CACHE_DEGRADATIONS",
@@ -68,6 +73,7 @@ __all__ = [
     "CacheStorageError",
     "ResilientCacheTransport",
     "host_untested",
+    "store_accepted",
 ]
 
 
@@ -82,32 +88,22 @@ class CacheStorageError(Exception):
     """
 
 
-#: What passes through the guard on a storage call: only an httpx2 error, which no backend raises for itself.
-_PASS_FROM_STORAGE: tuple[type[Exception], ...] = (httpx2.HTTPError,)
-
-
 @contextlib.contextmanager
-def _storage_faults(passing: tuple[type[Exception], ...] = _PASS_FROM_STORAGE) -> Generator[None]:
-    """Raise any failure in the block as :class:`CacheStorageError`, except one of *passing*.
+def _storage_faults() -> Generator[None]:
+    """Raise any failure in the block as :class:`CacheStorageError`.
 
-    An ``httpx2.HTTPError`` passes through because a storage that stores a miss streams the network body while writing
-    it, so a network failure can surface from inside the storage and must still reach the retry layer as one. The body
-    of a miss passes every one of :data:`~headgate.retry._policy.NETWORK_ERRORS`, an ``OSError`` from a custom transport
-    included; anywhere else an ``OSError`` comes from the backend (a full disk) and is a storage fault.
+    The network body of a miss never passes through the backend (see :class:`_GuardedStorage`), so whatever fails
+    inside it, an ``OSError`` from a full disk included, is a storage fault.
     """
     try:
         yield
-    except passing:
-        raise
     except Exception as exc:
         raise CacheStorageError(type(exc).__name__) from exc
 
 
-async def _guarded_chunks(
-    chunks: Iterator[bytes] | AsyncIterator[bytes], passing: tuple[type[Exception], ...]
-) -> AsyncIterator[bytes]:
+async def _guarded_chunks(chunks: Iterator[bytes] | AsyncIterator[bytes]) -> AsyncIterator[bytes]:
     """Yield *chunks*, a body a storage streams, raising a failure while it streams as :class:`CacheStorageError`."""
-    with _storage_faults(passing):
+    with _storage_faults():
         if isinstance(chunks, Iterator):
             msg = "an async storage returned a synchronous body stream"
             raise TypeError(msg)
@@ -115,9 +111,9 @@ async def _guarded_chunks(
             yield chunk
 
 
-def _guarded_body(entry: Entry, passing: tuple[type[Exception], ...] = _PASS_FROM_STORAGE) -> Entry:
+def _guarded_body(entry: Entry) -> Entry:
     """Return *entry* with its response body streamed through :func:`_guarded_chunks`."""
-    stream = _guarded_chunks(entry.response.stream, passing)
+    stream = _guarded_chunks(entry.response.stream)
     return dataclasses.replace(entry, response=dataclasses.replace(entry.response, stream=stream))
 
 
@@ -127,6 +123,9 @@ class _GuardedStorage(AsyncBaseStorage):
     This is the only place a storage fault is recognised, so :class:`ResilientCacheTransport` falls back on exactly
     :class:`CacheStorageError` and lets anything else raised inside hishel propagate. ``close`` is delegated but never
     called by the transport, since a shared storage is closed by whoever created it.
+
+    A new entry is not written here: it is held on the request's trip through hishel (:class:`_Deferred`), and written
+    by :class:`_Store` once the call's reader accepts the response.
     """
 
     def __init__(self, backend: AsyncBaseStorage) -> None:
@@ -134,10 +133,16 @@ class _GuardedStorage(AsyncBaseStorage):
 
     @override
     async def create_entry(self, request: Request, response: Response, key: str, id_: uuid.UUID | None = None) -> Entry:
-        with _storage_faults():
-            entry = await self._backend.create_entry(request, response, key, id_)
-        # The new entry's body is the network body, teed into the backend as it streams.
-        return _guarded_body(entry, NETWORK_ERRORS)
+        entry = Entry(
+            id=uuid.uuid4() if id_ is None else id_,
+            request=request,
+            meta=EntryMeta(),
+            response=response,
+            cache_key=key.encode(),
+        )
+        # The body is still the network's, so nothing of the backend's streams here.
+        _CALL.get().deferred = _Deferred(entry, key)
+        return entry
 
     @override
     async def get_entries(self, key: str) -> list[Entry]:
@@ -186,6 +191,65 @@ class _CacheCall:
 
     set_cookies: list[str] = field(default_factory=list)
     """The ``Set-Cookie`` values of the latest network response, kept from hishel and handed back to the caller."""
+
+    deferred: _Deferred | None = None
+    """The entry hishel asked to store for this request, not yet written."""
+
+
+@dataclass(frozen=True, slots=True)
+class _Deferred:
+    """An entry hishel asked to store, whose body is still on its way from the network."""
+
+    entry: Entry
+    key: str
+
+
+class _Store:
+    """Write a deferred entry with its body, once, the first time a call accepts the response (:func:`store_accepted`).
+
+    Shared by every copy of the response, a download's waiting requests included, so it is written at most once. A
+    storage fault while writing is counted as a degradation and dropped: the call already has its answer.
+    """
+
+    def __init__(self, backend: AsyncBaseStorage, deferred: _Deferred, body: bytes, host: str) -> None:
+        """Hold *deferred* and its whole *body*, to write to *backend*; *host* is counted on a fault."""
+        self._backend = backend
+        self._deferred = deferred
+        self._body = body
+        self._host = host
+        self._written = False
+
+    async def __call__(self) -> None:
+        """Write the entry, unless it was written already."""
+        if self._written:
+            return
+        self._written = True
+        entry, body = self._deferred.entry, self._body
+        response = dataclasses.replace(entry.response, stream=_one_chunk(body))
+        try:
+            with _storage_faults():
+                stored = await self._backend.create_entry(entry.request, response, self._deferred.key, entry.id)
+            # A storage writes the body as it streams.
+            async for _ in _guarded_chunks(stored.response.stream):
+                pass
+        except CacheStorageError:
+            CACHE_DEGRADATIONS[self._host] += 1
+
+
+async def _one_chunk(body: bytes) -> AsyncIterator[bytes]:
+    """Yield *body* as one chunk."""
+    yield body
+
+
+#: The response extension carrying the :class:`_Store` of a miss, for :func:`store_accepted`.
+CACHE_STORE = "headgate.cache_store"
+
+
+async def store_accepted(response: httpx2.Response) -> None:
+    """Store the cache miss *response* answers, now that the call accepted it; do nothing for any other response."""
+    store = response.extensions.get(CACHE_STORE)
+    if isinstance(store, _Store):
+        await store()
 
 
 #: The call in progress in this task. A ContextVar rather than instance state because one transport serves every
@@ -404,7 +468,6 @@ class _InFlight:
     """A GET being fetched, and what the identical requests waiting on it get once it finishes."""
 
     finished: asyncio.Event = field(default_factory=asyncio.Event)
-    deadline_fitted: bool = False
     outcome: _Outcome = _Unshared.TRY_AGAIN
 
 
@@ -415,49 +478,37 @@ def _report(request: httpx2.Request, outcome: CacheOutcome) -> None:
         context.emit(CacheResult(call=context.info, outcome=outcome))
 
 
-def _requested_timeouts(request: httpx2.Request) -> dict[str, object]:
-    """Recover requested phase limits only where no explicit override followed deadline fitting."""
-    context = CallContext.of(request)
-    originals = context.get(ORIGINAL_TIMEOUTS)
-    fitted = context.get(FITTED_TIMEOUTS)
-    original = {} if originals is None else originals.get(request, {})
-    previous = {} if fitted is None else fitted.get(request, {})
-    current = request.extensions.get("timeout") or {}
-    return {
-        phase: original.get(phase, limit) if phase in previous and limit == previous[phase] else limit
-        for phase, limit in current.items()
-    }
-
-
 def _sharing_key(request: httpx2.Request) -> _SharingKey:
     """Return what two in-flight GETs must agree on to share one download.
 
     Headers as well as the URL, since two GETs that differ in ``Range``, ``Accept`` or a credential ask for different
-    responses. The original ``timeout`` extension and the call's own retry policy too, since a request willing to wait
-    longer, or to try more often, must not inherit the ``ReadTimeout`` of one that was not.
+    responses. The timeouts and the call's own retry policy too, since a request willing to wait longer, or to try more
+    often, must not inherit the ``ReadTimeout`` of one that was not. The timeouts are the ones the request asked for,
+    not the ones fitted to its deadline, which differ on every request; each waiter's own deadline bounds its wait.
     """
-    timeout = _requested_timeouts(request)
-    # Sorted by name, which is unique, so the values (a float or None) are never compared.
-    named: list[tuple[str, object]] = (
-        sorted((str(name), value) for name, value in timeout.items()) if bool(timeout) else []
-    )
-    timeouts = tuple(named)
+    timeouts = CallContext.requested_timeouts(request)
     retry = CallContext.of(request).get(RETRY_POLICY)
     return str(request.url), tuple(sorted(request.headers.multi_items())), timeouts, retry
 
 
-def _deadline_limited_timeout(request: httpx2.Request, exc: BaseException) -> bool:
-    """Whether fitting shortened the phase whose timeout ended this fetch."""
-    phases = (
+def _cut_short(request: httpx2.Request, failure: Exception) -> bool:
+    """Return whether *failure* is a timeout of *request*'s own deadline-fitted timeouts, not of the ones it asked for.
+
+    The requests waiting on it asked for the same timeouts, but each has a deadline of its own: one with more time left
+    must fetch for itself rather than inherit a timeout it would not have hit. Only the phase that failed matters;
+    an unknown timeout type retains the shared-failure behavior.
+    """
+    for error_type, phase in (
         (httpx2.ConnectTimeout, "connect"),
         (httpx2.ReadTimeout, "read"),
         (httpx2.WriteTimeout, "write"),
         (httpx2.PoolTimeout, "pool"),
-    )
-    phase = next((name for kind, name in phases if isinstance(exc, kind)), "")
-    requested = _requested_timeouts(request)
-    fitted = request.extensions.get("timeout") or {}
-    return phase in requested and bool(requested[phase] != fitted.get(phase))
+    ):
+        if isinstance(failure, error_type):
+            requested = dict(CallContext.requested_timeouts(request))
+            current = request.extensions.get("timeout")
+            return isinstance(current, dict) and phase in current and bool(current[phase] != requested.get(phase))
+    return False
 
 
 class ResilientCacheTransport(AsyncCacheTransport):
@@ -488,9 +539,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
     **Simultaneous identical GETs share one download.** hishel has no request coalescing, so an identical GET that
     arrives while the first is still fetching would find nothing in storage and go to the network too. Instead it waits
     and gets its own copy of the first one's response, whether a hit, a miss or degraded, since the body is held whole
-    here anyway. A timeout in a phase shortened to this call's deadline hands fetching to the next waiter instead of
-    failing it.
-    Any other network failure (one of :data:`~headgate.retry._policy.NETWORK_ERRORS`) fails every waiting request
+    here anyway. A network failure (one of :data:`~headgate.retry._policy.NETWORK_ERRORS`) fails every waiting request
     from the one attempt, each with its own copy chained to the original; each caller's retry layer then retries, and
     those retries share again. What a waiting request receives is marked :data:`HOST_UNTESTED`, so only the request that
     fetched counts toward the circuit breaker. If the first request is cancelled or fails outside the network, the next
@@ -510,7 +559,10 @@ class ResilientCacheTransport(AsyncCacheTransport):
 
         Without a *scope*, requests are viewed as a client with no auth would send them.
         """
-        super().__init__(_RestoreRequest(next_transport), storage=_GuardedStorage(cache.storage), policy=cache.policy)
+        super().__init__(
+            _RestoreRequest(next_transport), storage=_GuardedStorage(cache.storage), policy=filter_policy_of(cache)
+        )
+        self._backend = cache.storage
         self._scope = CredentialScope() if scope is None else scope
         self._live = next_transport
         self._max_body_bytes = max_body_bytes
@@ -529,9 +581,6 @@ class ResilientCacheTransport(AsyncCacheTransport):
         while (in_flight := self._in_flight.get(key)) is not None:
             await in_flight.finished.wait()
             outcome = in_flight.outcome
-            if isinstance(outcome, httpx2.TimeoutException) and in_flight.deadline_fitted:
-                # This fetch's remaining deadline cannot fail another call that still has time.
-                continue
             if isinstance(outcome, NETWORK_ERRORS):
                 _report(request, CacheOutcome.SHARED)
                 raise _shared_failure(outcome)
@@ -556,8 +605,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
             response, body = await self._fetch(request)
             in_flight.outcome = _Unshared.FETCH_OWN if body is None else _Download.of(response, body)
         except NETWORK_ERRORS as exc:
-            in_flight.deadline_fitted = _deadline_limited_timeout(request, exc)
-            in_flight.outcome = exc
+            in_flight.outcome = _Unshared.FETCH_OWN if _cut_short(request, exc) else exc
             raise
         finally:
             # Freed before the waiters wake, so none of them finds this download again.
@@ -596,7 +644,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
             if call.set_cookies:
                 cookies = [("set-cookie", value) for value in call.set_cookies]
                 response.headers = httpx2.Headers([*response.headers.multi_items(), *cookies])
-            return await _buffer_up_to(response, self._max_body_bytes, sources=(response, *call.handed_up))
+            held, body = await _buffer_up_to(response, self._max_body_bytes, sources=(response, *call.handed_up))
         except BaseException:
             await _close_quietly(response, *call.handed_up)
             raise
@@ -604,3 +652,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
             request.url = call.url
             request.headers = call.headers
             _CALL.reset(token)
+        if call.deferred is not None and body is not None:
+            store = _Store(self._backend, call.deferred, body, call.url.host)
+            held.extensions = {**held.extensions, CACHE_STORE: store}
+        return held, body

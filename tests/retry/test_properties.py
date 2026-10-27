@@ -25,7 +25,9 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from headgate._core import CallContext, CallInfo
-from headgate.retry import IDEMPOTENT_METHODS, Backoff, RetryBudget, RetryPolicy, RetryTransport, SendTrackingTransport
+from headgate.retry import IDEMPOTENT_METHODS, Backoff, RetryBudget, RetryPolicy
+from headgate.retry._tracking import SendTrackingTransport
+from headgate.retry._transport import RetryTransport
 from headgate.testing import (
     ConnectFail,
     DropMidBody,
@@ -58,7 +60,7 @@ _TOO_EARLY = 425
 
 _RESPONSES = st.builds(
     Respond,
-    status=st.sampled_from([200, 404, 408, 425, 429, 500, 503]),
+    status_code=st.sampled_from([200, 404, 408, 425, 429, 500, 503]),
     retry_after=st.sampled_from([None, 0.5, 2.0, 100.0]),
 )
 

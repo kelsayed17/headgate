@@ -16,8 +16,9 @@ import httpx2
 import pytest
 
 from headgate._core import BREAKER_GATE, CallContext, CallInfo, Emitter, RetryScheduled
-from headgate.retry import NO_RETRY, REPLAYABLE_BODY, Backoff, Hedge, RetryBudget, RetryPolicy, RetryTransport
-from headgate.retry._policy import RETRY_OUTCOME, RETRY_POLICY, RetryOutcome
+from headgate.retry import NO_RETRY, Backoff, Hedge, RetryBudget, RetryPolicy
+from headgate.retry._policy import REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, RetryOutcome
+from headgate.retry._transport import RetryTransport
 from headgate.testing import (
     ConnectFail,
     DropMidBody,

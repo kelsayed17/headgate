@@ -4,7 +4,7 @@
 with nothing private patched. Two seams make that possible:
 
 - **the network** is `HttpOptions(transport=...)`. Have the client accept a transport and pass it through, as the
-  [examples](../examples/) do: `CatalogClient(api_key, transport=fake)`;
+  [examples](https://github.com/kelsayed17/headgate/tree/main/examples) do: `CatalogClient(api_key, transport=fake)`;
 - **time and breaker state** are read when a client is **constructed**, from context variables the kit's context
   managers set. Build the client inside them; entering one around a client that already exists changes nothing.
 
@@ -17,7 +17,7 @@ from headgate.testing import instant_retries, isolated_breakers
 @pytest.fixture
 def catalog() -> Iterator[CatalogClient]:
     with instant_retries(), isolated_breakers():
-        yield CatalogClient("test-key", transport=FakeTransport().route("GET", "/v1/series/GDP", 200))
+        yield CatalogClient("test-key", transport=FakeTransport().reply("GET", "/v1/series/GDP", 200))
 ```
 
 ## FakeTransport
@@ -27,8 +27,8 @@ A route table of canned replies and a log of every request:
 ```python
 fake = (
     FakeTransport()
-    .route("GET", "/v1/series/GDP", httpx2.Response(503), httpx2.Response(200, json=GDP))
-    .route("DELETE", "/v1/series/GDP", 204)
+    .reply("GET", "/v1/series/GDP", httpx2.Response(503), httpx2.Response(200, json=GDP))
+    .reply("DELETE", "/v1/series/GDP", 204)
 )
 ```
 
@@ -70,7 +70,7 @@ response, whether that response was closed, and the error raised.
 | --- | --- |
 | `ConnectFail(timeout=False)` | raises `ConnectError` (`ConnectTimeout` with `timeout=True`); nothing sent |
 | `PoolFull()` | raises `PoolTimeout`; nothing sent |
-| `Respond(status=200, headers=..., json=..., content=..., retry_after=None)` | answers |
+| `Respond(status_code=200, headers=..., json=..., content=..., retry_after=None)` | answers |
 | `DropMidBody(after_bytes)` | writes that many request bytes, then loses the connection |
 | `Slow(seconds, then=Respond())` | waits (honouring the read timeout), then takes `then` |
 | `RefusedStream()` | resets the HTTP/2 stream with `REFUSED_STREAM`, exactly as httpx2 raises it |

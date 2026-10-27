@@ -14,7 +14,7 @@ import pytest
 from headgate import HttpOptions, RequestOptions, as_bytes, nothing
 from headgate._core import CallContext
 from headgate.ratelimit import Rate
-from headgate.retry import REPLAYABLE_BODY
+from headgate.retry._policy import REPLAYABLE_BODY
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
@@ -120,7 +120,7 @@ async def test_a_body_factory_may_return_any_async_iterable() -> None:
 async def test_a_streamed_upload_works_through_stream() -> None:
     """Send a streamed body on a streamed call."""
     server = _Server()
-    async with server.client().stream("POST", "upload", content=_chunks()) as stream:
+    async with server.client().stream("upload", method="POST", content=_chunks()) as stream:
         assert [chunk async for chunk in stream.aiter_bytes()] == [b"done"]
     assert server.bodies == [_BODY]
 

@@ -8,7 +8,6 @@ from __future__ import annotations
 import httpx2
 
 from headgate._core import CallContext, CallInfo, CallStarted, Emitter, SendProgress, Slot
-from headgate._core._context import ORIGINAL_TIMEOUTS
 from headgate.testing import TestClock
 from tests.support.events import Recorder
 
@@ -119,20 +118,31 @@ def test_a_standalone_context_names_only_the_origin_and_path() -> None:
     assert CallContext.find(request) is context
 
 
-def test_deadline_fitting_keeps_original_limits_per_request() -> None:
-    """Repeated fitting and an auth hop retain separate initial timeout maps on one call."""
-    clock = TestClock()
-    context = _context(clock, deadline_after=10.0)
-    first = httpx2.Request("GET", _URL, extensions={"timeout": {"read": 120.0}})
-    hop = httpx2.Request("GET", _URL, extensions={"timeout": {"read": 20.0}})
-    context.fit_timeouts(first)
-    clock.advance(1.0)
-    context.fit_timeouts(first)
+def test_each_request_keeps_the_timeouts_it_asked_for() -> None:
+    """Record what each request asked for at its first fit, so a hop fitted first cannot stand in for the call's own.
+
+    A token mint's hop with timeouts of its own is fitted before the call's request: each keeps its own.
+    """
+    context = _context(deadline_after=_STEP)
+    hop = httpx2.Request("GET", _URL, extensions={"timeout": {"read": 1.0}})
+    call = httpx2.Request("GET", _URL, extensions={"timeout": {"read": 60.0}})
     context.fit_timeouts(hop)
-    originals = context.get(ORIGINAL_TIMEOUTS)
-    assert originals == {first: {"read": 120.0}, hop: {"read": 20.0}}
-    assert first.extensions["timeout"] == {"read": 9.0}
-    assert hop.extensions["timeout"] == {"read": 9.0}
+    context.fit_timeouts(call)
+    context.fit_timeouts(call)
+
+    assert CallContext.requested_timeouts(hop) == (("read", 1.0),)
+    assert CallContext.requested_timeouts(call) == (("read", 60.0),), "a second fit keeps what was asked for"
+    assert not CallContext.timeouts_cut(hop)
+    assert CallContext.timeouts_cut(call)
+
+
+def test_a_withdrawn_attempt_does_not_count() -> None:
+    """Take back an attempt that was never sent."""
+    context = _context()
+    context.begin_attempt()
+    context.begin_attempt()
+    context.withdraw_attempt()
+    assert context.attempt == 1
 
 
 def test_fitting_after_an_override_updates_only_the_changed_requested_phase() -> None:
@@ -144,9 +154,8 @@ def test_fitting_after_an_override_updates_only_the_changed_requested_phase() ->
     request.extensions["timeout"]["read"] = 1.0
     clock.advance(1.0)
     context.fit_timeouts(request)
-    originals = context.get(ORIGINAL_TIMEOUTS)
-    assert originals == {request: {"read": 1.0, "connect": 120.0}}
+    assert context.requested_timeouts(request) == (("connect", 120.0), ("read", 1.0))
     assert request.extensions["timeout"] == {"read": 1.0, "connect": 9.0}
     request.extensions["timeout"] = {"pool": None}
     context.fit_timeouts(request)
-    assert originals == {request: {"pool": None}}
+    assert context.requested_timeouts(request) == (("pool", None),)

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
-from headgate import AsyncBaseClient, Cursor, Expect, HttpOptions, Rate, StaticHeaderAuth, nothing
+from headgate import AsyncBaseClient, BearerAuth, Cursor, Expect, HttpOptions, Rate, nothing
 from headgate.msgspec import decoder
 
 if TYPE_CHECKING:
@@ -67,7 +67,7 @@ class CatalogClient(AsyncBaseClient):
         super().__init__(
             base_url="https://api.catalog.example/v1",
             rate=Rate.per_second(10),
-            auth=StaticHeaderAuth({"Authorization": f"Bearer {api_key}"}),
+            auth=BearerAuth(api_key),
             http=HttpOptions(transport=transport),
         )
 

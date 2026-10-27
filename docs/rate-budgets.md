@@ -19,7 +19,9 @@ reports = AsyncBaseClient(
 
 ## Rates and budgets
 
-`Rate(requests, period)` is a value: `Rate.per_second(5)` and `Rate.per_minute(300)` are the same rate. A client given
+`Rate(requests, period)` is a value: `Rate.per_second(5)` and `Rate.per_minute(300)` are the same rate, and
+`Rate.per_hour(5000)` states an hourly quota as a provider does. Up to `requests` may go out back to back, so state a
+large hourly quota per minute or per second for a steadier pace. A client given
 a `Rate` builds a budget of its own. A `RateBudget` is the budget as an object: pass one instance to several clients
 (or rules) and they spend from it together, across tasks, event loops and threads, because its state is plain numbers
 under a `threading.Lock` and nothing in it is bound to a loop.
@@ -28,21 +30,24 @@ under a `threading.Lock` and nothing in it is bound to a loop.
 
 - **Pacing** is GCRA, the virtual-scheduling form of a leaky bucket. Up to `rate.requests` requests (at least one) go
   out back to back; after that they are `period / requests` seconds apart. Waiters are served in arrival order, and a
-  waiter cancelled in the queue (its deadline passed, say) gives its turn back when nobody reserved after it.
+  waiter cancelled in the queue gives its turn back when nobody reserved after it. A call whose turn comes at or after
+  its deadline does not queue: it gives the turn back and the attempt is never sent (see [deadlines](deadlines.md)).
 - **`max_in_flight`** caps how many requests are open at once. A request holds its slot from the send until its
   response body is **closed**, not until the head arrives, since the server is still busy with a body that streams.
   Every path that drops a response closes it, so a slot cannot leak.
 - **What spends.** Every attempt spends its own turn, retries and hedges included, as do redirect hops and token-mint
   hops. A cache hit spends nothing: the cache sits above the budget.
 
-`budget.effective_rate`, `budget.in_flight` and `budget.pause_remaining()` read the budget's state now.
+`budget.effective_rate`, `budget.in_flight` and `budget.pause_remaining` read the budget's state now.
 
 ## Per-path lanes
 
-`TransportPolicy(rate_limits=(RateRule(fragment, rate), ...))` gives the requests whose URL path contains `fragment`
-a budget of their own: the first matching rule wins, and a matching request spends from the rule's budget **instead
-of** the client's. A rule's `rate` is a `Rate` (a budget per client) or a shared `RateBudget`. The fragment is a plain
-substring of the path, like the cache's `PathFragmentFilter` and the policy's `Route`.
+`TransportPolicy(rate_limits=(RateRule(fragment, rate), ...))` gives the requests whose URL path holds `fragment` a
+budget of their own: the first matching rule wins, and a matching request spends from the rule's budget **instead
+of** the client's. A rule's `rate` is a `Rate` (a budget per client) or a shared `RateBudget`. The fragment is one or
+more whole path segments, matched anywhere in the path: `"/exports"` matches `/v2/exports` and
+`/v2/exports/orders.csv`, but not `/v2/exports-archive`. The cache's `PathFragmentFilter` and the policy's `Route`
+match the same way.
 
 ## Server feedback
 

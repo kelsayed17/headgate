@@ -20,16 +20,8 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage, FilterPolicy
 
-from headgate import (
-    ClientError,
-    HttpCache,
-    HttpOptions,
-    MethodFilter,
-    RetryPolicy,
-    StatusCodeFilter,
-    TransportPolicy,
-    as_bytes,
-)
+from headgate import ClientError, HttpCache, HttpOptions, RetryPolicy, TransportPolicy, as_bytes
+from headgate.cache import MethodFilter, StatusCodeFilter
 from headgate.ratelimit import Rate
 from tests.support.clients import StubClient
 
@@ -116,7 +108,7 @@ async def test_streaming_a_large_body_holds_a_few_chunks_at_most() -> None:
     tracemalloc.start()
     try:
         received = 0
-        async with client.stream("GET", "file") as stream:
+        async with client.stream("file") as stream:
             async for chunk in stream.aiter_bytes():
                 received += len(chunk)
         _, peak = tracemalloc.get_traced_memory()
@@ -175,7 +167,7 @@ async def test_repeated_streams_retain_nothing() -> None:
     client = _client()
 
     async def drain() -> None:
-        async with client.stream("GET", "file") as stream:
+        async with client.stream("file") as stream:
             async for _ in stream.aiter_bytes():
                 pass
 
