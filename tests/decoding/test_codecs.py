@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 import sys
 from typing import TYPE_CHECKING, ClassVar, cast, override
 
@@ -86,8 +87,12 @@ _TAGGED = _Tagged()
     [(msgspec_flavor.CODEC, _Row), (pydantic_flavor.CODEC, _Model)],
     ids=["msgspec", "pydantic"],
 )
+@pytest.mark.filterwarnings("error")
 def test_the_built_in_codecs_pass_the_conformance_check(codec: Codec, record: type) -> None:
-    """Keep every promise: a media type, a round trip, strict types, malformed bytes refused, quiet messages."""
+    """Keep every promise: a media type, a round trip, strict types, malformed bytes refused, quiet messages.
+
+    Warnings are errors: pydantic warns, quoting the value, when it serializes by an adapter of another type.
+    """
     check_codec(codec, record=record)
 
 
@@ -117,6 +122,21 @@ async def test_a_codecs_own_error_is_a_parse_error_with_its_description() -> Non
 def test_an_empty_body_reads_as_the_codecs_empty_array() -> None:
     """Read an empty body as the empty array the codec encodes, when the reader allows it."""
     assert decoder_for(_TAGGED, list[_Row], allow_empty_body=True)(response(b"")) == []
+
+
+def test_an_empty_body_is_refused_unless_the_reader_allows_it() -> None:
+    """Refuse an empty body by default: an empty 200 is corruption for every provider but a list-shaped one."""
+    with pytest.raises(DecodeError):
+        decoder_for(_TAGGED, list[_Row])(response(b""))
+
+
+@pytest.mark.filterwarnings("error")
+def test_readers_and_writers_hand_a_codec_the_type_they_were_built_for() -> None:
+    """Build the empty array and each writer from the declared types, which pydantic serializes by without a warning."""
+    codec = pydantic_flavor.CODEC
+    assert decoder_for(codec, list[_Model], allow_empty_body=True)(response(b"")) == []
+    assert encoder_for(codec, _Model)(_Model(value=1)) == EncodedBody(b'{"value":1}', "application/json")
+    assert pydantic_flavor.encoder(_Model)(_Model(value=1)).content == b'{"value":1}'
 
 
 def test_a_json_writer_wraps_a_plain_encode_function() -> None:
@@ -206,18 +226,69 @@ class _MisreadsRecords(MsgspecCodec):
         return decode
 
 
+class _CoercesStrings(MsgspecCodec):
+    @override
+    def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
+        decode = super().decoder(type_)
+
+        def _decode(content: bytes) -> T:
+            try:
+                return decode(content)
+            except msgspec.ValidationError:
+                return decode(re.sub(rb':\s*"[^"]*"', b":0", content))
+
+        return _decode
+
+
+class _RepairsCutShortBodies(MsgspecCodec):
+    @override
+    def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
+        decode = super().decoder(type_)
+
+        def _decode(content: bytes) -> T:
+            try:
+                return decode(content)
+            except msgspec.DecodeError:
+                return decode(content + b"}")
+
+        return _decode
+
+
+class _ReadsRecordsAsDicts(MsgspecCodec):
+    @override
+    def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
+        return cast("Callable[[bytes], T]", super().decoder(dict[str, object] if type_ is _Row else type_))
+
+
 @pytest.mark.parametrize(
     ("codec", "message"),
     [
-        (_BadMediaType(), r"media_type 'json' is not a media type"),
-        (_ForgetsValues(), r"wrote \{'a': 1\} and read back \{\}"),
-        (_IgnoresTypes(), r"accepted a string where an int is declared"),
-        (_QuotesTheInput(), r"describe\(\) repeats the input"),
-        (_UnlistedError(), r"raised ValidationError for a string where an int is declared, which is not one of"),
-        (_RejectsUnknownFields(), r"refused a body with a field .* does not declare"),
-        (_MisreadsRecords(), r"read _Row\(value=2\) from a body with a field"),
+        (_BadMediaType(), r"^_BadMediaType\.media_type 'json' is not a media type"),
+        (_ForgetsValues(), r"^_ForgetsValues wrote \{'a': 1\} and read back \{\}"),
+        (_IgnoresTypes(), r"^_IgnoresTypes accepted a string where an int is declared"),
+        (_CoercesStrings(), r"^_CoercesStrings accepted a string where an int is declared as \{'a': 0\}"),
+        (_RepairsCutShortBodies(), r"^_RepairsCutShortBodies accepted a cut-short body as \{'a': 1\}"),
+        (_QuotesTheInput(), r"^_QuotesTheInput\.describe\(\) repeats the input \(.*bad body"),
+        (
+            _UnlistedError(),
+            r"^_UnlistedError raised ValidationError for a string where an int is declared, which is not one of",
+        ),
+        (_RejectsUnknownFields(), r"^_RejectsUnknownFields refused a body with a field .* does not declare"),
+        (_MisreadsRecords(), r"^_MisreadsRecords read _Row\(value=2\) from a body with a field"),
+        (_ReadsRecordsAsDicts(), r"^_ReadsRecordsAsDicts read \{'value': 1, .*\} from a body with a field"),
     ],
-    ids=["media-type", "round-trip", "strict", "quiet", "errors", "unknown-field", "record"],
+    ids=[
+        "media-type",
+        "round-trip",
+        "strict",
+        "coercing",
+        "cut-short",
+        "quiet",
+        "errors",
+        "unknown-field",
+        "record",
+        "record-shape",
+    ],
 )
 def test_the_conformance_check_names_the_promise_a_codec_breaks(codec: Codec, message: str) -> None:
     """Fail with a message naming the codec and the promise it broke."""

@@ -513,7 +513,7 @@ async def test_a_walk_past_its_page_limit_raises_with_what_it_fetched() -> None:
     assert len(api.sent) == _BUDGET, "the page past the limit was never fetched"
     assert raised.value.pages == _BUDGET
     assert isinstance(raised.value, ClientError)
-    assert raised.value.url == "items"
+    assert (raised.value.method, raised.value.url) == ("GET", "items")
     assert str(raised.value) == (
         f"[StubClient] pagination reached its limit of {_BUDGET} pages with more to come (items); the result is"
         " incomplete. Raise PageLimit.max_pages, or set on_limit='stop' to end the walk there"
@@ -526,7 +526,11 @@ async def test_a_limit_on_a_template_url_raises_without_naming_it() -> None:
     paginated = client.paginate(t"items/{'x'}", expect=decoder(Page), pages=_cursor(), limit=PageLimit(1))
     with pytest.raises(PageLimitError) as raised:
         _ = [page async for page in paginated.pages()]
-    assert raised.value.url is None
+    assert (raised.value.method, raised.value.url) == ("GET", None)
+    assert str(raised.value) == (
+        "[StubClient] pagination reached its limit of 1 pages with more to come; the result is incomplete."
+        " Raise PageLimit.max_pages, or set on_limit='stop' to end the walk there"
+    )
 
 
 async def test_a_walk_can_stop_quietly_at_its_page_limit() -> None:

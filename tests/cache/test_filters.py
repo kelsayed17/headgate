@@ -106,7 +106,10 @@ async def test_a_policy_of_your_own_is_used_as_it_is(storage: AsyncSqliteStorage
 @pytest.mark.parametrize(
     ("build", "message"),
     [
-        (lambda s: HttpCache(storage=s, policy=FilterPolicy(), methods={"GET"}), "policy= decides what is stored"),
+        (
+            lambda s: HttpCache(storage=s, policy=FilterPolicy(), methods={"GET"}),
+            r"^policy= decides what is stored, so it cannot be combined with methods=, paths= or statuses=$",
+        ),
         (lambda s: HttpCache(storage=s, paths=["/"]), "fragment must name at least one path segment"),
     ],
     ids=["policy-and-methods", "empty-path"],
