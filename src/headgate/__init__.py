@@ -5,16 +5,17 @@
 
 Built on ``httpx2``; Python 3.14 or newer. A client subclasses :class:`AsyncBaseClient`, configures it with a
 :class:`Rate` (or a shared :class:`RateBudget`) and optionally :class:`TransportPolicy` and :class:`HttpOptions`, and
-picks a codec flavor by importing ``headgate.msgspec`` or ``headgate.pydantic``. Re-exported here is what a client is
-written with:
+picks a codec: ``headgate.msgspec``, ``headgate.pydantic``, or any library as a :class:`Codec` of its own. Re-exported
+here is what a client is written with:
 
 * the client and its options: :class:`AsyncBaseClient`, :data:`Method`, :class:`RequestOptions`,
   :class:`PageOptions`, :class:`ViewOptions`, :class:`TransportPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`,
   :class:`Timeouts`, :class:`IdempotencyKeys`, :class:`Route`, :class:`Middleware` and :data:`Next` (what a
   middleware calls to continue);
 * declared responses: :class:`Expect`, :data:`Reader` and the readers, :data:`RefusalCheck`, :class:`RefusedError`;
-* request bodies: :class:`EncodedBody`, :data:`Writer` and :func:`json_writer`, each codec flavor's ``encoder`` built on
-  it;
+* codecs: :class:`Codec`, and :func:`decoder_for`, :func:`encoder_for` and :func:`decode_with`, which build a reader, a
+  writer and a decode on any codec;
+* request bodies: :class:`EncodedBody`, :data:`Writer` and :func:`json_writer`;
 * auth: :class:`BearerAuth`, :class:`StaticHeaderAuth`, :class:`QueryParamAuth`, :class:`CachedTokenAuth`,
   :class:`Minted`, :data:`MAX_MINT_RESPONSE_BYTES`;
 * the policy values a client usually sets: :class:`RetryPolicy`, :class:`BreakerPolicy`, :class:`Rate`,
@@ -38,6 +39,7 @@ from headgate._auth import (
     StaticHeaderAuth,
 )
 from headgate._client import AsyncBaseClient, Method, PageOptions, RequestOptions
+from headgate._codec import Codec, decode_with, decoder_for, encoder_for
 from headgate._middleware import Middleware, Next
 from headgate._options import HttpOptions, IdempotencyKeys, Route, SecurityOptions, Timeouts, TransportPolicy
 from headgate._request_body import EncodedBody, Writer, json_writer
@@ -76,6 +78,7 @@ __all__ = [
     "ClientConfigurationError",
     "ClientError",
     "ClientTimeoutError",
+    "Codec",
     "Cursor",
     "DecodeError",
     "EncodedBody",
@@ -118,6 +121,9 @@ __all__ = [
     "ViewOptions",
     "Writer",
     "as_bytes",
+    "decode_with",
+    "decoder_for",
+    "encoder_for",
     "event_stream",
     "json_reader",
     "json_writer",

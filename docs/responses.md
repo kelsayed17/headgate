@@ -112,9 +112,10 @@ to a host-wide `HttpOptions(refusal_check=...)`: a function of the response that
 It sees only the final response, so it requires `follow_redirects=False`, and a call that asks to follow redirects on
 such a client raises `ValueError`.
 
-## Codec flavors
+## Codecs
 
-The core imports no codec. `headgate.msgspec` and `headgate.pydantic` expose the same four functions:
+The core imports no serialization library. `headgate.msgspec` and `headgate.pydantic` are two
+[codecs](codecs.md), and expose the same four shortcuts:
 
 - `decode(content, Type, *, strict=True)`: bytes to a value, raising `DecodeError`;
 - `decoder(Type, *, strict=True, allow_empty_body=False, refusal_check=None)`: a reader built on `decode`;

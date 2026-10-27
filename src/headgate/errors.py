@@ -48,7 +48,7 @@ __all__ = [
 
 
 class DecodeError(Exception):
-    """A response body could not be decoded into the declared type; raised by every codec flavor."""
+    """A response body could not be decoded into the declared type; raised for every :class:`~headgate.Codec`."""
 
 
 def _is_absent(text: str | None) -> bool:

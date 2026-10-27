@@ -11,6 +11,7 @@
 * :func:`instant_retries`: clients whose retries do not wait.
 * :func:`isolated_breakers`: clients whose circuit breakers live in a fresh registry.
 * :class:`CassetteFilter`: vcrpy / pytest-recording filters that keep credentials and token mints out of cassettes.
+* :func:`check_codec`: the promises a :class:`~headgate.Codec` of your own must keep, checked in one call.
 
 The three context managers act on the clients **constructed** inside their block (the way a client class fixes its
 options in ``super().__init__()`` leaves no other way in), so build the client inside them, typically in a fixture::
@@ -22,6 +23,7 @@ options in ``super().__init__()`` leaves no other way in), so build the client i
 """
 
 from headgate.testing._breakers import isolated_breakers
+from headgate.testing._codec import check_codec
 from headgate.testing._recording import CassetteFilter, RecordedRequest
 from headgate.testing._time import TestClock, instant_retries
 from headgate.testing._transport import FakeTransport, Reply, UnmatchedRequestError
@@ -53,6 +55,7 @@ __all__ = [
     "Step",
     "TestClock",
     "UnmatchedRequestError",
+    "check_codec",
     "instant_retries",
     "isolated_breakers",
 ]

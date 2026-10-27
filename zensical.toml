@@ -20,6 +20,7 @@ nav = [
   { "Guides" = [
     "configuration.md",
     "responses.md",
+    "codecs.md",
     "errors.md",
     "retries.md",
     "deadlines.md",
