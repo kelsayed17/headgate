@@ -146,9 +146,9 @@ class RequestOptions(TypedDict, total=False):
       to no narrower mapping). Its values are encoded the way httpx2 encodes a mapping: a list or tuple repeats the key
       once per item, and any value that is not a ``str``, number, bool or ``None`` is sent as its ``str()``.
     * ``headers``: added to the client's; a clash is won by the call.
-    * ``body``: an :class:`~headgate.EncodedBody` a codec flavor's ``encoder`` wrote (``body=NEW_ORDER(order)``), sent
+    * ``body``: an :class:`~headgate.EncodedBody` a codec's ``encoder`` wrote (``body=NEW_ORDER(order)``), sent
       with its ``Content-Type`` unless ``headers=`` sets one. It combines with no other body option.
-    * ``json`` / ``data``: a JSON body of builtins (a codec flavor's ``to_builtins`` builds one) or a form body.
+    * ``json`` / ``data``: a JSON body of builtins (a codec's ``to_builtins`` builds one) or a form body.
     * ``content``: a raw body: ``bytes``; an async iterable of ``bytes``, streamed once, so the call is never re-sent
       and a redirect that asks for the body again is not followed; or a callable returning one, called once for each
       send, so the call stays retryable. It combines with no other body option.

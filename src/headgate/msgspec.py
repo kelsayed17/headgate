@@ -1,13 +1,12 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The msgspec codec flavor: strict JSON decoding into ``msgspec.Struct`` types, and request-body preparation.
+"""The msgspec codec: strict JSON decoding into ``msgspec.Struct`` types, and request bodies written back.
 
-A client picks its flavor by import (``from headgate.msgspec import decoder, to_builtins``), and the base client stays
-an HTTP-policy layer with no serialization knowledge of its own. :func:`decode` is the bytes-level primitive,
-:func:`decoder` builds a response reader on it, :func:`encoder` its mirror, a request-body writer, and
-:func:`to_builtins` prepares builtins for ``json=`` or ``data=``. Every decode failure is the shared
-:class:`~headgate.errors.DecodeError`.
+:data:`CODEC` is msgspec as a :class:`~headgate.Codec`. A client usually reaches it through the shortcuts here
+(``from headgate.msgspec import decoder, encoder``): :func:`decode` is the bytes-level primitive, :func:`decoder`
+builds a response reader on it and :func:`encoder` its mirror, a request-body writer; :func:`to_builtins` prepares
+builtins for ``json=`` or ``data=``. Every decode failure is the shared :class:`~headgate.errors.DecodeError`.
 
 A ``DecodeError``'s message is msgspec's own diagnosis (the expected type and the path), bounded, with the one input
 value msgspec quotes (an unknown enum value) left out.
@@ -20,21 +19,23 @@ ignoring it costs nothing, since a field nobody models is a field nobody reads. 
 
 ``type_`` parameters are annotated ``TypeForm[T]`` (PEP 747), so a union or a generic alias such as ``list[A] | A``
 types the result as exactly that expression.
+
+Requires the ``msgspec`` extra: ``pip install headgate[msgspec]``.
 """
 
 from __future__ import annotations
 
-import functools
 import re
-from typing import TYPE_CHECKING, Final, overload
+from typing import TYPE_CHECKING, ClassVar, Final, overload
 
-import msgspec
+try:
+    import msgspec
+except ImportError as exc:
+    msg = "headgate.msgspec needs msgspec: pip install headgate[msgspec]"
+    raise ImportError(msg) from exc
 
+from headgate._codec import decode_with, decoder_for, encoder_for
 from headgate._codec import drop_none as _drop_none
-from headgate._failures import shorten
-from headgate._request_body import json_writer
-from headgate._responses import json_reader
-from headgate.errors import DecodeError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -44,7 +45,7 @@ if TYPE_CHECKING:
     from headgate._request_body import Writer
     from headgate._responses import Reader, RefusedError
 
-__all__ = ["decode", "decoder", "encoder", "to_builtins"]
+__all__ = ["CODEC", "MsgspecCodec", "decode", "decoder", "encoder", "to_builtins"]
 
 #: One encoder serves every value: msgspec encodes by the value's own type, so it holds no per-type state.
 _JSON_ENCODER: Final = msgspec.json.Encoder()
@@ -54,28 +55,54 @@ _JSON_ENCODER: Final = msgspec.json.Encoder()
 _ENUM_VALUE = re.compile(r"(Invalid enum value) .*?(?= - at `\$|$)", re.DOTALL)
 
 
-def _json_decoder[T](type_: TypeForm[T], *, strict: bool) -> msgspec.json.Decoder[T]:
-    """Build a ``msgspec.json.Decoder`` for *type_*.
+class MsgspecCodec:
+    """JSON through msgspec, as a :class:`~headgate.Codec`.
 
-    msgspec's stubs type a non-``type[T]`` argument as ``Any``; the annotation records that the decoder decodes into
-    exactly the type expression it was built from.
+    *strict* (the default) rejects msgspec's built-in coercions, so a JSON string where an ``int`` is declared is wire
+    drift; ``strict=False`` is the deliberate opt-out for a wire that needs lax coercion. *drop_none* leaves
+    ``None``-valued fields out of what it encodes, recursively, as :func:`to_builtins` does.
     """
-    json_decoder: msgspec.json.Decoder[T] = msgspec.json.Decoder(type_, strict=strict)
-    return json_decoder
+
+    __slots__ = ("_drop_none", "_strict")
+
+    media_type: ClassVar[str] = "application/json"
+    #: ``msgspec.ValidationError`` subclasses ``msgspec.DecodeError``, so the base covers malformed and mistyped bytes.
+    errors: ClassVar[tuple[type[Exception], ...]] = (msgspec.DecodeError,)
+
+    def __init__(self, *, strict: bool = True, drop_none: bool = False) -> None:
+        """Decode strictly unless *strict* is false; encode without ``None`` fields when *drop_none* is true."""
+        self._strict = strict
+        self._drop_none = drop_none
+
+    def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
+        """Return a ``msgspec.json.Decoder`` for *type_*'s decode, built once.
+
+        msgspec's stubs type a non-``type[T]`` argument as ``Any``; the annotation records that the decoder decodes into
+        exactly the type expression it was built from.
+        """
+        json_decoder: msgspec.json.Decoder[T] = msgspec.json.Decoder(type_, strict=self._strict)
+        return json_decoder.decode
+
+    def encoder[T](self, type_: TypeForm[T], /) -> Callable[[T], bytes]:
+        """Return the function that encodes a value of *type_*: msgspec encodes by the value's own type."""
+        del type_  # the expression only types the writer
+        drop_none = self._drop_none
+
+        def encode(value: T) -> bytes:
+            return _JSON_ENCODER.encode(_drop_none(msgspec.to_builtins(value)) if drop_none else value)
+
+        return encode
+
+    def describe(self, error: Exception, /) -> str:
+        """Return msgspec's diagnosis with any quoted input value dropped."""
+        return _ENUM_VALUE.sub(r"\1", str(error))
 
 
-def _decode_with[T](json_decoder: msgspec.json.Decoder[T], content: bytes) -> T:
-    """Decode *content* with *json_decoder*, raising :class:`DecodeError` for malformed or mistyped JSON."""
-    try:
-        return json_decoder.decode(content)
-    # msgspec.ValidationError subclasses msgspec.DecodeError, so the base covers malformed and mistyped bodies alike.
-    except msgspec.DecodeError as exc:
-        raise DecodeError(_describe(exc)) from exc
+#: msgspec, decoding strictly: the codec every shortcut here uses unless told otherwise.
+CODEC: Final = MsgspecCodec()
 
-
-def _describe(exc: msgspec.DecodeError) -> str:
-    """Return msgspec's diagnosis with any quoted input value dropped, bounded like every decode message."""
-    return shorten(_ENUM_VALUE.sub(r"\1", str(exc)))
+_LAX: Final = MsgspecCodec(strict=False)
+_DROPPING_NONE: Final = MsgspecCodec(drop_none=True)
 
 
 def decode[T](content: bytes, type_: TypeForm[T], *, strict: bool = True) -> T:
@@ -87,7 +114,7 @@ def decode[T](content: bytes, type_: TypeForm[T], *, strict: bool = True) -> T:
 
     :raises DecodeError: if *content* is not JSON or does not match *type_*.
     """
-    return _decode_with(_json_decoder(type_, strict=strict), content)
+    return decode_with(CODEC if strict else _LAX, content, type_)
 
 
 def decoder[T](
@@ -105,10 +132,10 @@ def decoder[T](
 
     msgspec decodes the expression atomically, so one malformed element fails the whole body with
     :class:`~headgate.errors.DecodeError`. ``strict=False`` is the deliberate opt-out for a wire that needs lax
-    coercion. ``allow_empty_body`` and ``refusal_check`` are documented on :func:`~headgate._responses.json_reader`.
+    coercion. ``allow_empty_body`` and ``refusal_check`` are documented on :func:`~headgate.decoder_for`.
     """
-    decode_body = functools.partial(_decode_with, _json_decoder(type_, strict=strict))
-    return json_reader(decode_body, allow_empty_body=allow_empty_body, refusal_check=refusal_check)
+    codec = CODEC if strict else _LAX
+    return decoder_for(codec, type_, allow_empty_body=allow_empty_body, refusal_check=refusal_check)
 
 
 def encoder[T](type_: TypeForm[T], *, drop_none: bool = False) -> Writer[T]:
@@ -119,12 +146,7 @@ def encoder[T](type_: TypeForm[T], *, drop_none: bool = False) -> Writer[T]:
     ``omit_defaults`` as :func:`to_builtins`; *type_* types the writer, so it takes only that type. ``drop_none=True``
     removes ``None``-valued fields recursively, as :func:`to_builtins` does.
     """
-    del type_  # msgspec encodes by the value's own type; the expression only types the writer
-
-    def encode(value: T) -> bytes:
-        return _JSON_ENCODER.encode(_drop_none(msgspec.to_builtins(value)) if drop_none else value)
-
-    return json_writer(encode)
+    return encoder_for(_DROPPING_NONE if drop_none else CODEC, type_)
 
 
 @overload

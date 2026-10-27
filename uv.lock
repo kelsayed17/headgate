@@ -269,7 +269,6 @@ source = { editable = "." }
 dependencies = [
     { name = "hishel" },
     { name = "httpx2", extra = ["http2"] },
-    { name = "msgspec" },
     { name = "typing-extensions", marker = "python_full_version < '3.15'" },
 ]
 
@@ -280,6 +279,9 @@ cache = [
 curl = [
     { name = "curl-cffi" },
 ]
+msgspec = [
+    { name = "msgspec" },
+]
 otel = [
     { name = "opentelemetry-api" },
 ]
@@ -289,7 +291,7 @@ pydantic = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "headgate", extra = ["cache", "curl", "otel", "pydantic"] },
+    { name = "headgate", extra = ["cache", "curl", "msgspec", "otel", "pydantic"] },
     { name = "httpx2-pytest" },
     { name = "hypothesis" },
     { name = "mutmut" },
@@ -314,16 +316,16 @@ requires-dist = [
     { name = "hishel", specifier = ">=1.4.0" },
     { name = "hishel", extras = ["async"], marker = "extra == 'cache'", specifier = ">=1.4.0" },
     { name = "httpx2", extras = ["http2"], specifier = ">=2.16.0" },
-    { name = "msgspec", specifier = ">=0.22.0" },
+    { name = "msgspec", marker = "extra == 'msgspec'", specifier = ">=0.22.0" },
     { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.45.1" },
     { name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.14.1" },
     { name = "typing-extensions", marker = "python_full_version < '3.15'", specifier = ">=4.15" },
 ]
-provides-extras = ["pydantic", "curl", "otel", "cache"]
+provides-extras = ["msgspec", "pydantic", "curl", "otel", "cache"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "headgate", extras = ["pydantic", "curl", "otel", "cache"], editable = "." },
+    { name = "headgate", extras = ["msgspec", "pydantic", "curl", "otel", "cache"], editable = "." },
     { name = "httpx2-pytest", specifier = ">=2.0.0" },
     { name = "hypothesis", specifier = ">=6.170" },
     { name = "mutmut", specifier = ">=3.8" },

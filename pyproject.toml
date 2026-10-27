@@ -30,12 +30,12 @@ classifiers = [
 dependencies = [
     "httpx2[http2]>=2.16.0",
     "hishel>=1.4.0",
-    "msgspec>=0.22.0",
     # TypeForm (PEP 747) is imported only for type checking; type checkers of client code need it to resolve it.
     "typing-extensions>=4.15; python_version < '3.15'",
 ]
 
 [project.optional-dependencies]
+msgspec = ["msgspec>=0.22.0"]
 pydantic = ["pydantic>=2.14.1"]
 curl = ["curl_cffi>=0.16.3"]
 otel = ["opentelemetry-api>=1.45.1"]
@@ -59,7 +59,7 @@ dev = [
     "time-machine",
     "ruff",
     "ty",
-    "headgate[pydantic,curl,otel,cache]",
+    "headgate[msgspec,pydantic,curl,otel,cache]",
     "opentelemetry-sdk>=1.45.1",
     "pytest-cov>=7",
     "pytest-codspeed>=5.0.3",

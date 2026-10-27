@@ -47,7 +47,16 @@ def test_headgate_never_imports_upstream_httpx(monkeypatch: pytest.MonkeyPatch, 
 
 
 @pytest.mark.parametrize(
-    "module", ["headgate", "headgate._client", "headgate._core", "headgate._responses", "headgate.errors"]
+    "module",
+    [
+        "headgate",
+        "headgate._client",
+        "headgate._codec",
+        "headgate._core",
+        "headgate._responses",
+        "headgate.errors",
+        "headgate.testing",
+    ],
 )
 def test_the_core_imports_neither_codec(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
     """Check that the codec-free core imports with neither msgspec nor pydantic available."""
