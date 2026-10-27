@@ -131,6 +131,16 @@ async def test_head_maps_to_head_method() -> None:
     assert out.status_code == httpx2.codes.OK
 
 
+async def test_head_reads_nothing_by_default() -> None:
+    """Send a HEAD with no ``expect=`` and return ``None``, as ``expect=nothing`` would."""
+    wire = _Wire()
+    async with _client(wire) as c:
+        out = await c.head("thing")
+
+    assert wire.last.method == "HEAD"
+    assert out is None
+
+
 @pytest.mark.parametrize(
     "status",
     [httpx2.codes.NOT_FOUND, httpx2.codes.INTERNAL_SERVER_ERROR, httpx2.codes.SERVICE_UNAVAILABLE],

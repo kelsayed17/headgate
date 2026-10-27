@@ -6,6 +6,37 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+Makes the public API smaller and more regular: the auth hooks lose their underscores, `head()` and `paginate()` take
+what the other verbs take, and the root package re-exports only what a client is written with. Each change below says
+what to write instead.
+
+### Changed
+
+- `CachedTokenAuth`'s subclass hooks are public: override `mint_token`, `mint_flow`, `attach` and `skips` where you
+  overrode `_mint_token`, `_mint_flow`, `_attach` and `_skips`. A hook under its old name is no longer called, so a
+  subclass that defines only `_mint_token` or `_mint_flow` fails when it is defined.
+- `head()` reads `expect=nothing` when no `expect=` is given: `await client.head(url)` returns `None`.
+- `paginate()` takes `follow_redirects=` and `cache_ttl=`, applied to every page as on `get()`. Its options are typed
+  by the new `PageOptions`, `RequestOptions` plus those two.
+
+### Fixed
+
+- `paginate()` sends an `Expect`'s `headers` and `accept` on every page and checks each page's `Content-Type` against
+  `accept`, as a verb does; it used to drop both.
+
+### Removed
+
+- From the root `headgate` package, names that live in a subpackage and are rarely needed to write a client. Import
+  them from there:
+  - `headgate.retry`: `Backoff`, `Hedge`, `RetryBudget`, `NO_RETRY`;
+  - `headgate.ratelimit`: `Adaptive`;
+  - `headgate.breaker`: `BreakerRegistry`;
+  - `headgate.cache`: `Fresh`, `MethodFilter`, `NotModified`, `Partition`, `PathFragmentFilter`, `StatusCodeFilter`,
+    `Validator`, `conditional`;
+  - `headgate.pagination`: `Pager`, `PageRequest`;
+  - `headgate.events`: `Observer`;
+  - `headgate.streaming`: `Stream`.
+
 ## [0.5.0] - 2026-10-26
 
 Adds `Paginated.collect()`, so a walk becomes a list in one call, bounded by items as well as pages. Nothing changes for

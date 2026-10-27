@@ -76,7 +76,7 @@ class Bearer(CachedTokenAuth):
     """A bearer auth whose exchange never runs: :func:`seeded` caches its token."""
 
     @override
-    async def _mint_token(self) -> tuple[str, float]:
+    async def mint_token(self) -> tuple[str, float]:
         raise NotImplementedError
 
 

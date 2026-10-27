@@ -276,9 +276,7 @@ class _HopAuth(CachedTokenAuth):
     """Mint a token through the owning client's stack, with one hop to a separate credential host."""
 
     @override
-    async def _mint_flow(
-        self, request: httpx2.Request
-    ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         del request  # the hop is its own request
         response = yield httpx2.Request("POST", "https://auth.example/token", extensions={AUTH_HOP: True})
         yield Minted(response.text, 3600.0)

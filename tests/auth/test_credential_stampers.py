@@ -29,7 +29,7 @@ class _Bearer(CachedTokenAuth):
     """A bearer auth whose exchange never runs."""
 
     @override
-    async def _mint_token(self) -> tuple[str, float]:
+    async def mint_token(self) -> tuple[str, float]:
         raise NotImplementedError
 
 
@@ -52,7 +52,7 @@ class _PairToken(_Bearer):
     token_headers: ClassVar = frozenset({"X-Cookie", "X-Crumb"})
 
     @override
-    def _attach(self, request: httpx2.Request, token: str) -> None:
+    def attach(self, request: httpx2.Request, token: str) -> None:
         request.headers["X-Cookie"], request.headers["X-Crumb"] = token, token
 
 
@@ -61,7 +61,7 @@ class _InheritsAttach(_PairToken):
 
 
 class _DeclaredByProperty(_Bearer):
-    """A custom ``_attach`` declared by overriding ``credential_headers`` instead of ``token_headers``."""
+    """A custom ``attach`` declared by overriding ``credential_headers`` instead of ``token_headers``."""
 
     @property
     @override
@@ -69,7 +69,7 @@ class _DeclaredByProperty(_Bearer):
         return frozenset({"x-signed"})
 
     @override
-    def _attach(self, request: httpx2.Request, token: str) -> None:
+    def attach(self, request: httpx2.Request, token: str) -> None:
         request.headers["X-Signed"] = token
 
 
@@ -103,7 +103,7 @@ def test_the_query_auth_declares_its_parameters() -> None:
     ids=["default", "declared", "inherited"],
 )
 async def test_a_token_auth_declares_exactly_what_it_stamps(auth: CachedTokenAuth, headers: set[str]) -> None:
-    """Report, lower-cased, exactly the headers ``_attach`` puts on a request, and no parameters."""
+    """Report, lower-cased, exactly the headers ``attach`` puts on a request, and no parameters."""
     premint(auth)
     request = httpx2.Request("GET", "https://api.example/x")
     flow = auth.async_auth_flow(request)
@@ -116,17 +116,17 @@ async def test_a_token_auth_declares_exactly_what_it_stamps(auth: CachedTokenAut
 
 
 def test_a_token_auth_may_declare_through_credential_headers() -> None:
-    """Accept a custom ``_attach`` whose class overrides ``credential_headers`` rather than ``token_headers``."""
+    """Accept a custom ``attach`` whose class overrides ``credential_headers`` rather than ``token_headers``."""
     assert _DeclaredByProperty().credential_headers == {"x-signed"}
 
 
 def test_an_undeclared_attach_fails_when_the_class_is_defined() -> None:
-    """Refuse a subclass whose ``_attach`` sets headers it has not declared, naming the fix."""
+    """Refuse a subclass whose ``attach`` sets headers it has not declared, naming the fix."""
     with pytest.raises(TypeError, match="token_headers"):
 
         class _Undeclared(_Bearer):
             @override
-            def _attach(self, request: httpx2.Request, token: str) -> None:
+            def attach(self, request: httpx2.Request, token: str) -> None:
                 request.headers["X-Secret"] = token
 
     assert _Bearer().credential_headers == {"authorization"}
@@ -142,7 +142,7 @@ def test_the_declaration_is_checked_where_attach_is_overridden() -> None:
         token_headers: ClassVar = frozenset({"X-One"})
 
         @override
-        def _attach(self, request: httpx2.Request, token: str) -> None:
+        def attach(self, request: httpx2.Request, token: str) -> None:
             request.headers["X-One"] = token
 
     class _ByProperty(_Bearer):
@@ -152,19 +152,19 @@ def test_the_declaration_is_checked_where_attach_is_overridden() -> None:
             return frozenset({"x-two"})
 
         @override
-        def _attach(self, request: httpx2.Request, token: str) -> None:
+        def attach(self, request: httpx2.Request, token: str) -> None:
             request.headers["X-Two"] = token
 
     class _Inherits(_ByTokenHeaders):
-        """Inherit the declaring class's ``_attach`` and its declaration."""
+        """Inherit the declaring class's ``attach`` and its declaration."""
 
     assert (_ByTokenHeaders().credential_headers, _ByProperty().credential_headers) == ({"x-one"}, {"x-two"})
     assert _Inherits().credential_headers == {"x-one"}
-    with pytest.raises(TypeError, match=r"_Overrides overrides _attach, so it must declare"):
+    with pytest.raises(TypeError, match=r"_Overrides overrides attach, so it must declare"):
 
         class _Overrides(_ByTokenHeaders):
             @override
-            def _attach(self, request: httpx2.Request, token: str) -> None:
+            def attach(self, request: httpx2.Request, token: str) -> None:
                 request.headers["X-Three"] = token
 
 

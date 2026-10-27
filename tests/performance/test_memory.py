@@ -20,16 +20,8 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage, FilterPolicy
 
-from headgate import (
-    ClientError,
-    HttpCache,
-    HttpOptions,
-    MethodFilter,
-    RetryPolicy,
-    StatusCodeFilter,
-    TransportPolicy,
-    as_bytes,
-)
+from headgate import ClientError, HttpCache, HttpOptions, RetryPolicy, TransportPolicy, as_bytes
+from headgate.cache import MethodFilter, StatusCodeFilter
 from headgate.ratelimit import Rate
 from tests.support.clients import StubClient
 

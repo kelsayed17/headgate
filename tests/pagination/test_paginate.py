@@ -26,18 +26,19 @@ from headgate import (
     Offset,
     PageLimit,
     PageLimitError,
-    PageRequest,
     RequestOptions,
+    ResponseParseError,
     UpstreamStatusError,
 )
 from headgate.msgspec import decoder
+from headgate.pagination import PageRequest
 from headgate.ratelimit import Rate
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from headgate import Pager
+    from headgate.pagination import Pager
 
 _BASE = "https://api.test"
 _RATE = Rate.per_second(100)
@@ -234,6 +235,65 @@ async def test_each_page_goes_through_the_stack() -> None:
         await collect(received.append)
     assert raised.value.status_code == httpx2.codes.NOT_FOUND
     assert received == [1, 2, 3]
+
+
+async def test_every_page_carries_the_walks_cache_ttl() -> None:
+    """Stamp ``cache_ttl=`` on every page's GET, as on one ``get``."""
+    ttl = 30.0
+    stamped: list[object] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        stamped.append(request.extensions.get("hishel_ttl"))
+        return _by_cursor(request)
+
+    pages = Cursor(items=items_of, next=cursor_of, param="after")
+    paginated = _Api(answer).client().paginate("items", expect=decoder(Page), pages=pages, cache_ttl=ttl)
+    assert len([item async for item in paginated]) == len((1, 2, 3, 4))
+    assert stamped == [ttl, ttl, ttl]
+
+
+async def test_a_walk_that_does_not_follow_redirects_raises_a_pages_redirect() -> None:
+    """Raise a page's redirect as its 3xx with ``follow_redirects=False``, as on one ``get``."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/moved":
+            return httpx2.Response(302, headers={"Location": f"{_BASE}/items"}, request=request)
+        return _by_cursor(request)
+
+    pages = Cursor(items=items_of, next=cursor_of, param="after")
+    api = _Api(answer)
+    with pytest.raises(UpstreamStatusError) as raised:
+        await api.client().paginate("moved", expect=decoder(Page), pages=pages, follow_redirects=False).collect()
+    assert raised.value.status_code == httpx2.codes.FOUND
+    assert [url.path for url in api.sent] == ["/moved"]
+
+
+async def test_every_page_sends_the_expects_headers_and_accept() -> None:
+    """Send an ``Expect``'s ``headers`` and ``accept`` on every page, as one ``get`` does."""
+    sent: list[httpx2.Request] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        page = _by_cursor(request)
+        return httpx2.Response(200, json=msgspec.json.decode(page.content), request=request)
+
+    expect = Expect(decoder(Page), headers={"X-Api-Version": "2"}, accept="application/json")
+    pages = Cursor(items=items_of, next=cursor_of, param="after")
+    assert len(await _Api(answer).client().paginate("items", expect=expect, pages=pages).collect()) == len((1, 2, 3, 4))
+    assert [(r.headers["X-Api-Version"], r.headers["Accept"]) for r in sent] == [("2", "application/json")] * 3
+
+
+async def test_a_page_of_another_media_type_than_the_expect_accepts_raises() -> None:
+    """Refuse a page whose ``Content-Type`` the ``Expect`` does not accept, before its reader runs."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        page = _by_cursor(request)
+        return httpx2.Response(200, content=page.content, headers={"Content-Type": "text/html"}, request=request)
+
+    expect = Expect(decoder(Page), accept="application/json")
+    paginated = _Api(answer).client().paginate("items", expect=expect, pages=LinkHeader(items=items_of))
+    with pytest.raises(ResponseParseError, match="text/html"):
+        await paginated.collect()
 
 
 async def test_a_declared_answer_is_a_page() -> None:

@@ -7,7 +7,8 @@ above the rate budget, so a hit returns before any retry and spends no rate turn
 ```python
 from hishel import AsyncSqliteStorage, FilterPolicy
 
-from headgate import HttpCache, MethodFilter, PathFragmentFilter, StatusCodeFilter, TransportPolicy
+from headgate import HttpCache, TransportPolicy
+from headgate.cache import MethodFilter, PathFragmentFilter, StatusCodeFilter
 
 cache = HttpCache(
     policy=FilterPolicy(
@@ -100,7 +101,7 @@ back. The call sends `If-None-Match` / `If-Modified-Since` and returns `Fresh(va
 representation, or `NotModified(validator)` for a 304. headgate stores nothing; the representation is yours.
 
 ```python
-from headgate import Fresh, NotModified, Validator, conditional
+from headgate.cache import Fresh, NotModified, Validator, conditional
 from headgate.msgspec import decoder
 
 

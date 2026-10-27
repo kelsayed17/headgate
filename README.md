@@ -354,7 +354,8 @@ Every option, its validation and the precedence of call, view, route and policy:
 
 ## Per-call options
 
-Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`) takes the URL, `expect=`, and optionally `retry=False` or
+Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`) takes the URL, `expect=` (on `head`, `nothing` unless
+given), and optionally `retry=False` or
 a `RetryPolicy`, `follow_redirects=`, `cache_ttl=`, `timeout=`, `deadline=`, `idempotency_key=`, and the request
 options `params=`, `headers=`, `json=`, `data=`, `content=` and `files=`. `client.with_options(headers=...,
 timeout=..., deadline=..., retry=...)` returns a view with other defaults that shares the pool, the budgets and the

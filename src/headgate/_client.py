@@ -34,7 +34,7 @@ import copy
 import functools
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Literal, Self, TypedDict, Unpack
+from typing import TYPE_CHECKING, Literal, Self, TypedDict, Unpack, overload
 
 import httpx2
 
@@ -76,7 +76,7 @@ from headgate._options import (
     reject_upstream_httpx,
 )
 from headgate._request_body import check_one_body, request_content
-from headgate._responses import Expect, Reader, RefusedError
+from headgate._responses import Expect, Reader, RefusedError, nothing
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import render_path, route_template, sanitize_url
 from headgate._view import KEEP, ROOT_DEFAULTS, Keep, overlay_timeout
@@ -163,6 +163,17 @@ class RequestOptions(TypedDict, total=False):
     timeout: Timeouts | float
     deadline: float | None
     idempotency_key: str
+
+
+class PageOptions(RequestOptions, total=False):
+    """The per-page options :meth:`AsyncBaseClient.paginate` takes: :class:`RequestOptions`, plus the two a verb names.
+
+    * ``follow_redirects``: ``False`` makes a page's redirect raise as its 3xx, as on a verb.
+    * ``cache_ttl``: each page's cache lifetime, as on a verb.
+    """
+
+    follow_redirects: bool | None
+    cache_ttl: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,6 +412,7 @@ class AsyncBaseClient:
         call = _Call("PATCH", url, options, retry=retry, follow_redirects=follow_redirects, cache_ttl=cache_ttl)
         return await self._request(call, expect)
 
+    @overload
     async def head[T](
         self,
         url: str | Template,
@@ -410,8 +422,31 @@ class AsyncBaseClient:
         follow_redirects: bool | None = None,
         cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
-    ) -> T:
-        """Send a HEAD and read the reply through *expect*; a HEAD has no body, so ``expect=nothing`` is usual."""
+    ) -> T: ...
+    @overload
+    async def head(
+        self,
+        url: str | Template,
+        *,
+        retry: bool | RetryPolicy = True,
+        follow_redirects: bool | None = None,
+        cache_ttl: float | None = None,
+        **options: Unpack[RequestOptions],
+    ) -> None: ...
+    async def head(
+        self,
+        url: str | Template,
+        *,
+        expect: Reader[object] | Expect[object] = nothing,
+        retry: bool | RetryPolicy = True,
+        follow_redirects: bool | None = None,
+        cache_ttl: float | None = None,
+        **options: Unpack[RequestOptions],
+    ) -> object:
+        """Send a HEAD and read the reply through *expect*: by default :func:`~headgate.nothing`, as a HEAD has no body.
+
+        A reader still has the status line and headers, so ``expect=`` reads a header off a HEAD.
+        """
         call = _Call("HEAD", url, options, retry=retry, follow_redirects=follow_redirects, cache_ttl=cache_ttl)
         return await self._request(call, expect)
 
@@ -461,14 +496,15 @@ class AsyncBaseClient:
         pages: Pager[P, I],
         retry: bool | RetryPolicy = True,
         limit: PageLimit | None = None,
-        **options: Unpack[RequestOptions],
+        **options: Unpack[PageOptions],
     ) -> Paginated[P, I]:
         """Return the pages *pages* follows from the GET of *url*, each read through *expect*, iterated lazily.
 
         ``async for item in client.paginate(...)`` yields the items of each page in turn; ``.pages()`` yields the
         pages. Each page is a GET through the whole stack, fetched only when the iteration reaches it, and a next-page
         URL taken from a response is sent as an absolute URL, under the same credential and destination rules as any
-        other. Iterating again starts again from the first page.
+        other. Iterating again starts again from the first page. ``retry=``, ``follow_redirects=``, ``cache_ttl=`` and
+        the request options apply to every page, as they do to one :meth:`get`.
 
         *limit* is a page budget (:class:`~headgate.PageLimit`): at most ``max_pages`` pages are fetched. When more
         would follow, the walk raises :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or
@@ -480,13 +516,15 @@ class AsyncBaseClient:
             msg = "paginate sends GETs, so it takes no request body"
             raise ValueError(msg)
         spec: Expect[P] = expect if isinstance(expect, Expect) else Expect(expect)
-        paired = Expect(_paired(spec.ok), {status: _paired(read) for status, read in spec.answers.items()})
+        answers = {status: _paired(read) for status, read in spec.answers.items()}
+        paired = Expect(_paired(spec.ok), answers, headers=spec.headers, accept=spec.accept)
         call_options = options.copy()
         first = PageRequest(url, call_options.pop("params", None))
 
         async def fetch(request: PageRequest) -> tuple[P, httpx2.Response]:
             page_options = call_options.copy()
             page_options["params"] = request.params
+            # A page's follow_redirects and cache_ttl land on get's own parameters of those names.
             return await self.get(request.url, expect=paired, retry=retry, **page_options)
 
         return Paginated(fetch, pages, first, source=self._source, limit=limit)

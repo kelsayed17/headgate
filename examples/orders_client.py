@@ -37,7 +37,8 @@ from headgate.msgspec import decode, decoder, to_builtins
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
-    from headgate import Observer, Paginated
+    from headgate import Paginated
+    from headgate.events import Observer
 
 #: Where tokens are minted: another origin than the API's, trusted for the mint's own hops only.
 MINT_ENDPOINT = "https://auth.shop.example/oauth/token"
@@ -87,9 +88,7 @@ class ShopTokenAuth(CachedTokenAuth):
         return f"{self._form['client_id']}\0{self._form['client_secret']}".encode()
 
     @override
-    async def _mint_flow(
-        self, request: httpx2.Request
-    ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         del request  # the hop needs nothing of the call: it is sent with the call's timeouts already
         # The client's stack paces the hop, retries it when safe, maps its failures, and hands the response back read.
         response = yield httpx2.Request("POST", MINT_ENDPOINT, data=self._form)

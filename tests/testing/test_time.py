@@ -10,8 +10,9 @@ import math
 import httpx2
 import pytest
 
-from headgate import Backoff, HttpOptions, Rate, RetryPolicy, TransportPolicy, nothing
+from headgate import HttpOptions, Rate, RetryPolicy, TransportPolicy, nothing
 from headgate._core import current_timing
+from headgate.retry import Backoff
 from headgate.testing import FakeTransport, TestClock, instant_retries
 from tests.support.clients import StubClient
 

@@ -23,11 +23,11 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from syrupy.filters import props
 
-from headgate import Backoff, BreakerPolicy, Hedge, HttpCache, RateBudget, RetryPolicy, TransportPolicy, nothing
+from headgate import BreakerPolicy, HttpCache, RateBudget, RetryPolicy, TransportPolicy, nothing
 from headgate.errors import ClientError
 from headgate.otel import OpenTelemetryObserver
 from headgate.ratelimit import Rate
-from headgate.retry import NO_RETRY
+from headgate.retry import NO_RETRY, Backoff, Hedge
 from headgate.testing import FakeTransport, TestClock, isolated_breakers
 from tests.cache._helpers import FaultyStorage, every_get_policy
 from tests.observe._support import client

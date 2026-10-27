@@ -22,7 +22,6 @@ import httpx2
 import pytest
 
 from headgate import (
-    NO_RETRY,
     HttpOptions,
     IdempotencyKeys,
     Rate,
@@ -37,13 +36,15 @@ from headgate import (
 )
 from headgate._options import DEFAULT_LIMITS
 from headgate._user_agent import DEFAULT_USER_AGENT, headgate_version
+from headgate.retry import NO_RETRY
 from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from headgate import Middleware, Observer
+    from headgate import Middleware
+    from headgate.events import Observer
 
 _RATE = Rate.per_second(1000)
 _BASE = "https://api.example.test"

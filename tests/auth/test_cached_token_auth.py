@@ -46,7 +46,7 @@ class _CountingAuth(CachedTokenAuth):
         self._delay = delay
 
     @override
-    async def _mint_token(self) -> tuple[str, float]:
+    async def mint_token(self) -> tuple[str, float]:
         if self._delay:
             # Widen the window in which concurrent callers pile up, so a missing lock shows as extra exchanges.
             await asyncio.sleep(self._delay)
@@ -388,7 +388,7 @@ class _HoppingAuth(CachedTokenAuth[tuple[str, str]]):
         self.mints = 0
 
     @override
-    async def _mint_flow(
+    async def mint_flow(
         self, request: httpx2.Request
     ) -> AsyncGenerator[httpx2.Request | Minted[tuple[str, str]], httpx2.Response]:
         self.mints += 1
@@ -397,11 +397,11 @@ class _HoppingAuth(CachedTokenAuth[tuple[str, str]]):
         yield Minted((seed.headers["x-cookie"], second.text), math.inf)
 
     @override
-    def _attach(self, request: httpx2.Request, token: tuple[str, str]) -> None:
+    def attach(self, request: httpx2.Request, token: tuple[str, str]) -> None:
         request.headers["X-Cookie"], request.headers["X-Crumb"] = token
 
     @override
-    def _skips(self, request: httpx2.Request) -> bool:
+    def skips(self, request: httpx2.Request) -> bool:
         return request.url.path.startswith("/open")
 
 
@@ -422,7 +422,7 @@ def _crumb_server(seen: list[str]) -> Callable[[httpx2.Request], httpx2.Response
 
 
 class TestAMintThatYieldsRequests:
-    """``_mint_flow``: the exchange's requests are sent by the client's own stack, under the same cache and lock."""
+    """``mint_flow``: the exchange's requests are sent by the client's own stack, under the same cache and lock."""
 
     async def test_the_hops_go_through_the_client_and_the_pair_is_attached(self, client_factory: _Factory) -> None:
         """Send each hop through the client, then attach the minted pair to the call."""
@@ -522,22 +522,22 @@ class TestAMintThatYieldsRequests:
             """Mint through a flow that yields nothing."""
 
             @override
-            async def _mint_flow(
+            async def mint_flow(
                 self, request: httpx2.Request
             ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
                 if request.url.path == "/never":
                     yield Minted("unreachable", 0.0)
 
-        with pytest.raises(RuntimeError, match=r"_Unfinished\._mint_flow ended without yielding Minted"):
+        with pytest.raises(RuntimeError, match=r"_Unfinished\.mint_flow ended without yielding Minted"):
             await anext(_Unfinished().async_auth_flow(_get()))
 
 
 class TestASubclassMustSupplyAMint:
-    """A subclass supplies ``_mint_token`` or ``_mint_flow``, checked when the class is defined."""
+    """A subclass supplies ``mint_token`` or ``mint_flow``, checked when the class is defined."""
 
     def test_neither_hook_overridden_fails_at_the_class_statement(self) -> None:
         """Refuse a class that overrides neither."""
-        with pytest.raises(TypeError, match="must override _mint_token or _mint_flow"):
+        with pytest.raises(TypeError, match="must override mint_token or mint_flow"):
 
             class _Neither(CachedTokenAuth):
                 """Supply no mint."""
@@ -553,13 +553,13 @@ class TestASubclassMustSupplyAMint:
         assert sent.headers["Authorization"] == "Bearer tok-1"
 
     async def test_a_mint_flow_alone_is_enough_and_the_flow_wins_when_both_exist(self) -> None:
-        """Accept a flow-only class, and run the flow rather than ``_mint_token`` when a class has both."""
+        """Accept a flow-only class, and run the flow rather than ``mint_token`` when a class has both."""
 
         class _FlowOnly(CachedTokenAuth):
             """Mint through a flow only."""
 
             @override
-            async def _mint_flow(
+            async def mint_flow(
                 self, request: httpx2.Request
             ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
                 yield Minted("from-flow", math.inf)
@@ -568,7 +568,7 @@ class TestASubclassMustSupplyAMint:
             """Mint through both hooks."""
 
             @override
-            async def _mint_flow(
+            async def mint_flow(
                 self, request: httpx2.Request
             ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
                 yield Minted("from-flow", math.inf)
@@ -581,19 +581,19 @@ class TestASubclassMustSupplyAMint:
         assert both.mints == 0
 
     async def test_the_default_mint_token_names_the_flow_only_class(self) -> None:
-        """Raise a clear error when a flow-only class falls back to the default ``_mint_token``."""
+        """Raise a clear error when a flow-only class falls back to the default ``mint_token``."""
 
         class _Delegating(CachedTokenAuth):
-            """Override the flow, then delegate to the default one, which calls ``_mint_token``."""
+            """Override the flow, then delegate to the default one, which calls ``mint_token``."""
 
             @override
-            async def _mint_flow(
+            async def mint_flow(
                 self, request: httpx2.Request
             ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
-                async for step in super()._mint_flow(request):
+                async for step in super().mint_flow(request):
                     yield step
 
-        with pytest.raises(NotImplementedError, match="_Delegating mints through _mint_flow"):
+        with pytest.raises(NotImplementedError, match="_Delegating mints through mint_flow"):
             await anext(_Delegating().async_auth_flow(_get()))
 
 

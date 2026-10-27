@@ -40,7 +40,8 @@ What the stack does to every request.
 A `Route` changes an endpoint's retry policy or deadline in configuration, so the endpoint method stays one line:
 
 ```python
-from headgate import NO_RETRY, Route, TransportPolicy
+from headgate import Route, TransportPolicy
+from headgate.retry import NO_RETRY
 
 policy = TransportPolicy(routes=(Route("/charges", retry=NO_RETRY), Route("/reports", deadline=300.0)))
 ```
@@ -136,7 +137,8 @@ buffered body; a streamed body is not readable there.
 
 ## Per-call options
 
-Every verb, `get`, `post`, `put`, `patch`, `delete` and `head`, has the same signature:
+Every verb, `get`, `post`, `put`, `patch`, `delete` and `head`, has the same signature, except that `head` reads
+`expect=nothing` unless it is given another reader, since a HEAD has no body:
 
 ```python
 await client.get(
@@ -153,8 +155,8 @@ await client.get(
 ```
 
 plus `json=`, `data=`, `content=`, `files=` for a body and `idempotency_key=` for a write. `stream()` takes the same
-options without `expect=` and `cache_ttl=`, and `paginate()` takes `expect=`, `pages=`, `retry=` and the non-body
-options.
+options without `expect=` and `cache_ttl=`, and `paginate()` takes `expect=`, `pages=`, `limit=` and every other option
+but a body, applied to each page.
 
 ### Views
 

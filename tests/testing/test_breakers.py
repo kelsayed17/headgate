@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from headgate import BreakerPolicy, BreakerRegistry, HttpOptions, Rate, TransportPolicy, nothing
-from headgate.breaker import DEFAULT_REGISTRY, BreakerState, CircuitBreaker
+from headgate import BreakerPolicy, HttpOptions, Rate, TransportPolicy, nothing
+from headgate.breaker import DEFAULT_REGISTRY, BreakerRegistry, BreakerState, CircuitBreaker
 from headgate.errors import CircuitOpenError, UpstreamStatusError
 from headgate.health import breaker_states
 from headgate.retry import NO_RETRY

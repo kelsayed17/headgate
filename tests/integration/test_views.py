@@ -19,7 +19,6 @@ from headgate import (
     HttpOptions,
     RateBudget,
     RateLimitError,
-    RetryBudget,
     RetryPolicy,
     TransportPolicy,
     UpstreamStatusError,
@@ -27,7 +26,7 @@ from headgate import (
 )
 from headgate.events import RateLimited
 from headgate.ratelimit import Rate
-from headgate.retry import NO_RETRY
+from headgate.retry import NO_RETRY, RetryBudget
 from headgate.testing import FakeTransport, TestClock, isolated_breakers
 from tests.integration._support import client
 from tests.support.events import Recorder

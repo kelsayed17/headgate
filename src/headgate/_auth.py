@@ -53,7 +53,7 @@ __all__ = [
 ]
 
 #: The request extension marking a request an auth flow yields to acquire a credential, as opposed to the call's own
-#: request. :class:`CachedTokenAuth` sets it on every request its :meth:`~CachedTokenAuth._mint_flow` yields. A fixture
+#: request. :class:`CachedTokenAuth` sets it on every request its :meth:`~CachedTokenAuth.mint_flow` yields. A fixture
 #: recorder can read it to skip the hop, which is not the endpoint's answer.
 AUTH_HOP = "headgate.auth_hop"
 
@@ -260,20 +260,20 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     The exchange itself is the subclass's, because that is where providers differ (form-encoded or JSON, a separate
     sign-in host, their own field names). It supplies one of:
 
-    * :meth:`_mint_token`, a coroutine that makes the exchange on a client of its own and returns
+    * :meth:`mint_token`, a coroutine that makes the exchange on a client of its own and returns
       ``(token, lifetime)``. The usual shape.
-    * :meth:`_mint_flow`, an async generator that yields the requests the exchange needs, so they travel through the
+    * :meth:`mint_flow`, an async generator that yields the requests the exchange needs, so they travel through the
       owning client's own stack (its transport, rate budget, retries and error mapping), marked :data:`AUTH_HOP`. It
       ends by yielding :class:`Minted`. A cookie-plus-crumb exchange has this shape.
 
-    Supplying neither fails when the class is defined; with both, the flow runs :meth:`_mint_flow`. Two more hooks let a
-    credential that is not an ``Authorization`` bearer ride the same cache: :meth:`_attach` (how a token is put on a
-    request) and :meth:`_skips` (a request that needs none). ``TokenT`` is the credential's type, ``str`` for every
+    Supplying neither fails when the class is defined; with both, the flow runs :meth:`mint_flow`. Two more hooks let a
+    credential that is not an ``Authorization`` bearer ride the same cache: :meth:`attach` (how a token is put on a
+    request) and :meth:`skips` (a request that needs none). ``TokenT`` is the credential's type, ``str`` for every
     bearer. :meth:`seed` caches a token obtained elsewhere.
 
-    **What it stamps is declared.** :attr:`token_headers` names the headers :meth:`_attach` sets (``Authorization`` by
+    **What it stamps is declared.** :attr:`token_headers` names the headers :meth:`attach` sets (``Authorization`` by
     default), and is what :attr:`credential_headers` reports, so the client withholds exactly those from an untrusted
-    origin. A subclass that overrides :meth:`_attach` must declare its own :attr:`token_headers` (or override
+    origin. A subclass that overrides :meth:`attach` must declare its own :attr:`token_headers` (or override
     :attr:`credential_headers`), or the class definition fails: an undeclared header would follow a request anywhere.
 
     **Its identity is the long-lived credential, not the token.** :meth:`credential_identity` names what the minted
@@ -283,7 +283,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     A subclass that wants them to overrides :meth:`credential_identity` to return its long-lived secret material (the
     API key, or client id and secret), never the short-lived token.
 
-    The hops a :meth:`_mint_flow` yields are addressed by the subclass's own code, so each may carry credentials to the
+    The hops a :meth:`mint_flow` yields are addressed by the subclass's own code, so each may carry credentials to the
     origin it names, and the redirects it is answered with stay pinned to that origin (see :mod:`headgate.security`).
 
     **Every hop counts toward** ``HttpOptions.max_redirects``. httpx2 keeps one history per logical request, and puts
@@ -300,12 +300,12 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     :func:`~headgate._failures.mint_error`): an exception the mint code raises (a ``ConnectError`` on its own client,
     a ``raise_for_status()``, an unreadable token response) becomes the ``ClientError`` it means, named for this auth
     class and the token endpoint, chained to the original. It is raised from the auth flow, so the API host's circuit
-    breaker records nothing for it. A hop :meth:`_mint_flow` yields travels the owning client's stack and fails as any
+    breaker records nothing for it. A hop :meth:`mint_flow` yields travels the owning client's stack and fails as any
     request there does; reading its response (bounded by :data:`MAX_MINT_RESPONSE_BYTES`) fails through the same
     mapping, so a body that is too large is ``ResponseTooLargeError`` and a dropped connection ``TransportError``.
     """
 
-    #: The headers :meth:`_attach` sets. A subclass whose :meth:`_attach` sets others declares them here.
+    #: The headers :meth:`attach` sets. A subclass whose :meth:`attach` sets others declares them here.
     token_headers: ClassVar[frozenset[str]] = frozenset({"Authorization"})
 
     def __init__(self, *, refresh_margin_s: float = 120.0) -> None:
@@ -318,29 +318,27 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     # -- Subclass contract ---------------------------------------------------
 
     def __init_subclass__(cls, **kwargs: object) -> None:
-        """Refuse a subclass with no mint, or whose :meth:`_attach` sets headers it has not declared.
+        """Refuse a subclass with no mint, or whose :meth:`attach` sets headers it has not declared.
 
-        A subclass must inherit a :meth:`_mint_token` or a :meth:`_mint_flow` override; and when it overrides
-        :meth:`_attach`, that class or one below it must declare :attr:`token_headers` or override
+        A subclass must inherit a :meth:`mint_token` or a :meth:`mint_flow` override; and when it overrides
+        :meth:`attach`, that class or one below it must declare :attr:`token_headers` or override
         :attr:`credential_headers`.
         """
         super().__init_subclass__(**kwargs)
         # Not @abstractmethod: either of two methods satisfies the contract.
-        supplied = any(
-            getattr(cls, name) is not getattr(CachedTokenAuth, name) for name in ("_mint_token", "_mint_flow")
-        )
+        supplied = any(getattr(cls, name) is not getattr(CachedTokenAuth, name) for name in ("mint_token", "mint_flow"))
         if not supplied:
-            msg = f"{cls.__name__} must override _mint_token or _mint_flow"
+            msg = f"{cls.__name__} must override mint_token or mint_flow"
             raise TypeError(msg)
         mro = cls.__mro__
-        attaching = next(klass for klass in mro if "_attach" in vars(klass))
+        attaching = next(klass for klass in mro if "attach" in vars(klass))
         declared = any(
             "token_headers" in vars(klass) or "credential_headers" in vars(klass)
             for klass in mro[: mro.index(attaching) + 1]
         )
         if not declared:
             msg = (
-                f"{cls.__name__} overrides _attach, so it must declare the headers _attach sets in token_headers "
+                f"{cls.__name__} overrides attach, so it must declare the headers attach sets in token_headers "
                 f"(or override credential_headers)"
             )
             raise TypeError(msg)
@@ -349,7 +347,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
 
     @property
     def credential_headers(self) -> frozenset[str]:
-        """The headers :meth:`_attach` sets (:attr:`token_headers`), lower-cased."""
+        """The headers :meth:`attach` sets (:attr:`token_headers`), lower-cased."""
         return frozenset(name.lower() for name in self.token_headers)
 
     @property
@@ -365,17 +363,17 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         """
         return self._identity
 
-    async def _mint_token(self) -> tuple[TokenT, float]:
+    async def mint_token(self) -> tuple[TokenT, float]:
         """Exchange the provider's long-lived credential for ``(access_token, lifetime_seconds)``.
 
         Called with the lock held, so an implementation need not guard against concurrent mints. Raise rather than
         return an empty token. An implementation whose provider may rotate its long-lived credential calls
         :meth:`reject_credential_rotation` with the returned value.
         """
-        msg = f"{type(self).__name__} mints through _mint_flow, not _mint_token"
+        msg = f"{type(self).__name__} mints through mint_flow, not mint_token"
         raise NotImplementedError(msg)
 
-    async def _mint_flow(
+    async def mint_flow(
         self, request: httpx2.Request
     ) -> AsyncGenerator[httpx2.Request | Minted[TokenT], httpx2.Response]:
         """Mint through the owning client's stack: yield each request the exchange needs, end with :class:`Minted`.
@@ -383,21 +381,21 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         Each response is sent back in already read (up to :data:`MAX_MINT_RESPONSE_BYTES`), so ``.content`` and
         ``.json()`` work on it. A hop that sets no ``timeout`` extension is sent with the call's timeouts, and every
         hop's timeouts are cut to what the call's deadline leaves. *request* is the call that needs the credential, for
-        a hop that wants another of its extensions. Called with the lock held, like :meth:`_mint_token`; the default
+        a hop that wants another of its extensions. Called with the lock held, like :meth:`mint_token`; the default
         delegates to it.
         """
         del request  # only a flow that yields its own requests needs the call it is minting for
-        token, lifetime = await self._mint_token()
+        token, lifetime = await self.mint_token()
         yield Minted(token, lifetime)
 
-    def _attach(self, request: httpx2.Request, token: TokenT) -> None:
+    def attach(self, request: httpx2.Request, token: TokenT) -> None:
         """Put *token* on *request*, replacing any earlier one: the re-send after a 401 calls this a second time.
 
         An override declares the headers it sets in :attr:`token_headers`.
         """
         request.headers["Authorization"] = f"Bearer {token}"
 
-    def _skips(self, request: httpx2.Request) -> bool:
+    def skips(self, request: httpx2.Request) -> bool:
         """Return whether *request* needs no credential from this auth: by default, one carrying a token header."""
         return any(name in request.headers for name in self.token_headers)
 
@@ -465,7 +463,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
 
     @override
     async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
-        if self._skips(request):
+        if self.skips(request):
             yield request
             return
 
@@ -481,7 +479,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
                 if token is None:
                     # Only this generator can yield to the client, so it drives the mint flow: httpx2 sends each
                     # request the mint yields and hands its response back in.
-                    mint = self._mint_flow(request)
+                    mint = self.mint_flow(request)
                     try:
                         step = await self._mint_step(anext(mint))
                         while isinstance(step, httpx2.Request):
@@ -490,13 +488,13 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
                             hop_response = await self._mint_step(_read_hop(hop_response, type(self).__name__))
                             step = await self._mint_step(mint.asend(hop_response))
                     except StopAsyncIteration:
-                        msg = f"{type(self).__name__}._mint_flow ended without yielding Minted"
+                        msg = f"{type(self).__name__}.mint_flow ended without yielding Minted"
                         raise RuntimeError(msg) from None
                     finally:
                         await mint.aclose()
                     token = step.token
                     self._cache(token, step.lifetime, minted_at=time.monotonic())
-            self._attach(request, token)
+            self.attach(request, token)
             response = yield request
             # ``rejected`` is set only after the first 401, so this re-sends at most once.
             if response.status_code != httpx2.codes.UNAUTHORIZED or rejected is not None or self._is_fresh(token):

@@ -79,9 +79,7 @@ class _FlowAuth(CachedTokenAuth):
     """A token auth that mints through the client's own stack, so its hop passes the middleware."""
 
     @override
-    async def _mint_flow(
-        self, request: httpx2.Request
-    ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         del request
         response = yield httpx2.Request("POST", _MINT_URL)
         yield Minted(response.json()["token"], 3600.0)

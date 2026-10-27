@@ -15,7 +15,6 @@ import httpx2
 import pytest
 
 from headgate import (
-    Backoff,
     ClientTimeoutError,
     RateBudget,
     RateLimitError,
@@ -25,7 +24,7 @@ from headgate import (
     nothing,
 )
 from headgate.ratelimit import Rate
-from headgate.retry import NO_RETRY
+from headgate.retry import NO_RETRY, Backoff
 from headgate.testing import FakeTransport, TestClock
 from tests.integration._support import client
 

@@ -15,18 +15,10 @@ import itertools
 import httpx2
 import pytest
 
-from headgate import (
-    BreakerPolicy,
-    ClientError,
-    Hedge,
-    HttpOptions,
-    RetryBudget,
-    RetryPolicy,
-    TransportPolicy,
-    nothing,
-)
+from headgate import BreakerPolicy, ClientError, HttpOptions, RetryPolicy, TransportPolicy, nothing
 from headgate.breaker import BreakerState
 from headgate.events import RetryScheduled
+from headgate.retry import Hedge, RetryBudget
 from headgate.testing import FakeTransport, TestClock, isolated_breakers
 from tests.integration._support import BASE, client
 from tests.support.events import Recorder

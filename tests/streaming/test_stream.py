@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, HttpOptions, Stream, TransportPolicy
+from headgate import BreakerPolicy, HttpOptions, TransportPolicy
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
 from headgate._responses import RefusedError
 from headgate.errors import (
@@ -23,6 +23,7 @@ from headgate.errors import (
     UpstreamStatusError,
 )
 from headgate.ratelimit import Rate
+from headgate.streaming import Stream
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
 

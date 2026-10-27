@@ -21,7 +21,6 @@ import pytest
 
 from headgate import (
     BreakerPolicy,
-    BreakerRegistry,
     CircuitOpenError,
     ClientError,
     HttpOptions,
@@ -39,6 +38,7 @@ from headgate import (
     nothing,
 )
 from headgate._core import CallContext
+from headgate.breaker import BreakerRegistry
 from headgate.retry import NO_RETRY
 from tests.support.breakers import failures
 from tests.support.clients import StubClient

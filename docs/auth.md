@@ -32,7 +32,7 @@ it:
 - **one re-mint on a 401**, for a token revoked early, and never a loop. A token minted in the last 60 seconds is not
   re-minted: a 401 on it is a permissions problem, which reaches the caller as the `AuthError` it is.
 
-The exchange is one of two methods. `_mint_token()` makes it on a client of its own and returns `(token, lifetime)`:
+The exchange is one of two methods. `mint_token()` makes it on a client of its own and returns `(token, lifetime)`:
 
 ```python
 from typing import override
@@ -55,7 +55,7 @@ class PartnerAuth(CachedTokenAuth):
         self._credentials = (client_id, client_secret)
 
     @override
-    async def _mint_token(self) -> tuple[str, float]:
+    async def mint_token(self) -> tuple[str, float]:
         async with httpx2.AsyncClient(timeout=10.0, trust_env=False) as http:  # read no proxy from the environment
             response = await http.post("https://login.partner.example/token", auth=self._credentials)
             response.raise_for_status()
@@ -63,7 +63,7 @@ class PartnerAuth(CachedTokenAuth):
         return token.access_token, token.expires_in
 ```
 
-Or `_mint_flow(request)` yields the requests the exchange needs, so they travel through the owning client's own stack
+Or `mint_flow(request)` yields the requests the exchange needs, so they travel through the owning client's own stack
 (its transport, rate budget, retries and error mapping), and ends by yielding `Minted(token, lifetime)`.
 [`examples/orders_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/orders_client.py) has a complete one. What the flow can count on:
 
@@ -85,10 +85,10 @@ endpoint. The API host's breaker records nothing for it.
 
 ### Other credential shapes
 
-- `_attach(request, token)` decides how a token is put on a request (`Authorization: Bearer` by default). A subclass
+- `attach(request, token)` decides how a token is put on a request (`Authorization: Bearer` by default). A subclass
   that overrides it declares the headers it sets in `token_headers`, or the class definition fails: an undeclared
   header would follow a request anywhere.
-- `_skips(request)` says a request needs no token (by default, one that already carries a token header).
+- `skips(request)` says a request needs no token (by default, one that already carries a token header).
 - `seed(token, lifetime)` caches a token obtained elsewhere, such as one restored from storage or a test's fixed bearer.
 - `CachedTokenAuth[TokenT]` is generic in the token's type, `str` by default.
 - `credential_identity()` names the long-lived credential for the cache partition. By default each instance is its own

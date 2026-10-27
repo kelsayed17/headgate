@@ -53,7 +53,7 @@ class _MintsOver(CachedTokenAuth):
         self._handler = handler
 
     @override
-    async def _mint_token(self) -> tuple[str, float]:
+    async def mint_token(self) -> tuple[str, float]:
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(self._handler)) as client:
             response = await client.post(_EXCHANGE_URL)
         response.raise_for_status()
@@ -69,7 +69,7 @@ class _Raises(CachedTokenAuth):
         self._exc = exc
 
     @override
-    async def _mint_token(self) -> tuple[str, float]:
+    async def mint_token(self) -> tuple[str, float]:
         raise self._exc
 
 
@@ -77,9 +77,7 @@ class _FlowReadsJson(CachedTokenAuth):
     """Mint through the owning client's stack, reading the token out of the hop's JSON body."""
 
     @override
-    async def _mint_flow(
-        self, request: httpx2.Request
-    ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         response = yield httpx2.Request("POST", f"https://{_API_HOST}/token")
         yield Minted(response.json()["access_token"], 3600.0)
 
@@ -241,9 +239,7 @@ class _ThreeHops(CachedTokenAuth):
     hops = 3
 
     @override
-    async def _mint_flow(
-        self, request: httpx2.Request
-    ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         del request
         for hop in range(self.hops):
             yield httpx2.Request("GET", f"https://login.example.test/step/{hop}")
@@ -391,9 +387,7 @@ class _OneHop(CachedTokenAuth):
         self._extensions = extensions or {}
 
     @override
-    async def _mint_flow(
-        self, request: httpx2.Request
-    ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         response = yield httpx2.Request("POST", f"https://{_API_HOST}/token", extensions=self._extensions)
         yield Minted(response.text, 3600.0)
 
