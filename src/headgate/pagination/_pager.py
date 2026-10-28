@@ -20,9 +20,10 @@ treats like any other: credentials go only to the origins the client trusts.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, override
 
 from headgate.pagination._link import next_link
 
@@ -79,8 +80,11 @@ class PageRequest[B = None]:
 class Pager[P, I, B = None](Protocol):
     """How pages of type ``P`` holding items of type ``I``, fetched with request bodies of type ``B``, link up.
 
-    ``B`` is ``None`` for a walk of GETs.
+    ``B`` is the type of the walk's body, ``None`` for a pager that only walks GETs. A pager typed with a body may walk
+    GETs too, when ``paginate`` is given no body (``body=None``): a request's ``body`` is then ``None`` on every page.
     """
+
+    __slots__ = ()
 
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
         """Return the request for the first page, given the one the caller wrote.
@@ -100,19 +104,23 @@ class Pager[P, I, B = None](Protocol):
         ...
 
 
-@runtime_checkable
-class WritingPager[P, I, B](Pager[P, I, B], Protocol):
+class WritingPager[P, I, B](Pager[P, I, B], ABC):
     """A :class:`Pager` that writes the walk's request bodies: ``write`` encodes a ``body=`` for every page.
 
     A walk given ``body=`` needs one, since the body is the caller's own value, and a walk given ``json=`` needs one
     whose ``write`` is ``None``, since builtins are sent as JSON. :class:`Cursor`, :class:`Offset`,
     :class:`BodyCursor` and :class:`BodyOffset` are writing pagers; a pager of GETs is not one.
+
+    A pager is one by subclassing this class, not by its shape: an attribute that only shares the name ``write`` is
+    never taken for a writer.
     """
 
+    __slots__ = ()
+
     @property
+    @abstractmethod
     def write(self) -> Writer[B] | None:
         """The writer (a codec's ``encoder``) that encodes each page's body, or ``None`` for one sent as JSON."""
-        ...
 
 
 def _check_param(param: str) -> None:
@@ -143,7 +151,7 @@ def _posted[B](request: PageRequest[B], pager: str) -> B:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class Cursor[P, I, B = None]:
+class Cursor[P, I, B = None](WritingPager[P, I, B]):
     """Pages linked by an opaque cursor: ``next`` reads it from a page, and it is sent back as the query ``param``.
 
     The last page is the one whose ``next`` returns ``None`` or ``""``, or one with no items: a cursor that advances
@@ -163,14 +171,17 @@ class Cursor[P, I, B = None]:
         """Refuse an empty parameter name."""
         _check_param(self.param)
 
+    @override
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
         """Return *request* unchanged: the first page is fetched without a cursor."""
         return request
 
+    @override
     def page_items(self, page: P) -> Sequence[I]:
         """Return the items on *page*."""
         return self.items(page)
 
+    @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* carrying *page*'s cursor, or ``None`` when it has none or (by default) no items."""
         del response
@@ -181,7 +192,7 @@ class Cursor[P, I, B = None]:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class Offset[P, I, B = None]:
+class Offset[P, I, B = None](WritingPager[P, I, B]):
     """Pages of at most ``page_size`` items, addressed by the offset of their first item, sent as the query ``param``.
 
     The offset starts at ``start`` and advances by the number of items each page held. A page holding fewer than
@@ -206,14 +217,17 @@ class Offset[P, I, B = None]:
             raise ValueError(msg)
         _check_param(self.param)
 
+    @override
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
         """Return *request* at offset ``start``."""
         return request.with_param(self.param, self.start)
 
+    @override
     def page_items(self, page: P) -> Sequence[I]:
         """Return the items on *page*."""
         return self.items(page)
 
+    @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* at the offset after *page*'s items, or ``None`` when *page* was short."""
         del response
@@ -285,7 +299,7 @@ class NextUrl[P, I]:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class BodyCursor[P, I, B]:
+class BodyCursor[P, I, B](WritingPager[P, I, B]):
     """Pages linked by an opaque cursor carried in the POSTed body: ``put`` writes it into the next page's body.
 
     For an endpoint whose query is a request body (a search API, a JSON-RPC call): the walk POSTs the body the caller
@@ -302,15 +316,18 @@ class BodyCursor[P, I, B]:
     write: Writer[B] | None = None
     stop_on_empty: bool = True
 
+    @override
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
         """Return *request* unchanged, refusing one with no body: the first page is POSTed without a cursor."""
         _posted(request, "BodyCursor")
         return request
 
+    @override
     def page_items(self, page: P) -> Sequence[I]:
         """Return the items on *page*."""
         return self.items(page)
 
+    @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* with *page*'s cursor in its body, or ``None`` when it has none or (by default) no items."""
         del response
@@ -323,7 +340,7 @@ class BodyCursor[P, I, B]:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class BodyOffset[P, I, B]:
+class BodyOffset[P, I, B](WritingPager[P, I, B]):
     """Pages of at most ``page_size`` items, addressed by the offset of their first item, carried in the POSTed body.
 
     ``offset`` reads the offset from a body and ``put`` returns a new body at another one. The walk starts at the
@@ -344,6 +361,7 @@ class BodyOffset[P, I, B]:
             msg = f"page_size must be >= 1 (got {self.page_size})"
             raise ValueError(msg)
 
+    @override
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
         """Return *request* unchanged, refusing one with no body or a negative offset."""
         start = self.offset(_posted(request, "BodyOffset"))
@@ -352,10 +370,12 @@ class BodyOffset[P, I, B]:
             raise ValueError(msg)
         return request
 
+    @override
     def page_items(self, page: P) -> Sequence[I]:
         """Return the items on *page*."""
         return self.items(page)
 
+    @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* with its body at the offset after *page*'s items, or ``None`` when *page* was short."""
         del response

@@ -217,7 +217,7 @@
   '''
   module headgate.pagination
   __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageLimit', 'PageRequest', 'Pager', 'Paginated', 'WritingPager', 'parse_link_header']
-  class BodyCursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+  class BodyCursor(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field put: Callable[[B, str], B]
@@ -226,7 +226,7 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class BodyOffset(Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]', write: 'Writer[B] | None' = None) -> 'None'
+  class BodyOffset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]', write: 'Writer[B] | None' = None) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field offset: Callable[[B], int]
@@ -235,7 +235,7 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Cursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+  class Cursor(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field param: str
@@ -261,7 +261,7 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Offset(Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', start: 'int' = 0, write: 'Writer[B] | None' = None) -> 'None'
+  class Offset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', start: 'int' = 0, write: 'Writer[B] | None' = None) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field param: str = 'offset'
@@ -286,7 +286,7 @@
   class Paginated(Protocol)(*args, **kwargs)
       def collect(self, *, max_items: 'int | None' = None) -> 'list[I]'
       def pages(self) -> 'AsyncIterator[P]'
-  class WritingPager(Pager, Protocol)(*args, **kwargs)
+  class WritingPager(Pager, ABC, Generic)(*args, **kwargs)
       property write
   def parse_link_header(value: 'str') -> 'list[Link]'
   '''
@@ -485,7 +485,7 @@
       def with_options(self, **options: 'Unpack[ViewOptions]') -> 'Self'
   class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
   class BearerAuth(StaticHeaderAuth)(token: 'str') -> 'None'
-  class BodyCursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+  class BodyCursor(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field put: Callable[[B, str], B]
@@ -494,7 +494,7 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class BodyOffset(Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]', write: 'Writer[B] | None' = None) -> 'None'
+  class BodyOffset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]', write: 'Writer[B] | None' = None) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field offset: Callable[[B], int]
@@ -534,7 +534,7 @@
       def encoder(self, type_: 'TypeForm[T]', /) -> 'Callable[[T], bytes]'
       property errors
       property media_type
-  class Cursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+  class Cursor(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field param: str
@@ -602,7 +602,7 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Offset(Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', start: 'int' = 0, write: 'Writer[B] | None' = None) -> 'None'
+  class Offset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', start: 'int' = 0, write: 'Writer[B] | None' = None) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field param: str = 'offset'

@@ -17,8 +17,9 @@ encodes a `body=` belongs to the pager, built once with the endpoint's reader. T
   walk under a GET-only pager, a `body=` under a pager with no `write`, a body of another type than the pager's, and
   `body=` beside `json=` type errors. See [Walks of POSTs](docs/pagination.md#walks-of-posts).
 - `write=` on `Cursor`, `Offset`, `BodyCursor` and `BodyOffset`: the writer (a codec's `encoder`) that encodes a
-  walk's `body=` for every page, whatever request the pager returns. The new `WritingPager` protocol is a `Pager`
-  with that `write` property, for a custom pager walked with `body=`.
+  walk's `body=` for every page, whatever request the pager returns. The new `WritingPager` base class is a `Pager`
+  with that `write` property: a custom pager walked with `body=` subclasses it, so a pager writes bodies because it
+  declares so, never because of an attribute's name.
 
 ### Changed
 

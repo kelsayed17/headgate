@@ -169,7 +169,8 @@ would answer each page with the first.
 ## A pager of your own
 
 A scheme the strategies do not cover implements the `Pager[P, I]` protocol (`Pager[P, I, B]` for a walk of POSTs whose
-bodies are of type `B`, and `WritingPager[P, I, B]`, which adds a `write` property, for one given `body=`):
+bodies are of type `B`). One walked with `body=` subclasses `WritingPager[P, I, B]` and gives it a `write` property:
+a pager writes bodies because it says so, not because it has an attribute of that name.
 
 ```python
 import httpx2

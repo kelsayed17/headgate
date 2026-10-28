@@ -590,9 +590,11 @@ class AsyncBaseClient:
         # How a body is sent is the walk's: the pager's writer encodes every page's, whatever request the pager returns.
         write = pages.write if isinstance(pages, WritingPager) else None
         first = pages.first(PageRequest(url, call_options.pop("params", None), body))
-        fixed_key = self._one_key_for_every_page(call_options)
-        if first.body is not None:
-            _check_post(write, as_json=as_json, fixed_key=fixed_key)
+        # Whether a page's body can be sent is the walk's too: refused for the first page here, and for a later one
+        # (a pager that turns GETs into POSTs) before it is sent.
+        refusal = _post_refusal(write, as_json=as_json, fixed_key=self._one_key_for_every_page(call_options))
+        if first.body is not None and refusal is not None:
+            raise ValueError(refusal)
         spec: Expect[P] = expect if isinstance(expect, Expect) else Expect(expect)
         answers = {status: _paired(read) for status, read in spec.answers.items()}
         paired = Expect(_paired(spec.ok), answers, headers=spec.headers, accept=spec.accept)
@@ -603,7 +605,8 @@ class AsyncBaseClient:
             # A page's follow_redirects and cache_ttl land on the verb's own parameters of those names.
             if request.body is None:
                 return await self.get(request.url, expect=paired, retry=retry, **page_options)
-            _check_post(write, as_json=as_json, fixed_key=fixed_key)
+            if refusal is not None:
+                raise ValueError(refusal)
             if write is None:
                 return await self.post(request.url, expect=paired, retry=retry, json=request.body, **page_options)
             return await self.post(request.url, expect=paired, retry=retry, body=write(request.body), **page_options)
@@ -1093,20 +1096,18 @@ def _walk_body[B](
     return (json if body is None else body), json is not None, page
 
 
-def _check_post[B](write: Writer[B] | None, *, as_json: bool, fixed_key: bool) -> None:
-    """Refuse a page's body that cannot be sent as the walk says: by the pager's ``write``, or as JSON for ``json=``.
+def _post_refusal[B](write: Writer[B] | None, *, as_json: bool, fixed_key: bool) -> str | None:
+    """Return why a walk's pages cannot carry a body, or ``None`` when they can: by ``write``, or as JSON for ``json=``.
 
     *fixed_key* is whether the call fixes one idempotency key for every page, which a page with a body cannot carry.
     """
     if as_json and write is not None:
-        msg = "json= is sent as JSON, so its pager takes no write="
-        raise ValueError(msg)
+        return "json= is sent as JSON, so its pager takes no write="
     if not as_json and write is None:
-        msg = "a POSTed body is encoded by its pager's write=, so the pager needs one; send builtins as json="
-        raise ValueError(msg)
+        return "a POSTed body is encoded by its pager's write=, so the pager needs one; send builtins as json="
     if fixed_key:
-        msg = "an idempotency key would be sent with every page's body; a walk of POSTs takes none"
-        raise ValueError(msg)
+        return "an idempotency key would be sent with every page's body; a walk of POSTs takes none"
+    return None
 
 
 def _paired[T](read: Reader[T]) -> Reader[tuple[T, httpx2.Response]]:

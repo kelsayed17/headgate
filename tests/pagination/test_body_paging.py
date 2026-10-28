@@ -8,9 +8,10 @@ An in-memory API reads each page's JSON body and answers from it, so what a walk
 
 from __future__ import annotations
 
+import io
 import json
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Final, assert_type
+from typing import TYPE_CHECKING, Final, assert_type, override
 
 import httpx2
 import msgspec
@@ -36,7 +37,7 @@ from headgate import (
     Writer,
 )
 from headgate.msgspec import decoder, encoder
-from headgate.pagination import PageRequest
+from headgate.pagination import PageRequest, WritingPager
 from headgate.ratelimit import Rate
 from headgate.retry import IDEMPOTENT_METHODS
 from tests.support.clients import StubClient
@@ -555,22 +556,26 @@ def test_a_pagers_refusal_is_raised_when_the_walk_is_built() -> None:
         client.paginate("search", expect=decoder(Page), pages=QUERY_CURSOR)  # ty: ignore[invalid-argument-type]
 
 
-class _Rebuilt:
+class _Rebuilt(WritingPager[Page, Item, Query]):
     """A writing body cursor whose ``next_page`` builds each request anew rather than deriving it."""
 
+    @override
     @property
     def write(self) -> Writer[Query]:
         """Encode each page's body as a :class:`Query`."""
         return QUERY
 
+    @override
     def first(self, request: PageRequest[Query]) -> PageRequest[Query]:
         """Return *request* unchanged."""
         return request
 
+    @override
     def page_items(self, page: Page) -> list[Item]:
         """Return the items on *page*."""
         return page.data
 
+    @override
     def next_page(
         self, page: Page, request: PageRequest[Query], response: httpx2.Response
     ) -> PageRequest[Query] | None:
@@ -669,9 +674,10 @@ class _PostsLater:
         return None if page.cursor is None else request.with_body(Query(kind="a", limit=2, cursor=page.cursor))
 
 
-class _WrittenPostsLater(_PostsLater):
+class _WrittenPostsLater(_PostsLater, WritingPager[Page, Item, Query]):
     """A :class:`_PostsLater` that writes its bodies as a :class:`Query`."""
 
+    @override
     @property
     def write(self) -> Writer[Query]:
         """Encode each page's body as a :class:`Query`."""
@@ -696,3 +702,39 @@ async def test_a_body_that_appears_mid_walk_is_held_to_the_same_rules(
     with pytest.raises(ValueError, match=message):
         _ = [item async for item in paginated]
     assert [request.method for request in api.sent] == ["GET"]
+
+
+class _Logged:
+    """A cursor over JSON bodies whose ``write`` is a log's, not a body writer: it is not a :class:`WritingPager`."""
+
+    def __init__(self) -> None:
+        """Keep a log, whose ``write`` happens to share the writer's name."""
+        self.log = io.StringIO()
+        self.write = self.log.write
+
+    def first(self, request: PageRequest[dict[str, object]]) -> PageRequest[dict[str, object]]:
+        """Return *request* unchanged."""
+        return request
+
+    def page_items(self, page: Page) -> list[Item]:
+        """Return the items on *page*."""
+        return page.data
+
+    def next_page(
+        self, page: Page, request: PageRequest[dict[str, object]], response: httpx2.Response
+    ) -> PageRequest[dict[str, object]] | None:
+        """Return *request* with *page*'s cursor in its body, or ``None`` after the last page."""
+        del response
+        assert request.body is not None
+        return None if page.cursor is None else request.with_body({**request.body, "cursor": page.cursor})
+
+
+async def test_an_attribute_named_write_is_not_a_writer() -> None:
+    """Send a ``json=`` walk as JSON under a pager that has a ``write`` attribute but is not a writing pager."""
+    pages = _Logged()
+    api = _Api(_by_body_cursor)
+    query: dict[str, object] = {"kind": "a"}
+    paginated = api.client().paginate("search", json=query, expect=decoder(Page), pages=pages)
+
+    assert [item.id async for item in paginated] == [1, 2, 3, 4]
+    assert pages.log.getvalue() == ""
