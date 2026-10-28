@@ -498,7 +498,7 @@ def test_a_walk_of_posts_refuses_one_idempotency_key_for_every_page(options: Pag
         )
 
 
-def test_a_walk_of_posts_refuses_the_policys_own_idempotency_header() -> None:
+def test_a_walk_of_posts_refuses_a_fixed_key_in_the_configured_idempotency_header() -> None:
     """Refuse a fixed key in the header the client's ``IdempotencyKeys`` names, not only in ``Idempotency-Key``."""
     policy = TransportPolicy(breaker=None, idempotency=IdempotencyKeys(header="X-Request-Key"))
     first = Query(kind="a", limit=2)
