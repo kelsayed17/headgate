@@ -15,6 +15,7 @@ from headgate import HttpOptions, Rate, RetryPolicy, TransportPolicy, nothing
 from headgate._core import current_timing
 from headgate.retry import Backoff
 from headgate.testing import FakeTransport, TestClock, instant_retries
+from headgate.testing._time import _SETTLE_TURNS
 from tests.support.clients import StubClient
 
 _START = 100.0
@@ -72,6 +73,49 @@ async def test_a_cancelled_sleep_does_not_move_the_clock() -> None:
         await sleeper
     await clock.sleep(_STEP)
     assert (clock(), clock.sleeps) == (_STEP, [60.0, _STEP])
+
+
+async def test_a_cancelled_sleep_never_moves_the_clock_however_long_the_loop_runs() -> None:
+    """Leave the clock where it was through any number of quiet turns once the only sleep is cancelled."""
+    clock = TestClock()
+    sleeper = asyncio.create_task(clock.sleep(60.0))
+    await asyncio.sleep(0)
+    sleeper.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await sleeper
+    for _ in range(_SETTLE_TURNS * 2):
+        await asyncio.sleep(0)
+    assert clock() == 0.0
+
+
+async def _sleep_after_turns(clock: TestClock, turns: int, *, woken: bool) -> float:
+    """Sleep 5 seconds *turns* turns of the loop after starting (after waking from a first sleep when *woken*).
+
+    Another task sleeps 10 seconds from the start. Return the reading the 5-second sleep woke at.
+    """
+    other = asyncio.create_task(clock.sleep(10.0))
+    if woken:
+        await clock.sleep(1.0)
+    else:
+        await asyncio.sleep(0)
+    for _ in range(turns):
+        await asyncio.sleep(0)
+    await clock.sleep(5.0)
+    woke = clock()
+    await other
+    return woke
+
+
+@pytest.mark.parametrize("woken", [False, True], ids=["after-a-sleep-begins", "after-a-wake"])
+async def test_the_clock_moves_after_exactly_its_settling_turns(*, woken: bool) -> None:
+    """Wait ``_SETTLE_TURNS`` quiet turns of the loop before moving: a sleep begun within them overlaps the other.
+
+    The count starts again whenever a sleep begins or wakes. A sleep begun one turn later starts after the clock has
+    moved to the other sleeper's wake.
+    """
+    started = 1.0 if woken else 0.0
+    assert await _sleep_after_turns(TestClock(), _SETTLE_TURNS, woken=woken) == started + 5.0
+    assert await _sleep_after_turns(TestClock(), _SETTLE_TURNS + 1, woken=woken) == 10.0 + 5.0
 
 
 async def test_a_cancelled_sleep_due_with_another_is_left_asleep() -> None:

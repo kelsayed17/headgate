@@ -488,6 +488,66 @@ async def test_a_hedge_refused_after_the_first_send_failed_ends_with_that_failur
     assert context.attempt == 1, "neither refused send counts as an attempt"
 
 
+def _one_retry(clock: TestClock) -> RetryBudget:
+    """Return a budget on *clock* that admits one retry at a time over its window."""
+    return RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0, clock=clock)
+
+
+#: The send :class:`_RefusesTheSecondSend` refuses: the first call's hedge.
+_REFUSED_SEND: Final = 2
+
+
+class _RefusesTheSecondSend(_Held):
+    """A held network whose rate budget refuses the second send it is given, and no other."""
+
+    def __init__(self, changes: _Changes) -> None:
+        """Count the sends from none."""
+        super().__init__(changes)
+        self.sends = 0
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        self.sends += 1
+        if self.sends == _REFUSED_SEND:
+            raise _backlog()
+        return await super().handle_async_request(request)
+
+
+async def test_a_hedge_the_budget_cannot_admit_gives_its_retry_back() -> None:
+    """Give back the retry budget a refused hedge spent, so the next call can still hedge."""
+    clock = TestClock()
+    changes = _Changes()
+    network, gate = _RefusesTheSecondSend(changes), _Gate(changes)
+    policy = RetryPolicy(budget=_one_retry(clock), hedge=Hedge(after=_HEDGE_AFTER))
+    retry = RetryTransport(transport=network, policy=policy, sleep=gate.sleep, clock=clock)
+
+    first = asyncio.create_task(retry.handle_async_request(_request(clock)[0]))
+    await changes.until(lambda: network.started and gate.waits)
+    gate.opened.set()
+    await _settle()
+    network.started[0].set_result(200)
+    assert (await first).status_code == httpx2.codes.OK
+
+    second = asyncio.create_task(retry.handle_async_request(_request(clock)[0]))
+    await _settle()
+    assert len(network.started) == len(("the first call's send", "the second call's", "its hedge"))
+    network.started[1].set_result(200)
+    assert (await second).status_code == httpx2.codes.OK
+
+
+async def test_a_hedged_retry_the_budget_cannot_admit_gives_its_retry_back() -> None:
+    """Give back the retry budget a hedged retry spent when its first send is refused, so the next call can retry."""
+    clock = TestClock()
+    network = _Scripted(503, _backlog(), 503, 200)
+    policy = RetryPolicy(budget=_one_retry(clock), backoff=_QUARTER, hedge=Hedge(after=_HEDGE_AFTER))
+    retry = RetryTransport(transport=network, policy=policy, sleep=clock.sleep, clock=clock)
+
+    refused = await retry.handle_async_request(_request(clock)[0])
+    retried = await retry.handle_async_request(_request(clock)[0])
+
+    assert (refused.status_code, retried.status_code) == (httpx2.codes.SERVICE_UNAVAILABLE, httpx2.codes.OK)
+
+
 # --- Exact bounds of a wait ---
 
 

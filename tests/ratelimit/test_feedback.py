@@ -144,6 +144,12 @@ def test_spent_de_facto_quota_without_a_reset_is_pushback_without_a_pause() -> N
     assert _feedback(X_RateLimit_Remaining="0") == Feedback(pushback=True, pause=None)
 
 
+@pytest.mark.parametrize("reset", ["inf", "nan", "-5"])
+def test_a_reset_that_is_no_finite_non_negative_number_is_no_reset(reset: str) -> None:
+    """Throttle on a spent quota whose reset is infinite, not a number, or negative, as on one that names none."""
+    assert _feedback(X_RateLimit_Remaining="0", X_RateLimit_Reset=reset) == Feedback(pushback=True, pause=None)
+
+
 # --- Structured Field Lists ---
 
 
