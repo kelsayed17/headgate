@@ -21,8 +21,8 @@ __all__ = ["UNLIMITED", "Adaptive", "Rate", "RateRule"]
 class Rate:
     """``requests`` per ``period`` seconds, with its unit in the call that builds it.
 
-    ``Rate.per_minute(120)`` and ``Rate.per_second(2)`` are the same rate. Up to ``requests`` (at least one) requests
-    may go out back to back; after that they are spaced :attr:`interval` apart.
+    Up to ``requests`` (at least one) requests may go out back to back; after that they are spaced :attr:`interval`
+    apart. ``Rate.per_minute(120)`` and ``Rate.per_second(2)`` share their spacing but not their burst: 120 and 2.
     """
 
     requests: float

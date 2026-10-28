@@ -6,6 +6,16 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Fixed
+
+- The guides and docstrings say what 0.9.0 does. `Idempotency-Key` is opt-in, not sent by default. The options that
+  cannot be combined with `transport=` are `ssl_context`, `limits` and `proxy`. msgspec leaves out what the body chose
+  rather than showing `[...]`. `Rate.per_second(5)` and `Rate.per_minute(300)` share a spacing, not a burst.
+  `TestClock` moves after 16 quiet turns of the event loop. A pause past the deadline on a retry ends the call with its
+  last failure. A body's `Content-Type` and an `Expect`'s headers rank above the client's default headers. And a token
+  mint redirected off its origin raises `ForbiddenDestinationError`. The mutation-testing page now says its score
+  describes 0.7.0 until the next run.
+
 ## [0.9.0] - 2026-10-27
 
 A walk of POSTs is written as a `post` is: `paginate()` takes its body as `body=` or `json=`, and the writer that

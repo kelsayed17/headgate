@@ -137,5 +137,5 @@ request URLs records it. Exclude such hosts from URL capture, or prefer a header
 Nothing is read from the environment: no proxy variables, no `.netrc`, no `SSL_CERT_FILE`, because the HTTP client and
 the default transport are built with `trust_env=False`. Cookies a response sets are neither stored nor sent back unless
 `HttpOptions(cookies=True)`. TLS verification is always on; pass `HttpOptions(ssl_context=...)` for a private CA,
-mutual TLS or pinning, and `proxy=` (`http`, `https` or `socks5` URL) for a proxy. Those three configure the default
-transport, so combining them with `transport=` is a `ValueError`.
+mutual TLS or pinning, and `proxy=` (`http`, `https` or `socks5` URL) for a proxy. `ssl_context=`, `proxy=` and
+`limits=` configure the default transport, so combining any of them with `transport=` is a `ValueError`.

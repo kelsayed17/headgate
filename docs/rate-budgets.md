@@ -19,12 +19,12 @@ reports = AsyncBaseClient(
 
 ## Rates and budgets
 
-`Rate(requests, period)` is a value: `Rate.per_second(5)` and `Rate.per_minute(300)` are the same rate, and
-`Rate.per_hour(5000)` states an hourly quota as a provider does. Up to `requests` may go out back to back, so state a
-large hourly quota per minute or per second for a steadier pace. A client given
-a `Rate` builds a budget of its own. A `RateBudget` is the budget as an object: pass one instance to several clients
-(or rules) and they spend from it together, across tasks, event loops and threads, because its state is plain numbers
-under a `threading.Lock` and nothing in it is bound to a loop.
+`Rate(requests, period)` is a value, and `Rate.per_hour(5000)` states an hourly quota as a provider does. Up to
+`requests` may go out back to back, then they are spaced `period / requests` apart, so `Rate.per_second(5)` and
+`Rate.per_minute(300)` share a 0.2-second spacing but allow bursts of 5 and 300. State a large hourly quota per minute
+or per second for a steadier pace. A client given a `Rate` builds a budget of its own. A `RateBudget` is the budget as
+an object: pass one instance to several clients (or rules) and they spend from it together, across tasks, event loops
+and threads, because its state is plain numbers under a `threading.Lock` and nothing in it is bound to a loop.
 
 `RateBudget(rate, *, max_in_flight=None, adaptive=Adaptive(), timing=..., wall_clock=time.time)`:
 
@@ -37,8 +37,9 @@ under a `threading.Lock` and nothing in it is bound to a loop.
   **closed**, not until the head arrives, since the server is still busy with a body that streams. Every path that
   drops a response closes it, and a response that arrives already read gives its slot back at once, so a slot cannot
   leak.
-- **What spends.** Every attempt spends its own turn, retries and hedges included, as do redirect hops and token-mint
-  hops. A cache hit spends nothing: the cache sits above the budget.
+- **What spends.** Every attempt spends its own turn, retries and hedges included, as do redirect hops and the hops a
+  `mint_flow` yields. A `mint_token()` exchange runs on a client of its own and spends nothing here. A cache hit spends
+  nothing: the cache sits above the budget.
 
 `budget.effective_rate`, `budget.in_flight` and `budget.pause_remaining` read the budget's state now.
 

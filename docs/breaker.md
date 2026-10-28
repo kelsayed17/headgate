@@ -33,6 +33,7 @@ Only what the origin itself showed:
 | | a failure on a hop an auth flow made to mint a credential (that is the token host's failure) |
 | | a cache hit, a stored 5xx, or an outcome shared from another identical request's fetch |
 | | a call cancelled (by its caller, or by the deadline's own timer), a body over the size cap, a refused SSRF destination |
+| | an exception a `stream()` block's own code raises, even an `OSError` or an httpx2 error: it is the caller's, not the origin's |
 
 Every other response is a success: a 4xx says the origin is answering.
 

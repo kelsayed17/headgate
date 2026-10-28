@@ -23,8 +23,8 @@ ladder as a verb, except that:
   bounded by the read timeout; wrap the block in `asyncio.timeout` to bound the whole body.
 - **a retry covers opening only.** A failure while the body arrives raises `TransportError` or `ClientTimeoutError`
   from the iteration, after the chunks before it were delivered. Resuming is the caller's decision.
-- **the origin's breaker spans the whole block**: a network failure mid-body that leaves the block counts against the
-  origin, and a clean exit as a success.
+- **the origin's breaker spans the whole block**: a network failure mid-body counts against the origin, even when the
+  block catches it, and a clean exit with no such failure as a success.
 - **an exception the block raises that is not a `ClientError` is the caller's own**, even an `OSError` or an httpx2
   error: it propagates unchanged, the breaker is charged nothing for it, and `CallFinished` reports the status the
   stream opened with and no error.
@@ -54,8 +54,8 @@ that does not declare `text/event-stream` raises `ResponseParseError` at once; a
 (`None` for no limit) raises `ResponseTooLargeError`.
 
 `stream.last_event_id` is the id the server last set, `None` until it sets one and `""` once it resets it with an
-empty `id`. Pass it as `last_event_id=` when re-opening, and the request carries `Last-Event-ID` so the server resumes
-after it.
+empty `id`. Pass it as `last_event_id=` when re-opening, and the request carries `Last-Event-ID` (none when it is
+empty) so the server resumes after it.
 
 For an event stream that is short and bounded, the buffered `event_stream` reader returns every event in a body, parsed
 the same way (see [responses](responses.md#readers)).

@@ -1,10 +1,10 @@
 # Pagination
 
-`client.paginate(url, *, expect, pages, retry=True, limit=None, **options)` follows a paginated endpoint and returns a
-`Paginated[P, I]`: `async for` yields the items `I`, and `.pages()` yields the pages `P`. Each page is a GET through
-the whole stack (rate budget, retries, breaker, cache, credential rules), fetched only when the iteration reaches it.
-An endpoint whose query is a request body is walked with POSTs instead, given `body=` or `json=` as a `post` is: see
-[Walks of POSTs](#walks-of-posts).
+`client.paginate(url, *, expect, pages, retry=True, limit=None, body=None, json=None, **options)` follows a paginated
+endpoint and returns a `Paginated[P, I]`: `async for` yields the items `I`, and `.pages()` yields the pages `P`. Each
+page is a GET through the whole stack (rate budget, retries, breaker, cache, credential rules), fetched only when the
+iteration reaches it. An endpoint whose query is a request body is walked with POSTs instead, given `body=` or `json=`
+as a `post` is: see [Walks of POSTs](#walks-of-posts).
 
 ```python
 from headgate import Cursor
@@ -70,10 +70,10 @@ except PageLimitError as exc:
 Set the budget where the client calls `paginate`, so every caller of that endpoint gets it.
 
 A walk of POSTs takes its body as `body=` or `json=` (see [Walks of POSTs](#walks-of-posts)); the other body options
-(`data`, `content`, `files`) are refused. Its `params=` are the first page's query, and a pager's
-parameter is added to them. `expect=` may be an `Expect`: a page can be a
-declared answer like any other. Every other option applies to each page as it does to one `get`: `follow_redirects=False`
-makes a page's redirect raise as its 3xx, and `cache_ttl=` is each page's cache lifetime.
+(`data`, `content`, `files`) are refused. Its `params=` are the first page's query, and a pager's parameter is added to
+them. `expect=` may be an `Expect`: a page can be a declared answer like any other. Every other option applies to each
+page as it does to one `get` (or one `post`, in a walk of POSTs): `follow_redirects=False` makes a page's redirect raise
+as its 3xx, and `cache_ttl=` is each page's cache lifetime.
 
 ## Strategies
 
@@ -193,7 +193,8 @@ class PageNumbers:
 
 A pager walked with `body=` subclasses `WritingPager` instead, which makes every member abstract, so leaving one out
 is an error when the pager is built rather than a `None` mid-walk. A frozen dataclass field named `write` gives the
-writer, as the strategies do:
+writer, as the strategies do. Here it has no default, since a walk with `body=` needs one
+(`SearchPages(write=encoder(Query))`):
 
 ```python
 from dataclasses import dataclass
@@ -210,7 +211,7 @@ from headgate.pagination import PageRequest, WritingPager
 class SearchPages(WritingPager[SearchPage, Item, Query]):
     """Pages of a search whose body carries the page number."""
 
-    write: Writer[Query] | None = None
+    write: Writer[Query]
 
     @override
     def first(self, request: PageRequest[Query]) -> PageRequest[Query]:
