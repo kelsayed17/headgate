@@ -6,6 +6,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-27
+
 A walk of POSTs is written as a `post` is: `paginate()` takes its body as `body=` or `json=`, and the writer that
 encodes a `body=` belongs to the pager, built once with the endpoint's reader. A review of the whole library fixes a
 cache that could serve one client's private response to another, credentials sent where they should not go, a
@@ -508,7 +510,8 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/kelsayed17/headgate/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/kelsayed17/headgate/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/kelsayed17/headgate/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/kelsayed17/headgate/compare/v0.5.0...v0.6.0
