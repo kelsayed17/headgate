@@ -491,6 +491,13 @@ async def test_a_stream_without_a_content_type_is_named_as_such() -> None:
             stream.aiter_events()
 
 
+async def test_an_unended_line_past_the_size_limit_is_refused() -> None:
+    """Refuse a line past ``max_event_size`` before it ends, so a body with no newline cannot grow without bound."""
+    handler = _answer(httpx2.Response(200, headers=_SSE, content=b"data: " + b"x" * 64))
+    with pytest.raises(ResponseTooLargeError, match="server-sent event over 16 bytes"):
+        await _drain_events(_client(handler), max_event_size=16)
+
+
 async def test_an_event_past_the_size_limit_names_the_limit_and_the_call() -> None:
     """Refuse an event past ``max_event_size``, naming the limit and the call."""
     headers = {**_SSE, "x-request-id": "req-7"}

@@ -68,6 +68,8 @@ is a minor release: see **Changed** and **Removed**.
   body at its middle, so a codec whose output ends in a newline (NDJSON, orjson's `OPT_APPEND_NEWLINE`) passes.
 - Docs: `min_attempt_time` holds back retries, hedges and waits; a request's first attempt, a redirect or mint hop
   included, is always sent.
+- `typing-extensions` is a dependency on every Python version, not only before 3.15: `RequestOptions` and
+  `PageOptions` are its closed `TypedDict`.
 
 ### Removed
 

@@ -74,6 +74,19 @@ async def test_a_cancelled_sleep_does_not_move_the_clock() -> None:
     assert (clock(), clock.sleeps) == (_STEP, [60.0, _STEP])
 
 
+async def test_a_cancelled_sleep_due_with_another_is_left_asleep() -> None:
+    """Wake the live sleeper and skip a cancelled one due at the same reading, which no one is waiting on."""
+    clock = TestClock()
+    live = asyncio.create_task(clock.sleep(_STEP))
+    cancelled = asyncio.create_task(clock.sleep(_STEP))
+    await asyncio.sleep(0)
+    cancelled.cancel()
+    await live
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    assert clock() == _STEP
+
+
 @pytest.mark.parametrize("step", [-1.0, math.nan, math.inf])
 async def test_a_sleep_refuses_a_step_no_clock_takes(step: float) -> None:
     """Refuse a backwards, NaN or infinite sleep, as :meth:`TestClock.advance` refuses the step."""

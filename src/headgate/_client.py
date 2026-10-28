@@ -32,7 +32,6 @@ import asyncio
 import contextlib
 import copy
 import functools
-import sys
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
 from typing import TYPE_CHECKING, Literal, Self, Unpack, overload
@@ -40,10 +39,7 @@ from typing import TYPE_CHECKING, Literal, Self, Unpack, overload
 import httpx2
 
 # A closed TypedDict (PEP 728) refuses a keyword it does not name, so a stray or misspelled option is a type error.
-if sys.version_info >= (3, 15):
-    from typing import TypedDict
-else:
-    from typing_extensions import TypedDict
+from typing_extensions import TypedDict
 
 from headgate._auth import failed_on_auth_hop
 from headgate._body import read_capped, read_head
