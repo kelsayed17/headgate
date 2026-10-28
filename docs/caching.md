@@ -52,11 +52,12 @@ policy=None)`:
 with different keys can share one storage. The partition is an HMAC-SHA256, under a key drawn at random once per
 process, of the auth's class and `credential_identity()`, of any other credential the request carries (what a
 [middleware](configuration.md#middleware) declares in `credential_headers` and `credential_params`, a caller's own
-`Authorization`, a cookie, an `api_key` in the URL), and of every header set in `HttpOptions(headers=...)`, where a
-static key is often configured. A middleware whose signature changes on every request implements
+`Authorization`, a cookie, an `api_key` in the URL), and of every header set in `HttpOptions(headers=...)`, whatever
+it is, since a static key is often configured there. A middleware whose signature changes on every request implements
 `credential_identity()` too, and is then partitioned by that, as an auth is. Labels can be neither reversed nor
 compared across processes, so credential-partitioned entries in a persistent storage are not found again after a
-restart; they expire by their TTL. A request with no credential at all is unpartitioned.
+restart; they expire by their TTL. That holds for a client-wide header that is no credential too (`Accept-Language`,
+say): only a request with no credential and no client-wide header is unpartitioned, and found again after a restart.
 
 A `CachedTokenAuth` partitions by the long-lived credential, not the short-lived token, so a refresh keeps its entries.
 By default each instance is its own identity; override `credential_identity()` to return the credential's secret

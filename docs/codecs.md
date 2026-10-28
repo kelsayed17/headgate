@@ -21,8 +21,9 @@ NEW_ORDER = encoder(NewOrder)  # a writer, for body=
 
 Both decode strictly (a field that changes type on the wire fails rather than being coerced), ignore fields the type
 does not declare, and describe a failure without repeating the body. A message keeps the path to the failure and the
-names the type declares, and shows `[...]` for anything the body chose: a key of a `dict[str, int]`, an unknown enum
-value or tag, an unknown field's name. Each module's `CODEC` is the codec itself, for the functions below.
+names the type declares, and leaves out anything the body chose: a key of a `dict[str, int]`, an unknown enum value or
+tag, an unknown field's name. msgspec drops it (`Invalid enum value - at $.status`; a dict key shows as `$[...]` in the
+path), and pydantic shows `[...]` in its place. Each module's `CODEC` is the codec itself, for the functions below.
 
 ## Any codec, the same way
 
@@ -88,7 +89,7 @@ A format other than JSON is the same five members with another `media_type`: a m
 ## The promises, checked
 
 `headgate.testing.check_codec` holds a codec to the promises the built-in ones keep, so a codec of your own behaves
-like them. Call it from your tests, with a record type of the codec's own kind holding one field, `value: int`:
+like them. Call it from your tests; `record=` is a record type of the codec's own kind holding one field, `value: int`:
 
 ```python
 from headgate.testing import check_codec
@@ -105,6 +106,7 @@ It raises `AssertionError` naming the first promise broken:
 - a string where an `int` is declared is refused, not coerced;
 - a body cut short at its middle is refused, so a codec whose bodies end in a newline passes;
 - each refusal raises one of `errors`, and its description never repeats the input, whether a value or a key;
-- a field the record does not declare is ignored, since providers add fields without notice.
+- a field the record does not declare is ignored, since providers add fields without notice (checked only when
+  `record=` is given).
 
 Every body it reads is one the codec wrote itself, so the check works for any format.

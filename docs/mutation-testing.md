@@ -37,10 +37,11 @@ tests written for that run's survivors:
 | killed by a timeout | 59 |
 | survived, every one equivalent (listed below) | 131 |
 
-That is 5,968 of 6,099 detected (97.9%), and every mutant that changes behavior is detected. The same run before
-those tests left 184 survivors; the 53 that changed behavior (a reader's empty-body and refusal options, codecs built
-at run time, the conformance check's messages, a degraded cache fetch with a streamed body, a hedge refused by the rate
-budget, among others) each now fail a test.
+That is 5,968 of 6,099 detected (97.9%), and in 0.7.0 every mutant that changed behavior was detected. 0.8.0 and 0.9.0
+have since rewritten some of the functions listed below and added others no run has mutated, so the score and the list
+describe 0.7.0 until the next run. The same run before those tests left 184 survivors; the 53 that changed behavior (a
+reader's empty-body and refusal options, codecs built at run time, the conformance check's messages, a degraded cache
+fetch with a streamed body, a hedge refused by the rate budget, among others) each now fail a test.
 
 ## Equivalent mutants
 

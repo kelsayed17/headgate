@@ -69,7 +69,8 @@ cannot:
   the rate budget.
 - **The retry layer and the rate budget read `Retry-After` the same way**, so the retry's wait and the budget's pause
   end together instead of stacking.
-- **One deadline bounds everything**: every attempt, every backoff, every rate-budget wait and the body read.
+- **One deadline bounds everything**: every attempt, every backoff, every rate-budget wait and the body read (for
+  `stream()`, up to the response head).
 - **A breaker counts only the host's own failures**: a 404 your code asked for, or a call you cancelled, does not open
   it.
 

@@ -37,8 +37,9 @@ fake = (
 - A route matches the method (case-insensitively) and the path **exactly as sent**: with the client's base path, and
   percent-encoded as a t-string escapes it (`/v1/series/A%2FB`). The query is not part of the match.
 - A route's replies are served in order, the last repeating, so a retry sequence is one route.
-- A reply is an `httpx2.Response` built with `content=`, `json=` or `text=` (copied for each request), a bare status, or
-  a function of the request returning a response, sync or async. A function can raise an httpx2 error to simulate a
+- A reply is a `Respond` (the step `FaultyTransport` answers with), an `httpx2.Response` built with `content=`, `json=`
+  or `text=` (copied for each request), a bare status, or a function of the request returning a response, sync or
+  async. A function can raise an httpx2 error to simulate a
   network failure.
 - `fake.calls` is every request sent, in order, body read; `fake.calls_to(method, path)` filters it; `fake.closed`
   says whether the client closed it.
@@ -52,12 +53,15 @@ fake = (
 `clock.install()` measure every duration on it (deadlines, events, rate pacing, and the cooldowns of a registry built by
 `isolated_breakers()` in the same block) and wait through its sleep, so a test of a 60-second cooldown runs in no time.
 
-Concurrent sleeps overlap as they would in real time: each sleeper wakes at the reading it began at plus its delay,
-and the clock moves to the earliest wake once the other tasks are waiting too. Two calls that back off 30 seconds
-together both retry at 30, and a sleep cancelled before it wakes does not move the clock.
+Concurrent sleeps overlap as they would in real time: each sleeper wakes at the reading it began at plus its delay.
+The clock moves to the earliest wake after 16 turns of the event loop in which no sleep begins or ends, room for the
+tasks that are not sleeping to reach their own sleep. Two calls that back off 30 seconds together both retry at 30, and
+a sleep cancelled before it wakes does not move the clock. The clock cannot see what a task is waiting on, so a task
+that runs for more turns than that, or waits on real I/O or a thread, is overtaken: its sleep starts at the later
+reading.
 
-`instant_retries()` keeps the real clock and makes every wait return at once, so a mocked failure is retried exactly as
-production retries it, without the backoff.
+`instant_retries()` leaves the clock as it is (the real one, or a `TestClock`) and makes every wait return at once, so a
+mocked failure is retried exactly as production retries it, without the backoff.
 
 ## Isolated breakers
 

@@ -1,9 +1,10 @@
 # Auth
 
 A client's `auth=` is an `httpx2.Auth`. httpx2 runs its flow once per call, above the transport stack, so a retry
-re-sends the request already signed. headgate ships three, each a `CredentialStamper` that declares what it stamps, so
-the [credential guard](security.md#credentials-stay-on-your-origin) keeps it on your origin and the
-[cache](caching.md#partitions) keeps each credential's entries apart and the credential itself out of storage.
+re-sends the request already signed. headgate ships four (the three static ones below and `CachedTokenAuth`), each a
+`CredentialStamper` that declares what it stamps, so the [credential guard](security.md#credentials-stay-on-your-origin)
+keeps it on your origin and the [cache](caching.md#partitions) keeps each credential's entries apart and the credential
+itself out of storage.
 
 Every one merges without overriding: a header or parameter the call sets itself wins.
 
