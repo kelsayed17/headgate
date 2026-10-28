@@ -191,6 +191,44 @@ class PageNumbers:
         return request.with_param("page", page.number + 1) if page.number < page.total_pages else None
 ```
 
+A pager walked with `body=` subclasses `WritingPager` instead, which makes every member abstract, so leaving one out
+is an error when the pager is built rather than a `None` mid-walk. A frozen dataclass field named `write` gives the
+writer, as the strategies do:
+
+```python
+from dataclasses import dataclass
+from typing import override
+
+import httpx2
+import msgspec
+
+from headgate import Writer
+from headgate.pagination import PageRequest, WritingPager
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SearchPages(WritingPager[SearchPage, Item, Query]):
+    """Pages of a search whose body carries the page number."""
+
+    write: Writer[Query] | None = None
+
+    @override
+    def first(self, request: PageRequest[Query]) -> PageRequest[Query]:
+        return request
+
+    @override
+    def page_items(self, page: SearchPage) -> list[Item]:
+        return page.items
+
+    @override
+    def next_page(
+        self, page: SearchPage, request: PageRequest[Query], response: httpx2.Response
+    ) -> PageRequest[Query] | None:
+        if request.body is None or page.number >= page.total_pages:
+            return None
+        return request.with_body(msgspec.structs.replace(request.body, page=page.number + 1))
+```
+
 A pager speaks `PageRequest`: `paginate` builds the first from its URL, `params=` and body, `first` prepares it once
 (so its refusals raise from `paginate`, and it depends on the request alone), and the pager returns each next.
 `PageRequest(url, params)` is the GET for one page, and `PageRequest(url, params, body=)` the POST. How a body is sent

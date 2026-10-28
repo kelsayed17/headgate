@@ -264,7 +264,8 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
       none for a token minted in the last :data:`FRESH_TOKEN_S` seconds. A 401 on a token that new is a permissions
       problem, not staleness, and re-minting cannot fix it: a gateway that rejects valid tokens (a revoked scope, a
       changed entitlement) costs at most one mint per window, and the 401 reaches the caller as the ``AuthError`` it
-      is.
+      is. A 401 to a request sent without the token (withheld from an origin the client does not trust) rejects
+      nothing, so it neither mints nor re-sends.
 
     The exchange itself is the subclass's, because that is where providers differ (form-encoded or JSON, a separate
     sign-in host, their own field names). It supplies one of:
@@ -293,7 +294,9 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     API key, or client id and secret), never the short-lived token.
 
     The hops a :meth:`mint_flow` yields are addressed by the subclass's own code, so each may carry credentials to the
-    origin it names, and the redirects it is answered with stay pinned to that origin (see :mod:`headgate.security`).
+    origin it names, and the redirects it is answered with stay pinned to that origin: one to another origin is refused
+    as ``ForbiddenDestinationError`` rather than followed, since the hop's own headers and body may carry the long-lived
+    credential (see :mod:`headgate.security`).
 
     **Every hop counts toward** ``HttpOptions.max_redirects``. httpx2 keeps one history per logical request, and puts
     each response an auth flow answers with in it beside the redirects, so a mint of *n* hops (and the response a 401
@@ -461,6 +464,10 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         held = self._held
         return held is not None and token == held.token and time.monotonic() - held.minted_at < FRESH_TOKEN_S
 
+    def _carried(self, request: httpx2.Request) -> bool:
+        """Return whether *request*, as it was sent, carried any of the headers the token rides on."""
+        return any(name in request.headers for name in self.credential_headers)
+
     async def _mint_step[T](self, step: Awaitable[T]) -> T:
         """Await a *step* of the mint, raising a failure in it as the ``ClientError`` it means."""
         try:
@@ -506,7 +513,14 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
                     self._cache(token, step.lifetime, minted_at=time.monotonic())
             self.attach(request, token)
             response = yield request
-            # ``rejected`` is set only after the first 401, so this re-sends at most once.
-            if response.status_code != httpx2.codes.UNAUTHORIZED or rejected is not None or self._is_fresh(token):
+            # ``rejected`` is set only after the first 401, so this re-sends at most once. A 401 to a request the token
+            # never reached (the credential guard withheld it from an untrusted origin, or httpx2 from a cross-origin
+            # redirect) judged no token, so it rejects none.
+            if (
+                response.status_code != httpx2.codes.UNAUTHORIZED
+                or rejected is not None
+                or not self._carried(response.request)
+                or self._is_fresh(token)
+            ):
                 return
             rejected = token

@@ -7,8 +7,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 ## [Unreleased]
 
 A walk of POSTs is written as a `post` is: `paginate()` takes its body as `body=` or `json=`, and the writer that
-encodes a `body=` belongs to the pager, built once with the endpoint's reader. This is a minor release: see
-**Changed** and **Removed**.
+encodes a `body=` belongs to the pager, built once with the endpoint's reader. A review of the whole library fixes a
+cache that could serve one client's private response to another, credentials sent where they should not go, a
+rate-limit pause that let queued calls stampede, and errors from a `stream()` block mistaken for the transport's. This
+is a minor release: see **Changed** and **Removed**.
 
 ### Added
 
@@ -38,12 +40,85 @@ encodes a `body=` belongs to the pager, built once with the endpoint's reader. T
   iterations, such as the time). A pager's refusals (`LinkHeader` or `NextUrl` given a body, `BodyCursor` or
   `BodyOffset` given none) now raise from the `paginate()` call rather than from the first iteration.
 
+- `HttpCache(methods=)` accepts only `GET` and `HEAD`, and raises `ValueError` for any other method, since entries are
+  keyed by URL: cache a read-only POST with `policy=FilterPolicy(use_body_key=True, ...)`. An empty `methods=` or
+  `statuses=` now stores nothing, as `paths=()` already did, instead of falling back to the defaults.
+- Every request header the HTTP cache keeps is stored as a keyed digest, never as sent. The key is the process's, so an
+  entry whose response varies on a header is not found again after a restart, and expires by its TTL.
+- A `CachedTokenAuth` mint hop redirected to another origin raises `ForbiddenDestinationError` instead of being
+  followed, so the hop's own secret headers and form body never leave the token origin.
+- A server can pause a `RateBudget` for at most an hour, so a `Retry-After` dated in the year 9999 no longer stops every
+  client that shares the budget.
+- A rate-limit pause holds every waiting call: calls already queued, or waiting for a `max_in_flight` slot, resume in
+  order at the configured rate when it ends, not all at once. A call now takes its concurrency slot before its paced
+  turn.
+- Breaking: `RetryPolicy.wait_after` takes the `Retry-After` delay already parsed (`float | None`) instead of the
+  failed response, so the delay waited is the one checked against `max_retry_after` and recorded.
+- A per-call `deadline=` and `Route(deadline=)` refuse infinity and NaN, as `TransportPolicy` and `with_options` do,
+  all with one message.
+- A 302 answering a PUT, PATCH or DELETE with a one-shot `content=` stream is followed as a body-less GET, as httpx2
+  follows it, instead of raising the 302; a 301 on a method other than POST, which resends the body, is refused.
+- `content=` given a `str`, `bytearray`, `memoryview` or a plain iterable raises a `TypeError` naming `content=`,
+  instead of failing inside httpx2.
+- `stream().aiter_events()` and `event_stream` share a parser of headgate's own that follows the WHATWG event-stream
+  grammar (see **Fixed**); `event_stream` now yields an event whose `data:` line is empty, as the grammar does.
+- `TestClock` overlaps concurrent sleeps, as real time does: two calls backing off 30 s together both retry at 30, not
+  30 and 60. A sleep cancelled before it wakes no longer moves the clock.
+- `check_codec` checks that a codec's messages leave out an input's keys as well as its values, and cuts the malformed
+  body at its middle, so a codec whose output ends in a newline (NDJSON, orjson's `OPT_APPEND_NEWLINE`) passes.
+- Docs: `min_attempt_time` holds back retries, hedges and waits; a request's first attempt, a redirect or mint hop
+  included, is always sent.
+
 ### Removed
 
 - `paginate()` no longer takes a `PageRequest` as its URL. Write `paginate(url, params=params, body=body, ...)` for
   `paginate(PageRequest(url, params, body=body, write=write), ...)` and put `write=` on the pager, or pass `json=body`
   for a request that had no `write`. `PageRequest` stays public as what a `Pager` reads and returns.
 - `PageRequest.write`: how a body is sent is the walk's, set by the pager's `write`, not each request's.
+
+### Fixed
+
+- The HTTP cache no longer stores, or shares across credentials, a key that a middleware stamps (declared in
+  `credential_headers`) or that is set in `HttpOptions(headers=...)`. Those values partition entries under
+  `Partition.CREDENTIAL`, so clients with different keys sharing one storage no longer read each other's responses.
+- Under `Partition.SHARED`, query parameters with a secret name such as `key` or `session` that the auth does not
+  declare no longer collapse into one entry: each value gets its own.
+- With `HttpOptions(cookies=True)`, a `Cookie` header set explicitly (client-wide or per call) is withheld from
+  untrusted origins; those origins receive only the cookies the jar holds for them.
+- The SSRF guard refuses IPv6 site-local addresses (`fec0::/10`), which Python's `ipaddress` reports as global.
+- `CachedTokenAuth` no longer discards its token and mints again on a 401 from a request sent without the token
+  (withheld from an untrusted origin).
+- A `DecodeError` message no longer quotes the input: msgspec drops an unknown tag and an unknown field's name, and
+  pydantic shows `[...]` for an unknown tag and for a key of the body's own, such as a `dict[str, int]` key.
+- `stream()` no longer turns an exception its block raises itself into a `TransportError`: an `OSError` or httpx2 error
+  from the caller's own code propagates unchanged and is not charged to the origin's breaker, and `CallFinished` (and
+  so the OpenTelemetry span) reports the stream's status with no error.
+- `head()`, and a 204 or 304, no longer fail with `ResponseTooLargeError` when `Content-Length` is past
+  `max_response_bytes`, and a reader of a response with no body sees its `Content-Length` and `Content-Encoding`.
+- `max_in_flight` no longer leaks a slot for a response that arrives already read, such as one from
+  `httpx2.MockTransport` or `FakeTransport`, where the next call used to hang.
+- With several windows, `X-RateLimit-Remaining` and `X-RateLimit-Reset` pause for the reset of the window that is
+  spent, paired by position, not the latest reset of any window.
+- A call refused by a paused rate budget reports `attempts=0`, with no history line and no `AttemptFinished`; on a
+  retry it ends with its real last failure.
+- A retry or hedge that is never sent (the breaker opened, the deadline came, the rate budget refused it, or the call
+  was cancelled) gives its share of the `RetryBudget` back.
+- The backoff before retry *n* counts retries only, so a hedge no longer doubles the next wait.
+- An `EncodedBody`'s `Content-Type` and `Expect.headers` win over a header in `HttpOptions.headers`, losing only to the
+  call's or its view's `headers=`.
+- A built-in `TimeoutError` from a middleware or custom transport raises `ClientTimeoutError`, not `TransportError`.
+- `stream(last_event_id=...)` replaces a `Last-Event-ID` set in `headers=` in any letter case, instead of sending both.
+- `stream().aiter_events()` and `event_stream`: a leading byte order mark no longer loses the first event, the body is
+  read as UTF-8 whatever its `charset`, a block with no data (an `event: ping` heartbeat, or `id:` alone) is no longer
+  yielded with empty `data`, and `retry:` takes only ASCII digits.
+- `Stream.last_event_id` is `None` until the server sends an `id`, and `""` only once the server resets it; an `id:`
+  in a block without data sets it too.
+- `Deprecated.link` and `sunset_link` read `Link` relations as RFC 8288 defines them, space-separated and
+  case-insensitive, so `rel="deprecation sunset"` and `rel=Deprecation` are found.
+- `DropMidBody` and `RefusedStream` report send progress as httpx2's transport does, so a POST with a body that is
+  dropped before anything is written is retried like one without a body.
+- A `WritingPager` subclass that leaves out `first`, `page_items` or `next_page` cannot be built, instead of inheriting
+  a stub that returns `None` mid-walk.
 
 ## [0.8.0] - 2026-10-27
 

@@ -15,10 +15,22 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import CachedTokenAuth, HttpOptions, Minted, QueryParamAuth, SecurityOptions, StaticHeaderAuth
+from headgate import (
+    CachedTokenAuth,
+    ForbiddenDestinationError,
+    HttpOptions,
+    Minted,
+    QueryParamAuth,
+    SecurityOptions,
+    StaticHeaderAuth,
+    TransportPolicy,
+)
 from headgate._core import CredentialStamper
+from headgate.ratelimit import UNLIMITED
+from headgate.retry import NO_RETRY
 from headgate.security._credentials import CHAIN_ORIGIN, CredentialGuard
 from tests.security._web import BASE, Web
+from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 from tests.support.tokens import premint
 
@@ -177,22 +189,58 @@ async def test_a_default_header_credential_is_withheld_from_a_foreign_origin() -
     assert "Authorization" not in web.sent[0].headers
 
 
-async def test_a_cookie_jar_scopes_cookies_itself() -> None:
-    """Leave ``Cookie`` alone on a client that keeps a cookie jar, which scopes cookies to their domains."""
-    web = Web()
-    async with web.client(http=HttpOptions(cookies=True)) as client:
-        await client.get("https://cdn.example/x", expect=RESPONSE, headers={"Cookie": "a=1"})
+def _cookie_client(sent: list[httpx2.Request], headers: dict[str, str] | None = None) -> StubClient:
+    """Return a client with a cookie jar and *headers*, over a web where ``/login`` on any origin sets a cookie for it.
 
-    assert web.sent[0].headers["Cookie"] == "a=1"
+    Each request is recorded in *sent*.
+    """
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        if request.url.path == "/login":
+            return httpx2.Response(httpx2.codes.OK, headers={"Set-Cookie": f"sid={request.url.host}"}, text="ok")
+        return httpx2.Response(httpx2.codes.OK, text="ok")
+
+    http = HttpOptions(cookies=True, headers=headers or {}, transport=httpx2.MockTransport(answer))
+    return StubClient(base_url=BASE, rate=UNLIMITED, policy=TransportPolicy(retry=NO_RETRY), http=http)
+
+
+async def test_a_cookie_jar_sends_each_origin_its_own_cookies() -> None:
+    """Leave ``Cookie`` to the jar on a client that keeps one: another origin gets the cookies it set, and no others."""
+    sent: list[httpx2.Request] = []
+    async with _cookie_client(sent) as client:
+        await client.get("login", expect=RESPONSE)
+        await client.get("https://cdn.example/login", expect=RESPONSE)
+        await client.get("https://cdn.example/x", expect=RESPONSE)
+        await client.get("x", expect=RESPONSE)
+
+    assert [request.headers.get("Cookie") for request in sent[2:]] == ["sid=cdn.example", "sid=api.example"]
+
+
+@pytest.mark.parametrize("where", ["client", "call"])
+async def test_an_explicit_cookie_stays_off_a_foreign_origin_beside_a_jar(where: str) -> None:
+    """Withhold a ``Cookie`` set in ``headers=`` from another origin, jar or not: the jar did not scope it."""
+    sent: list[httpx2.Request] = []
+    explicit = {"Cookie": "sid=secret"}
+    on_call = explicit if where == "call" else {}
+    async with _cookie_client(sent, explicit if where == "client" else None) as client:
+        await client.get("https://cdn.example/login", expect=RESPONSE, headers=on_call)
+        await client.get("https://cdn.example/x", expect=RESPONSE, headers=on_call)
+        await client.get("x", expect=RESPONSE, headers=on_call)
+
+    assert [request.headers.get("Cookie") for request in sent] == [None, "sid=cdn.example", "sid=secret"]
 
 
 class _MintingAuth(CachedTokenAuth):
-    """Mint by posting a basic-auth request to a token host on another origin, through the client."""
+    """Mint by posting a basic-auth request, a secret header and a form body to a token host on another origin."""
 
     @override
     async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         response = yield httpx2.Request(
-            "POST", "https://login.example/token", headers={"Authorization": "Basic Y2xpZW50OnNlY3JldA=="}
+            "POST",
+            "https://login.example/token",
+            headers={"Authorization": "Basic Y2xpZW50OnNlY3JldA==", "X-Client-Secret": "s3cret"},
+            data={"client_secret": "s3cret"},
         )
         yield Minted(response.text, 3600.0)
 
@@ -202,14 +250,13 @@ class _MintingAuth(CachedTokenAuth):
     [
         ({}, [True]),
         ({"https://login.example/token": "https://login.example/v2/token"}, [True, True]),
-        ({"https://login.example/token": "https://evil.example/steal"}, [True, False]),
     ],
-    ids=["direct", "same-origin-redirect", "cross-origin-redirect"],
+    ids=["direct", "same-origin-redirect"],
 )
-async def test_a_mint_hop_carries_its_credential_only_to_the_origin_it_named(
+async def test_a_mint_hop_carries_its_credential_to_the_origin_it_named(
     redirects: dict[str, str], keeps: list[bool]
 ) -> None:
-    """Let a mint hop carry its credential to its own token host, and to no other origin a redirect names."""
+    """Let a mint hop carry its credential to its own token host, on a redirect within it too."""
     web = Web(redirects)
     async with web.client(auth=_MintingAuth()) as client:
         await client.get("data", expect=RESPONSE)
@@ -220,10 +267,25 @@ async def test_a_mint_hop_carries_its_credential_only_to_the_origin_it_named(
     assert all(hop.extensions[CHAIN_ORIGIN] == "https://login.example" for hop in mint_hops)
 
 
+@pytest.mark.parametrize(
+    "target",
+    ["https://evil.example/steal", "https://api.example/token", "https://login.example:8443/token"],
+    ids=["foreign", "base-origin", "other-port"],
+)
+async def test_a_mint_hops_redirect_off_its_origin_is_refused(target: str) -> None:
+    """Refuse a mint hop's redirect to any other origin: its header and body credentials would go with it."""
+    web = Web({"https://login.example/token": target})
+    async with web.client(auth=_MintingAuth()) as client:
+        with pytest.raises(ForbiddenDestinationError, match=r"refused to follow a token mint's redirect"):
+            await client.get("data", expect=RESPONSE)
+
+    assert [str(request.url) for request in web.sent] == ["https://login.example/token"]
+
+
 @pytest.mark.parametrize("marker", [None, 1, "https://other.example"], ids=["absent", "not-text", "other-origin"])
 def test_a_chain_marker_trusts_only_its_own_origin(marker: object) -> None:
     """Trust a request off the trusted origins only when its chain marker names exactly its origin."""
-    guard = CredentialGuard(auth=None, base_url=httpx2.URL(BASE), trusted_origins=(), cookie_jar=False)
+    guard = CredentialGuard(auth=None, base_url=httpx2.URL(BASE), trusted_origins=(), cookie_jar=None)
     extensions = {} if marker is None else {CHAIN_ORIGIN: marker}
     request = httpx2.Request("GET", "https://login.example/x", extensions=extensions)
 

@@ -15,8 +15,10 @@ Strictness parity with the msgspec flavor is held by tests: a JSON string where 
 unknown field is ignored, and every failure is the shared :class:`~headgate.errors.DecodeError`.
 
 A ``DecodeError``'s message names the first few failures by location and reason, and how many there were. It never
-repeats an input value: ``str(ValidationError)`` lists every failure with the value that failed, so a body of 5,000 bad
-rows makes a message of most of a megabyte, and a token field that failed validation is quoted back in full.
+repeats the input: ``str(ValidationError)`` lists every failure with the value that failed, so a body of 5,000 bad rows
+makes a message of most of a megabyte, and a token field that failed validation is quoted back in full. A location
+shows the names the type declares and ``[...]`` for a key of the input's own (a ``dict[str, int]``'s), as msgspec's
+``$[...]`` does, and an unknown tag is ``[...]`` too.
 
 Requires the ``pydantic`` extra: ``pip install headgate[pydantic]``.
 """
@@ -28,7 +30,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, overload
 
 try:
     from pydantic import BaseModel, RootModel, TypeAdapter, ValidationError
-    from pydantic_core import to_jsonable_python
+    from pydantic_core import PydanticKnownError, to_jsonable_python
 except ImportError as exc:
     msg = "headgate.pydantic needs pydantic: pip install headgate[pydantic]"
     raise ImportError(msg) from exc
@@ -39,6 +41,8 @@ from headgate._codec import drop_none as _drop_none
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from pydantic_core import ErrorDetails
+    from pydantic_core.core_schema import ErrorType
     from typing_extensions import TypeForm
 
     from headgate._request_body import Writer
@@ -49,16 +53,45 @@ __all__ = ["CODEC", "PydanticCodec", "decode", "decoder", "encoder", "to_builtin
 #: How many of a validation's failures a ``DecodeError`` message names; the count of the rest follows them.
 _ERRORS_SHOWN = 5
 
+#: What a message shows in place of the input: a key in a failure's location, or a value its reason would quote.
+_REDACTED: Final = "[...]"
+
+#: The failures whose reason quotes the input, each with the context value that holds it: an unknown tag, the character
+#: a UUID failed at, and a timezone offset the input named.
+_QUOTING: Final = {"union_tag_invalid": "tag", "uuid_parsing": "error", "timezone_offset": "tz_actual"}
+
+#: Every name the schemas this module compiled hold: field names and aliases, tags, and model and type names. A part of
+#: a failure's location is shown only if it is one of them, so a key of the input's own never is. ``[key]`` is the part
+#: pydantic adds for a failure in a dict's key rather than its value.
+_NAMES: Final = {"[key]"}
+
+
+def _schema_names(schema: object) -> set[str]:
+    """Return every string *schema*, a pydantic core schema, holds as a key or a value, however deep."""
+    names: set[str] = set()
+    pending: list[object] = [schema]
+    seen: set[int] = set()
+    while pending:
+        node = pending.pop()
+        if isinstance(node, str):
+            names.add(node)
+        elif isinstance(node, dict | list | tuple) and id(node) not in seen:
+            seen.add(id(node))
+            pending.extend([*node.keys(), *node.values()] if isinstance(node, dict) else node)
+    return names
+
 
 @functools.cache
 def _cached_adapter(type_: TypeForm[object]) -> TypeAdapter[Any]:
-    """Return the one ``TypeAdapter`` for *type_*, built on first use.
+    """Return the one ``TypeAdapter`` for *type_*, built on first use, adding the names its schema holds to ``_NAMES``.
 
     ``decoder`` typically runs on every request, and :func:`decode` may run once per element of a larger document, so
     each type expression is compiled once. A cache shared by every type expression cannot carry each entry's type
     parameter, which is why it returns ``TypeAdapter[Any]``; :func:`_adapter` restores it.
     """
-    return TypeAdapter(type_)
+    adapter = TypeAdapter(type_)
+    _NAMES.update(_schema_names(adapter.core_schema))
+    return adapter
 
 
 def _adapter[T](type_: TypeForm[T]) -> TypeAdapter[T]:
@@ -107,14 +140,34 @@ class PydanticCodec:
         return encode
 
     def describe(self, error: Exception, /) -> str:
-        """Summarize a ``ValidationError`` without any input value: its first failures, and how many there were."""
+        """Summarize a ``ValidationError`` without any of the input: its first failures, and how many there were.
+
+        A failure's location keeps list positions and the names the type declares (fields and aliases, tags), and shows
+        ``[...]`` for a key of the input's own; a reason that would quote the input (an unknown tag) shows ``[...]`` in
+        its place. A validator of your own is quoted as it words its message.
+        """
         exc = cast("ValidationError", error)  # the only one of :attr:`errors`
-        errors = exc.errors(include_input=False, include_url=False, include_context=False)[:_ERRORS_SHOWN]
-        shown = "; ".join(f"{'.'.join(map(str, error['loc'])) or '<body>'}: {error['msg']}" for error in errors)
+        errors = exc.errors(include_input=False, include_url=False, include_context=True)[:_ERRORS_SHOWN]
+        shown = "; ".join(f"{_location(error['loc'])}: {_reason(error)}" for error in errors)
         count = exc.error_count()
         more = f" (+{count - len(errors)} more)" if count > len(errors) else ""
         noun = "error" if count == 1 else "errors"
         return f"{count} validation {noun} for {exc.title}: {shown}{more}"
+
+
+def _location(loc: tuple[int | str, ...]) -> str:
+    """Return *loc* dotted, with ``[...]`` for each part that is neither a list position nor a name a schema holds."""
+    return ".".join(str(part) if isinstance(part, int) or part in _NAMES else _REDACTED for part in loc) or "<body>"
+
+
+def _reason(error: ErrorDetails) -> str:
+    """Return *error*'s message, rendered again with ``[...]`` for the input it would quote."""
+    quoted = _QUOTING.get(error["type"])
+    context = error.get("ctx")
+    if quoted is None or context is None or quoted not in context:
+        return error["msg"]
+    kind = cast("ErrorType", error["type"])  # one of :data:`_QUOTING`'s keys, each a pydantic error type
+    return PydanticKnownError(kind, {**context, quoted: _REDACTED}).message()
 
 
 #: pydantic, validating strictly: the codec every shortcut here uses unless told otherwise.

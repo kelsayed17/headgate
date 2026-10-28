@@ -30,6 +30,7 @@ from typing import Final, final
 import httpx2
 
 from headgate.errors import UpstreamStatusError
+from headgate.streaming._events import EventParser
 
 __all__ = [
     "Expect",
@@ -290,28 +291,13 @@ def nothing(resp: httpx2.Response, /) -> None:
     del resp
 
 
-#: A reserved (RFC 2606) URL for the request an ``httpx2.Response`` must carry. Nothing is sent to it.
-_UNSENT_URL: Final = "https://sse.invalid/"
-
-
 def event_stream(resp: httpx2.Response, /) -> list[httpx2.ServerSentEvent]:
-    """Return each server-sent event in the buffered body, in order, in the shape ``Stream.aiter_events`` yields.
+    """Return each server-sent event in the buffered body, in order, as ``Stream.aiter_events`` yields them.
 
-    Each event carries its ``event``, ``data``, ``id`` and ``retry`` as httpx2 parses them. httpx2's ``EventSource``
-    parses the grammar (multi-line ``data``, CRLF, comments) but requires a response that declares
-    ``text/event-stream``, so the body is framed into a response of its own. ``max_event_size=None`` because the body is
-    already buffered and capped by the client, and a large reply is legitimately one event, which httpx2's 1 MiB default
-    would refuse.
-
-    ``EventSource`` also yields a block that has no ``data`` field (a ``retry:`` hint, an ``event: ping``), which the
-    WHATWG grammar does not dispatch. Such a block is skipped. It cannot be told apart from an event whose ``data`` is
-    empty, so that is skipped too. Choosing whether a body is an event stream is the caller's job, usually by reading
-    the ``content-type``.
+    It is the same WHATWG parser: each event carries its ``event``, ``data``, ``id`` and ``retry``, the body is UTF-8
+    whatever its ``charset`` says, and a block without data (a ``retry:`` hint, an ``event: ping``) is not an event.
+    No per-event limit applies, because the body is already buffered and capped by the client, and a large reply is
+    legitimately one event. Choosing whether a body is an event stream is the caller's job, usually by reading the
+    ``content-type``.
     """
-    framed = httpx2.Response(
-        200,
-        content=resp.content,
-        headers={"content-type": "text/event-stream"},
-        request=httpx2.Request("POST", _UNSENT_URL),
-    )
-    return [event for event in httpx2.EventSource(framed, max_event_size=None) if event.data]
+    return list(EventParser().feed(resp.content))

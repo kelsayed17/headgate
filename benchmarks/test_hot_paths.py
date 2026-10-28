@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from headgate import msgspec as msgspec_flavor
 from headgate import pydantic as pydantic_flavor
+from headgate._core import SendProgress
 from headgate._failures import CallSite, status_error
 from headgate._url import escape_segment, redact_secrets, render_path, sanitize_url
 from headgate.breaker import CircuitBreaker
@@ -24,6 +25,7 @@ from headgate.ratelimit import Rate, RateRule
 from headgate.ratelimit._budget import Pacer
 from headgate.ratelimit._budgets import PathBudgets
 from headgate.retry import RetryPolicy
+from headgate.retry._classify import Attempted, classify
 
 if TYPE_CHECKING:
     from pytest_codspeed import BenchmarkFixture
@@ -103,12 +105,17 @@ def test_breaker_track(benchmark: BenchmarkFixture) -> None:
 
 
 def test_retry_backoff(benchmark: BenchmarkFixture) -> None:
-    """Measure computing the wait after a 503 that carries a ``Retry-After`` HTTP-date."""
+    """Measure judging a 503 that carries a ``Retry-After`` HTTP-date, and computing the wait after it."""
     policy = RetryPolicy()
     failure = httpx2.Response(
         httpx2.codes.SERVICE_UNAVAILABLE, headers={"Retry-After": "Wed, 21 Oct 2099 07:28:00 GMT"}
     )
-    benchmark(policy.wait_after, failure, 1)
+    attempted = Attempted(method="GET", keyed=False, progress=SendProgress())
+
+    def wait() -> float:
+        return policy.wait_after(classify(failure, attempted, policy).retry_after, 1)
+
+    benchmark(wait)
 
 
 def test_path_budget_lookup(benchmark: BenchmarkFixture) -> None:

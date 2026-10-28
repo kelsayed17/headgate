@@ -81,6 +81,26 @@ async def test_a_deprecated_endpoint_reports_its_date_sunset_and_links() -> None
     assert event.call.url == "old"
 
 
+@pytest.mark.parametrize(
+    "links",
+    [
+        pytest.param(['</d>; rel="deprecation sunset"'], id="one-link-two-relations"),
+        pytest.param(["</d>; rel=Deprecation, </d>; rel=SUNSET"], id="any-case"),
+        pytest.param(['</d>; title="a, <x>; rel=next"; rel="sunset deprecation"'], id="comma-in-a-quoted-value"),
+        pytest.param(['</x>; rel="next"; rel="deprecation"', '</d>; rel="deprecation sunset"'], id="first-rel-wins"),
+    ],
+)
+async def test_link_relations_are_read_as_rfc_8288_writes_them(links: list[str]) -> None:
+    """Find each relation among a link's space-separated, case-insensitive ``rel`` values, in every ``Link`` field."""
+    headers = httpx2.Headers([("Deprecation", "true"), *(("Link", link) for link in links)])
+    fake = FakeTransport().reply("GET", "/v1/old", httpx2.Response(200, headers=headers))
+    recorder = Recorder()
+    await client(fake, recorder).get("old", expect=nothing)
+
+    (event,) = recorder.of(Deprecated)
+    assert (event.link, event.sunset_link) == ("https://api.example.test/d", "https://api.example.test/d")
+
+
 async def test_a_sunset_alone_is_reported_without_deprecation() -> None:
     """Report a ``Sunset`` header on its own, not deprecated, with no links."""
     fake, recorder = _headers_call({"Sunset": _SUNSET})

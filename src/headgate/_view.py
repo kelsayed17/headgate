@@ -11,13 +11,13 @@ then the policy's.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Final, Literal, TypedDict
 
 import httpx2
 
+from headgate._options import check_deadline
 from headgate.retry import NO_RETRY
 
 if TYPE_CHECKING:
@@ -86,9 +86,7 @@ class ViewDefaults:
             changed = replace(changed, headers=tuple(merged.items()))
         if "deadline" in options:
             deadline = options["deadline"]
-            if deadline is not None and not (deadline > 0 and math.isfinite(deadline)):
-                msg = f"deadline must be > 0 and finite, or None (got {deadline})"
-                raise ValueError(msg)
+            check_deadline(deadline)
             changed = replace(changed, deadline=deadline)
         if (retry := options.get("retry")) is not None:
             changed = replace(changed, retry=_retry_override(retry=retry))

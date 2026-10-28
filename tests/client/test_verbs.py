@@ -23,7 +23,7 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate import HttpOptions, TransportPolicy, Writer
+from headgate import EncodedBody, Expect, HttpOptions, TransportPolicy, Writer
 from headgate import msgspec as flavor
 from headgate._client import AsyncBaseClient
 from headgate._responses import as_bytes, nothing
@@ -152,6 +152,38 @@ async def test_a_calls_content_type_wins_over_the_writers() -> None:
         await c.put("orders/1", body=body, headers={"Content-Type": "application/merge-patch+json"}, expect=nothing)
 
     assert wire.last.headers["content-type"] == "application/merge-patch+json"
+
+
+def _defaulting(wire: _Wire, headers: dict[str, str]) -> AsyncBaseClient:
+    """Return a client over *wire* sending *headers* on every call, as client-wide defaults."""
+    return AsyncBaseClient(
+        base_url="https://example.test", http=HttpOptions(transport=httpx2.MockTransport(wire), headers=headers)
+    )
+
+
+async def test_the_writers_content_type_wins_over_the_clients_default() -> None:
+    """Send the encoded body's ``Content-Type`` over one among the client's default headers."""
+    wire = _Wire()
+    async with _defaulting(wire, {"Content-Type": "application/json"}) as c:
+        await c.post("x", body=EncodedBody(b"\x81", "application/msgpack"), expect=nothing)
+        await c.with_options(headers={"Content-Type": "application/cbor"}).post(
+            "x", body=EncodedBody(b"\x81", "application/msgpack"), expect=nothing
+        )
+
+    first, from_a_view = wire.sent
+    assert first.headers.get_list("content-type") == ["application/msgpack"]
+    assert from_a_view.headers.get_list("content-type") == ["application/cbor"]
+
+
+async def test_a_declarations_headers_win_over_the_clients_defaults_but_not_the_calls() -> None:
+    """Send ``Expect.headers`` over the client's default headers, and keep one the call set itself."""
+    wire = _Wire()
+    spec = Expect(nothing, headers={"If-None-Match": '"v2"', "Prefer": "return=minimal"})
+    async with _defaulting(wire, {"If-None-Match": '"v1"', "Prefer": "return=representation"}) as c:
+        await c.get("x", expect=spec, headers={"prefer": "respond-async"})
+
+    assert wire.last.headers.get_list("if-none-match") == ['"v2"']
+    assert wire.last.headers.get_list("prefer") == ["respond-async"]
 
 
 async def test_an_encoded_body_is_sent_again_on_a_retry() -> None:

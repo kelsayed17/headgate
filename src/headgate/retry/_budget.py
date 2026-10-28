@@ -71,3 +71,11 @@ class RetryLedger:
             return False
         current.retries += 1
         return True
+
+    def refund(self) -> None:
+        """Take back a retry :meth:`try_spend` counted but never sent, from the latest bucket still counting one."""
+        self._current()
+        for bucket in reversed(self._buckets):
+            if bucket.retries:
+                bucket.retries -= 1
+                return

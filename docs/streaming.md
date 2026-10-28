@@ -11,8 +11,8 @@ async with client.stream("exports/2026.csv") as stream:
         sink.write(chunk)
 ```
 
-`client.stream(url, *, method="GET", retry=..., follow_redirects=..., last_event_id=None, **options)` sends the request when
-the block is entered and hands it a `Stream` once a 2xx head has arrived. It runs through the same stack and failure
+`client.stream(url, *, method="GET", retry=..., follow_redirects=..., last_event_id=None, **options)` sends the request
+when the block is entered and hands it a `Stream` once a 2xx head has arrived. It runs through the same stack and failure
 ladder as a verb, except that:
 
 - **a 2xx is the only success.** There is no `expect=`; any other status raises before the block is entered, with a
@@ -25,6 +25,9 @@ ladder as a verb, except that:
   from the iteration, after the chunks before it were delivered. Resuming is the caller's decision.
 - **the origin's breaker spans the whole block**: a network failure mid-body that leaves the block counts against the
   origin, and a clean exit as a success.
+- **an exception the block raises that is not a `ClientError` is the caller's own**, even an `OSError` or an httpx2
+  error: it propagates unchanged, the breaker is charged nothing for it, and `CallFinished` reports the status the
+  stream opened with and no error.
 - the client's `refusal_check` runs on the response head, before the block is entered.
 
 A `Stream` has `status_code`, `headers` and `request_id`, and three ways to read the body, one per stream:
@@ -43,14 +46,19 @@ async with client.stream("events", last_event_id=resume_from) as stream:
     ...
 ```
 
-`aiter_events(max_event_size=1 MiB)` parses each event as soon as its blank line arrives, with httpx2's WHATWG parser:
-`event`, `data` (multi-line joined), `id` and `retry`. A response that does not declare `text/event-stream` raises
-`ResponseParseError` at once; an event larger than `max_event_size` (`None` for no limit) raises
-`ResponseTooLargeError`. `stream.last_event_id` is the last `id` seen; pass it as `last_event_id=` when re-opening, and
-the request carries `Last-Event-ID` so the server resumes after it.
+`aiter_events(max_event_size=1 MiB)` parses each event as soon as its blank line arrives, by the WHATWG grammar, into
+an `httpx2.ServerSentEvent`: `event`, `data` (multi-line joined), `id` and the `retry` its block named. The body is
+UTF-8 whatever its `charset` says, a leading byte order mark is skipped, and a block without data (an `event: ping`
+heartbeat, a `retry:` or `id:` alone) is not an event, so `event.data` is always what a `data:` field sent. A response
+that does not declare `text/event-stream` raises `ResponseParseError` at once; an event larger than `max_event_size`
+(`None` for no limit) raises `ResponseTooLargeError`.
 
-For an event stream that is short and bounded, the buffered `event_stream` reader returns every event in a body, in the
-shape `aiter_events()` yields them (see [responses](responses.md#readers)).
+`stream.last_event_id` is the id the server last set, `None` until it sets one and `""` once it resets it with an
+empty `id`. Pass it as `last_event_id=` when re-opening, and the request carries `Last-Event-ID` so the server resumes
+after it.
+
+For an event stream that is short and bounded, the buffered `event_stream` reader returns every event in a body, parsed
+the same way (see [responses](responses.md#readers)).
 
 ## Request bodies
 
@@ -65,14 +73,16 @@ NEW_ORDER = encoder(NewOrder)
 await self.post("orders", body=NEW_ORDER(order), expect=ORDER)
 ```
 
-It is sent as `application/json` unless `headers=` sets another `Content-Type`, and it is bytes, so the call stays
-retryable. A verb also takes `json=` (builtins, which a codec's `to_builtins` builds), `data=` (form fields), or one
-of:
+It is sent with the writer's `Content-Type` (`application/json` for these codecs) unless the call's `headers=`, or
+its view's, sets another; a `Content-Type` among the client's default headers does not count. It is bytes, so the call
+stays retryable. A verb also takes `json=` (builtins, which a codec's `to_builtins` builds), `data=` (form fields), or
+one of:
 
 - **`content=`**, a raw body:
   - `bytes`, sent as they are, and retryable;
-  - an async iterable of `bytes`, streamed once. The call is then **never re-sent**, and a 307 or 308 that asks for the
-    body again is not followed but raised as its 3xx, both with a note saying why;
+  - an async iterable of `bytes`, streamed once. The call is then **never re-sent**, and a redirect that asks for the
+    body again (a 307 or 308, or a 301 answering anything but a POST) is not followed but raised as its 3xx, both with
+    a note saying why;
   - a callable returning such an iterable: a **factory**, called once for each send, so the call stays retryable and
     redirects are followed. Prefer this for a file.
 - **`files=`**, a multipart body as httpx2 takes it (`{"name": file}`, or `(filename, file, content_type)` tuples), with
@@ -90,5 +100,6 @@ await client.post("reports", expect=nothing, files={"report": ("q3.csv", csv_byt
 ```
 
 `content=` combines with no other body option, and `files=` cannot carry `json=`: both raise `ValueError` rather than
-let httpx2 drop one silently. A `CachedTokenAuth` buffers a streamed body before the first send, because a 401 makes it
-send the request again.
+let httpx2 drop one silently. A `content=` that is none of the three (a `str`, which you encode first, a `bytearray`, a
+list) raises `TypeError` naming it. A `CachedTokenAuth` buffers a streamed body before the first send, because a 401
+makes it send the request again.

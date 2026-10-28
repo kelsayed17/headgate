@@ -78,6 +78,7 @@ from headgate._options import (
     HttpOptions,
     Timeouts,
     TransportPolicy,
+    check_deadline,
     check_timeout_fits,
     httpx_timeout,
     match_route,
@@ -164,7 +165,8 @@ class RequestOptions(_SendOptions, total=False, closed=True):
       once per item, and any value that is not a ``str``, number, bool or ``None`` is sent as its ``str()``.
     * ``headers``: added to the client's; a clash is won by the call.
     * ``body``: an :class:`~headgate.EncodedBody` a codec's ``encoder`` wrote (``body=NEW_ORDER(order)``), sent
-      with its ``Content-Type`` unless ``headers=`` sets one. It combines with no other body option.
+      with its ``Content-Type`` unless ``headers=`` (the call's or its view's, not the client's defaults) sets one. It
+      combines with no other body option.
     * ``json`` / ``data``: a JSON body of builtins (a codec's ``to_builtins`` builds one) or a form body.
     * ``content``: a raw body: ``bytes``; an async iterable of ``bytes``, streamed once, so the call is never re-sent
       and a redirect that asks for the body again is not followed; or a callable returning one, called once for each
@@ -220,6 +222,15 @@ class _Call:
     retry: bool | RetryPolicy = True
     follow_redirects: bool | None = None
     cache_ttl: float | None = None
+
+
+class _BlockError(Exception):
+    """An exception a ``stream()`` block raised, carried past the exchange's failure mapping to be raised unchanged."""
+
+    def __init__(self, error: Exception) -> None:
+        """Carry *error*."""
+        super().__init__()
+        self.error = error
 
 
 class _Report:
@@ -352,7 +363,9 @@ class AsyncBaseClient:
         closing a view, or leaving its ``async with`` block, closes nothing, and a view stops working once that client
         is closed.
 
-        :raises ValueError: for a timeout or deadline that is not positive.
+        :raises ValueError: for a deadline that is not positive and finite, and for a timeout longer than the deadline
+            the view's calls run under, since it could never take effect. A deadline shorter than the timeouts is
+            accepted: cutting each attempt's timeouts to the time left is what a short deadline is for.
         """
         layered = self._view.layered(options)
         if (timeout := options.get("timeout")) is not None:
@@ -471,7 +484,8 @@ class AsyncBaseClient:
     ) -> object:
         """Send a HEAD and read the reply through *expect*: by default :func:`~headgate.nothing`, as a HEAD has no body.
 
-        A reader still has the status line and headers, so ``expect=`` reads a header off a HEAD.
+        A reader still has the status line and headers, ``Content-Length`` and ``Content-Encoding`` included, so
+        ``expect=`` reads a header off a HEAD; the size cap is not applied to a body that does not exist.
         """
         call = _Call("HEAD", url, options, retry=retry, follow_redirects=follow_redirects, cache_ttl=cache_ttl)
         return await self._request(call, expect)
@@ -502,16 +516,23 @@ class AsyncBaseClient:
         * a retry covers opening only; a failure while the body arrives raises ``TransportError`` or
           ``ClientTimeoutError`` from the iteration;
         * the origin's circuit breaker spans the whole block: a network failure mid-body that leaves the block counts
-          against the origin, and a clean exit as a success.
+          against the origin, and a clean exit as a success;
+        * an exception the block raises that is not a ``ClientError`` is the caller's own, even an ``OSError`` or an
+          httpx2 error: it propagates unchanged, the breaker is charged nothing for it, and ``CallFinished`` reports
+          the status the stream opened with and no error.
 
-        ``last_event_id=`` sends ``Last-Event-ID`` (when not empty), to resume a server-sent event stream after the
-        last event a previous :class:`~headgate.streaming.Stream` saw (its ``last_event_id``).
+        ``last_event_id=`` sends ``Last-Event-ID`` (when not empty, and in place of one in ``headers=``), to resume a
+        server-sent event stream after the last event a previous :class:`~headgate.streaming.Stream` saw (its
+        ``last_event_id``).
 
         The request goes out when the block is entered.
         """
         if bool(last_event_id):
+            # Merged case-insensitively, so it replaces a Last-Event-ID however headers= spelled it.
+            headers = httpx2.Headers(options.get("headers"))
+            headers["Last-Event-ID"] = last_event_id
             options = options.copy()
-            options["headers"] = {**options.get("headers", {}), "Last-Event-ID": last_event_id}
+            options["headers"] = headers
         return self._streamed(_Call(method, url, options, retry=retry, follow_redirects=follow_redirects))
 
     @overload
@@ -635,10 +656,10 @@ class AsyncBaseClient:
         """
         spec: Expect[T] = expect if isinstance(expect, Expect) else Expect(expect)
         prepared = self._prepare(call)
-        for name, value in spec.headers.items():
-            prepared.request.headers.setdefault(name, value)
+        explicit = self._view.headers_for(call.options.get("headers"))
+        _stamp_headers(prepared.request, explicit, spec.headers)
         if spec.accept is not None:
-            _stamp_accept(prepared.request, self._view.headers_for(call.options.get("headers")), spec.accept)
+            _stamp_headers(prepared.request, explicit, {"Accept": spec.accept})
         async with self._reported(prepared):
             async with self._deadline(prepared), self._exchange(prepared) as (streamed, _):
                 announce_deprecation(prepared.context, streamed)
@@ -654,23 +675,46 @@ class AsyncBaseClient:
 
         The exchange is entered under the deadline and left open past it, on the exit stack, so the deadline bounds the
         send and the head checks while the breaker scope and the response last until the caller's block exits.
+
+        The caller's block runs at the ``yield``. What it raises is carried past the exchange in a :class:`_BlockError`,
+        out of reach of the exchange's failure mapping, since the stream maps its own network failures as the body
+        arrives and anything else is the caller's; it is raised unchanged once the exchange has closed. A
+        ``ClientError`` is raised inside the report, as the call's error; any other exception after it, so the call
+        reports the exchange it was.
         """
         prepared = self._prepare(call)
-        async with self._reported(prepared), contextlib.AsyncExitStack() as held:
-            async with self._deadline(prepared):
-                streamed, verdict = await held.enter_async_context(self._exchange(prepared))
-                announce_deprecation(prepared.context, streamed)
-                if (refused := _refusal(self._refusal_check, streamed)) is not None:
-                    head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
-                    raise refusal_error(refused, head, self._site(prepared)) from refused
-                if not streamed.is_success:
-                    head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
-                    raise status_error(head, self._site(prepared))
-                # A stream has no reader: passing the head checks is what accepts it.
-                await store_accepted(streamed)
-            yield OpenStream(
-                streamed, self._site(prepared), functools.partial(self._network_failure, prepared, verdict)
-            )
+        own: Exception | None = None
+        async with self._reported(prepared):
+            try:
+                async with contextlib.AsyncExitStack() as held:
+                    streamed, verdict = await self._opened(prepared, held)
+                    fail = functools.partial(self._network_failure, prepared, verdict)
+                    try:
+                        yield OpenStream(streamed, self._site(prepared), fail)
+                    except Exception as exc:
+                        raise _BlockError(exc) from exc
+            except _BlockError as blocked:
+                own = blocked.error
+            # Raised outside the except clause, so the error keeps its own __context__ rather than the carrier.
+            if isinstance(own, ClientError):
+                raise own
+        if own is not None:
+            raise own
+
+    async def _opened(self, prepared: _Prepared, held: contextlib.AsyncExitStack) -> tuple[httpx2.Response, Verdict]:
+        """Send *prepared* under its deadline and check the response head, leaving the exchange open on *held*."""
+        async with self._deadline(prepared):
+            streamed, verdict = await held.enter_async_context(self._exchange(prepared))
+            announce_deprecation(prepared.context, streamed)
+            if (refused := _refusal(self._refusal_check, streamed)) is not None:
+                head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
+                raise refusal_error(refused, head, self._site(prepared)) from refused
+            if not streamed.is_success:
+                head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
+                raise status_error(head, self._site(prepared))
+            # A stream has no reader: passing the head checks is what accepts it.
+            await store_accepted(streamed)
+        return streamed, verdict
 
     # Preparing the request.
 
@@ -678,8 +722,9 @@ class AsyncBaseClient:
         """Build *call*'s request and stamp its context on it.
 
         Raises ``ValueError`` for a t-string value no path segment can hold, for a call that would follow redirects
-        on a client with a ``refusal_check``, for a non-positive ``deadline=`` and for body options that do not
-        combine; and ``ClientError`` for a URL httpx2 cannot parse.
+        on a client with a ``refusal_check``, for a ``deadline=`` that is not positive and finite and for body options
+        that do not combine; ``TypeError`` for a ``content=`` that is no body; and ``ClientError`` for a URL httpx2
+        cannot parse.
         """
         if isinstance(call.url, Template):
             url, route = render_path(call.url), route_template(call.url)
@@ -698,7 +743,7 @@ class AsyncBaseClient:
         check_one_body(
             body=body, content=options.get("content"), json=options.get("json"), data=options.get("data"), files=files
         )
-        content, replayable = request_content(options.get("content") if body is None else body.content)
+        content, replayable = (body.content, True) if body is not None else request_content(options.get("content"))
         try:
             request = self._http_client.build_request(
                 call.method,
@@ -714,7 +759,7 @@ class AsyncBaseClient:
         except httpx2.InvalidURL as exc:
             raise _invalid_url(exc, CallSite(self._source, call.method, log_url)) from exc
         if body is not None:
-            request.headers.setdefault("Content-Type", body.content_type)
+            _stamp_headers(request, self._view.headers_for(options.get("headers")), {"Content-Type": body.content_type})
         # The absolute URL is for observers only (an OpenTelemetry span's url.full and server.address).
         full_url = sanitize_url(str(request.url)) if self._emitter.active else None
         info = CallInfo(method=call.method, url=log_url, route=route, full_url=full_url)
@@ -739,9 +784,7 @@ class AsyncBaseClient:
         """Return the seconds *call* may take: its own ``deadline=``, else the view's, its route's, the policy's."""
         if "deadline" in call.options:
             deadline = call.options["deadline"]
-            if deadline is not None and not deadline > 0:
-                msg = f"deadline must be > 0, or None (got {deadline})"
-                raise ValueError(msg)
+            check_deadline(deadline)
             return deadline
         if self._view.deadline is not KEEP:
             return self._view.deadline
@@ -838,7 +881,7 @@ class AsyncBaseClient:
 
         The response yielded is anything but a 429 or 5xx: one of those means the retry transport ran out of
         attempts, and it is raised here, so no call can declare either as an answer. A network failure or timeout,
-        in the send or in the caller's body read inside the block, becomes ``TransportError`` /
+        in the send or in a verb's body read inside the block, becomes ``TransportError`` /
         ``ClientTimeoutError``; an open breaker ``CircuitOpenError``; a rate budget the server paused past the
         call's deadline ``RateLimitError``; and a hop the SSRF guard refused ``ForbiddenDestinationError``.
 
@@ -1026,13 +1069,16 @@ def _query_value(value: object) -> _QueryValue:
     return value if isinstance(value, str | int | float | bool | None) else str(value)
 
 
-def _stamp_accept(request: httpx2.Request, explicit: Mapping[str, str] | None, accept: str) -> None:
-    """Send *accept* as *request*'s ``Accept``, over the client's default but never over an *explicit* one.
+def _stamp_headers(request: httpx2.Request, explicit: Mapping[str, str] | None, headers: Mapping[str, str]) -> None:
+    """Send *headers* on *request*, each over the client's default but never over an *explicit* one.
 
-    *explicit* is what the call and its view set in ``headers=``.
+    *explicit* is what the call and its view set in ``headers=``. The headers stamped this way are the ones the call's
+    own declarations imply: its body's ``Content-Type``, and its ``Expect``'s ``headers`` and ``accept``.
     """
-    if explicit is None or "accept" not in {name.lower() for name in explicit}:
-        request.headers["Accept"] = accept
+    taken = set() if explicit is None else {name.lower() for name in explicit}
+    for name, value in headers.items():
+        if name.lower() not in taken:
+            request.headers[name] = value
 
 
 def _charge_response(response: httpx2.Response, verdict: Verdict) -> None:

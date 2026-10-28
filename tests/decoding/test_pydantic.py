@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import importlib
 import sys
-from typing import TYPE_CHECKING
+import uuid
+from typing import TYPE_CHECKING, Annotated, Literal
 
 import msgspec
 import pytest
@@ -25,6 +26,8 @@ from headgate.pydantic import PydanticCodec, decode, decoder, encoder, to_builti
 from tests.support.responses import response
 
 if TYPE_CHECKING:
+    from typing_extensions import TypeForm
+
     from headgate._responses import Reader
 
 
@@ -261,6 +264,72 @@ def test_each_failure_is_named_and_separated() -> None:
         decode(b"{}", _Pair)
 
     assert str(raised.value) == "2 validation errors for _Pair: a: Field required; b: Field required"
+
+
+class _Buy(BaseModel):
+    kind: Literal["buy"]
+    qty: int
+
+
+class _Sell(BaseModel):
+    kind: Literal["sell"]
+    qty: int
+
+
+class _Ledger(BaseModel):
+    balances: dict[str, int] = Field(alias="Balances")
+    order: Annotated[_Buy | _Sell, Field(discriminator="kind")] | None = None
+
+
+class _Closed(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    qty: int
+
+
+@pytest.mark.parametrize(
+    ("body", "type_", "shown"),
+    [
+        pytest.param(
+            b'{"Balances": {"sk-live-SECRET": "x"}}',
+            _Ledger,
+            "Balances.[...]: Input should be a valid integer",
+            id="key",
+        ),
+        pytest.param(
+            b'{"Balances": {}, "order": {"kind": "sk-live-SECRET", "qty": 1}}',
+            _Ledger,
+            "order: Input tag '[...]' found using 'kind' does not match any of the expected tags: 'buy', 'sell'",
+            id="tag",
+        ),
+        pytest.param(
+            b'{"Balances": {}, "order": {"kind": "sell", "qty": "x"}}',
+            _Ledger,
+            "order.sell.qty: Input should be a valid integer",
+            id="known-tag",
+        ),
+        pytest.param(
+            b'"sk-live-SECRET"',
+            uuid.UUID,
+            "<body>: Input should be a valid UUID, [...]",
+            id="uuid",
+        ),
+        pytest.param(b'{"qty": 1, "sk-live-SECRET": 2}', _Closed, "[...]: Extra inputs are not permitted", id="extra"),
+        pytest.param(
+            b'{"sk-live-SECRET": 1}',
+            dict[int, int],
+            "[...].[key]: Input should be a valid integer, unable to parse string as an integer",
+            id="int-key",
+        ),
+    ],
+)
+def test_a_decode_error_never_repeats_an_input_key_or_tag(body: bytes, type_: TypeForm[object], shown: str) -> None:
+    """Show a location's parts the type declares (fields, aliases, tags) and ``[...]`` for the input's own keys."""
+    with pytest.raises(DecodeError) as raised:
+        decode(body, type_)
+
+    assert "SECRET" not in str(raised.value)
+    assert str(raised.value).endswith(f": {shown}")
 
 
 def test_the_encoder_applies_aliases_and_can_leave_out_none() -> None:

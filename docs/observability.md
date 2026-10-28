@@ -36,7 +36,7 @@ http = HttpOptions(observers=(Metrics(),))
 | `BreakerChanged` | an origin's breaker changed state | `origin`, `previous`, `state`, `failures`, `call` |
 | `CacheResult` | the cache answered | `outcome`: `hit`, `miss`, `shared`, `degraded` |
 | `Deprecated` | the response announced deprecation or a sunset | `deprecated`, `deprecated_at`, `sunset_at`, `link`, `sunset_link` |
-| `CallFinished` | a call ends, either way | `status_code`, `error` (the exception type's name), `attempts`, `elapsed` |
+| `CallFinished` | a call ends, either way | `status_code`, `error` (the exception type's name; not that of a non-`ClientError` a `stream()` block raised itself), `attempts`, `elapsed` |
 
 Every call event carries `call`, a `CallInfo`: the `method`, the `url` as given (sanitized), the `route` (the t-string
 template, `"series/{series_id}"`, or `None` for a `str` URL), the absolute `full_url` (sanitized), and a process-unique

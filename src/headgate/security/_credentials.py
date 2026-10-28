@@ -13,8 +13,9 @@ auth flow yields. On any of them addressed elsewhere it removes:
 * ``Authorization`` and ``Proxy-Authorization``, whatever the auth, so a third-party auth or a caller's own header does
   not reach another origin either. httpx2 itself drops ``Authorization`` only on a cross-origin redirect, not on a
   first request to an absolute URL;
-* ``Cookie``, unless the client keeps a cookie jar (``HttpOptions(cookies=True)``), which scopes cookies to their
-  domains itself.
+* ``Cookie``. A client that keeps a cookie jar (``HttpOptions(cookies=True)``) then gets back what the jar holds for
+  the hop's origin, since the jar scopes the cookies it stores to their domains; a ``Cookie`` header set explicitly
+  (client-wide or on the call) is not the jar's, and stays off.
 
 The request is still sent, unsigned: a provider may hand out a signed download URL on another host. A header of one of
 those names that the call set itself is removed too, since nothing on the request tells the two apart; a credential
@@ -24,7 +25,10 @@ implementing the protocol.
 
 **An auth flow's own hops** (requests a :class:`~headgate.CachedTokenAuth` mint yields, marked with
 :data:`CHAIN_ORIGIN`) carry the credentials the mint needs to the token endpoint the code addressed, so that origin is
-trusted for the hop and for the redirects it is answered with, and no other.
+trusted for the hop and for the redirects it is answered with on that origin. A redirect to any other origin is refused
+as :class:`~headgate.errors.ForbiddenDestinationError` before it is sent, rather than followed unsigned: a mint's
+credentials are not only what the guard knows to remove (a client secret in a header of the flow's own, or in the form
+body, which httpx2 sends again on a 307 or 308).
 
 **A middleware's credentials** follow the same rule. A middleware runs inside the transport stack, after the request
 hooks, so a signer that stamps every attempt would sign a cross-origin redirect hop after the hook had checked it. A
@@ -42,9 +46,11 @@ from typing import TYPE_CHECKING, Final
 import httpx2
 
 from headgate._core import CredentialCarrier, CredentialStamper, origin_text
+from headgate.errors import ForbiddenDestinationError
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from http.cookiejar import CookieJar
 
 __all__ = ["CHAIN_ORIGIN", "CredentialGuard"]
 
@@ -54,7 +60,7 @@ __all__ = ["CHAIN_ORIGIN", "CredentialGuard"]
 CHAIN_ORIGIN: Final = "headgate.chain_origin"
 
 #: The headers withheld from an untrusted origin whatever the client's auth declares.
-_ALWAYS_WITHHELD: Final = frozenset({"authorization", "proxy-authorization"})
+_ALWAYS_WITHHELD: Final = frozenset({"authorization", "proxy-authorization", "cookie"})
 
 
 class CredentialGuard:
@@ -64,7 +70,7 @@ class CredentialGuard:
     hook and, when it has middleware, again below the last one (see the module docstring).
     """
 
-    __slots__ = ("_headers", "_middleware_headers", "_middleware_params", "_params", "_trusted")
+    __slots__ = ("_cookie_jar", "_headers", "_middleware_headers", "_middleware_params", "_params", "_trusted")
 
     def __init__(
         self,
@@ -72,23 +78,23 @@ class CredentialGuard:
         auth: httpx2.Auth | None,
         base_url: httpx2.URL,
         trusted_origins: Iterable[str],
-        cookie_jar: bool,
+        cookie_jar: CookieJar | None,
         middleware: Iterable[object] = (),
     ) -> None:
         """Trust *base_url*'s origin and *trusted_origins* (normalized origin text); withhold *auth*'s credentials.
 
-        *cookie_jar* says whether the client keeps a cookie jar, in which case ``Cookie`` is left to it. Each of
-        *middleware* that is a :class:`~headgate._core.CredentialCarrier` has its declared credentials withheld too.
+        *cookie_jar* is the jar the client keeps, if any, whose cookies for the hop's origin replace a withheld
+        ``Cookie``. Each of *middleware* that is a :class:`~headgate._core.CredentialCarrier` has its declared
+        credentials withheld too.
         """
         headers = set(_ALWAYS_WITHHELD)
-        if not cookie_jar:
-            headers.add("cookie")
         params = frozenset[str]()
         if isinstance(auth, CredentialStamper):
             headers.update(name.lower() for name in auth.credential_headers)
             params = auth.credential_params
         self._headers = frozenset(headers)
         self._params = params
+        self._cookie_jar = cookie_jar
         carriers = [item for item in middleware if isinstance(item, CredentialCarrier)]
         self._middleware_headers = frozenset(name.lower() for item in carriers for name in item.credential_headers)
         self._middleware_params = frozenset(name for item in carriers for name in item.credential_params)
@@ -107,11 +113,24 @@ class CredentialGuard:
 
         The middleware's are removed unless the origin is ``base_url``'s or a trusted one; an auth flow's chain origin
         is trusted for the auth's credentials only.
+
+        :raises ForbiddenDestinationError: for an auth flow's hop redirected off its chain origin.
         """
-        if request.url.origin not in self._trusted:
+        origin = request.url.origin
+        chain = request.extensions.get(CHAIN_ORIGIN)
+        if isinstance(chain, str) and chain != origin_text(origin):
+            msg = (
+                f"refused to follow a token mint's redirect from {chain} to {origin_text(origin)}: a mint hop's "
+                f"credentials (its headers and body) go only to the origin its flow addressed. A flow that means to "
+                f"go there yields that request itself"
+            )
+            raise ForbiddenDestinationError(msg)
+        if origin not in self._trusted:
             _remove(request, self._middleware_headers, self._middleware_params)
         if not self.trusts(request):
             _remove(request, self._headers, self._params)
+            if self._cookie_jar is not None:
+                httpx2.Cookies(self._cookie_jar).set_cookie_header(request)
 
 
 def _remove(request: httpx2.Request, headers: frozenset[str], params: frozenset[str]) -> None:

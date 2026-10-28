@@ -175,6 +175,18 @@ async def test_timeout_raises_client_timeout_error() -> None:
         assert isinstance(ei.value, TransportError), "must stay catchable as the parent"
 
 
+async def test_a_builtin_timeout_raises_client_timeout_error() -> None:
+    """Map a built-in ``TimeoutError`` from below the client (a middleware or transport's own ``asyncio.timeout``)."""
+
+    def _timeout(_request: httpx2.Request) -> httpx2.Response:
+        msg = "resolver timed out"
+        raise TimeoutError(msg)
+
+    async with _client(httpx2.MockTransport(_timeout)) as c:
+        with pytest.raises(ClientTimeoutError, match="resolver timed out"):
+            await c.get("/x", expect=decoder(dict[str, int]))
+
+
 # --- success ---
 
 

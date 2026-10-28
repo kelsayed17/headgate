@@ -260,6 +260,17 @@ async def test_a_synchronous_body_does_not_hold_a_slot() -> None:
     assert isinstance(response.stream, _SyncBody)
 
 
+async def test_a_response_already_read_and_closed_frees_its_slot_at_once() -> None:
+    """Free the slot of a response the transport returns read and closed, which no later close reaches."""
+    budget = RateBudget(_INSTANT, max_in_flight=1)
+    wire = httpx2.MockTransport(lambda _request: httpx2.Response(200, json={"ok": True}))
+    client = StubClient(base_url="https://x", rate=budget, http=HttpOptions(transport=wire))
+    for _ in range(_CALLS):
+        response = await asyncio.wait_for(client.get("y", expect=RESPONSE), _THREAD_TIMEOUT)
+        assert response.json() == {"ok": True}
+    assert budget.in_flight == 0
+
+
 async def test_a_capped_client_frees_every_slot_it_reads() -> None:
     """Serve more concurrent calls than the cap through a client: each buffered read frees its slot."""
     budget = RateBudget(_INSTANT, max_in_flight=2)

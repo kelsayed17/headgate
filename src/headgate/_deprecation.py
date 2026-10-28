@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Final
 
 from headgate._core import Deprecated
 from headgate._url import sanitize_url
+from headgate.pagination._link import parse_link_header
 
 if TYPE_CHECKING:
     import httpx2
@@ -65,11 +66,16 @@ def parse_deprecation(value: str) -> tuple[bool, datetime | None]:
 
 
 def _link(response: httpx2.Response, rel: str) -> str | None:
-    """Return the target of *response*'s ``Link`` with relation *rel*, resolved and sanitized, or ``None``."""
-    target = response.links.get(rel, {}).get("url")
-    if target is None:
-        return None
-    return sanitize_url(str(response.request.url.join(target)))
+    """Return the target of *response*'s first ``Link`` with relation *rel*, resolved and sanitized, or ``None``.
+
+    The ``Link`` fields are read as RFC 8288 writes them, by the parser :class:`~headgate.pagination.LinkHeader`
+    follows: a link's ``rel`` holds relation types separated by spaces, compared without regard to case.
+    """
+    for value in response.headers.get_list("link"):
+        for link in parse_link_header(value):
+            if rel in link.rels:
+                return sanitize_url(str(response.request.url.join(link.target)))
+    return None
 
 
 def deprecation_of(response: httpx2.Response, call: CallInfo) -> Deprecated | None:

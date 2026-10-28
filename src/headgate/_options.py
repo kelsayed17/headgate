@@ -50,6 +50,7 @@ __all__ = [
     "SecurityOptions",
     "Timeouts",
     "TransportPolicy",
+    "check_deadline",
     "check_timeout_fits",
     "httpx_timeout",
     "match_route",
@@ -89,6 +90,16 @@ def _check_positive(name: str, value: float) -> None:
     """Raise ``ValueError`` unless *value* is a positive number (NaN is not)."""
     if not value > 0:
         msg = f"{name} must be > 0 (got {value})"
+        raise ValueError(msg)
+
+
+def check_deadline(deadline: float | None) -> None:
+    """Raise ``ValueError`` unless *deadline* is ``None`` or a positive, finite number of seconds (NaN is not).
+
+    The one check for every place a deadline is set: the policy, a route, a view and a call.
+    """
+    if deadline is not None and not (deadline > 0 and math.isfinite(deadline)):
+        msg = f"deadline must be > 0 and finite, or None (got {deadline})"
         raise ValueError(msg)
 
 
@@ -199,10 +210,9 @@ class Route:
     deadline: float | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a fragment that names no path segment, which would match every path, and a deadline not positive."""
+        """Refuse a fragment naming no segment, which matches every path, and a deadline not positive and finite."""
         check_fragment(self.fragment)
-        if self.deadline is not None:
-            _check_positive("deadline", self.deadline)
+        check_deadline(self.deadline)
 
 
 def match_route(routes: tuple[Route, ...], path: str) -> Route | None:
@@ -235,9 +245,7 @@ class TransportPolicy:
 
     def __post_init__(self) -> None:
         """Refuse a deadline that is not positive and finite, and freeze the rule and route sequences."""
-        if self.deadline is not None and not (self.deadline > 0 and math.isfinite(self.deadline)):
-            msg = f"deadline must be > 0 and finite, or None (got {self.deadline})"
-            raise ValueError(msg)
+        check_deadline(self.deadline)
         object.__setattr__(self, "rate_limits", tuple(self.rate_limits))
         object.__setattr__(self, "routes", tuple(self.routes))
 

@@ -10,8 +10,11 @@ module keeps the real ``Pacer.wait`` (``transport_policy``), since that wait is 
 from __future__ import annotations
 
 import asyncio
+import heapq
+import itertools
 import threading
 import time
+from typing import TYPE_CHECKING, override
 
 import httpx2
 import pytest
@@ -19,10 +22,16 @@ import pytest
 from headgate._core import BudgetBacklogError, CallContext, CallInfo, Emitter, RateLimited, Timing
 from headgate.policy import policy_disabled
 from headgate.ratelimit import UNLIMITED, Adaptive, Rate, RateBudget, RateRule
-from headgate.ratelimit._budget import BudgetPausedError, Pacer, pacer_of
+from headgate.ratelimit._budget import MAX_PAUSE, BudgetPausedError, Pacer, pacer_of
 from headgate.ratelimit._budgets import PathBudgets
+from headgate.ratelimit._transport import RateLimitTransport
 from headgate.testing import TestClock
 from tests.support.events import Recorder
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Coroutine
+
+    from headgate._core import Clock
 
 pytestmark = pytest.mark.transport_policy
 
@@ -43,7 +52,7 @@ _PER_THREAD = 4
 _THREADS = 3
 
 
-def _context(clock: TestClock, *, deadline: float | None = None, observer: Recorder | None = None) -> CallContext:
+def _context(clock: Clock, *, deadline: float | None = None, observer: Recorder | None = None) -> CallContext:
     """Return a call's context on *clock*, due *deadline* seconds from now, reporting to *observer*."""
     emitter = Emitter(() if observer is None else (observer,))
     return CallContext(CallInfo(method="GET", url="https://x/"), clock=clock, deadline_after=deadline, emitter=emitter)
@@ -72,6 +81,54 @@ def _response(status: int, headers: dict[str, str] | None = None) -> httpx2.Resp
 def _rate_limited(recorder: Recorder) -> list[tuple[float, str]]:
     """Return each ``RateLimited`` event's delay and reason."""
     return [(event.delay, event.reason) for event in recorder.events if isinstance(event, RateLimited)]
+
+
+#: How many times the timeline lets the event loop run before it takes every task to be asleep.
+_SETTLE = 50
+
+
+class _Timeline:
+    """A clock and a sleep for concurrent waiters, as real time runs them: each sleeper wakes at its own time.
+
+    Unlike :class:`~headgate.testing.TestClock`, sleeps overlap: :meth:`run` lets every task run until all of them
+    sleep, then moves the clock to the earliest wake and wakes that sleeper alone (ties in the order they slept).
+    """
+
+    def __init__(self) -> None:
+        """Start at zero with nobody asleep."""
+        self.now = 0.0
+        self._sleepers: list[tuple[float, int, asyncio.Future[None]]] = []
+        self._order = itertools.count()
+
+    def __call__(self) -> float:
+        """Return the current reading."""
+        return self.now
+
+    async def sleep(self, seconds: float, /) -> None:
+        """Sleep until the clock reaches now plus *seconds*."""
+        woken = asyncio.get_running_loop().create_future()
+        heapq.heappush(self._sleepers, (self.now + seconds, next(self._order), woken))
+        await woken
+
+    @property
+    def timing(self) -> Timing:
+        """This clock and its sleep."""
+        return Timing(clock=self, sleep=self.sleep)
+
+    async def run(self, *calls: Coroutine[object, object, None]) -> None:
+        """Run *calls* together to the end, moving the clock from one wake to the next."""
+        tasks = [asyncio.create_task(call) for call in calls]
+        while True:
+            for _ in range(_SETTLE):
+                await asyncio.sleep(0)
+            if all(task.done() for task in tasks):
+                break
+            assert self._sleepers, "every task waits on something no sleep will end"
+            when, _, woken = heapq.heappop(self._sleepers)
+            self.now = max(self.now, when)
+            woken.set_result(None)
+        for task in tasks:
+            task.result()
 
 
 # --- Pacing ---
@@ -279,6 +336,124 @@ async def test_a_shorter_pause_never_shortens_a_longer_one() -> None:
     budget.observe(_response(429, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
     budget.observe(_response(429, {"Retry-After": "1"}), sent_at=clock())
     assert budget.pause_remaining() == _PAUSE
+
+
+async def test_a_pause_holds_the_turns_already_reserved_in_order_and_at_the_rate() -> None:
+    """Send the calls queued before a pause one interval apart after it, in their order, not all at its end."""
+    timeline = _Timeline()
+    rate = Rate(requests=1, period=0.1)
+    budget = Pacer(rate, adaptive=None, timing=timeline.timing, wall_clock=timeline)
+    sent: list[tuple[int, float]] = []
+
+    async def call(number: int) -> None:
+        await budget.wait(_context(timeline))
+        sent.append((number, timeline.now))
+
+    async def pushback() -> None:
+        await timeline.sleep(0.05)
+        budget.observe(_response(429, {"retry-after-ms": "500"}), sent_at=timeline.now)
+
+    await timeline.run(pushback(), *(call(number) for number in range(8)))
+
+    assert [number for number, _ in sent] == list(range(8))
+    assert [when for _, when in sent] == pytest.approx([0.0, *(0.55 + rate.interval * turn for turn in range(7))])
+
+
+async def test_a_call_arriving_during_a_pause_queues_behind_the_turns_it_postponed() -> None:
+    """Keep FIFO across a pause: a call that arrives while it runs sends after every call queued before it."""
+    timeline = _Timeline()
+    budget = Pacer(Rate(requests=1, period=1.0), adaptive=None, timing=timeline.timing, wall_clock=timeline)
+    sent: list[str] = []
+
+    async def call(name: str, *, after: float = 0.0) -> None:
+        await timeline.sleep(after)
+        await budget.wait(_context(timeline))
+        sent.append(name)
+
+    async def pushback() -> None:
+        await timeline.sleep(0.5)
+        budget.observe(_response(503, {"Retry-After": "2"}), sent_at=timeline.now)
+
+    await timeline.run(pushback(), call("first"), call("second"), call("third"), call("late", after=1.0))
+
+    assert sent == ["first", "second", "third", "late"]
+    assert timeline.now == pytest.approx(4.5), "the queue resumed at 2.5, one second apart"
+
+
+@pytest.mark.parametrize("retry_after", ["99999999999", "Fri, 31 Dec 9999 23:59:59 GMT"], ids=["seconds", "date"])
+async def test_a_pause_is_cut_to_an_hour(retry_after: str) -> None:
+    """Pause no longer than ``MAX_PAUSE`` however long a response asks, so a hostile header cannot stop the budget."""
+    clock = TestClock()
+    budget = _budget(clock)
+
+    asked = budget.observe(_response(503, {"Retry-After": retry_after}), sent_at=clock())
+    await budget.wait(_context(clock))
+
+    assert (asked, clock.sleeps) == (MAX_PAUSE, [MAX_PAUSE])
+    assert MAX_PAUSE == 60 * 60
+
+
+class _Wire(httpx2.AsyncBaseTransport):
+    """Answer each request after the time *durations* gives it, the first with a 429 asking for *pause*; log sends."""
+
+    def __init__(self, timeline: _Timeline, durations: list[float], *, pause: float | None = None) -> None:
+        """Take *durations[n]* seconds over request *n*."""
+        self._timeline = timeline
+        self._durations = durations
+        self._pause = pause
+        self.sent: list[float] = []
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        number = len(self.sent)
+        self.sent.append(self._timeline.now)
+        await self._timeline.sleep(self._durations[number])
+        if number == 0 and self._pause is not None:
+            return httpx2.Response(429, headers={"Retry-After": f"{self._pause:g}"}, stream=_Body())
+        return httpx2.Response(200, stream=_Body())
+
+
+class _Body(httpx2.AsyncByteStream):
+    """A streamed empty body, so the concurrency slot is held until it is closed."""
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        return
+        yield b""
+
+
+async def _send_all(budget: RateBudget, wire: _Wire, timeline: _Timeline, calls: int) -> None:
+    """Send *calls* requests at once through a rate-limit layer spending *budget* over *wire*, closing each answer."""
+    layer = RateLimitTransport(budgets=PathBudgets(default=budget), transport=wire)
+
+    async def call() -> None:
+        response = await layer.handle_async_request(httpx2.Request("GET", "https://x/"))
+        await response.aclose()
+
+    await timeline.run(*(call() for _ in range(calls)))
+
+
+async def test_a_call_waiting_for_a_slot_waits_out_a_pause_set_meanwhile() -> None:
+    """Hold the calls a freed slot lets through behind the pause the first answer asked for."""
+    timeline = _Timeline()
+    budget = RateBudget(Rate.per_second(100), max_in_flight=2, adaptive=None, timing=timeline.timing)
+    wire = _Wire(timeline, [0.1] * 6, pause=1.0)
+
+    await _send_all(budget, wire, timeline, 6)
+
+    assert wire.sent == pytest.approx([0.0, 0.0, 1.1, 1.1, 1.2, 1.2])
+    assert budget.in_flight == 0
+
+
+async def test_calls_freed_together_by_slots_still_go_out_at_the_rate() -> None:
+    """Pace the calls that slots freed at one instant let through, rather than sending them all at once."""
+    timeline = _Timeline()
+    budget = RateBudget(Rate(requests=1, period=1.0), max_in_flight=2, adaptive=None, timing=timeline.timing)
+    wire = _Wire(timeline, [10.0, 9.0, 1.0, 1.0])
+
+    await _send_all(budget, wire, timeline, 4)
+
+    assert wire.sent == pytest.approx([0.0, 1.0, 10.0, 11.0])
 
 
 # --- Adaptive throttling ---

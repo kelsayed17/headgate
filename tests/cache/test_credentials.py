@@ -11,10 +11,11 @@ auths implement the protocol themselves, and are exercised when they do.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import math
 import string
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, ClassVar, override
 
 import anysqlite
 import httpx2
@@ -33,7 +34,9 @@ from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Mapping
+    from collections.abc import AsyncIterator, Generator, Mapping
+
+    from headgate import Next
 
 _URL = "https://x/series?id=A"
 _HEADER = "X-Api-Key"
@@ -80,6 +83,22 @@ class _OpaqueAuth(httpx2.Auth):
         yield request
 
 
+class _KeyMiddleware:
+    """A middleware that stamps a key header and declares it, as a :class:`~headgate._core.CredentialCarrier`."""
+
+    credential_headers: ClassVar = frozenset({_HEADER})
+    credential_params: ClassVar = frozenset[str]()
+
+    def __init__(self, key: str) -> None:
+        """Send *key* in :data:`_HEADER` on every attempt."""
+        self._key = key
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        """Stamp the key, then send."""
+        request.headers[_HEADER] = self._key
+        return await call_next(request)
+
+
 class _Recorder(httpx2.AsyncBaseTransport):
     """The network leg: records the raw URL and raw headers of every request, and answers 200."""
 
@@ -99,20 +118,36 @@ def _client(
     auth: httpx2.Auth | None,
     *,
     partition: Partition = Partition.CREDENTIAL,
-    headers: Mapping[str, str] | None = None,
+    http: HttpOptions | None = None,
 ) -> StubClient:
-    """Build a client caching ``/series`` into *storage*, with *auth* and *partition*."""
+    """Build a client caching ``/series`` into *storage*, with *auth* and *partition*, and *http* over *network*."""
     return StubClient(
         base_url="https://x",
         rate=UNLIMITED,
         auth=auth,
         policy=TransportPolicy(cache=HttpCache(policy=series_policy(), storage=storage, partition=partition)),
-        http=HttpOptions(transport=network, headers=headers or {}),
+        http=dataclasses.replace(http or HttpOptions(), transport=network),
     )
 
 
 #: Every row the SQLite storage holds: entries (request, response head, metadata) and body chunks.
 _ALL_ROWS = ("SELECT * FROM entries", "SELECT * FROM streams")
+
+
+@pytest.fixture
+async def connection() -> anysqlite.Connection:
+    """Return the in-memory SQLite connection under :func:`inspected`, so a test can read every stored row."""
+    return await anysqlite.connect(":memory:")
+
+
+@pytest.fixture
+async def inspected(connection: anysqlite.Connection) -> AsyncIterator[AsyncSqliteStorage]:
+    """Yield a storage on :func:`connection`, closed (with the connection) after the test."""
+    store = AsyncSqliteStorage(connection=connection)
+    try:
+        yield store
+    finally:
+        await store.close()
 
 
 async def _stored_bytes(connection: anysqlite.Connection) -> bytes:
@@ -166,8 +201,8 @@ async def test_one_credential_shares_its_entries_between_clients(storage: AsyncS
 async def test_an_undeclared_credential_partitions_too(storage: AsyncSqliteStorage) -> None:
     """A client with no auth but its own ``Authorization`` header gets entries of its own per value."""
     network = _Recorder()
-    first = _client(network, storage, None, headers={"Authorization": "Bearer one"})
-    second = _client(network, storage, None, headers={"Authorization": "Bearer two"})
+    first = _client(network, storage, None, http=HttpOptions(headers={"Authorization": "Bearer one"}))
+    second = _client(network, storage, None, http=HttpOptions(headers={"Authorization": "Bearer two"}))
 
     await first.get(_URL, expect=RESPONSE)
     await second.get(_URL, expect=RESPONSE)
@@ -195,6 +230,77 @@ async def test_an_anonymous_client_and_a_shared_one_share_a_namespace(storage: A
     hit = await _client(network, storage, _KeyAuth("bob"), partition=Partition.SHARED).get(_URL, expect=RESPONSE)
 
     assert hit.extensions.get("hishel_from_cache") is True
+
+
+async def test_a_middlewares_declared_credential_partitions_and_is_never_stored(
+    inspected: AsyncSqliteStorage, connection: anysqlite.Connection
+) -> None:
+    """A key a middleware stamps and declares keeps each key's entries apart, and no stored row carries it."""
+    network = _Recorder()
+    alice = _client(network, inspected, None, http=HttpOptions(middleware=(_KeyMiddleware("alice-middleware-key"),)))
+    bob = _client(network, inspected, None, http=HttpOptions(middleware=(_KeyMiddleware("bob-middleware-key"),)))
+
+    await alice.get(_URL, expect=RESPONSE)
+    await bob.get(_URL, expect=RESPONSE)
+    hit = await alice.get(_URL, expect=RESPONSE)
+
+    assert len(network.sent) == len(("alice", "bob")), "bob missed alice's entry"
+    assert hit.extensions.get("hishel_from_cache") is True
+    stored = await _stored_bytes(connection)
+    assert b"middleware-key" not in stored
+
+
+async def test_a_client_wide_header_partitions_and_is_never_stored(
+    inspected: AsyncSqliteStorage, connection: anysqlite.Connection
+) -> None:
+    """A key in ``HttpOptions(headers=...)`` keeps each key's entries apart, and no stored row carries it."""
+    network = _Recorder()
+    alice = _client(network, inspected, None, http=HttpOptions(headers={_HEADER: "alice-client-key"}))
+    bob = _client(network, inspected, None, http=HttpOptions(headers={_HEADER: "bob-client-key"}))
+
+    await alice.get(_URL, expect=RESPONSE)
+    await bob.get(_URL, expect=RESPONSE)
+    hit = await alice.get(_URL, expect=RESPONSE)
+
+    assert len(network.sent) == len(("alice", "bob")), "bob missed alice's entry"
+    assert hit.extensions.get("hishel_from_cache") is True
+    assert b"client-key" not in await _stored_bytes(connection)
+
+
+async def test_a_shared_partition_stores_no_header_value_as_sent(
+    inspected: AsyncSqliteStorage, connection: anysqlite.Connection
+) -> None:
+    """Under ``Partition.SHARED`` an undeclared auth's header is not stored, nor a client-wide or per-call one."""
+    network = _Recorder()
+    http = HttpOptions(headers={"X-Static": "static-1"})
+    client = _client(network, inspected, _OpaqueAuth(), partition=Partition.SHARED, http=http)
+
+    await client.get(_URL, expect=RESPONSE, headers={"X-Call": "per-call-1"})
+    hit = await client.get(_URL, expect=RESPONSE, headers={"X-Call": "per-call-1"})
+
+    assert hit.extensions.get("hishel_from_cache") is True
+    stored = await _stored_bytes(connection)
+    assert all(value not in stored for value in (b"opaque-secret", b"static-1", b"per-call-1"))
+
+
+async def test_a_header_a_response_varies_on_still_tells_entries_apart(storage: AsyncSqliteStorage) -> None:
+    """The stored request headers are digests, so ``Vary`` still matches a request only to its own variant."""
+    sent: list[str] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request.headers["Accept-Language"])
+        return httpx2.Response(httpx2.codes.OK, headers={"Vary": "Accept-Language"}, text=sent[-1])
+
+    english = _client(httpx2.MockTransport(answer), storage, None, partition=Partition.SHARED)
+    french = _client(httpx2.MockTransport(answer), storage, None, partition=Partition.SHARED)
+
+    await english.get(_URL, expect=RESPONSE, headers={"Accept-Language": "en"})
+    answer_fr = await french.get(_URL, expect=RESPONSE, headers={"Accept-Language": "fr"})
+    hit_en = await english.get(_URL, expect=RESPONSE, headers={"Accept-Language": "en"})
+
+    assert sent == ["en", "fr"]
+    assert (answer_fr.text, hit_en.text) == ("fr", "en")
+    assert hit_en.extensions.get("hishel_from_cache") is True
 
 
 # Refusing what cannot be partitioned.
@@ -233,7 +339,7 @@ async def test_the_network_gets_the_request_exactly_as_an_uncached_client_sends_
     url = "https://x/series?api_key=k1&id=1&api_key=k2"
     cached, uncached = _Recorder(), _Recorder()
 
-    await _client(cached, storage, _KeyAuth("alice"), headers=headers).get(url, expect=RESPONSE)
+    await _client(cached, storage, _KeyAuth("alice"), http=HttpOptions(headers=headers)).get(url, expect=RESPONSE)
     await StubClient(
         base_url="https://x",
         rate=UNLIMITED,
@@ -346,7 +452,8 @@ def test_the_view_drops_every_credential_and_keeps_the_rest_in_order() -> None:
 
     stored, headers = CredentialScope(_KeyAuth("k"), partition=Partition.SHARED).view(request)
 
-    assert str(stored) == "https://x/series?b=2&a=1"
+    assert str(stored.copy_with(fragment=None)) == "https://x/series?b=2&a=1"
+    assert stored.fragment.startswith("headgate-partition-"), "the undeclared api_key labels it, the fragment does not"
     assert [name for name, _ in headers.multi_items()] == ["host", "accept", "x-trace"]
 
 
@@ -381,11 +488,65 @@ def test_labels_separate_auth_classes_with_the_same_identity() -> None:
     assert _label(CredentialScope(_KeyAuth("k")), _URL) != _label(CredentialScope(_OtherKeyAuth("k")), _URL)
 
 
-def test_a_shared_scope_never_labels() -> None:
-    """Under ``Partition.SHARED`` no request is labeled, whatever credential it carries."""
+def test_a_shared_scope_never_labels_by_credential() -> None:
+    """Under ``Partition.SHARED`` no request is labeled for a credential header, cookie or userinfo it carries."""
     shared = CredentialScope(_KeyAuth("alice"), partition=Partition.SHARED)
 
-    assert _label(shared, _URL, {"Authorization": "Bearer t"}) is None
+    assert _label(shared, _URL, {"Authorization": "Bearer t", "Cookie": "c"}) is None
+    assert _label(shared, "https://a:1@x/series") is None
+
+
+def test_a_shared_scope_keeps_secret_named_parameters_apart_by_value() -> None:
+    """Under ``Partition.SHARED`` a parameter named like a credential is still told apart by its value.
+
+    ``key`` is a well-known secret name, but ``/config?key=theme`` and ``?key=locale`` are different resources: dropped
+    without a trace they would share one entry. A parameter the auth declares is its credential, and is not.
+    """
+    shared = CredentialScope(_KeyAuth("alice"), partition=Partition.SHARED)
+
+    theme, locale = _label(shared, "https://x/config?key=theme"), _label(shared, "https://x/config?key=locale")
+    assert None not in (theme, locale)
+    assert theme != locale
+    assert _label(shared, f"{_URL}&{_PARAM}=one") is None
+
+
+def test_the_view_digests_every_header_it_keeps() -> None:
+    """A kept header's value is a keyed digest, the same for the same value, so it can be matched but not read."""
+    scope = CredentialScope()
+
+    _, first = scope.view(httpx2.Request("GET", _URL, headers={"X-Key": "value-one"}))
+    _, again = scope.view(httpx2.Request("GET", _URL, headers={"X-Key": "value-one"}))
+    _, other = scope.view(httpx2.Request("GET", _URL, headers={"X-Key": "value-two"}))
+
+    assert "value-one" not in first["x-key"]
+    assert first["x-key"] == again["x-key"] != other["x-key"]
+
+
+class _IdentifiedSigner(_KeyMiddleware):
+    """A middleware whose stamp changes per request, and which names the credential it signs with."""
+
+    def credential_identity(self) -> bytes:
+        """Return the signing key."""
+        return self._key.encode()
+
+
+def test_labels_follow_a_middlewares_values_and_a_client_wide_header() -> None:
+    """A middleware's declared header and a client-wide header label by value; the auth's own stays its identity."""
+    carrier = CredentialScope(carriers=(_KeyMiddleware("k"),))
+    client_wide = CredentialScope(client_headers=("X-Static",))
+
+    assert _label(carrier, _URL, {_HEADER: "a"}) != _label(carrier, _URL, {_HEADER: "b"})
+    assert _label(client_wide, _URL, {"X-Static": "a"}) != _label(client_wide, _URL, {"X-Static": "b"})
+    assert _label(client_wide, _URL) is None
+
+
+def test_a_middleware_that_names_its_credential_labels_by_that() -> None:
+    """A middleware that is a ``CredentialStamper`` labels by its identity, so a per-request signature still hits."""
+    alice = CredentialScope(carriers=(_IdentifiedSigner("alice"),))
+    bob = CredentialScope(carriers=(_IdentifiedSigner("bob"),))
+
+    assert _label(alice, _URL, {_HEADER: "signature-1"}) == _label(alice, _URL, {_HEADER: "signature-2"})
+    assert _label(alice, _URL, {_HEADER: "signature-1"}) != _label(bob, _URL, {_HEADER: "signature-1"})
 
 
 def test_a_label_is_a_keyed_hash_not_the_credential() -> None:

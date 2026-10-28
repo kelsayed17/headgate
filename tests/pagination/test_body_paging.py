@@ -738,3 +738,24 @@ async def test_an_attribute_named_write_is_not_a_writer() -> None:
 
     assert [item.id async for item in paginated] == [1, 2, 3, 4]
     assert pages.log.getvalue() == ""
+
+
+def test_a_writing_pager_missing_a_method_cannot_be_built() -> None:
+    """Refuse to build a writing pager that leaves out a pager method, rather than inherit a stub that returns None."""
+
+    class Unfinished(WritingPager[Page, Item, Query]):
+        @property
+        @override
+        def write(self) -> Writer[Query]:
+            return QUERY
+
+        @override
+        def first(self, request: PageRequest[Query]) -> PageRequest[Query]:
+            return request
+
+        @override
+        def page_items(self, page: Page) -> list[Item]:
+            return page.data
+
+    with pytest.raises(TypeError, match="abstract method 'next_page'"):
+        Unfinished()  # ty: ignore[call-non-callable]

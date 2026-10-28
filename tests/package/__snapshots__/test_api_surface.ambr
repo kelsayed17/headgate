@@ -287,6 +287,9 @@
       def collect(self, *, max_items: 'int | None' = None) -> 'list[I]'
       def pages(self) -> 'AsyncIterator[P]'
   class WritingPager(Pager, ABC, Generic)(*args, **kwargs)
+      def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
+      def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
+      def page_items(self, page: 'P') -> 'Iterable[I]'
       property write
   def parse_link_header(value: 'str') -> 'list[Link]'
   '''
@@ -375,7 +378,7 @@
       field respect_should_retry: bool = True
       field hedge: Hedge | None = None
       field min_attempt_time: float = 0.05
-      def wait_after(self, failure: 'httpx2.Response | Exception', retry: 'int') -> 'float'
+      def wait_after(self, retry_after: 'float | None', retry: 'int') -> 'float'
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.security]
@@ -687,7 +690,7 @@
       field respect_should_retry: bool = True
       field hedge: Hedge | None = None
       field min_attempt_time: float = 0.05
-      def wait_after(self, failure: 'httpx2.Response | Exception', retry: 'int') -> 'float'
+      def wait_after(self, retry_after: 'float | None', retry: 'int') -> 'float'
   class Route(object)(fragment: 'str', *, retry: 'RetryPolicy | None' = None, deadline: 'float | None' = None) -> 'None'
       field fragment: str
       field retry: RetryPolicy | None = None

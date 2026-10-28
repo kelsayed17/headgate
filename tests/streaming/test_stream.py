@@ -256,6 +256,50 @@ async def test_an_error_of_the_callers_own_passes_through_and_charges_nothing() 
     assert failures(_HOST) == 0
 
 
+async def _fail_while_handling(client: StubClient) -> None:
+    """Raise ``KeyError`` from the stream's block while handling a ``ValueError``, its context suppressed."""
+    async with client.stream("f"):
+        try:
+            int("x")
+        except ValueError:
+            msg = "id"
+            raise KeyError(msg) from None
+
+
+async def test_an_error_of_the_callers_own_keeps_its_context() -> None:
+    """Raise the caller's exception with the context it was raised in, not one the client added."""
+    with pytest.raises(KeyError) as raised:
+        await _fail_while_handling(_client(_answer(httpx2.Response(200))))
+    assert raised.value.__suppress_context__
+    assert isinstance(raised.value.__context__, ValueError)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(FileNotFoundError(2, "No such file", "out.csv"), id="an-os-error"),
+        pytest.param(TimeoutError(), id="a-timeout-of-its-own"),
+        pytest.param(httpx2.ReadError("another client's read"), id="an-httpx2-error"),
+        pytest.param(httpx2.InvalidURL("another URL"), id="an-invalid-url"),
+    ],
+)
+async def test_a_network_like_error_of_the_callers_own_is_not_the_streams(error: Exception) -> None:
+    """Let an ``OSError`` or httpx2 error the block raises itself propagate unchanged, charging the host nothing."""
+    client = StubClient(
+        base_url=_BASE,
+        rate=_RATE,
+        policy=TransportPolicy(breaker=BreakerPolicy(failure_threshold=1)),
+        http=HttpOptions(transport=httpx2.MockTransport(_answer(httpx2.Response(200, content=b"ok")))),
+    )
+    with pytest.raises(type(error)) as raised:
+        async with client.stream("f"):
+            raise error
+    assert raised.value is error
+    assert failures(_HOST) == 0
+    async with client.stream("f") as stream:
+        assert [chunk async for chunk in stream.aiter_bytes()] == [b"ok"]
+
+
 async def test_the_deadline_bounds_opening_the_stream() -> None:
     """Raise ``ClientTimeoutError`` when the response head does not arrive within the deadline."""
 
@@ -295,6 +339,38 @@ async def test_events_are_parsed_as_they_arrive() -> None:
         assert [event async for event in events] == []
 
 
+async def test_the_last_event_id_is_none_until_the_server_sends_one() -> None:
+    """Keep ``None`` through events without an id, then the id, then ``""`` once the server resets it."""
+    body = _Body(b"data: a\n\n", b"id: 3\ndata: b\n\n", b"id\ndata: c\n\n")
+    async with _client(_streaming(body, _SSE)).stream("events") as stream:
+        seen = [stream.last_event_id async for _ in stream.aiter_events()]
+    assert seen == [None, "3", ""]
+
+
+async def test_a_block_without_data_yields_nothing_but_its_id_is_kept() -> None:
+    """Skip a heartbeat (``event: ping``, ``retry:``, ``id:`` alone) and keep the id it sets, as a browser does."""
+    body = _Body(b"event: ping\n\nretry: 10\n\nid: 9\n\n", b"data: a\n\n")
+    async with _client(_streaming(body, _SSE)).stream("events") as stream:
+        events = [(event.data, event.id) async for event in stream.aiter_events()]
+        assert stream.last_event_id == "9"
+    assert events == [("a", "9")]
+
+
+async def test_events_split_anywhere_across_chunks_parse_whole() -> None:
+    """Join a BOM, a UTF-8 character and a CRLF that arrive split across chunks."""
+    body = _Body(b"\xef\xbb", b"\xbfdata: \xc3", b"\xa9t\xc3\xa9\r", b"\n\r", b"\ndata: b\r", b"\r")
+    async with _client(_streaming(body, _SSE)).stream("events") as stream:
+        assert [event.data async for event in stream.aiter_events()] == ["été", "b"]
+
+
+async def test_events_are_utf_8_whatever_the_charset() -> None:
+    """Decode an event stream as UTF-8, as the grammar requires, under a ``charset`` that names another."""
+    headers = {"content-type": "text/event-stream; charset=iso-8859-1"}
+    handler = _answer(httpx2.Response(200, headers=headers, content="data: café\n\n".encode()))
+    async with _client(handler).stream("events") as stream:
+        assert [event.data async for event in stream.aiter_events()] == ["café"]
+
+
 async def test_a_stream_resumes_after_the_last_event_id() -> None:
     """Send ``Last-Event-ID`` when re-opening with the id the previous stream saw, and none for an empty one."""
     seen: list[str | None] = []
@@ -311,6 +387,19 @@ async def test_a_stream_resumes_after_the_last_event_id() -> None:
     async with client.stream("events", last_event_id=""):
         pass
     assert seen == [None, "41", None]
+
+
+async def test_last_event_id_replaces_one_the_headers_set_in_another_case() -> None:
+    """Send one ``Last-Event-ID``, *last_event_id*'s, however ``headers=`` spelled its own."""
+    seen: list[list[str]] = []
+
+    async def handle(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request.headers.get_list("last-event-id"))
+        return httpx2.Response(200, headers=_SSE, request=request)
+
+    async with _client(handle).stream("events", last_event_id="7", headers={"last-event-id": "3"}):
+        pass
+    assert seen == [["7"]]
 
 
 async def test_events_require_an_event_stream() -> None:

@@ -8,8 +8,9 @@
 builds a response reader on it and :func:`encoder` its mirror, a request-body writer; :func:`to_builtins` prepares
 builtins for ``json=`` or ``data=``. Every decode failure is the shared :class:`~headgate.errors.DecodeError`.
 
-A ``DecodeError``'s message is msgspec's own diagnosis (the expected type and the path), bounded, with the one input
-value msgspec quotes (an unknown enum value) left out.
+A ``DecodeError``'s message is msgspec's own diagnosis (the expected type and the path), bounded, with the input
+msgspec quotes left out: an unknown enum value or tag, and an unknown field's name. A dict key in the path is already
+``$[...]``.
 
 Drift detection is strict **typing**, not unknown-field rejection. ``strict=True`` catches a field that changes type
 on the wire, which silently corrupts values. ``forbid_unknown_fields`` would catch a field appearing, which providers
@@ -50,9 +51,12 @@ __all__ = ["CODEC", "MsgspecCodec", "decode", "decoder", "encoder", "to_builtins
 #: One encoder serves every value: msgspec encodes by the value's own type, so it holds no per-type state.
 _JSON_ENCODER: Final = msgspec.json.Encoder()
 
-#: The one msgspec diagnosis that quotes the input: ``Invalid enum value '<the value>'``, whatever its length, before
-#: the `` - at `$…` `` path when there is one.
-_ENUM_VALUE = re.compile(r"(Invalid enum value) .*?(?= - at `\$|$)", re.DOTALL)
+#: The msgspec diagnoses that quote the input: an unknown enum value or tag (``Invalid enum value 'x'``, ``Invalid value
+#: 'x'``) and an unknown field's name (``Object contains unknown field `x```). What they quote runs, whatever it holds,
+#: up to the path msgspec ends the message with when there is one (`` - at `$.a` ``, `` - at `key` in `$` ``).
+_QUOTED_INPUT = re.compile(
+    r"(Invalid (?:enum )?value|Object contains unknown field) .*?(?=(?: - at `[^`]*`(?: in `[^`]*`)?)?\Z)", re.DOTALL
+)
 
 
 class MsgspecCodec:
@@ -94,8 +98,8 @@ class MsgspecCodec:
         return encode
 
     def describe(self, error: Exception, /) -> str:
-        """Return msgspec's diagnosis with any quoted input value dropped."""
-        return _ENUM_VALUE.sub(r"\1", str(error))
+        """Return msgspec's diagnosis with any input it quotes dropped."""
+        return _QUOTED_INPUT.sub(r"\1", str(error))
 
 
 #: msgspec, decoding strictly: the codec every shortcut here uses unless told otherwise.

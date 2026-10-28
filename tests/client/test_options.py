@@ -11,6 +11,7 @@ else is observed on the requests a scripted network receives.
 from __future__ import annotations
 
 import importlib.metadata
+import math
 import re
 import ssl
 import uuid
@@ -42,7 +43,7 @@ from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Coroutine
 
     from headgate import Middleware
     from headgate.events import Observer
@@ -130,7 +131,7 @@ def _ok(request: httpx2.Request) -> httpx2.Response:
             "proxy must be an http, https or socks5 URL (got a malformed URL)",
         ),
         (lambda: Route("/"), "fragment must name at least one path segment (got '/')"),
-        (lambda: Route("/x", deadline=0.0), "deadline must be > 0 (got 0.0)"),
+        (lambda: Route("/x", deadline=0.0), "deadline must be > 0 and finite, or None (got 0.0)"),
         (lambda: IdempotencyKeys(header=""), "header must name a header"),
     ],
     ids=["other-scheme", "unparsable", "no-scheme", "empty-route", "route-deadline", "empty-header"],
@@ -387,6 +388,40 @@ async def test_the_default_idempotency_keys_are_random_uuids() -> None:
 
 
 # --- Routes ---
+
+
+async def _call_with_deadline(deadline: float) -> None:
+    """Send a GET with *deadline* as its own ``deadline=``."""
+    await _client(Script(200)).get("x", expect=nothing, deadline=deadline)
+
+
+async def _route_with_deadline(deadline: float) -> None:
+    """Build a ``Route`` with *deadline*."""
+    Route("/x", deadline=deadline)
+
+
+async def _policy_with_deadline(deadline: float) -> None:
+    """Build a ``TransportPolicy`` with *deadline*."""
+    TransportPolicy(deadline=deadline)
+
+
+async def _view_with_deadline(deadline: float) -> None:
+    """Make a view with *deadline*."""
+    _client(Script(200)).with_options(deadline=deadline)
+
+
+@pytest.mark.parametrize("deadline", [0.0, -1.0, math.nan, math.inf])
+@pytest.mark.parametrize(
+    "where", [_call_with_deadline, _route_with_deadline, _policy_with_deadline, _view_with_deadline]
+)
+async def test_every_place_a_deadline_is_set_refuses_the_same_values(
+    where: Callable[[float], Coroutine[None, None, None]], deadline: float
+) -> None:
+    """Refuse a deadline that is not positive and finite, with one message, wherever it is set."""
+    with pytest.raises(
+        ValueError, match=f"^{re.escape(f'deadline must be > 0 and finite, or None (got {deadline})')}$"
+    ):
+        await where(deadline)
 
 
 async def test_a_route_gives_matching_paths_their_own_retry_policy() -> None:

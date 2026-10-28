@@ -9,9 +9,10 @@
   declares, for the guard alone.
 * :data:`BREAKER_GATE`: set by the client on every call, read by the retry layer, so a retry sequence stops as soon as
   the origin's breaker opens without the retry layer knowing about breakers.
-* :class:`BudgetBacklogError`: raised by the rate budget for an attempt whose turn comes after the call's deadline. The
-  retry layer withdraws the attempt, which was never sent, and keeps the call's last failure when it has one; the
-  client raises it as ``ClientTimeoutError``.
+* :class:`BudgetBacklogError` and :class:`BudgetPausedError`: raised by the rate budget for an attempt whose turn, or
+  the server's pause, ends after the call's deadline. The retry layer withdraws the attempt, which was never sent, and
+  keeps the call's last failure when it has one; the client raises them as ``ClientTimeoutError`` and
+  ``RateLimitError``.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from typing import Protocol, runtime_checkable
 
 from headgate._core._context import Slot
 
-__all__ = ["BREAKER_GATE", "BudgetBacklogError", "CredentialCarrier", "CredentialStamper"]
+__all__ = ["BREAKER_GATE", "BudgetBacklogError", "BudgetPausedError", "CredentialCarrier", "CredentialStamper"]
 
 
 @runtime_checkable
@@ -64,3 +65,17 @@ class BudgetBacklogError(Exception):
         """Record *message* and *retry_after*."""
         super().__init__(message)
         self.retry_after = retry_after
+
+
+class BudgetPausedError(Exception):
+    """Raised by ``Pacer.wait`` when the server's pause outlasts the call's deadline, so the attempt is never sent.
+
+    ``AsyncBaseClient`` raises it to its caller as :class:`headgate.errors.RateLimitError`. ``retry_after`` is the
+    seconds left in the pause; ``status_code`` is the status of the response that asked for it.
+    """
+
+    def __init__(self, message: str, *, retry_after: float, status_code: int) -> None:
+        """Record *message*, *retry_after* and *status_code*."""
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.status_code = status_code

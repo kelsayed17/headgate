@@ -9,8 +9,9 @@ budget (see :mod:`headgate._stack`), so a cache hit short-circuits before the re
 still decided before the fetch, so a hit is refused while the breaker is open.
 
 **Credentials.** hishel sees the request through the client's :class:`~headgate.cache._credentials.CredentialScope`:
-no credential header, parameter or userinfo, and a partition label in the URL fragment. The layer below hishel puts
-the real URL and headers back for the network, so what is sent is exactly what the caller built.
+no credential header, parameter or userinfo, every other header's value as a keyed digest, and a partition label in the
+URL fragment. The layer below hishel puts the real URL and headers back for the network, so what is sent is exactly
+what the caller built.
 
 **Stored on accept.** hishel writes a miss to storage as it passes through. Here the storage defers that write: the
 response handed up carries it (:func:`store_accepted`), and ``AsyncBaseClient`` makes it only once the call's reader

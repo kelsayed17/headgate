@@ -90,11 +90,21 @@ async def test_a_cache_stores_the_200s_of_every_get_by_default(storage: AsyncSql
 
 async def test_a_cache_stores_what_its_methods_paths_and_statuses_name(storage: AsyncSqliteStorage) -> None:
     """Store only the methods, path fragments and statuses the cache names."""
-    cache = HttpCache(storage=storage, methods={"get", "POST"}, paths=["/series"], statuses=[200, 203])
+    cache = HttpCache(storage=storage, methods={"get", "HEAD"}, paths=["/series"], statuses=[200, 203])
     policy = filter_policy_of(cache)
-    assert _stores(policy, "POST", "https://api.example.test/v1/series/GDP", 203)
+    assert _stores(policy, "HEAD", "https://api.example.test/v1/series/GDP", 203)
     assert not _stores(policy, "GET", "https://api.example.test/v1/releases", 200)
-    assert (cache.methods, cache.paths, cache.statuses) == (frozenset({"GET", "POST"}), ("/series",), {200, 203})
+    assert (cache.methods, cache.paths, cache.statuses) == (frozenset({"GET", "HEAD"}), ("/series",), {200, 203})
+
+
+async def test_empty_methods_or_statuses_store_nothing(storage: AsyncSqliteStorage) -> None:
+    """Store nothing for ``methods=()`` or ``statuses=()``, as ``paths=()`` does: empty is not the default."""
+    for cache in (
+        HttpCache(storage=storage, methods=()),
+        HttpCache(storage=storage, statuses=()),
+        HttpCache(storage=storage, paths=()),
+    ):
+        assert not _stores(filter_policy_of(cache), "GET", "https://api.example.test/any/path", 200)
 
 
 async def test_a_policy_of_your_own_is_used_as_it_is(storage: AsyncSqliteStorage) -> None:
@@ -111,12 +121,16 @@ async def test_a_policy_of_your_own_is_used_as_it_is(storage: AsyncSqliteStorage
             r"^policy= decides what is stored, so it cannot be combined with methods=, paths= or statuses=$",
         ),
         (lambda s: HttpCache(storage=s, paths=["/"]), "fragment must name at least one path segment"),
+        (
+            lambda s: HttpCache(storage=s, methods={"GET", "post"}),
+            r"^methods= may name only GET and HEAD \(got POST\): .*FilterPolicy\(use_body_key=True",
+        ),
     ],
-    ids=["policy-and-methods", "empty-path"],
+    ids=["policy-and-methods", "empty-path", "body-method"],
 )
 async def test_a_contradictory_cache_is_refused(
     storage: AsyncSqliteStorage, build: Callable[[AsyncSqliteStorage], HttpCache], message: str
 ) -> None:
-    """Refuse a policy beside the fields it replaces, and a path that names no segment."""
+    """Refuse a policy beside the fields it replaces, a path that names no segment, and a method with a body."""
     with pytest.raises(ValueError, match=message):
         build(storage)

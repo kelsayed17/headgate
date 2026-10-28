@@ -167,3 +167,19 @@ async def test_body_options_httpx2_would_drop_are_refused(options: RequestOption
     client = _Server().client()
     with pytest.raises(ValueError, match="cannot"):
         await client.post("upload", expect=nothing, **options)
+
+
+@pytest.mark.parametrize(
+    ("content", "kind"),
+    [("text", "str"), (bytearray(b"x"), "bytearray"), (memoryview(b"x"), "memoryview"), ([b"x"], "list")],
+    ids=["str", "bytearray", "memoryview", "a-sync-iterable"],
+)
+async def test_a_content_that_is_no_body_is_refused_by_name(content: object, kind: str) -> None:
+    """Refuse a ``content=`` that is neither bytes, an async iterable nor a callable, naming it, before any send."""
+    server = _Server()
+    with pytest.raises(TypeError) as raised:
+        await server.client().post("upload", expect=nothing, content=content)  # ty: ignore[invalid-argument-type]
+    assert str(raised.value) == (
+        f"content= takes bytes, an async iterable of bytes, or a callable returning one (got {kind})"
+    )
+    assert server.bodies == []

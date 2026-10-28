@@ -13,7 +13,9 @@ Three sources are read, in this order of precedence:
   rate and is skipped. When several items are exhausted, the longest wait wins. Per the draft, a malformed field is
   ignored and ``Retry-After`` takes precedence over ``t``;
 * ``X-RateLimit-Remaining`` with ``X-RateLimit-Reset``, the widespread de facto pair, read when ``RateLimit`` is absent.
-  Its reset is seconds to wait or an absolute Unix time, told apart by size: a value of at least
+  A server with several windows lists one value per window in each; the quota is spent when any window's count is
+  zero, and the pause is the latest reset among the spent windows, paired by position. Each reset is seconds to wait
+  or an absolute Unix time, told apart by size: a value of at least
   :data:`_EPOCH_SECONDS_FLOOR` (September 2001 as a Unix time, and 31 years as a delay) is a time, and one of at
   least :data:`_EPOCH_MILLIS_FLOOR` is a time in milliseconds.
 """
@@ -105,29 +107,38 @@ def _count(value: object) -> int | None:
 
 
 def _de_facto_quota(headers: httpx2.Headers, *, now: float) -> tuple[bool, float | None]:
-    """Read ``X-RateLimit-Remaining`` / ``-Reset``: whether the quota is spent, and the seconds to its reset."""
+    """Read ``X-RateLimit-Remaining`` / ``-Reset``: whether the quota is spent, and the seconds to its reset.
+
+    Lists of the same length name one window per position, so the reset read is the latest among the spent windows'
+    own; lists that cannot be paired that way give the latest reset of all.
+    """
     remaining = _numbers(headers.get("X-RateLimit-Remaining", ""))
-    if not remaining or min(remaining) > 0:
+    spent = [index for index, count in enumerate(remaining) if count == 0]
+    if not spent:
         return False, None
     resets = _numbers(headers.get("X-RateLimit-Reset", ""))
-    if not resets:
-        return True, None
-    reset = max(resets)
+    if len(resets) == len(remaining):
+        resets = [resets[index] for index in spent]
+    waits = [_seconds_until(reset, now=now) for reset in resets if reset is not None]
+    return True, max(waits, default=None)
+
+
+def _seconds_until(reset: float, *, now: float) -> float:
+    """Return the seconds until an ``X-RateLimit-Reset`` of *reset*: a delay, or a Unix time in seconds or millis."""
     if reset >= _EPOCH_MILLIS_FLOOR:
         reset = reset / _MILLIS - now
     elif reset >= _EPOCH_SECONDS_FLOOR:
         reset -= now
-    return True, max(0.0, reset)
+    return max(0.0, reset)
 
 
-def _numbers(value: str) -> list[float]:
-    """Return the non-negative numbers in a comma-separated header value; any part that is not one is skipped."""
-    numbers: list[float] = []
+def _numbers(value: str) -> list[float | None]:
+    """Return each part of a comma-separated header value as a non-negative number, or ``None`` when it is not one."""
+    numbers: list[float | None] = []
     for part in value.split(","):
         try:
             number = float(part)
         except ValueError:
-            continue
-        if number >= 0 and math.isfinite(number):
-            numbers.append(number)
+            number = None
+        numbers.append(number if number is not None and number >= 0 and math.isfinite(number) else None)
     return numbers

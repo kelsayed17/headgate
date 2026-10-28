@@ -9,7 +9,8 @@ a request filter matches and an allowed status comes back, even past an RFC 9111
 a provider that sends ``no-store`` or no cache headers at all, where hishel's RFC 9111 policy would cache nothing. Store
 only the 200s (a :class:`StatusCodeFilter`) so an error body never poisons the cache. Filters run inside hishel and see
 the URL with its credentials removed (see :mod:`headgate.cache._credentials`), so no other layer evaluates a rule.
-Body-keyed POST caching is hishel's own ``FilterPolicy.use_body_key``.
+:class:`HttpCache`'s ``methods`` names only GET and HEAD, which a URL keys; a read-only POST is cached only through a
+``policy`` of your own with hishel's ``FilterPolicy.use_body_key``, which keys it by its body too.
 
 A ``FilterPolicy`` cache is TTL-only: an entry is served until its lifetime ends and is never revalidated with the
 origin. A caller that wants revalidation sends its own validator with :func:`headgate.cache.conditional`.
@@ -20,7 +21,7 @@ from __future__ import annotations
 import enum
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, Final, override
 
 import httpx2
 from hishel import BaseFilter, FilterPolicy, Request, Response
@@ -33,6 +34,9 @@ if TYPE_CHECKING:
     from hishel import AsyncBaseStorage
 
 __all__ = ["HttpCache", "MethodFilter", "Partition", "PathFragmentFilter", "StatusCodeFilter", "filter_policy_of"]
+
+#: The methods ``HttpCache(methods=...)`` may name: those a URL identifies, since the URL is the cache key.
+_URL_KEYED_METHODS: Final = frozenset({"GET", "HEAD"})
 
 
 class Partition(enum.Enum):
@@ -50,7 +54,10 @@ class Partition(enum.Enum):
     SHARED = "shared"
     """To every client on the storage, whatever its credential: for public data only.
 
-    Credentials are still never stored. This is the explicit opt-in for an auth that does not declare its credentials.
+    Credentials are still never stored: what the auth and middleware declare is dropped, and every other request header
+    is stored as a keyed digest, so an undeclared auth's header is not stored either. A query parameter with a secret
+    name that the auth does not declare still keeps entries apart by its value, since it may be an ordinary parameter
+    (``?key=theme``). This is the explicit opt-in for an auth that does not declare its credentials.
     """
 
 
@@ -62,12 +69,15 @@ class HttpCache:
     client's default lifetime in seconds, which a per-call ``cache_ttl=`` overrides. ``partition`` decides who sees an
     entry (:class:`Partition`); entries are per credential unless it says otherwise.
 
-    What is stored: a request whose method is in ``methods`` (``GET`` by default) and whose path holds one of ``paths``
-    (any path by default; matched as :class:`~headgate.RateRule` matches), answered with a status in ``statuses`` (200
-    by default). ``policy`` is the escape hatch: a hishel ``FilterPolicy`` of your own, in place of those three.
+    What is stored: a request whose method is in ``methods`` (``GET`` by default; ``GET`` and ``HEAD`` only, since the
+    URL is the key) and whose path holds one of ``paths`` (any path by default; matched as :class:`~headgate.RateRule`
+    matches), answered with a status in ``statuses`` (200 by default). An empty collection matches nothing, so stores
+    nothing. ``policy`` is the escape hatch: a hishel ``FilterPolicy`` of your own, in place of those three, and the
+    only way to cache a POST (``use_body_key=True``).
 
-    :raises ValueError: for a ``ttl`` that is not a positive finite number, a fragment in ``paths`` that names no
-        segment, or a ``policy`` given with any of ``methods``, ``paths`` and ``statuses``.
+    :raises ValueError: for a ``ttl`` that is not a positive finite number, a method in ``methods`` other than ``GET``
+        and ``HEAD``, a fragment in ``paths`` that names no segment, or a ``policy`` given with any of ``methods``,
+        ``paths`` and ``statuses``.
     """
 
     storage: AsyncBaseStorage
@@ -79,7 +89,10 @@ class HttpCache:
     policy: FilterPolicy | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a TTL no entry could live by, and a policy beside the fields it replaces; freeze the collections."""
+        """Refuse a TTL no entry could live by, a method a URL cannot key, and a policy beside the fields it replaces.
+
+        The collections are frozen.
+        """
         if self.ttl is not None and not (self.ttl > 0 and math.isfinite(self.ttl)):
             msg = f"ttl must be a positive finite number of seconds, or None (got {self.ttl})"
             raise ValueError(msg)
@@ -87,7 +100,15 @@ class HttpCache:
             msg = "policy= decides what is stored, so it cannot be combined with methods=, paths= or statuses="
             raise ValueError(msg)
         if self.methods is not None:
-            object.__setattr__(self, "methods", frozenset(method.upper() for method in self.methods))
+            methods = frozenset(method.upper() for method in self.methods)
+            if bodied := sorted(methods - _URL_KEYED_METHODS):
+                msg = (
+                    f"methods= may name only GET and HEAD (got {', '.join(bodied)}): the cache keys an entry by its "
+                    f"URL, so two requests with different bodies would share one. For a read-only POST, pass "
+                    f"policy=FilterPolicy(use_body_key=True, ...), which keys it by its body too"
+                )
+                raise ValueError(msg)
+            object.__setattr__(self, "methods", methods)
         if self.paths is not None:
             for fragment in self.paths:
                 check_fragment(fragment)
@@ -97,13 +118,18 @@ class HttpCache:
 
 
 def filter_policy_of(cache: HttpCache) -> FilterPolicy:
-    """Return the hishel policy *cache* stores by: its own ``policy``, or one built from its three fields."""
+    """Return the hishel policy *cache* stores by: its own ``policy``, or one built from its three fields.
+
+    A field left ``None`` takes its default; an empty one matches nothing.
+    """
     if cache.policy is not None:
         return cache.policy
-    requests: list[BaseFilter[Request]] = [MethodFilter(cache.methods or {"GET"})]
+    methods = {"GET"} if cache.methods is None else cache.methods
+    statuses = {200} if cache.statuses is None else cache.statuses
+    requests: list[BaseFilter[Request]] = [MethodFilter(methods)]
     if cache.paths is not None:
         requests.append(PathFragmentFilter(cache.paths))
-    return FilterPolicy(request_filters=requests, response_filters=[StatusCodeFilter(cache.statuses or {200})])
+    return FilterPolicy(request_filters=requests, response_filters=[StatusCodeFilter(statuses)])
 
 
 # Filters. Each decides from the request line or the response status alone, so none needs the body.

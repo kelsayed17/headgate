@@ -81,7 +81,8 @@ class Pager[P, I, B = None](Protocol):
     """How pages of type ``P`` holding items of type ``I``, fetched with request bodies of type ``B``, link up.
 
     ``B`` is the type of the walk's body, ``None`` for a pager that only walks GETs. A pager typed with a body may walk
-    GETs too, when ``paginate`` is given no body (``body=None``): a request's ``body`` is then ``None`` on every page.
+    GETs too, when ``paginate`` is given no body (``body=None``): the first request's ``body`` is then ``None``, and a
+    later one has a body only if the pager gives it one.
     """
 
     __slots__ = ()
@@ -112,7 +113,7 @@ class WritingPager[P, I, B](Pager[P, I, B], ABC):
     :class:`BodyCursor` and :class:`BodyOffset` are writing pagers; a pager of GETs is not one.
 
     A pager is one by subclassing this class, not by its shape: an attribute that only shares the name ``write`` is
-    never taken for a writer.
+    never taken for a writer. Every member is abstract, so a subclass that leaves one out cannot be built.
     """
 
     __slots__ = ()
@@ -121,6 +122,21 @@ class WritingPager[P, I, B](Pager[P, I, B], ABC):
     @abstractmethod
     def write(self) -> Writer[B] | None:
         """The writer (a codec's ``encoder``) that encodes each page's body, or ``None`` for one sent as JSON."""
+
+    @override
+    @abstractmethod
+    def first(self, request: PageRequest[B]) -> PageRequest[B]:
+        """Return the request for the first page, given the one the caller wrote (see :meth:`Pager.first`)."""
+
+    @override
+    @abstractmethod
+    def page_items(self, page: P) -> Iterable[I]:
+        """Return the items on *page*."""
+
+    @override
+    @abstractmethod
+    def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
+        """Return the request for the page after *page* (fetched by *request*, answered by *response*), or ``None``."""
 
 
 def _check_param(param: str) -> None:

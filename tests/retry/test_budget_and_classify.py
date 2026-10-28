@@ -59,6 +59,20 @@ def test_the_window_slides_so_old_retries_stop_counting() -> None:
     assert ledger.try_spend() is True
 
 
+def test_a_refunded_retry_stops_counting() -> None:
+    """Take back a retry that was never sent, so the window has room for it again; a refund of nothing does nothing."""
+    clock = TestClock()
+    ledger = RetryLedger(RetryBudget(ratio=0.0, min_per_second=0.1, window=_WINDOW), clock)
+
+    ledger.refund()
+    assert ledger.try_spend() is True
+    assert ledger.try_spend() is False
+    clock.advance(_WINDOW / 2)
+    ledger.refund()
+    assert ledger.try_spend() is True
+    assert ledger.try_spend() is False
+
+
 def test_a_budget_measures_its_window_on_its_own_clock_when_it_has_one() -> None:
     """Prefer the budget's own clock to the one the transport supplies."""
     own, transport = TestClock(), TestClock()

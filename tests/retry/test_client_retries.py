@@ -23,7 +23,7 @@ from headgate._core import RetryScheduled, Timing, timing_override
 from headgate.errors import TransportError
 from headgate.ratelimit import Rate
 from headgate.retry import Backoff, RetryBudget
-from headgate.testing import ConnectFail, FaultyTransport, Respond, Slow, TestClock
+from headgate.testing import ConnectFail, DropMidBody, FaultyTransport, Respond, Slow, TestClock
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
 
@@ -134,6 +134,29 @@ async def test_a_post_is_resent_only_with_an_idempotency_key() -> None:
     keys = {call.headers["Idempotency-Key"] for call in keyed.calls}
     assert len(keyed.calls) == len(("first", "retry"))
     assert len(keys) == 1, "every attempt carries the same key"
+
+
+@pytest.mark.parametrize("body", [None, {"qty": 1}], ids=["no-body", "json-body"])
+async def test_a_post_dropped_before_it_was_written_is_resent_with_or_without_a_body(body: object) -> None:
+    """Re-send a plain POST whose connection dropped before a byte was written, whether or not it carries a body."""
+    network = FaultyTransport(schedule=[DropMidBody(after_bytes=0), Respond(201)])
+
+    await _client(network).post("orders", expect=nothing, json=body)
+
+    assert len(network.calls) == len(("dropped", "resent"))
+    assert network.calls[0].bytes_sent == 0
+
+
+@pytest.mark.parametrize("body", [None, {"qty": 1}], ids=["no-body", "json-body"])
+async def test_a_post_dropped_inside_its_head_is_not_resent(body: object) -> None:
+    """Send a plain POST once when its head had started to go out, as httpx2's trace counts it written."""
+    network = FaultyTransport(schedule=[DropMidBody(after_bytes=3), Respond(201)])
+
+    with pytest.raises(TransportError) as raised:
+        await _client(network).post("orders", expect=nothing, json=body)
+
+    assert raised.value.retryable is False
+    assert len(network.calls) == 1
 
 
 async def test_a_whole_retry_sequence_counts_once_toward_the_breaker() -> None:
