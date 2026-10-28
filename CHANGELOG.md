@@ -104,6 +104,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - Every call left its context in a reference cycle (through the retry verdict's judge), so what it allocated was
   freed only at the next garbage collection, raising the memory a stream of calls held at its peak.
 
+### Security
+
+- A password with a bare `@` in it (`https://user:p@ss@host/`) is redacted whole from an error message. The redaction
+  of a URL's userinfo in free text stopped at the first `@` and left the rest of the password in the message.
+
 ## [0.11.0] - 2026-11-02
 
 What an API client wrote around headgate is now headgate's: a pager over numbered pages, an offset walk that ends at
