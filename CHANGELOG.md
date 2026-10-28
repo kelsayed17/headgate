@@ -13,8 +13,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   rather than showing `[...]`. `Rate.per_second(5)` and `Rate.per_minute(300)` share a spacing, not a burst.
   `TestClock` moves after 16 quiet turns of the event loop. A pause past the deadline on a retry ends the call with its
   last failure. A body's `Content-Type` and an `Expect`'s headers rank above the client's default headers. And a token
-  mint redirected off its origin raises `ForbiddenDestinationError`. The mutation-testing page now says its score
-  describes 0.7.0 until the next run.
+  mint redirected off its origin raises `ForbiddenDestinationError`.
+- The mutation-testing page reports a run on 0.9.0: 6,649 mutants, 97.6% detected, and every survivor equivalent and
+  listed with its reason. The run's 76 survivors that changed behavior each now fail a new test.
 
 ## [0.9.0] - 2026-10-27
 

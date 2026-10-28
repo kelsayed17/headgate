@@ -16,13 +16,14 @@ from typing import TYPE_CHECKING, Annotated, Literal
 
 import msgspec
 import pytest
-from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, RootModel, ValidationError
+from pydantic_core import PydanticCustomError
 
 from headgate import msgspec as msgspec_flavor
 from headgate._failures import MESSAGE_TEXT_LIMIT
 from headgate._responses import RefusedError
 from headgate.errors import DecodeError
-from headgate.pydantic import PydanticCodec, decode, decoder, encoder, to_builtins
+from headgate.pydantic import PydanticCodec, _schema_names, decode, decoder, encoder, to_builtins
 from tests.support.responses import response
 
 if TYPE_CHECKING:
@@ -330,6 +331,47 @@ def test_a_decode_error_never_repeats_an_input_key_or_tag(body: bytes, type_: Ty
 
     assert "SECRET" not in str(raised.value)
     assert str(raised.value).endswith(f": {shown}")
+
+
+def test_the_names_a_schema_holds_are_every_string_in_it_however_deep() -> None:
+    """Collect every string a core schema holds, as a key or a value, through dicts, lists and tuples."""
+    schema = {"type": "model", "fields": [{"name": "qty"}, ("alias", {"tags": ["buy", 1]})]}
+    assert _schema_names(schema) == {"type", "model", "fields", "name", "qty", "alias", "tags", "buy"}
+
+
+def test_the_names_of_a_schema_that_refers_back_to_itself_are_collected_once() -> None:
+    """Visit a node the schema reaches again only once, so a schema that holds itself still ends."""
+    schema: dict[str, object] = {"type": "list"}
+    schema["items"] = [schema, (schema,)]
+    assert _schema_names(schema) == {"type", "list", "items"}
+
+
+def _refuse_in_own_words(context: dict[str, object] | None) -> AfterValidator:
+    """Return a validator that refuses every value with a custom ``uuid_parsing`` error, of *context*."""
+
+    def refuse(_value: str) -> str:
+        kind = "uuid_parsing"
+        raise PydanticCustomError(kind, "refused" if context is None else "refused: {reason}", context)
+
+    return AfterValidator(refuse)
+
+
+@pytest.mark.parametrize(
+    ("context", "shown"),
+    [(None, "refused"), ({"reason": "not ours"}, "refused: not ours")],
+    ids=["no-context", "other-context"],
+)
+def test_a_validators_own_error_under_a_quoting_type_keeps_its_words(
+    context: dict[str, object] | None, shown: str
+) -> None:
+    """Quote a validator's own error as it words it, though it reuses the type of a failure that quotes the input.
+
+    Only pydantic's own failure of that type carries the input in its context, to be shown as ``[...]``.
+    """
+    with pytest.raises(DecodeError) as raised:
+        decode(b'"x"', Annotated[str, _refuse_in_own_words(context)])
+
+    assert str(raised.value).endswith(f"<body>: {shown}")
 
 
 def test_the_encoder_applies_aliases_and_can_leave_out_none() -> None:

@@ -380,6 +380,73 @@ async def test_a_call_arriving_during_a_pause_queues_behind_the_turns_it_postpon
     assert timeline.now == pytest.approx(4.5), "the queue resumed at 2.5, one second apart"
 
 
+async def test_a_turn_postponed_by_a_pause_reports_its_wait_after_the_pause_as_the_pauses() -> None:
+    """Report a queued call's wait for its postponed turn as ``paused`` even once the pause itself has ended."""
+    timeline = _Timeline()
+    budget = Pacer(Rate(requests=1, period=1.0), adaptive=None, timing=timeline.timing, wall_clock=timeline)
+    recorder = Recorder()
+
+    async def pushback() -> None:
+        await timeline.sleep(0.5)
+        budget.observe(_response(503, {"Retry-After": "2"}), sent_at=timeline.now)
+
+    await timeline.run(
+        pushback(),
+        budget.wait(_context(timeline)),
+        budget.wait(_context(timeline)),
+        budget.wait(_context(timeline, observer=recorder)),
+    )
+
+    # Its turn was at 2; the pause to 2.5 moved the queue by 1.5, so it is due at 3.5, a second after the pause ends.
+    assert _rate_limited(recorder) == [(2.0, "paced"), (0.5, "paused"), (1.0, "paused")]
+
+
+async def test_a_second_pause_moves_the_queue_on_from_where_the_first_left_it() -> None:
+    """Shift the turns queued behind a pause again when a longer one follows, from where the first pause put them."""
+    timeline = _Timeline()
+    budget = Pacer(Rate(requests=1, period=1.0), adaptive=None, timing=timeline.timing, wall_clock=timeline)
+    sent: list[float] = []
+
+    async def call() -> None:
+        await budget.wait(_context(timeline))
+        sent.append(timeline.now)
+
+    async def pushback() -> None:
+        await timeline.sleep(0.5)
+        budget.observe(_response(503, {"Retry-After": "2"}), sent_at=timeline.now)
+        budget.observe(_response(503, {"Retry-After": "4"}), sent_at=timeline.now)
+
+    await timeline.run(pushback(), call(), call(), call())
+
+    assert sent == pytest.approx([0.0, 4.5, 5.5]), "the queue resumes as the longer pause ends, one second apart"
+
+
+async def test_a_cancelled_waiters_turn_does_not_hold_the_queue_at_a_pause() -> None:
+    """Shift the queue at a pause from the turns still waiting, not from the turn of a waiter cancelled before it."""
+    clock = TestClock()
+    blocked = asyncio.Event()
+    slept: list[float] = []
+
+    async def sleep(seconds: float, /) -> None:
+        slept.append(seconds)
+        await blocked.wait()
+        await clock.sleep(seconds)
+
+    budget = Pacer(Rate.per_second(1), adaptive=None, timing=Timing(clock=clock, sleep=sleep), wall_clock=clock)
+    await budget.wait(_context(clock))
+    first = asyncio.create_task(budget.wait(_context(clock)))
+    second = asyncio.create_task(budget.wait(_context(clock)))
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    budget.observe(_response(429, {"Retry-After": "4"}), sent_at=clock())
+    blocked.set()
+    await second
+
+    assert slept == [1.0, 2.0, 2.0], "the second waiter's turn at 2 moves to the pause's end at 4, and no later"
+
+
 @pytest.mark.parametrize("retry_after", ["99999999999", "Fri, 31 Dec 9999 23:59:59 GMT"], ids=["seconds", "date"])
 async def test_a_pause_is_cut_to_an_hour(retry_after: str) -> None:
     """Pause no longer than ``MAX_PAUSE`` however long a response asks, so a hostile header cannot stop the budget."""
@@ -678,6 +745,29 @@ async def test_a_pause_exactly_as_long_as_the_time_left_is_waited() -> None:
     await budget.wait(_context(clock, deadline=_PAUSE))
 
     assert clock.sleeps == [_PAUSE]
+
+
+async def test_a_turn_due_now_is_taken_whatever_time_the_call_has_left() -> None:
+    """Admit a call whose turn has come, even with no time left: the budget refuses only a wait that cannot fit."""
+    clock = TestClock()
+    # With no burst, the turn is due exactly now rather than before it.
+    budget = _budget(clock, Rate.per_second(1))
+
+    await budget.wait(_context(clock, deadline=0.0))
+
+    assert clock.sleeps == []
+
+
+async def test_a_turn_due_as_a_pause_ends_at_the_deadline_is_waited() -> None:
+    """Wait for a turn that falls due exactly as a pause ends, exactly at the call's deadline."""
+    clock = TestClock()
+    budget = _budget(clock, Rate.per_second(1), adaptive=None)
+    await budget.wait(_context(clock))
+    budget.observe(_response(429, {"Retry-After": "1"}), sent_at=clock())
+
+    await budget.wait(_context(clock, deadline=1.0))
+
+    assert clock.sleeps == [1.0]
 
 
 async def test_a_refused_call_gives_back_the_turn_it_reserved() -> None:

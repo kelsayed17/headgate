@@ -122,8 +122,8 @@ async def test_a_policy_of_your_own_is_used_as_it_is(storage: AsyncSqliteStorage
         ),
         (lambda s: HttpCache(storage=s, paths=["/"]), "fragment must name at least one path segment"),
         (
-            lambda s: HttpCache(storage=s, methods={"GET", "post"}),
-            r"^methods= may name only GET and HEAD \(got POST\): .*FilterPolicy\(use_body_key=True",
+            lambda s: HttpCache(storage=s, methods={"GET", "put", "post"}),
+            r"^methods= may name only GET and HEAD \(got POST, PUT\): .*FilterPolicy\(use_body_key=True",
         ),
     ],
     ids=["policy-and-methods", "empty-path", "body-method"],

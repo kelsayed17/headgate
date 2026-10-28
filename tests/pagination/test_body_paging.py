@@ -478,6 +478,11 @@ def test_a_body_offset_refuses_a_page_size_below_one() -> None:
         BodyOffset[Page, Item, Query](items=items_of, page_size=0, offset=offset_of, put=at_offset)
 
 
+def test_a_body_offset_takes_a_page_size_of_one() -> None:
+    """Take a page size of one, the smallest that pages."""
+    assert BodyOffset[Page, Item, Query](items=items_of, page_size=1, offset=offset_of, put=at_offset).page_size == 1
+
+
 #: A fixed idempotency key, as a call option and as a header.
 _FIXED_KEYS: Final[list[PageOptions]] = [{"idempotency_key": "k"}, {"headers": {"idempotency-key": "k"}}]
 
@@ -486,9 +491,20 @@ _FIXED_KEYS: Final[list[PageOptions]] = [{"idempotency_key": "k"}, {"headers": {
 def test_a_walk_of_posts_refuses_one_idempotency_key_for_every_page(options: PageOptions) -> None:
     """Refuse a fixed idempotency key on a walk of POSTs: the server would replay the first page for every other."""
     first = Query(kind="a", limit=2)
-    with pytest.raises(ValueError, match="idempotency key would be sent with every page's body"):
+    message = r"^an idempotency key would be sent with every page's body; a walk of POSTs takes none$"
+    with pytest.raises(ValueError, match=message):
         _Api(_by_body_cursor).client().paginate(
             "search", body=first, expect=decoder(Page), pages=QUERY_CURSOR, **options
+        )
+
+
+def test_a_walk_of_posts_refuses_a_fixed_key_in_the_configured_idempotency_header() -> None:
+    """Refuse a fixed key in the header the client's ``IdempotencyKeys`` names, not only in ``Idempotency-Key``."""
+    policy = TransportPolicy(breaker=None, idempotency=IdempotencyKeys(header="X-Request-Key"))
+    first = Query(kind="a", limit=2)
+    with pytest.raises(ValueError, match="idempotency key would be sent with every page's body"):
+        _Api(_by_body_cursor, policy=policy).client().paginate(
+            "search", body=first, expect=decoder(Page), pages=QUERY_CURSOR, headers={"x-request-key": "k"}
         )
 
 
@@ -512,6 +528,26 @@ async def test_a_walk_of_posts_takes_a_json_body_beside_the_url() -> None:
 
     assert [item.id async for item in paginated] == [1, 2, 3, 4]
     assert api.bodies(dict[str, object]) == [{"kind": "a"}, {"kind": "a", "cursor": "b"}, {"kind": "a", "cursor": "c"}]
+
+
+async def test_a_json_walk_sends_every_page_with_the_walks_retry_and_options() -> None:
+    """Send each ``json=`` page under the walk's ``retry=`` and request options, as a ``body=`` walk sends its own."""
+
+    def put(body: dict[str, object], cursor: str) -> dict[str, object]:
+        return {**body, "cursor": cursor}
+
+    api = _Api(_flaky())
+    pages = BodyCursor[Page, Item, dict[str, object]](items=items_of, next=cursor_of, put=put)
+    query: dict[str, object] = {"kind": "a"}
+    retry = RetryPolicy(methods=IDEMPOTENT_METHODS | {"POST"})
+    paginated = api.client().paginate(
+        "search", json=query, expect=decoder(Page), pages=pages, retry=retry, headers={"X-Trace": "t"}
+    )
+
+    assert [item.id async for item in paginated] == [1, 2, 3, 4]
+    assert [request.headers.get("x-trace") for request in api.sent] == ["t"] * len(
+        ("the 503", "page 1", "page 2", "page 3")
+    )
 
 
 #: The body arguments ``paginate`` refuses, each with the reason it gives.

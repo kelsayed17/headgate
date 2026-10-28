@@ -549,6 +549,46 @@ def test_a_middleware_that_names_its_credential_labels_by_that() -> None:
     assert _label(alice, _URL, {_HEADER: "signature-1"}) != _label(bob, _URL, {_HEADER: "signature-1"})
 
 
+class _Declares:
+    """A credential source that declares one header and one param, under *identity*: a bare ``CredentialStamper``."""
+
+    def __init__(self, header: str, param: str, identity: bytes) -> None:
+        """Declare *header* and *param*, and name the credential *identity*."""
+        self.credential_headers = frozenset({header})
+        self.credential_params = frozenset({param})
+        self._identity = identity
+
+    def credential_identity(self) -> bytes:
+        """Return the identity."""
+        return self._identity
+
+
+def test_every_sources_credential_is_dropped_and_labels_by_its_identity() -> None:
+    """Drop what the auth and each middleware declare, and label by each identity rather than by what each stamps."""
+    signer = _Declares("X-Second", "second_part", b"signer")
+
+    def scope(identity: bytes) -> CredentialScope:
+        return CredentialScope(_Declares("X-First", "first_part", identity), carriers=(signer,))
+
+    def view(scope: CredentialScope, stamp: str) -> tuple[httpx2.URL, httpx2.Headers]:
+        url = f"https://x/series?first_part={stamp}&second_part={stamp}&id=A"
+        return scope.view(httpx2.Request("GET", url, headers={"X-First": stamp, "X-Second": stamp}))
+
+    (stored, headers), (again, _) = view(scope(b"alice"), "one"), view(scope(b"alice"), "two")
+    other, _ = view(scope(b"bob"), "one")
+
+    assert str(stored.copy_with(fragment=None)) == "https://x/series?id=A"
+    assert {"x-first", "x-second"}.isdisjoint(headers)
+    assert stored.fragment == again.fragment != other.fragment
+
+
+def test_a_kept_headers_digest_is_bound_to_its_name() -> None:
+    """Digest a kept header's value together with its name, so one value sent under two names is not matched."""
+    _, headers = CredentialScope().view(httpx2.Request("GET", _URL, headers={"X-One": "same", "X-Two": "same"}))
+
+    assert headers["x-one"] != headers["x-two"]
+
+
 def test_a_label_is_a_keyed_hash_not_the_credential() -> None:
     """The label carries no credential byte, and is an HMAC-SHA256 hex digest behind a fixed prefix."""
     label = _label(CredentialScope(_KeyAuth("alice-secret-key")), _URL)

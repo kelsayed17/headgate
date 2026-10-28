@@ -59,9 +59,14 @@ async def test_a_factory_body_is_sent_whole_on_every_attempt(method: Method) -> 
     assert [request.content for request in fake.calls] == [_BODY, _BODY]
 
 
-@pytest.mark.parametrize(("status", "method"), [(307, "POST"), (308, "POST"), (301, "PUT")])
+@pytest.mark.parametrize(
+    ("status", "method"), [(307, "POST"), (308, "POST"), (301, "PUT"), (303, "HEAD"), (303, "GET"), (302, "GET")]
+)
 async def test_a_redirect_asking_for_a_one_shot_body_again_is_not_followed(status: int, method: Method) -> None:
-    """Return the redirect as the final answer, with a note, instead of failing in httpx2 with ``StreamConsumed``."""
+    """Return the redirect as the final answer, with a note, instead of failing in httpx2 with ``StreamConsumed``.
+
+    A HEAD keeps its method on a 303, and a GET on any redirect, so either sends its body again.
+    """
     moved = httpx2.Response(status, headers={"Location": "/v1/elsewhere"})
     fake = FakeTransport().reply(method, "/v1/upload", moved).reply(method, "/v1/elsewhere", 200)
     built = client(fake)
