@@ -1,9 +1,9 @@
 # Rate budgets
 
-Every request a client sends to the network spends from a **rate budget**: it waits its turn at the configured rate,
-optionally for a free concurrency slot, and for any pause the server asked for. Waiting on the client side is cheaper
-than collecting 429s, and a budget that listens to the server stops a fleet of callers from hammering an API that has
-said "slow down".
+Every request a client sends to the network spends from a **rate budget**: it waits for a free concurrency slot, if the
+budget caps them, then for its turn at the configured rate and for any pause the server asked for. Waiting on the
+client side is cheaper than collecting 429s, and a budget that listens to the server stops a fleet of callers from
+hammering an API that has said "slow down".
 
 ```python
 from headgate import AsyncBaseClient, Rate, RateBudget, RateRule, TransportPolicy
@@ -32,9 +32,11 @@ under a `threading.Lock` and nothing in it is bound to a loop.
   out back to back; after that they are `period / requests` seconds apart. Waiters are served in arrival order, and a
   waiter cancelled in the queue gives its turn back when nobody reserved after it. A call whose turn comes at or after
   its deadline does not queue: it gives the turn back and the attempt is never sent (see [deadlines](deadlines.md)).
-- **`max_in_flight`** caps how many requests are open at once. A request holds its slot from the send until its
-  response body is **closed**, not until the head arrives, since the server is still busy with a body that streams.
-  Every path that drops a response closes it, so a slot cannot leak.
+- **`max_in_flight`** caps how many requests are open at once. A request takes its slot before its turn, so the
+  requests that slots freed at one instant still go out at the rate, and holds it until its response body is
+  **closed**, not until the head arrives, since the server is still busy with a body that streams. Every path that
+  drops a response closes it, and a response that arrives already read gives its slot back at once, so a slot cannot
+  leak.
 - **What spends.** Every attempt spends its own turn, retries and hedges included, as do redirect hops and token-mint
   hops. A cache hit spends nothing: the cache sits above the budget.
 
@@ -58,13 +60,18 @@ Every response is read for what it says about the quota, in this order of preced
 2. `RateLimit` with `RateLimit-Policy` (the IETF draft): an item with `r=0` is an exhausted quota, and its `t` is the
    seconds until it returns; a policy whose quota unit is not requests is skipped, and a malformed field is ignored;
 3. `X-RateLimit-Remaining` with `X-RateLimit-Reset`, the de facto pair, when `RateLimit` is absent. The reset is a
-   number of seconds or an absolute Unix time (in seconds or milliseconds), told apart by size.
+   number of seconds or an absolute Unix time (in seconds or milliseconds), told apart by size. A server with several
+   windows lists a value per window in each header: the pause is the latest reset among the windows whose count is
+   zero, paired by position, so `Remaining: 0, 4000` with `Reset: 1, 3600` pauses for 1 s.
 
 A response that names a pause **pauses the whole budget** until it ends, so every concurrent and later call queues
-behind it instead of spending a request on a certain refusal. A call whose deadline would pass before the pause ends
-does not wait: it raises `RateLimitError` at once, with `retry_after` set to the time left in the pause,
-`retryable=True`, and `status_code` the status of the response that asked for it: a 200 whose rate-limit headers said
-the quota was spent gives `RateLimitError(status_code=200)`.
+behind it instead of spending a request on a certain refusal. The calls already waiting their turn keep their order:
+the first goes when the pause ends and the rest follow at the rate, ahead of any call that arrived during the pause. A
+pause lasts at most an hour, long enough for an hourly quota's reset, so one hostile or mistaken header, such as a
+`Retry-After` dated in the year 9999, cannot stop every client sharing the budget for good. A call whose deadline
+would pass before the pause ends does not wait: it raises `RateLimitError` at once, with `retry_after` set to the time
+left in the pause, `retryable=True`, and `status_code` the status of the response that asked for it: a 200 whose
+rate-limit headers said the quota was spent gives `RateLimitError(status_code=200)`.
 
 ## Adaptive throttling
 

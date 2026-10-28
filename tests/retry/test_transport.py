@@ -10,12 +10,21 @@ the budget's window move only when the transport sleeps.
 from __future__ import annotations
 
 import asyncio
+import email.utils
 from typing import TYPE_CHECKING, override
 
 import httpx2
 import pytest
 
-from headgate._core import BREAKER_GATE, CallContext, CallInfo, Emitter, RetryScheduled
+from headgate._core import (
+    BREAKER_GATE,
+    BudgetBacklogError,
+    CallContext,
+    CallInfo,
+    Emitter,
+    RetryScheduled,
+    _retry_after,
+)
 from headgate.retry import NO_RETRY, Backoff, Hedge, RetryBudget, RetryPolicy
 from headgate.retry._policy import REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, RetryOutcome
 from headgate.retry._transport import RetryTransport
@@ -540,6 +549,120 @@ async def test_one_budget_is_shared_by_every_call_through_the_transport() -> Non
     assert second_context.notes[-1] == "retry budget exhausted"
 
 
+#: A budget with room for exactly one retry over its window, whatever the traffic.
+_ONE_RETRY = RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0)
+
+
+class _Answers(httpx2.AsyncBaseTransport):
+    """Answer each send with the next of *answers*: a status, or an exception raised."""
+
+    def __init__(self, *answers: int | Exception) -> None:
+        """Answer in order."""
+        self._answers = list(answers)
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        answer = self._answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return httpx2.Response(answer, request=request)
+
+
+async def _second_call_retries(retry: RetryTransport, clock: TestClock) -> None:
+    """Assert that a call through *retry* after a 503 is retried to its 200: the budget still has its one retry."""
+    request, context = _request(clock=clock)
+    response = await retry.handle_async_request(request)
+    assert (response.status_code, context.attempt) == (httpx2.codes.OK, _TWO_SENDS), "the budget had no retry left"
+    await response.aclose()
+
+
+async def test_a_retry_stopped_after_its_wait_gives_its_budget_back() -> None:
+    """Refund the retry a call paid for when the breaker opens during the wait, so the next call can retry."""
+    clock = TestClock()
+    opened = False
+
+    async def open_breaker(seconds: float, /) -> None:
+        nonlocal opened
+        opened = True
+        await clock.sleep(seconds)
+
+    network = _Answers(503, 503, 200)
+    retry = RetryTransport(transport=network, policy=RetryPolicy(backoff=_FULL, budget=_ONE_RETRY), sleep=open_breaker)
+    request, context = _request(clock=clock)
+    context.put(BREAKER_GATE, lambda: opened)
+    await (await retry.handle_async_request(request)).aclose()
+    assert context.notes[-1] == "circuit opened"
+
+    opened = False
+    await _second_call_retries(retry, clock)
+
+
+async def test_a_retry_the_rate_budget_refuses_gives_its_budget_back() -> None:
+    """Refund the retry a call paid for when the rate budget cannot send it before the deadline."""
+    clock = TestClock()
+    backlog = BudgetBacklogError("the rate budget's turn comes after the call's deadline", retry_after=1.0)
+    network = _Answers(503, backlog, 503, 200)
+    retry = RetryTransport(transport=network, policy=RetryPolicy(backoff=_FULL, budget=_ONE_RETRY), sleep=clock.sleep)
+    request, context = _request(clock=clock)
+    await (await retry.handle_async_request(request)).aclose()
+    assert context.notes[-1] == "deadline exhausted"
+
+    await _second_call_retries(retry, clock)
+
+
+async def test_a_retry_whose_call_is_cancelled_in_the_wait_gives_its_budget_back() -> None:
+    """Refund the retry a call paid for when the call is cancelled during the wait before it."""
+    clock = TestClock()
+    cancel = True
+
+    async def sleep(seconds: float, /) -> None:
+        if cancel:
+            raise asyncio.CancelledError
+        await clock.sleep(seconds)
+
+    network = _Answers(503, 503, 200)
+    retry = RetryTransport(transport=network, policy=RetryPolicy(backoff=_FULL, budget=_ONE_RETRY), sleep=sleep)
+    request, _ = _request(clock=clock)
+    with pytest.raises(asyncio.CancelledError):
+        await retry.handle_async_request(request)
+
+    cancel = False
+    await _second_call_retries(retry, clock)
+
+
+async def test_the_backoff_counts_retries_not_the_hedges_beside_them() -> None:
+    """Wait the first retry's backoff after a round in which the first send and its hedge both failed."""
+    clock = TestClock()
+    observer = _Events()
+    retry, _ = _transport(
+        [Slow(seconds=1, then=Respond(503)), Respond(503), Respond(200)],
+        clock,
+        RetryPolicy(backoff=_FULL, budget=None, hedge=Hedge(after=_HEDGE_AFTER)),
+    )
+    request, _ = _request(clock=clock, observer=observer)
+
+    await (await retry.handle_async_request(request)).aclose()
+
+    scheduled = [event for event in observer.events if isinstance(event, RetryScheduled)]
+    assert [(event.reason, event.delay) for event in scheduled] == [("hedge", _HEDGE_AFTER), ("503", _FULL.delay(1))]
+
+
+async def test_the_wait_is_the_retry_after_the_attempt_was_judged_by(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Wait the HTTP-date ``Retry-After`` as classification read it, not as read again on a later wall clock."""
+    clock = TestClock()
+    readings = iter(range(1_700_000_000, 1_700_000_100))
+    monkeypatch.setattr(_retry_after.time, "time", lambda: float(next(readings)))
+    date = email.utils.formatdate(1_700_000_010, usegmt=True)
+    retry, _ = _transport([Respond(503, headers={"Retry-After": date}), Respond(200)], clock)
+    request, context = _request(clock=clock)
+
+    await (await retry.handle_async_request(request)).aclose()
+
+    outcome_line = _attempt_notes(context)[0]
+    assert outcome_line == "attempt 1/3: 503 Service Unavailable (Retry-After 10.0s) after 0.0s"
+    assert clock.sleeps == [10.0], "the wait is the delay the history names"
+
+
 # --- History and events ---
 
 
@@ -773,7 +896,7 @@ async def test_a_hedge_is_not_started_without_budget() -> None:
     """Skip the hedge when the budget has no room, and wait for the first send alone."""
     clock = TestClock()
     policy = RetryPolicy(hedge=Hedge(after=_HEDGE_AFTER), budget=RetryBudget(ratio=0.0, min_per_second=0.0))
-    retry, network = _transport([Slow(seconds=1)], clock, policy)
+    retry, network = _transport([Slow(seconds=1), Respond(200)], clock, policy)
     request, _ = _request(clock=clock)
 
     response = await retry.handle_async_request(request)
@@ -783,10 +906,14 @@ async def test_a_hedge_is_not_started_without_budget() -> None:
 
 
 async def test_a_hedge_is_not_started_past_the_deadline() -> None:
-    """Skip the hedge when the time left is below ``min_attempt_time``."""
+    """Skip the hedge when the time left once ``after`` passes is below ``min_attempt_time``.
+
+    The first send outlasts ``after``, so the hedge timer fires while it is outstanding; a hedge sent would take the
+    schedule's second step.
+    """
     clock = TestClock()
     policy = RetryPolicy(hedge=Hedge(after=_HEDGE_AFTER), budget=None, min_attempt_time=1.0)
-    retry, network = _transport([Slow(seconds=0.4)], clock, policy)
+    retry, network = _transport([Slow(seconds=_HEDGE_AFTER + 0.1), Respond(200)], clock, policy)
     request, _ = _request(clock=clock, deadline=1.2)
 
     response = await retry.handle_async_request(request)

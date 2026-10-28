@@ -162,8 +162,8 @@ await client.get(
 
 plus `body=` (what a codec's `encoder` wrote), `json=`, `data=`, `content=` or `files=` for a body and
 `idempotency_key=` for a write. `stream()` takes the same options without `expect=` and `cache_ttl=`, and `paginate()`
-takes `expect=`, `pages=`, `limit=` and every other option but a body, applied to each page; a walk of POSTs passes
-its body in a `PageRequest` ([Walks of POSTs](pagination.md#walks-of-posts)).
+takes `expect=`, `pages=`, `limit=` and the same options, applied to each page; a walk of POSTs takes `body=` or
+`json=` and no other body option ([Walks of POSTs](pagination.md#walks-of-posts)).
 
 ### Views
 

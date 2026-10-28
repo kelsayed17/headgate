@@ -14,7 +14,7 @@ import pytest
 from hishel import AsyncSqliteStorage, FilterPolicy
 
 from headgate import HttpCache, HttpOptions, RateLimitError, TransportPolicy
-from headgate._core import RateLimited, Timing
+from headgate._core import AttemptFinished, CallFinished, RateLimited, Timing
 from headgate.cache import MethodFilter, StatusCodeFilter
 from headgate.cache._transport import CACHE_DEGRADATIONS
 from headgate.ratelimit import Rate, RateBudget
@@ -97,9 +97,27 @@ async def test_a_pause_past_the_deadline_raises_rate_limit_error_without_sending
 
     error = raised.value
     assert (error.status_code, error.retryable, error.retry_after) == (429, True, _PAUSE)
+    assert (error.attempts, getattr(error, "__notes__", [])) == (0, []), "an attempt never sent is no attempt"
     assert "past the call's deadline" in str(error)
     assert server.received == 1, "the refused call never reached the server"
     assert failures(_HOST) == 0, "neither the 429 nor the local refusal is a host failure"
+
+
+async def test_a_call_the_paused_budget_refuses_reports_no_attempt() -> None:
+    """Emit no ``AttemptFinished`` for a send the budget refused before it reached the network."""
+    clock = TestClock()
+    budget = _budget(clock)
+    server = _Server()
+    recorder = Recorder()
+    with pytest.raises(RateLimitError):
+        await _client(budget, server).get("x", expect=RESPONSE)
+
+    with pytest.raises(RateLimitError):
+        await _client(budget, server, recorder=recorder).get("x", expect=RESPONSE, deadline=_DEADLINE)
+
+    assert not [event for event in recorder.events if isinstance(event, AttemptFinished)]
+    finished = [event for event in recorder.events if isinstance(event, CallFinished)]
+    assert [(event.attempts, event.error) for event in finished] == [(0, "RateLimitError")]
 
 
 async def test_a_pause_past_the_deadline_is_not_mistaken_for_a_cache_fault(storage: AsyncSqliteStorage) -> None:

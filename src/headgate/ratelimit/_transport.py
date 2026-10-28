@@ -7,11 +7,13 @@ Below the cache, a cache hit returns above it and spends nothing; below retry, e
 spends its own turn. A client's ``rate_limits`` rules give a matching URL path a budget of its own
 (:class:`~headgate.ratelimit.PathBudgets`).
 
-A budget with ``max_in_flight`` counts a request from its send until its response body is closed, not until the
-response head arrives: the server is still busy with a request whose body is streaming. So the slot travels with the
-response, in a stream wrapper whose ``aclose`` gives it back. Every path that drops a response closes it (the client
-after reading the body or on error, the retry layer before re-sending, ``stream()`` on exit), and a send that raises
-or is cancelled gives the slot back at once.
+A budget with ``max_in_flight`` counts a request until its response body is closed, not until the response head
+arrives: the server is still busy with a request whose body is streaming. The slot is taken before the paced turn,
+so the calls that slots freed at one instant still go out at the rate, and behind any pause set while they waited for
+a slot. The slot travels with the response, in a stream wrapper whose ``aclose`` gives it back. Every path that drops
+a response closes it (the client after reading the body or on error, the retry layer before re-sending, ``stream()``
+on exit); a response the transport returns already closed, and a wait or send that raises or is cancelled, give the
+slot back at once.
 
 **Events.** The budget emits :class:`~headgate._core.RateLimited` for every wait it makes a call take; this layer emits
 one more, with the reason ``"pushback"``, for a response that asks the budget to pause, so the call that caused a pause
@@ -78,13 +80,15 @@ class RateLimitTransport(httpx2.AsyncBaseTransport):
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         budget = pacer_of(self._budgets.for_request(request))
         context = CallContext.of(request)
-        await budget.wait(context)
+        # The slot first, then the turn: calls that slots freed together still go out at the rate, and a pause set while
+        # a call waited for its slot still holds it.
         release = await budget.occupy()
-        # The waits took some of the call's time: the send that follows gets only what is left.
-        context.fit_timeouts(request)
-        context.progress.mark_dispatched()
-        sent_at = budget.now()
         try:
+            await budget.wait(context)
+            # The waits took some of the call's time: the send that follows gets only what is left.
+            context.fit_timeouts(request)
+            context.progress.mark_dispatched()
+            sent_at = budget.now()
             response = await self._transport.handle_async_request(request)
         except BaseException:
             release()
@@ -94,10 +98,11 @@ class RateLimitTransport(httpx2.AsyncBaseTransport):
             context.emit(RateLimited(call=context.info, delay=pause, reason=PUSHBACK))
         if budget.max_in_flight is not None:
             stream = response.stream
-            if isinstance(stream, httpx2.AsyncByteStream):
+            if isinstance(stream, httpx2.AsyncByteStream) and not response.is_closed:
                 response.stream = _SlotStream(stream, release)
             else:
-                # A synchronous body cannot be closed by an async caller's aclose(); holding the slot would leak it.
+                # A synchronous body cannot be closed by an async caller's aclose(), and a response already read and
+                # closed (one built with content=) is never closed again; holding the slot would leak it.
                 release()
         return response
 

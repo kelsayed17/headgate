@@ -98,11 +98,19 @@ def request_content(body: Body | None) -> tuple[bytes | AsyncIterable[bytes] | N
 
     Bytes and a factory are replayable; any other async iterable is consumed by the first send and is not. A value
     that is both callable and iterable counts as an iterable.
+
+    :raises TypeError: for a value that is none of the three, such as ``str`` (encode it first), ``bytearray`` or a
+        synchronous iterable, which would otherwise be called as a factory and fail inside httpx2.
     """
     if body is None or isinstance(body, bytes):
         return body, True
     if isinstance(body, AsyncIterable):
         return body, False
+    if not callable(body):
+        msg = (
+            f"content= takes bytes, an async iterable of bytes, or a callable returning one (got {type(body).__name__})"
+        )
+        raise TypeError(msg)
     return _Replayed(body), True
 
 

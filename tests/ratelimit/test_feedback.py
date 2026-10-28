@@ -121,10 +121,22 @@ def test_de_facto_headers_with_quota_left_or_garbage_say_nothing() -> None:
     assert _feedback(X_RateLimit_Reset="9") == Feedback()
 
 
-def test_de_facto_lists_take_the_most_restrictive_value() -> None:
-    """Read a repeated header (joined with commas) as its smallest remaining count and latest reset."""
+def test_de_facto_lists_of_unequal_length_take_the_latest_reset() -> None:
+    """Read lists that cannot be paired part by part as spent when any count is, with the latest reset."""
     feedback = _feedback(X_RateLimit_Remaining="5, 0, inf", X_RateLimit_Reset="3, 8, nope, -1")
     assert feedback == Feedback(pushback=True, pause=8.0)
+
+
+@pytest.mark.parametrize(
+    ("remaining", "reset", "pause"),
+    [("0, 4000", "1, 3600", 1.0), ("4000, 0", "1, 3600", 3600.0), ("0, 0", "1, 3600", 3600.0), ("0, 9", "x, 60", None)],
+)
+def test_de_facto_windows_pair_each_reset_with_its_remaining_count(
+    remaining: str, reset: str, pause: float | None
+) -> None:
+    """Pause for the reset of the window that is spent, by position, not for the latest reset of any window."""
+    feedback = _feedback(X_RateLimit_Remaining=remaining, X_RateLimit_Reset=reset)
+    assert feedback == Feedback(pushback=True, pause=pause)
 
 
 def test_spent_de_facto_quota_without_a_reset_is_pushback_without_a_pause() -> None:

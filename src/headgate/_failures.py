@@ -325,7 +325,8 @@ def transport_error(exc: httpx2.HTTPError | OSError, site: CallSite) -> Transpor
 
     httpx2 names the URL in most of its own messages but a bare ``OSError`` names nothing, so the request line is
     stated explicitly. Many httpx2 exceptions stringify to ``""`` (a dropped connection, a read timeout), and the type
-    name is then the only record of what failed. A timeout becomes :class:`~headgate.errors.ClientTimeoutError`.
+    name is then the only record of what failed. A timeout, httpx2's or the built-in ``TimeoutError`` a middleware or
+    transport's own ``asyncio.timeout`` raises, becomes :class:`~headgate.errors.ClientTimeoutError`.
 
     An ``httpx2.LocalProtocolError`` gets a fixed message instead (see :func:`_unsendable_detail`): it is the HTTP
     library refusing to encode the request, and its own message quotes the offending header value, which is usually
@@ -337,7 +338,7 @@ def transport_error(exc: httpx2.HTTPError | OSError, site: CallSite) -> Transpor
         detail = shorten(redact_secrets(str(exc))) or type(exc).__name__
     message = f"{site.method} {site.url}: {detail}"
     details = site.details(failure=exc, retryable=not isinstance(exc, UNRETRYABLE_ERRORS))
-    if isinstance(exc, httpx2.TimeoutException):
+    if isinstance(exc, httpx2.TimeoutException | TimeoutError):
         return ClientTimeoutError(message, **details)
     return TransportError(message, **details)
 

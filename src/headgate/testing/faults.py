@@ -11,9 +11,10 @@ send with the next step of its schedule::
 
 It reports each send's progress the way httpx2's own transport does through its trace: a connection obtained marks
 the call's current attempt connected, and the request head is counted as written when it starts to go out. The body
-is read through the request's stream, so the send-tracking layer above counts it as it would on a real network. Each
-send is recorded in :attr:`FaultyTransport.calls` as a :class:`FaultCall`: the step, the request line and headers,
-whether it connected, how many bytes it wrote, and the response it returned, if any, with whether that was closed.
+is read through the request's stream, one chunk per write and no further than the write gets, so the send-tracking
+layer above counts it as it would on a real network. Each send is recorded in :attr:`FaultyTransport.calls` as a
+:class:`FaultCall`: the step, the request line and headers, whether it connected, how many bytes it wrote, and the
+response it returned, if any, with whether that was closed.
 """
 
 from __future__ import annotations
@@ -88,7 +89,9 @@ class DropMidBody:
     """Connect, write ``after_bytes`` of the request (head first, then body), then lose the connection.
 
     ``httpx2.WriteError`` when the request was cut short, ``httpx2.RemoteProtocolError`` (the server disconnecting
-    without answering) when all of it was written. ``after_bytes=0`` drops the connection before anything is written.
+    without answering) when all of it was written. ``after_bytes=0`` drops the connection before anything is written;
+    any more, and the whole head is reported written, as httpx2's trace reports it when the head's write starts. The
+    body is read only as far as the write gets, so the chunks past the drop are never taken.
     """
 
     after_bytes: int
@@ -227,7 +230,7 @@ class FaultyTransport(httpx2.AsyncBaseTransport):
                 msg = "scheduled connection drop while writing"
                 raise httpx2.WriteError(msg, request=request)
             case RefusedStream():
-                await _write(request, call, limit=head_size(request))
+                await _write(request, call, body=False)
                 raise _refused_stream(request)
             case Slow(seconds=seconds, then=then):
                 await _write(request, call)
@@ -243,26 +246,33 @@ class FaultyTransport(httpx2.AsyncBaseTransport):
                 return _respond(step, request, call)
 
 
-async def _write(request: httpx2.Request, call: FaultCall, *, limit: int | None = None) -> _Write:
-    """Connect and write at most *limit* bytes of *request* (head first, then body), recording it in *call*.
+async def _write(request: httpx2.Request, call: FaultCall, *, limit: int | None = None, body: bool = True) -> _Write:
+    """Connect and write at most *limit* bytes of *request*, head first, then its body when *body*; record it in *call*.
 
-    The connection and the head are reported on the call's context the way httpx2's trace reports them; the body is
-    read through the request's stream, in full, as a network write would read it, so a counting layer above sees it.
+    The connection and the head are reported on the call's context the way httpx2's trace reports them: the whole head
+    is counted once its write starts, even if the connection drops inside it, and nothing when *limit* is 0. The body
+    is read through the request's stream one chunk per write, as a network write reads it, so a counting layer above
+    counts each chunk taken; the first chunk the connection drops inside is the last one taken.
     """
     context = CallContext.find(request)
     progress = None if context is None else context.progress
     call.connected = True
-    head = head_size(request)
-    write = _Write(written=head if limit is None else min(head, limit), complete=limit is None or head <= limit)
     if progress is not None:
         progress.mark_connected()
-        progress.add_sent(write.written)
+    if limit == 0:
+        return _Write(written=0, complete=False)
+    head = head_size(request)
+    if progress is not None:
+        progress.add_sent(head)
+    write = _Write(written=head if limit is None else min(head, limit), complete=limit is None or head <= limit)
     stream = request.stream
-    if isinstance(stream, httpx2.AsyncByteStream):
+    if body and write.complete and isinstance(stream, httpx2.AsyncByteStream):
         async for chunk in stream:
-            take = len(chunk) if limit is None else max(0, min(len(chunk), limit - write.written))
-            write.complete = write.complete and take == len(chunk)
+            take = len(chunk) if limit is None else min(len(chunk), limit - write.written)
             write.written += take
+            if take < len(chunk):
+                write.complete = False
+                break
     call.bytes_sent += write.written
     return write
 

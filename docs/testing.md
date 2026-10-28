@@ -52,6 +52,10 @@ fake = (
 `clock.install()` measure every duration on it (deadlines, events, rate pacing, and the cooldowns of a registry built by
 `isolated_breakers()` in the same block) and wait through its sleep, so a test of a 60-second cooldown runs in no time.
 
+Concurrent sleeps overlap as they would in real time: each sleeper wakes at the reading it began at plus its delay,
+and the clock moves to the earliest wake once the other tasks are waiting too. Two calls that back off 30 seconds
+together both retry at 30, and a sleep cancelled before it wakes does not move the clock.
+
 `instant_retries()` keeps the real clock and makes every wait return at once, so a mocked failure is retried exactly as
 production retries it, without the backoff.
 
@@ -73,7 +77,7 @@ response, whether that response was closed, and the error raised.
 | `ConnectFail(timeout=False)` | raises `ConnectError` (`ConnectTimeout` with `timeout=True`); nothing sent |
 | `PoolFull()` | raises `PoolTimeout`; nothing sent |
 | `Respond(status_code=200, headers=..., json=..., content=..., retry_after=None)` | answers |
-| `DropMidBody(after_bytes)` | writes that many request bytes, then loses the connection |
+| `DropMidBody(after_bytes)` | writes that many request bytes, then loses the connection; `0` writes nothing, and any more counts the whole head as written, as httpx2's trace does |
 | `Slow(seconds, then=Respond())` | waits (honoring the read timeout), then takes `then` |
 | `RefusedStream()` | resets the HTTP/2 stream with `REFUSED_STREAM`, exactly as httpx2 raises it |
 

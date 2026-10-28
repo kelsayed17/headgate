@@ -20,8 +20,9 @@ NEW_ORDER = encoder(NewOrder)  # a writer, for body=
 ```
 
 Both decode strictly (a field that changes type on the wire fails rather than being coerced), ignore fields the type
-does not declare, and describe a failure without repeating the body. Each module's `CODEC` is the codec itself, for
-the functions below.
+does not declare, and describe a failure without repeating the body. A message keeps the path to the failure and the
+names the type declares, and shows `[...]` for anything the body chose: a key of a `dict[str, int]`, an unknown enum
+value or tag, an unknown field's name. Each module's `CODEC` is the codec itself, for the functions below.
 
 ## Any codec, the same way
 
@@ -102,8 +103,8 @@ It raises `AssertionError` naming the first promise broken:
 - `media_type` is a media type;
 - a value it writes reads back equal;
 - a string where an `int` is declared is refused, not coerced;
-- a cut-short body is refused;
-- each refusal raises one of `errors`, and its description never repeats the input;
+- a body cut short at its middle is refused, so a codec whose bodies end in a newline passes;
+- each refusal raises one of `errors`, and its description never repeats the input, whether a value or a key;
 - a field the record does not declare is ignored, since providers add fields without notice.
 
 Every body it reads is one the codec wrote itself, so the check works for any format.

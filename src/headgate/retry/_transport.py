@@ -17,9 +17,15 @@ For each request :class:`RetryTransport` runs a sequence of attempts under the c
    breaker is refusing (``BREAKER_GATE``), or the retry budget is spent. Each stop that is not plain exhaustion adds a
    note: ``"the request body is a one-shot stream, so it is not sent again"``, ``"Retry-After 60.0s exceeds
    max_retry_after 30.0s"``, ``"deadline exhausted"``, ``"circuit opened"`` or ``"retry budget exhausted"``.
-4. **Wait**: a ``Retry-After`` exactly, else the backoff; a failed response is first read (a bounded head of its body)
-   and closed, so no connection is held through the wait. ``RetryScheduled`` is emitted for every retry and hedge.
-   The deadline and the breaker are checked again after the wait, before the next attempt starts.
+4. **Wait**: a ``Retry-After`` exactly, as classification read it, else the backoff for the retry's number (hedges
+   are not counted); a failed response is first read (a bounded head of its body) and closed, so no connection is
+   held through the wait. ``RetryScheduled`` is emitted for every retry and hedge. The deadline and the breaker are
+   checked again after the wait, before the next attempt starts.
+
+A retry or hedge spends the retry budget when it is scheduled, and gives it back when it is never sent: the breaker
+opened or the deadline came during the wait, the rate budget could not admit it before the deadline
+(``BudgetBacklogError``, ``BudgetPausedError``, after which the call ends with the failure it has), or the call was
+cancelled during the wait. A send the rate budget refused is withdrawn from the call's attempts, with no history line.
 
 A hedge is sent as a copy of the request (its own headers and extensions, the same replayable body) on the same call
 context, so concurrent sends share the context's send progress. That is sound because only idempotent methods are
@@ -40,7 +46,15 @@ from typing import TYPE_CHECKING, Final, override
 
 import httpx2
 
-from headgate._core import BREAKER_GATE, BudgetBacklogError, CallContext, RetryScheduled, Sleep, asyncio_sleep
+from headgate._core import (
+    BREAKER_GATE,
+    BudgetBacklogError,
+    BudgetPausedError,
+    CallContext,
+    RetryScheduled,
+    Sleep,
+    asyncio_sleep,
+)
 from headgate.retry._budget import RetryLedger
 from headgate.retry._classify import Attempted, Verdict, classify
 from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, RetryOutcome
@@ -62,6 +76,10 @@ _IDEMPOTENCY_HEADER: Final = "Idempotency-Key"
 
 #: The reason a ``RetryScheduled`` event gives for a hedge.
 _HEDGE_REASON: Final = "hedge"
+
+#: What the rate budget raises for a send it cannot admit before the call's deadline: its turn, or the server's pause,
+#: ends too late. Such a send never reached the network, so it is no attempt.
+_UNSENT: Final = (BudgetBacklogError, BudgetPausedError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +197,7 @@ class _Sequence:
         self._replayable = context.get(REPLAYABLE_BODY) is not False
         self._ledger = ledger
         self._sent = 0
+        self._retries = 0
 
     # Attempts.
 
@@ -197,8 +216,11 @@ class _Sequence:
         verdict = classify(result, self._attempted(self._context.progress), self._policy)
         return RetryOutcome(verdict.retryable, verdict.retry_after, failure=verdict.failure)
 
-    async def _send(self, request: httpx2.Request, *, hedge: bool = False) -> _Attempt:
-        """Send *request* once, as a new attempt, and return its classified result with its history line added."""
+    async def _send(self, request: httpx2.Request, *, hedge: bool = False, paid: bool = False) -> _Attempt:
+        """Send *request* once, as a new attempt, and return its classified result with its history line added.
+
+        *paid* says the send spent the retry budget (a retry, or a hedge), which a send never made gives back.
+        """
         context = self._context
         context.begin_attempt()
         progress = context.progress
@@ -212,10 +234,12 @@ class _Sequence:
             result = await self._transport.handle_async_request(request)
         except NETWORK_ERRORS as exc:
             result = exc
-        except BudgetBacklogError:
-            # Never sent, so it is no attempt; the caller decides what the call ends with.
+        except _UNSENT:
+            # Never sent, so it is no attempt and spends no retry; the caller decides what the call ends with.
             context.withdraw_attempt()
             self._sent -= 1
+            if paid:
+                self._refund()
             raise
         except asyncio.CancelledError:
             # A losing hedge, or the whole call reaching its deadline: the history still accounts for the send.
@@ -225,20 +249,23 @@ class _Sequence:
         context.add_note(f"{prefix}: {_describe(result, verdict)} after {_rounded(context.clock() - started)}")
         return _Attempt(result, verdict, request)
 
-    async def _round(self) -> _Attempt:
-        """Run one attempt: hedged when a hedge is configured and the request is idempotent and replayable."""
+    async def _round(self, *, paid: bool = False) -> _Attempt:
+        """Run one attempt: hedged when a hedge is configured and the request is idempotent and replayable.
+
+        *paid* says the attempt is a retry, which spent the retry budget before it was scheduled.
+        """
         hedge = self._policy.hedge
         if hedge is None or self._method not in self._policy.methods or not self._replayable:
-            return await self._send(self._request)
-        return await self._hedged(hedge)
+            return await self._send(self._request, paid=paid)
+        return await self._hedged(hedge, paid=paid)
 
-    async def _hedged(self, hedge: Hedge) -> _Attempt:
+    async def _hedged(self, hedge: Hedge, *, paid: bool) -> _Attempt:
         """Send the request, adding a hedge each time ``hedge.after`` passes unanswered; return the first answer.
 
         A retryable failure from one send leaves the others running; once every send has failed, the last failure is
         returned to the retry loop. Every send that is not returned is cancelled, and its response closed.
         """
-        sends = [asyncio.create_task(self._send(self._request))]
+        sends = [asyncio.create_task(self._send(self._request, paid=paid))]
         pending = set(sends)
         timer: asyncio.Task[None] | None = None
         extra = 0
@@ -258,7 +285,7 @@ class _Sequence:
                     timer = None
                     if self._admit_hedge(hedge.after):
                         extra += 1
-                        task = asyncio.create_task(self._send(_clone(self._request), hedge=True))
+                        task = asyncio.create_task(self._send(_clone(self._request), hedge=True, paid=True))
                         sends.append(task)
                         pending.add(task)
                     else:
@@ -307,7 +334,8 @@ class _Sequence:
             return _STOP
         if (note := self._unsendable(attempt)) is not None:
             return _Decision(note=note)
-        delay = self._policy.wait_after(attempt.result, self._sent)
+        # The backoff grows with the retries made, not with the sends: a hedge is no retry.
+        delay = self._policy.wait_after(attempt.verdict.retry_after, self._retries + 1)
         if (note := self._unaffordable(delay)) is not None:
             return _Decision(note=note)
         return _Decision(delay=delay)
@@ -331,6 +359,11 @@ class _Sequence:
         if self._ledger is not None and not self._ledger.try_spend():
             return "retry budget exhausted"
         return None
+
+    def _refund(self) -> None:
+        """Give back the retry budget a retry or hedge spent and then never sent."""
+        if self._ledger is not None:
+            self._ledger.refund()
 
     def _scheduled(self, delay: float, reason: str) -> None:
         """Emit ``RetryScheduled`` for the attempt about to be scheduled, when anyone is listening."""
@@ -358,15 +391,23 @@ class _Sequence:
                         self._context.add_note(decision.note)
                     return _settle(attempt)
                 self._scheduled(decision.delay, verdict.reason)
-                attempt = await _parked_attempt(attempt)
-                await self._sleep(decision.delay)
+                self._retries += 1
+                try:
+                    attempt = await _parked_attempt(attempt)
+                    await self._sleep(decision.delay)
+                except asyncio.CancelledError:
+                    # The call ended during the wait, so the retry it paid for is never sent.
+                    self._refund()
+                    raise
                 if (reason := self._stop_reason()) is not None:
+                    self._refund()
                     self._context.add_note(reason)
                     return _settle(attempt)
                 try:
-                    retried = await self._round()
-                except BudgetBacklogError:
-                    # The retry could not be sent before the deadline: the call ends with the failure it has.
+                    retried = await self._round(paid=True)
+                except _UNSENT:
+                    # The rate budget could not send the retry before the deadline: the call ends with the failure it
+                    # has, and the retry, never sent, has given its budget back.
                     self._context.add_note("deadline exhausted")
                     return _settle(attempt)
                 await _release(attempt)
@@ -383,11 +424,11 @@ def _first_answer(
 
     An answer is an attempt that is not a retryable failure. A send the rate budget could not admit before the deadline
     was never sent, so it is passed over while another send is still running or one has failed; otherwise its
-    ``BudgetBacklogError`` is raised.
+    ``BudgetBacklogError`` or ``BudgetPausedError`` is raised.
     """
     for task in finished:
         pending.discard(task)
-        if (pending or failed is not None) and isinstance(task.exception(), BudgetBacklogError):
+        if (pending or failed is not None) and isinstance(task.exception(), _UNSENT):
             continue
         attempt = task.result()
         if not attempt.retryable_failure:

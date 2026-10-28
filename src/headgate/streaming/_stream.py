@@ -11,16 +11,17 @@ mapping (and the breaker charge that goes with a network failure) is the client'
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, Final, Protocol, final, override
-
-import httpx2
+from typing import TYPE_CHECKING, Final, Protocol, final
 
 from headgate._failures import parse_error
 from headgate.errors import ResponseTooLargeError
 from headgate.retry._policy import NETWORK_ERRORS
+from headgate.streaming._events import EventParser, EventTooLargeError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator, Callable, Iterator
+
+    import httpx2
 
     from headgate._failures import CallSite
     from headgate.errors import ClientError
@@ -63,9 +64,11 @@ class Stream(Protocol):
 
     @property
     def last_event_id(self) -> str | None:
-        """The last event id :meth:`aiter_events` has seen (``""`` once the server reset it), ``None`` before any.
+        """The event id the server last set, as of what :meth:`aiter_events` has read; ``None`` before it sets one.
 
-        Pass it as ``last_event_id=`` when re-opening the stream, so the server resumes after it.
+        It is ``""`` once the server reset it with an empty ``id``, and a block without data (an ``id:`` alone) sets
+        it too, as a browser's ``EventSource`` keeps it. Pass it as ``last_event_id=`` when re-opening the stream, so
+        the server resumes after it.
         """
         ...
 
@@ -82,9 +85,10 @@ class Stream(Protocol):
     ) -> AsyncIterator[httpx2.ServerSentEvent]:
         """Iterate the body as server-sent events, each parsed as soon as its blank line arrives.
 
-        Each event carries ``event``, ``data``, ``id`` and ``retry`` as httpx2 parses them (the WHATWG grammar), and
-        its ``id`` is kept as :attr:`last_event_id`. An event past *max_event_size* bytes (``None`` for no limit)
-        raises ``ResponseTooLargeError``.
+        Each event is an ``httpx2.ServerSentEvent`` carrying ``event``, ``data``, ``id`` and the ``retry`` its block
+        named, parsed by the WHATWG grammar: the body is UTF-8 whatever its ``charset`` says, a leading byte order mark
+        is skipped, and a block without data (an ``event: ping`` heartbeat, a ``retry:`` or ``id:`` alone) is not an
+        event. An event past *max_event_size* bytes (``None`` for no limit) raises ``ResponseTooLargeError``.
 
         :raises ResponseParseError: at once, for a response that does not declare ``text/event-stream``.
         """
@@ -95,7 +99,7 @@ class Stream(Protocol):
 class OpenStream:
     """The :class:`Stream` :meth:`AsyncBaseClient.stream <headgate.AsyncBaseClient.stream>` opens."""
 
-    __slots__ = ("_fail", "_last_event_id", "_request_id", "_response", "_site")
+    __slots__ = ("_events", "_fail", "_request_id", "_response", "_site")
 
     def __init__(self, response: httpx2.Response, site: CallSite, fail: NetworkFailure) -> None:
         """Wrap the streamed *response* of the call at *site*, mapping a mid-body failure through *fail*."""
@@ -103,7 +107,7 @@ class OpenStream:
         self._site = site
         self._fail = fail
         self._request_id = site.details(response).get("request_id")
-        self._last_event_id: str | None = None
+        self._events: EventParser | None = None
 
     @property
     def status_code(self) -> int:
@@ -122,11 +126,13 @@ class OpenStream:
 
     @property
     def last_event_id(self) -> str | None:
-        """The last event id :meth:`aiter_events` has seen (``""`` once the server reset it), ``None`` before any.
+        """The event id the server last set, as of what :meth:`aiter_events` has read; ``None`` before it sets one.
 
-        Pass it as ``last_event_id=`` when re-opening the stream, so the server resumes after it.
+        It is ``""`` once the server reset it with an empty ``id``, and a block without data (an ``id:`` alone) sets
+        it too, as a browser's ``EventSource`` keeps it. Pass it as ``last_event_id=`` when re-opening the stream, so
+        the server resumes after it.
         """
-        return self._last_event_id
+        return None if self._events is None else self._events.last_event_id
 
     def aiter_bytes(self, chunk_size: int | None = None) -> AsyncIterator[bytes]:
         """Iterate the body as bytes, in chunks as they arrive or of *chunk_size* bytes."""
@@ -141,9 +147,10 @@ class OpenStream:
     ) -> AsyncIterator[httpx2.ServerSentEvent]:
         """Iterate the body as server-sent events, each parsed as soon as its blank line arrives.
 
-        Each event carries ``event``, ``data``, ``id`` and ``retry`` as httpx2 parses them (the WHATWG grammar), and
-        its ``id`` is kept as :attr:`last_event_id`. An event past *max_event_size* bytes (``None`` for no limit)
-        raises ``ResponseTooLargeError``.
+        Each event is an ``httpx2.ServerSentEvent`` carrying ``event``, ``data``, ``id`` and the ``retry`` its block
+        named, parsed by the WHATWG grammar: the body is UTF-8 whatever its ``charset`` says, a leading byte order mark
+        is skipped, and a block without data (an ``event: ping`` heartbeat, a ``retry:`` or ``id:`` alone) is not an
+        event. An event past *max_event_size* bytes (``None`` for no limit) raises ``ResponseTooLargeError``.
 
         :raises ResponseParseError: at once, for a response that does not declare ``text/event-stream``.
         """
@@ -151,19 +158,14 @@ class OpenStream:
         if media_type != _EVENT_STREAM:
             error = ValueError(f"expected an event stream, got content type {media_type or 'none'!r}")
             raise parse_error(error, self._response, self._site)
-        source = httpx2.EventSource(self._response, max_event_size=max_event_size)
-        return _Events(aiter(source), functools.partial(self._event_failure, max_event_size=max_event_size), self._saw)
+        self._events = EventParser(max_event_size)
+        chunks = _Guarded(self._response.aiter_bytes(), self._fail)
+        return _Events(chunks, self._events, functools.partial(self._too_large, max_event_size))
 
-    def _event_failure(self, exc: httpx2.HTTPError | OSError, max_event_size: int | None) -> ClientError:
-        """Map a failure while events arrive: an oversized event is the body's fault, anything else the network's."""
-        if isinstance(exc, httpx2.SSEError):
-            message = f"server-sent event over {max_event_size} bytes from {self._site.method} {self._site.url}"
-            return ResponseTooLargeError(message, **self._site.details(self._response))
-        return self._fail(exc)
-
-    def _saw(self, event: httpx2.ServerSentEvent) -> None:
-        """Record *event*'s id as the last one seen."""
-        self._last_event_id = event.id
+    def _too_large(self, max_event_size: int | None) -> ClientError:
+        """Return the error for an event past *max_event_size* bytes: the body's fault, so it charges no breaker."""
+        message = f"server-sent event over {max_event_size} bytes from {self._site.method} {self._site.url}"
+        return ResponseTooLargeError(message, **self._site.details(self._response))
 
 
 class _Guarded[T]:
@@ -189,24 +191,29 @@ class _Guarded[T]:
 
 
 @final
-class _Events(_Guarded[httpx2.ServerSentEvent]):
-    """The event iterator: a :class:`_Guarded` that also reports each event to *seen*."""
+class _Events:
+    """The event iterator: the body's chunks fed through *parser*, raising what *too_large* builds for a large event."""
 
-    __slots__ = ("_seen",)
+    __slots__ = ("_chunks", "_parser", "_pending", "_too_large")
 
-    def __init__(
-        self,
-        source: AsyncIterator[httpx2.ServerSentEvent],
-        fail: NetworkFailure,
-        seen: Callable[[httpx2.ServerSentEvent], None],
-    ) -> None:
-        """Iterate *source*, mapping failures through *fail* and handing each event to *seen*."""
-        super().__init__(source, fail)
-        self._seen = seen
+    def __init__(self, chunks: AsyncIterator[bytes], parser: EventParser, too_large: Callable[[], ClientError]) -> None:
+        """Parse *chunks* with *parser*, raising what *too_large* builds for an oversized event."""
+        self._chunks = chunks
+        self._parser = parser
+        self._too_large = too_large
+        self._pending: Iterator[httpx2.ServerSentEvent] = iter(())
 
-    @override
+    def __aiter__(self) -> AsyncIterator[httpx2.ServerSentEvent]:
+        """Return this iterator."""
+        return self
+
     async def __anext__(self) -> httpx2.ServerSentEvent:
-        """Return the next event, after reporting it."""
-        event = await super().__anext__()
-        self._seen(event)
-        return event
+        """Return the next event, reading chunks until one completes it."""
+        while True:
+            try:
+                event = next(self._pending, None)
+            except EventTooLargeError as exc:
+                raise self._too_large() from exc
+            if event is not None:
+                return event
+            self._pending = self._parser.feed(await anext(self._chunks))

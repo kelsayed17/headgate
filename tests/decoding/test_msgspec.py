@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import enum
+from typing import TYPE_CHECKING
 
 import msgspec
 import pytest
@@ -19,6 +20,9 @@ from headgate._failures import MESSAGE_TEXT_LIMIT
 from headgate.errors import DecodeError
 from headgate.msgspec import MsgspecCodec, decode, decoder, to_builtins
 from tests.support.responses import response
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeForm
 
 
 class _Struct(msgspec.Struct, frozen=True):
@@ -259,6 +263,47 @@ def test_a_decode_error_never_repeats_an_unknown_enum_value() -> None:
         decode(b'{"side": "sk-live-SECRET"}', _Order)
 
     assert str(raised.value) == "Invalid enum value - at `$.side`"
+
+
+class _Buy(msgspec.Struct, frozen=True, tag="buy"):
+    qty: int
+
+
+class _Sell(msgspec.Struct, frozen=True, tag="sell"):
+    qty: int
+
+
+class _Closed(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    qty: int
+
+
+class _Book(msgspec.Struct, frozen=True):
+    closed: list[_Closed]
+
+
+@pytest.mark.parametrize(
+    ("body", "type_", "message"),
+    [
+        pytest.param(b'{"type": "sk-live-SECRET"}', _Buy | _Sell, "Invalid value - at `$.type`", id="tag"),
+        pytest.param(b'[{"type": "SECRET"}]', list[_Buy | _Sell], "Invalid value - at `$[0].type`", id="nested-tag"),
+        pytest.param(b'{"sk-live-SECRET": 1}', dict[_Side, int], "Invalid enum value - at `key` in `$`", id="enum-key"),
+        pytest.param(
+            b'{"closed": [{"qty": 1, "sk-live-SECRET": 2}]}',
+            _Book,
+            "Object contains unknown field - at `$.closed[0]`",
+            id="unknown-field",
+        ),
+        pytest.param(
+            b'{"type": "sk-live-SECRET - at `$.qty`"}', _Buy | _Sell, "Invalid value - at `$.type`", id="path-in-value"
+        ),
+    ],
+)
+def test_a_decode_error_never_repeats_an_input_value_or_key(body: bytes, type_: TypeForm[object], message: str) -> None:
+    """Leave out every input msgspec quotes (a tag, an enum key, an unknown field's name), keeping the path."""
+    with pytest.raises(DecodeError) as raised:
+        decode(body, type_)
+
+    assert str(raised.value) == message
 
 
 def test_a_decode_error_is_bounded_whatever_the_input() -> None:

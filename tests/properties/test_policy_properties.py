@@ -45,11 +45,11 @@ def test_a_retry_wait_is_finite_non_negative_and_capped_unless_the_server_asked(
     headers = [(b"Retry-After", retry_after.encode("latin-1"))]
     response = httpx2.Response(httpx2.codes.SERVICE_UNAVAILABLE, headers=headers)
 
-    wait = policy.wait_after(response, retry)
+    asked = retry_after_of(response)
+    wait = policy.wait_after(asked, retry)
 
     assert math.isfinite(wait)
     assert wait >= 0
-    asked = retry_after_of(response)
     if asked is None:
         assert wait <= _MAX_WAIT
     else:

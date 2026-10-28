@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from headgate import msgspec as msgspec_flavor
 from headgate import pydantic as pydantic_flavor
+from headgate._core import SendProgress, retry_after_of
 from headgate._failures import CallSite, status_error
 from headgate._url import escape_segment, redact_secrets, render_path, sanitize_url
 from headgate.breaker import CircuitBreaker
@@ -24,6 +25,7 @@ from headgate.ratelimit import Rate, RateRule
 from headgate.ratelimit._budget import Pacer
 from headgate.ratelimit._budgets import PathBudgets
 from headgate.retry import RetryPolicy
+from headgate.retry._classify import Attempted, classify
 
 if TYPE_CHECKING:
     from pytest_codspeed import BenchmarkFixture
@@ -102,13 +104,25 @@ def test_breaker_track(benchmark: BenchmarkFixture) -> None:
     benchmark(fetch)
 
 
+#: A 503 that asks for a wait with a ``Retry-After`` HTTP-date, the costlier of its two forms to parse.
+_DATED_503 = httpx2.Response(httpx2.codes.SERVICE_UNAVAILABLE, headers={"Retry-After": "Wed, 21 Oct 2099 07:28:00 GMT"})
+
+
 def test_retry_backoff(benchmark: BenchmarkFixture) -> None:
-    """Measure computing the wait after a 503 that carries a ``Retry-After`` HTTP-date."""
+    """Measure computing the wait after a 503 that carries a ``Retry-After`` HTTP-date, from reading the header on."""
     policy = RetryPolicy()
-    failure = httpx2.Response(
-        httpx2.codes.SERVICE_UNAVAILABLE, headers={"Retry-After": "Wed, 21 Oct 2099 07:28:00 GMT"}
-    )
-    benchmark(policy.wait_after, failure, 1)
+
+    def wait() -> float:
+        return policy.wait_after(retry_after_of(_DATED_503), 1)
+
+    benchmark(wait)
+
+
+def test_retry_classify(benchmark: BenchmarkFixture) -> None:
+    """Measure judging a failed attempt: whether a 503 with a ``Retry-After`` HTTP-date is retryable, and its delay."""
+    policy = RetryPolicy()
+    attempted = Attempted(method="GET", keyed=False, progress=SendProgress())
+    benchmark(classify, _DATED_503, attempted, policy)
 
 
 def test_path_budget_lookup(benchmark: BenchmarkFixture) -> None:

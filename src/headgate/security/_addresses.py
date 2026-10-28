@@ -4,11 +4,12 @@
 """Which network addresses a guarded client may connect to, and the resolver that finds them.
 
 An address is allowed only when it is globally routable (:attr:`ipaddress.IPv4Address.is_global`) and neither multicast
-nor reserved. An address that carries an IPv4 address inside an IPv6 one is judged by the IPv4 address it reaches:
-IPv4-mapped (``::ffff:127.0.0.1``) and the NAT64 well-known prefix (``64:ff9b::7f00:1``), so neither smuggles a
-loopback or private target past the check, and an IPv6-only network with DNS64 still reaches public IPv4 hosts. Other
-transition forms (6to4, Teredo, IPv4-compatible) are not globally routable or are reserved, so they are refused
-outright.
+nor reserved, nor IPv6 site-local (``fec0::/10``), which :mod:`ipaddress` counts as global since RFC 3879 deprecated it,
+though networks that still use it route it internally. An address that carries an IPv4 address inside an IPv6 one is
+judged by the IPv4 address it reaches: IPv4-mapped (``::ffff:127.0.0.1``) and the NAT64 well-known prefix
+(``64:ff9b::7f00:1``), so neither smuggles a loopback or private target past the check, and an IPv6-only network with
+DNS64 still reaches public IPv4 hosts. Other transition forms (6to4, Teredo, IPv4-compatible) are not globally routable
+or are reserved, so they are refused outright.
 """
 
 from __future__ import annotations
@@ -57,7 +58,7 @@ def _reached(address: _Address) -> _Address:
 
 
 def forbidden_reason(address: str) -> str | None:
-    """Return why the guard refuses *address* (``"loopback"``, ``"private"``, ...), or ``None`` when it is allowed.
+    """Return why the guard refuses *address* (``"loopback"``, ``"site-local"``, ...), or ``None`` when it is allowed.
 
     *address* is an IPv4 or IPv6 address in text form; an IPv6 zone (``fe80::1%en0``) is accepted.
 
@@ -68,6 +69,8 @@ def forbidden_reason(address: str) -> str | None:
         (ip.is_unspecified, "unspecified"),
         (ip.is_loopback, "loopback"),
         (ip.is_link_local, "link-local"),
+        # Deprecated (RFC 3879) but still routed inside some networks, and is_global is True for it.
+        (isinstance(ip, ipaddress.IPv6Address) and ip.is_site_local, "site-local"),
         (ip.is_multicast, "multicast"),
         (ip.is_private, "private"),
         (ip.is_reserved, "reserved"),

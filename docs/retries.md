@@ -32,7 +32,7 @@ policy = TransportPolicy(
 | `budget` | `RetryBudget(ratio=0.2, min_per_second=10, window=10)` | the share of traffic retries may add, or `None` |
 | `respect_should_retry` | `True` | follow a server's `x-should-retry: true` or `false` |
 | `hedge` | `None` | an opt-in `Hedge` for slow idempotent requests |
-| `min_attempt_time` | `0.05` | the least time left before the deadline that an attempt or a wait starts with |
+| `min_attempt_time` | `0.05` | the least time left before the deadline that a retry, a hedge or a wait starts with |
 
 `NO_RETRY` is `RetryPolicy(attempts=1)`, what `retry=False` installs.
 
@@ -65,9 +65,10 @@ The retry policy applies to each request the client sends: a followed redirect's
 
 Between attempts the layer waits `factor · 2^n · jitter` before retry *n* (full jitter: `jitter` is a uniform draw in
 `[0, 1)`), capped at `max_wait`. With the defaults that is up to 1 s before the first retry and up to 2 s before the
-second. The draw comes from the operating system's generator rather than `random`, so an application that seeds
-`random` does not synchronize its processes' retries. A failed response is read (a bounded head of its body) and
-closed before the wait, so no connection is held through it.
+second; *n* counts retries only, so a hedge sent beside an attempt does not lengthen the wait. The draw comes from the
+operating system's generator rather than `random`, so an application that seeds `random` does not synchronize its
+processes' retries. A failed response is read (a bounded head of its body) and closed before the wait, so no
+connection is held through it.
 
 ## Retry-After
 
@@ -84,13 +85,17 @@ Retries may add at most `ratio` of the first attempts made over the last `window
 same budget. A client keeps one account per distinct `RetryBudget` value, shared by every call it makes and by its
 `with_options` views, so once traffic is above the floor a failing upstream sees about 1.2 times its normal load from
 a client, not three times. A call that finds the budget
-spent raises its last failure with the note `retry budget exhausted`. `budget=None` removes the cap.
+spent raises its last failure with the note `retry budget exhausted`. A retry or hedge that is never sent (the breaker
+opened or the deadline came during the wait, the rate budget could not send it in time, or the call was cancelled)
+gives its share back. `budget=None` removes the cap.
 
 ## Deadlines and the breaker
 
 Each attempt's connect, read, write and pool timeouts are cut to the time left before the call's
-[deadline](deadlines.md). No attempt, and no wait before one, starts with less than `min_attempt_time` left: the call
-raises its last failure with the note `deadline exhausted` instead of sleeping past the deadline.
+[deadline](deadlines.md). No retry or hedge, and no wait before one, starts with less than `min_attempt_time` left: the
+call raises its last failure with the note `deadline exhausted` instead of sleeping past the deadline. A request's first
+attempt has no failure to raise instead, so it is sent with whatever time is left, a redirect's or a token mint's hop
+included; the deadline still ends it.
 
 The retry layer checks the origin's [circuit breaker](breaker.md) before every retry and after every wait, and stops
 with the note `circuit opened` once it refuses. A whole retry sequence counts once toward the breaker.

@@ -199,6 +199,21 @@ class _QuotesTheInput(MsgspecCodec):
         return _decode
 
 
+class _QuotesTheKeys(MsgspecCodec):
+    @override
+    def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
+        decode = super().decoder(type_)
+
+        def _decode(content: bytes) -> T:
+            try:
+                return decode(content)
+            except msgspec.ValidationError as exc:
+                msg = f"bad keys {sorted(msgspec.json.decode(content))}"
+                raise msgspec.ValidationError(msg) from exc
+
+        return _decode
+
+
 class _UnlistedError(MsgspecCodec):
     errors: ClassVar[tuple[type[Exception], ...]] = (_ShapeError,)
 
@@ -240,7 +255,7 @@ class _CoercesStrings(MsgspecCodec):
         return _decode
 
 
-class _RepairsCutShortBodies(MsgspecCodec):
+class _ReadsMalformedBodiesAsEmpty(MsgspecCodec):
     @override
     def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
         decode = super().decoder(type_)
@@ -248,8 +263,10 @@ class _RepairsCutShortBodies(MsgspecCodec):
         def _decode(content: bytes) -> T:
             try:
                 return decode(content)
+            except msgspec.ValidationError:
+                raise
             except msgspec.DecodeError:
-                return decode(content + b"}")
+                return decode(b"{}")
 
         return _decode
 
@@ -267,8 +284,9 @@ class _ReadsRecordsAsDicts(MsgspecCodec):
         (_ForgetsValues(), r"^_ForgetsValues wrote \{'a': 1\} and read back \{\}"),
         (_IgnoresTypes(), r"^_IgnoresTypes accepted a string where an int is declared"),
         (_CoercesStrings(), r"^_CoercesStrings accepted a string where an int is declared as \{'a': 0\}"),
-        (_RepairsCutShortBodies(), r"^_RepairsCutShortBodies accepted a cut-short body as \{'a': 1\}"),
+        (_ReadsMalformedBodiesAsEmpty(), r"^_ReadsMalformedBodiesAsEmpty accepted a cut-short body as \{\}"),
         (_QuotesTheInput(), r"^_QuotesTheInput\.describe\(\) repeats the input \(.*bad body"),
+        (_QuotesTheKeys(), r"^_QuotesTheKeys\.describe\(\) repeats the input \(.*bad keys"),
         (
             _UnlistedError(),
             r"^_UnlistedError raised ValidationError for a string where an int is declared, which is not one of",
@@ -284,6 +302,7 @@ class _ReadsRecordsAsDicts(MsgspecCodec):
         "coercing",
         "cut-short",
         "quiet",
+        "quiet-keys",
         "errors",
         "unknown-field",
         "record",
@@ -299,6 +318,20 @@ def test_the_conformance_check_names_the_promise_a_codec_breaks(codec: Codec, me
 def test_the_unknown_field_promise_needs_a_record() -> None:
     """Check every other promise when no record type is given."""
     check_codec(_RejectsUnknownFields())
+
+
+class _EndsInANewline(MsgspecCodec):
+    """JSON ending in a newline, as NDJSON and orjson's ``OPT_APPEND_NEWLINE`` write it: a conforming codec."""
+
+    @override
+    def encoder[T](self, type_: TypeForm[T], /) -> Callable[[T], bytes]:
+        encode = super().encoder(type_)
+        return lambda value: encode(value) + b"\n"
+
+
+def test_a_codec_whose_bodies_end_in_a_delimiter_passes() -> None:
+    """Cut a body short enough to break it, though dropping only its final newline would leave it whole."""
+    check_codec(_EndsInANewline(), record=_Row)
 
 
 # --- msgspec is an extra ---

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions
+from headgate import Expect, HttpOptions
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
 from headgate._client import AsyncBaseClient
 from headgate.errors import ClientError, ResponseTooLargeError
@@ -322,3 +322,39 @@ async def test_a_close_that_fails_after_the_cap_does_not_hide_the_refusal() -> N
     with pytest.raises(ResponseTooLargeError):
         await client.get("thing", expect=RESPONSE)
     await client.aclose()
+
+
+# --- A response with no body ---
+
+#: A declared size far past the cap, for a response that carries no body at all.
+_DECLARED = str(64 * _MIB)
+
+
+def _bodiless(status: int) -> httpx2.MockTransport:
+    """Answer *status* with the headers a GET of a large gzipped file would carry, and no body."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        headers = {"Content-Length": _DECLARED, "Content-Encoding": "gzip"}
+        return httpx2.Response(status, headers=headers, stream=httpx2.ByteStream(b""), request=request)
+
+    return httpx2.MockTransport(handler)
+
+
+async def test_a_head_reads_the_size_and_encoding_of_a_file_past_the_cap() -> None:
+    """Hand a HEAD's reader the ``Content-Length`` and ``Content-Encoding`` it was sent, never checking them."""
+    client = _Client(max_response_bytes=_CAP, transport=_bodiless(200))
+    resp = await client.head("f", expect=RESPONSE)
+    await client.aclose()
+
+    assert (resp.headers["content-length"], resp.headers["content-encoding"]) == (_DECLARED, "gzip")
+    assert resp.content == b""
+
+
+@pytest.mark.parametrize("status", [204, 304])
+async def test_a_status_without_a_body_is_not_held_to_its_declared_size(status: int) -> None:
+    """Accept a 204 or 304 whose ``Content-Length`` is past the cap, since neither carries a body."""
+    client = _Client(max_response_bytes=_CAP, transport=_bodiless(status))
+    resp = await client.get("f", expect=Expect(RESPONSE).on(status, RESPONSE))
+    await client.aclose()
+
+    assert (resp.status_code, resp.headers["content-length"]) == (status, _DECLARED)

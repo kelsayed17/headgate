@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Final
 
 import httpx2
 
-from headgate._core import Clock, RandomSource, Slot, retry_after_of, system_random
+from headgate._core import Clock, RandomSource, Slot, system_random
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -180,7 +180,8 @@ class RetryPolicy:
     * ``respect_should_retry``: follow a response's ``x-should-retry: true|false`` over the status rules.
     * ``hedge``: an opt-in :class:`Hedge` for the idempotent ``methods``; refused when ``methods`` include POST or
       PATCH.
-    * ``min_attempt_time``: the least time left before the deadline that a retry (or its wait) is started with.
+    * ``min_attempt_time``: the least time left before the deadline that a retry, a hedge, or the wait before a retry
+      is started with. A request's first attempt is sent with whatever time is left.
     """
 
     attempts: int = 3
@@ -207,16 +208,14 @@ class RetryPolicy:
             msg = f"a hedge may not be configured for non-idempotent methods ({', '.join(sorted(unsafe))})"
             raise ValueError(msg)
 
-    def wait_after(self, failure: httpx2.Response | Exception, retry: int) -> float:
-        """Return how long to wait after *failure* before retry number *retry* (from 1).
+    def wait_after(self, retry_after: float | None, retry: int) -> float:
+        """Return how long to wait before retry number *retry* (from 1), after a failure that asked for *retry_after*.
 
-        A response's ``retry-after-ms`` or ``Retry-After`` decides when it parses, exactly and uncapped (the retry
-        layer refuses one past :attr:`max_retry_after` instead of waiting it). Anything else takes
-        :meth:`Backoff.delay`.
+        *retry_after* is the delay the failed response's ``retry-after-ms`` or ``Retry-After`` asked for, as the
+        attempt's classification read it, or ``None``. It is waited exactly and uncapped (the retry layer refuses one
+        past :attr:`max_retry_after` instead of waiting it); without one, the wait is :meth:`Backoff.delay`.
         """
-        if isinstance(failure, httpx2.Response) and (asked := retry_after_of(failure)) is not None:
-            return asked
-        return self.backoff.delay(retry)
+        return self.backoff.delay(retry) if retry_after is None else retry_after
 
 
 @dataclass(frozen=True, slots=True)

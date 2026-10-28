@@ -13,7 +13,7 @@ import pytest
 
 from headgate._core import CallContext, CallInfo
 from headgate.retry._classify import refused_stream
-from headgate.retry._tracking import head_size
+from headgate.retry._tracking import SendTrackingTransport, head_size
 from headgate.testing import (
     ConnectFail,
     DropMidBody,
@@ -26,7 +26,7 @@ from headgate.testing import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import AsyncIterator, Iterator
 
     from headgate.testing import Step
 
@@ -149,6 +149,52 @@ async def test_a_refused_stream_is_raised_as_httpx2_raises_it() -> None:
 
     assert refused_stream(raised.value)
     assert network.calls[0].bytes_sent == head_size(request)
+
+
+async def _halves() -> AsyncIterator[bytes]:
+    """Yield the test body in two chunks, as a streamed upload arrives."""
+    yield _BODY[:5]
+    yield _BODY[5:]
+
+
+def _streamed() -> httpx2.Request:
+    """Build a POST whose ten-byte body is streamed in two chunks."""
+    return httpx2.Request("POST", "https://api.test/orders", content=_halves())
+
+
+#: The size of :func:`_streamed`'s head.
+_HEAD = head_size(_streamed())
+
+
+@pytest.mark.parametrize(
+    ("step", "written", "reported"),
+    [
+        pytest.param(DropMidBody(after_bytes=0), 0, 0, id="drop-before-the-head"),
+        pytest.param(DropMidBody(after_bytes=3), 3, _HEAD, id="drop-inside-the-head"),
+        pytest.param(DropMidBody(after_bytes=_HEAD + 4), _HEAD + 4, _HEAD + 5, id="drop-inside-a-chunk"),
+        pytest.param(DropMidBody(after_bytes=10_000), _HEAD + 10, _HEAD + 10, id="drop-after-the-request"),
+        pytest.param(RefusedStream(), _HEAD, _HEAD, id="refused-stream"),
+    ],
+)
+async def test_progress_through_the_tracking_layer_is_what_httpx2_reports(
+    step: Step, written: int, reported: int
+) -> None:
+    """Report what httpx2's own transport would: the whole head once it starts, and each body chunk the write took.
+
+    The call log keeps the exact bytes written. A drop inside a chunk counts that chunk, which the transport took, and
+    no chunk after it.
+    """
+    request = _streamed()
+    context = CallContext(CallInfo(method="POST", url="https://api.test/orders"))
+    context.attach(request)
+    context.begin_attempt()
+    network = FaultyTransport(schedule=[step])
+
+    with pytest.raises(httpx2.TransportError):
+        await SendTrackingTransport(transport=network).handle_async_request(request)
+
+    assert network.calls[0].bytes_sent == written
+    assert (context.progress.connected, context.progress.bytes_sent) == (True, reported)
 
 
 async def test_slow_waits_then_answers() -> None:

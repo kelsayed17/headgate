@@ -17,9 +17,12 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import _auth
+from headgate import HttpOptions, _auth
 from headgate._auth import AUTH_HOP, FRESH_TOKEN_S, CachedTokenAuth, Minted, failed_on_auth_hop
-from headgate.errors import ClientConfigurationError
+from headgate.errors import AuthError, ClientConfigurationError
+from headgate.ratelimit import UNLIMITED
+from tests.support.clients import StubClient
+from tests.support.responses import RESPONSE
 from tests.support.tokens import TEST_BEARER, premint
 
 if TYPE_CHECKING:
@@ -304,6 +307,40 @@ class TestAFreshTokenIsNotReMinted:
 
         assert retried_a.headers["Authorization"] == retried_b.headers["Authorization"] == "Bearer tok-2"
         assert auth.mints == _MINT_AND_RE_MINT
+
+    async def test_a_401_to_a_request_sent_without_the_token_rejects_nothing(self) -> None:
+        """Keep the token when the credential guard withheld it: the 401 judged an unsigned request, not the token."""
+        auth = premint(_CountingAuth())
+        flow = auth.async_auth_flow(_get("https://cdn.example/x"))
+        sent = await anext(flow)
+        del sent.headers["Authorization"]  # as the guard does for an origin the client does not trust
+
+        with pytest.raises(StopAsyncIteration):
+            await flow.asend(httpx2.Response(httpx2.codes.UNAUTHORIZED, request=sent))
+
+        assert auth.mints == 0
+
+    async def test_an_untrusted_origins_401_neither_mints_nor_re_sends(self) -> None:
+        """Send an unsigned call to another origin once, and keep the token, when that origin answers 401."""
+        sent: list[httpx2.Request] = []
+
+        def answer(request: httpx2.Request) -> httpx2.Response:
+            sent.append(request)
+            return httpx2.Response(httpx2.codes.UNAUTHORIZED)
+
+        auth = premint(_CountingAuth())
+        client = StubClient(
+            base_url="https://api.example",
+            rate=UNLIMITED,
+            auth=auth,
+            http=HttpOptions(transport=httpx2.MockTransport(answer)),
+        )
+        async with client:
+            with pytest.raises(AuthError):
+                await client.get("https://cdn.example/x", expect=RESPONSE)
+
+        assert [("Authorization" in request.headers) for request in sent] == [False]
+        assert auth.mints == 0
 
 
 class TestSeed:

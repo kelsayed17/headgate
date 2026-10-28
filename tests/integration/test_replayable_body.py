@@ -59,15 +59,16 @@ async def test_a_factory_body_is_sent_whole_on_every_attempt(method: Method) -> 
     assert [request.content for request in fake.calls] == [_BODY, _BODY]
 
 
-@pytest.mark.parametrize("status", [307, 308])
-async def test_a_redirect_asking_for_a_one_shot_body_again_is_not_followed(status: int) -> None:
-    """Return the 307/308 as the final answer, with a note, instead of failing in httpx2 with ``StreamConsumed``."""
+@pytest.mark.parametrize(("status", "method"), [(307, "POST"), (308, "POST"), (301, "PUT")])
+async def test_a_redirect_asking_for_a_one_shot_body_again_is_not_followed(status: int, method: Method) -> None:
+    """Return the redirect as the final answer, with a note, instead of failing in httpx2 with ``StreamConsumed``."""
     moved = httpx2.Response(status, headers={"Location": "/v1/elsewhere"})
-    fake = FakeTransport().reply("POST", "/v1/upload", moved).reply("POST", "/v1/elsewhere", 200)
+    fake = FakeTransport().reply(method, "/v1/upload", moved).reply(method, "/v1/elsewhere", 200)
     built = client(fake)
 
     with pytest.raises(UpstreamStatusError) as raised:
-        await built.post("upload", expect=nothing, content=_chunks())
+        async with built.stream("upload", method=method, content=_chunks()):
+            pytest.fail("the block runs only for a 2xx")
 
     assert raised.value.status_code == status
     assert len(fake.calls) == 1
@@ -116,7 +117,10 @@ def _status(response: httpx2.Response, /) -> int:
     return response.status_code
 
 
-@pytest.mark.parametrize(("status", "method"), [(303, "PUT"), (302, "POST"), (301, "POST")])
+@pytest.mark.parametrize(
+    ("status", "method"),
+    [(303, "PUT"), (302, "POST"), (302, "PUT"), (302, "PATCH"), (302, "DELETE"), (301, "POST")],
+)
 async def test_a_redirect_that_drops_the_body_is_followed(status: int, method: Method) -> None:
     """Follow a redirect httpx2 turns into a body-less GET, since nothing is sent twice."""
     moved = httpx2.Response(status, headers={"Location": "/v1/done"})

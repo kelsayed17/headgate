@@ -35,6 +35,9 @@ DEFAULT_MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 #: Headers describing the on-the-wire encoding, dropped from a rebuilt response because its body is already decoded.
 _WIRE_ENCODING_HEADERS = ("content-encoding", "content-length")
 
+#: The statuses that never carry a body (RFC 9110 section 6.4.1), besides every 1xx.
+_BODILESS_STATUSES = frozenset({httpx2.codes.NO_CONTENT, httpx2.codes.NOT_MODIFIED})
+
 
 async def read_capped(streamed: httpx2.Response, cap: int, site: CallSite) -> httpx2.Response:
     """Read *streamed*'s body up to *cap* decompressed bytes, close it, and return the response rebuilt around it.
@@ -42,14 +45,15 @@ async def read_capped(streamed: httpx2.Response, cap: int, site: CallSite) -> ht
     Raises :class:`~headgate.errors.ResponseTooLargeError` past the cap, naming the call at *site*.
     ``Content-Length`` is checked first as a cheap refusal of an honestly oversized body, but it is never the control:
     it reports the compressed size (so a gzip bomb passes it) and is absent on a chunked response. The control is the
-    running count of decoded bytes.
+    running count of decoded bytes. A response that has no body (to a HEAD, a 1xx, 204 or 304) is never refused: its
+    ``Content-Length`` describes the representation a GET would send, which is why its reader sees it.
 
     Bodies httpx2 reads itself are outside this function: a followed redirect's body is dropped unread by
     :func:`~headgate._redirects.drop_followed_redirect_body`, and a 401 an auth flow answers by re-sending is read in
     full by httpx2 before the retry.
     """
     try:
-        declared = streamed.headers.get("content-length")
+        declared = streamed.headers.get("content-length") if _has_body(streamed) else None
         # isascii: str.isdigit() also accepts digits int() rejects, such as a latin-1 "²".
         if declared is not None and declared.isascii() and declared.isdigit() and int(declared) > cap:
             msg = f"declared response size {int(declared)} exceeds cap {cap} for {site.url}"
@@ -104,12 +108,22 @@ def _rebuilt(streamed: httpx2.Response, content: bytes) -> httpx2.Response:
     Built on ``streamed.request``, not the request that was sent: httpx2 derives ``Response.url`` from the request,
     and after a followed redirect the two differ. A consumer that detects a bad key by the redirect it causes needs
     the URL that answered.
+
+    ``Content-Encoding`` and ``Content-Length`` are dropped from a response with a body, since *content* is decoded
+    and they would misdescribe it; a response with no body keeps them, as there they describe what a GET would send.
     """
+    dropped = _WIRE_ENCODING_HEADERS if _has_body(streamed) else ()
     return httpx2.Response(
         status_code=streamed.status_code,
-        headers=[(k, v) for k, v in streamed.headers.multi_items() if k.lower() not in _WIRE_ENCODING_HEADERS],
+        headers=[(k, v) for k, v in streamed.headers.multi_items() if k.lower() not in dropped],
         content=content,
         request=streamed.request,
         history=streamed.history,
         extensions=streamed.extensions,
     )
+
+
+def _has_body(response: httpx2.Response) -> bool:
+    """Return whether *response* can carry a body: not when it answers a HEAD, nor for a 1xx, 204 or 304."""
+    status = response.status_code
+    return not (response.request.method == "HEAD" or status < httpx2.codes.OK or status in _BODILESS_STATUSES)

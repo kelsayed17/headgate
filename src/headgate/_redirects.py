@@ -23,8 +23,8 @@ from headgate.retry._policy import REPLAYABLE_BODY
 
 __all__ = ["drop_followed_redirect_body", "refuse_unreplayable_redirect"]
 
-#: The redirects httpx2 turns into a body-less GET for a POST (RFC 9110 section 15.4.2 and 15.4.3 allow it).
-_POST_BECOMES_GET: Final = frozenset({httpx2.codes.MOVED_PERMANENTLY, httpx2.codes.FOUND})
+#: The methods httpx2 keeps on a 302; it turns any other into a GET, as browsers do (QUERY per RFC 10008 section 2.5).
+_KEPT_BY_302: Final = frozenset({"HEAD", "QUERY"})
 
 
 async def drop_followed_redirect_body(response: httpx2.Response) -> None:
@@ -54,20 +54,32 @@ async def drop_followed_redirect_body(response: httpx2.Response) -> None:
 def _resends_body(response: httpx2.Response) -> bool:
     """Return whether httpx2 follows the redirect *response* by sending its request's body again.
 
-    It does for every redirect but a 303, which becomes a GET, and a 301 or 302 answering a POST, which httpx2 turns
-    into a GET as browsers do.
+    It does unless it turns the request into a GET, which carries no body: a 303 answering anything but a HEAD (RFC
+    9110 section 15.4.4), a 302 answering anything but a HEAD or a QUERY, and a 301 answering a POST. A request that
+    already was a GET keeps its method, and so its body. This is ``httpx2.AsyncClient._redirect_method``'s rule.
     """
+    return _redirect_method(response) == response.request.method
+
+
+def _redirect_method(response: httpx2.Response) -> str:
+    """Return the method httpx2 follows the redirect *response* with (see :func:`_resends_body`)."""
+    method = response.request.method
     status = response.status_code
-    if status == httpx2.codes.SEE_OTHER:
-        return False
-    return not (status in _POST_BECOMES_GET and response.request.method == "POST")
+    if status == httpx2.codes.SEE_OTHER and method != "HEAD":
+        return "GET"
+    if status == httpx2.codes.FOUND and method not in _KEPT_BY_302:
+        return "GET"
+    if status == httpx2.codes.MOVED_PERMANENTLY and method == "POST":
+        return "GET"
+    return method
 
 
 async def refuse_unreplayable_redirect(response: httpx2.Response) -> None:
     """Stop httpx2 following a redirect that would send a one-shot request body again (a response hook).
 
     A ``content=`` given as an async iterable is consumed by the first send (:data:`~headgate.retry.REPLAYABLE_BODY`),
-    so following a 307 or 308 would fail inside httpx2 with ``StreamConsumed``. The ``Location`` is removed instead, as
+    so following a redirect that keeps the method (a 307 or 308, or a 301 answering anything but a POST) would fail
+    inside httpx2 with ``StreamConsumed``. The ``Location`` is removed instead, as
     :func:`~headgate.security.refuse_https_downgrade` does: the 3xx reaches the call as its final answer, raised through
     the status ladder unless the call declares it, with a note saying why. A body given as a factory is built afresh for
     the next hop, so its redirects are followed.

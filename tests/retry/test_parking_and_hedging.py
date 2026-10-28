@@ -19,7 +19,15 @@ from typing import TYPE_CHECKING, Final, override
 import httpx2
 import pytest
 
-from headgate._core import BREAKER_GATE, BudgetBacklogError, CallContext, CallInfo, Emitter, RetryScheduled
+from headgate._core import (
+    BREAKER_GATE,
+    BudgetBacklogError,
+    BudgetPausedError,
+    CallContext,
+    CallInfo,
+    Emitter,
+    RetryScheduled,
+)
 from headgate.retry import Backoff, Hedge, RetryBudget, RetryPolicy
 from headgate.retry._tracking import head_size
 from headgate.retry._transport import RetryTransport
@@ -351,6 +359,15 @@ def _backlog() -> BudgetBacklogError:
     return BudgetBacklogError("the rate budget's turn comes after the call's deadline", retry_after=2.0)
 
 
+def _paused() -> BudgetPausedError:
+    """Return the error the rate budget raises for a server pause past the deadline."""
+    return BudgetPausedError("rate budget paused past the call's deadline", retry_after=30.0, status_code=429)
+
+
+#: Both refusals of a send the rate budget cannot admit before the deadline: neither is ever sent.
+_UNSENT: Final = pytest.mark.parametrize("unsent", [_backlog, _paused], ids=["backlog", "paused"])
+
+
 class _Scripted(httpx2.AsyncBaseTransport):
     """Answer each send with the next of *answers*: a status, or an exception raised."""
 
@@ -366,23 +383,26 @@ class _Scripted(httpx2.AsyncBaseTransport):
         return httpx2.Response(answer, request=request, content=b"busy")
 
 
-async def test_a_first_send_the_budget_cannot_admit_is_withdrawn_and_raised() -> None:
-    """Raise the budget's refusal of the first send, which then counts as no attempt."""
+@_UNSENT
+async def test_a_first_send_the_budget_cannot_admit_is_withdrawn_and_raised(unsent: Callable[[], Exception]) -> None:
+    """Raise the budget's refusal of the first send, which then counts as no attempt and adds no history line."""
     clock = TestClock()
-    retry = RetryTransport(transport=_Scripted(_backlog()), policy=RetryPolicy(budget=None), sleep=clock.sleep)
+    refusal = unsent()
+    retry = RetryTransport(transport=_Scripted(refusal), policy=RetryPolicy(budget=None), sleep=clock.sleep)
     request, context = _request(clock)
 
-    with pytest.raises(BudgetBacklogError):
+    with pytest.raises(type(refusal)):
         await retry.handle_async_request(request)
 
-    assert context.attempt == 0
+    assert (context.attempt, context.notes) == (0, ())
 
 
-async def test_a_retry_the_budget_cannot_admit_ends_with_the_last_failure() -> None:
+@_UNSENT
+async def test_a_retry_the_budget_cannot_admit_ends_with_the_last_failure(unsent: Callable[[], Exception]) -> None:
     """End with the failure already in hand, noted as out of time, rather than with the unsent retry."""
     clock = TestClock()
     policy = RetryPolicy(budget=None, backoff=_QUARTER)
-    retry = RetryTransport(transport=_Scripted(503, _backlog()), policy=policy, sleep=clock.sleep, clock=clock)
+    retry = RetryTransport(transport=_Scripted(503, unsent()), policy=policy, sleep=clock.sleep, clock=clock)
     request, context = _request(clock)
 
     response = await retry.handle_async_request(request)
@@ -394,19 +414,25 @@ async def test_a_retry_the_budget_cannot_admit_ends_with_the_last_failure() -> N
 
 
 class _HedgeRefused(_Held):
-    """A held network whose rate budget refuses every send after the first."""
+    """A held network whose rate budget refuses every send after the first with *unsent*."""
+
+    def __init__(self, changes: _Changes, unsent: Callable[[], Exception] = _backlog) -> None:
+        """Refuse with what *unsent* returns."""
+        super().__init__(changes)
+        self._unsent = unsent
 
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         if self.started:
-            raise _backlog()
+            raise self._unsent()
         return await super().handle_async_request(request)
 
 
-async def test_a_hedge_the_budget_cannot_admit_leaves_the_first_send_to_answer() -> None:
+@_UNSENT
+async def test_a_hedge_the_budget_cannot_admit_leaves_the_first_send_to_answer(unsent: Callable[[], Exception]) -> None:
     """Pass over a hedge the budget refused, and answer with the send still in flight."""
     changes = _Changes()
-    network, gate = _HedgeRefused(changes), _Gate(changes)
+    network, gate = _HedgeRefused(changes, unsent), _Gate(changes)
     retry = RetryTransport(
         transport=network, policy=RetryPolicy(budget=None, hedge=Hedge(after=_HEDGE_AFTER)), sleep=gate.sleep
     )

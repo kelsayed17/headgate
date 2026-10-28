@@ -38,7 +38,9 @@ first request, each redirect, and each request an auth flow sends. On any hop ad
 - every header and query parameter the auth declares;
 - `Authorization` and `Proxy-Authorization`, whatever set them, so a third-party auth or a caller's own header does not
   travel either;
-- `Cookie`, unless the client keeps a cookie jar (`cookies=True`), which scopes cookies to their domains itself.
+- `Cookie`. A client that keeps a cookie jar (`cookies=True`) then sends the cookies its jar holds for that origin,
+  since the jar scopes them to their domains; a `Cookie` header you set yourself, client-wide or on a call, is not the
+  jar's and stays off.
 
 The request still goes out, unsigned, so a signed download URL on a CDN works. A credential meant for another origin
 needs that origin in `trusted_origins`, written as a bare origin:
@@ -54,7 +56,10 @@ http = HttpOptions(
 ```
 
 The hops a [`CachedTokenAuth`](auth.md#cachedtokenauth) mint flow yields may carry the mint's credentials to the token
-endpoint its code addressed, and to the redirects that endpoint answers with on the same origin, and nowhere else.
+endpoint its code addressed, and to the redirects that endpoint answers with on the same origin, and nowhere else. A
+mint hop's redirect to any other origin is refused before it is sent, as `ForbiddenDestinationError`, rather than
+followed unsigned: the hop's own headers and form body (a client secret) are credentials the guard cannot tell apart,
+and httpx2 sends the body again on a 307 or 308.
 
 A [middleware](configuration.md#middleware) that stamps a credential (a request signer) declares it the same way, with
 `credential_headers` and `credential_params`. A middleware runs inside the transport stack, after the request hook, so
@@ -73,9 +78,9 @@ such an auth unless told the data is public (see [caching](caching.md#partitions
 - **A hop limit.** `HttpOptions(max_redirects=5)` is the default. An auth flow's hops count toward it too, because
   httpx2 keeps one history per call; a client whose mint takes several hops raises it. Past it the call raises
   `TransportError` ("Exceeded maximum allowed redirects").
-- **No body sent twice.** A 307 or 308 that would re-send a one-shot streamed body is not followed; it raises as its
-  3xx, with a note suggesting a body factory. A 303, and a 301 or 302 answering a POST, become a body-less GET as
-  usual.
+- **No body sent twice.** A redirect that would re-send a one-shot streamed body (a 307 or 308, or a 301 answering
+  anything but a POST) is not followed; it raises as its 3xx, with a note suggesting a body factory. A 303, a 302
+  answering anything but a HEAD, and a 301 answering a POST become a body-less GET, as httpx2 follows them.
 - **No unbounded redirect bodies.** The body of a redirect being followed is dropped unread, so a large 302 cannot
   bypass the response size cap.
 - **Off when you need it.** `HttpOptions(follow_redirects=False)`, or `follow_redirects=False` on a call, makes every
@@ -86,8 +91,8 @@ such an auth unless told the data is public (see [caching](caching.md#partitions
 A client that fetches URLs it did not write (webhooks, user-supplied links, cursors from a partner) sets
 `HttpOptions(security=SecurityOptions(allow_private_hosts=False))`. Every hop's host is resolved and refused, as
 `ForbiddenDestinationError`, when any address it resolves to is not globally routable: loopback, private, link-local,
-carrier-grade NAT, multicast, reserved or unspecified, with IPv4-mapped and NAT64 addresses judged by the IPv4 address
-they reach. Nothing is sent to a refused host, and the refusal is never retried or charged to a breaker.
+IPv6 site-local, carrier-grade NAT, multicast, reserved or unspecified, with IPv4-mapped and NAT64 addresses judged by
+the IPv4 address they reach. Nothing is sent to a refused host, and the refusal is never retried or charged to a breaker.
 
 The default transport **pins** each connection to the address it vetted, in the same step as connecting, so a DNS
 answer that changes between the check and the connect (DNS rebinding) cannot redirect it. The request keeps its host

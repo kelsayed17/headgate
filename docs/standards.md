@@ -52,7 +52,7 @@ RFCs. headgate reads them so you do not have to, and follows them by default.
 | :lucide-key-round: [Idempotency-Key](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) (IETF draft) | a client key lets a server recognize a re-sent POST or PATCH | [`IdempotencyKeys()`](retries.md#idempotency-keys) stamps one key per call, so every retry carries the same one |
 | :lucide-clock-alert: [RFC 8470](https://www.rfc-editor.org/rfc/rfc8470) 425 Too Early | the server did not process the request | retried for every method, POST included, since nothing happened |
 | :lucide-git-pull-request-closed: [RFC 9113 §8.7](https://www.rfc-editor.org/rfc/rfc9113#section-8.7) HTTP/2 `REFUSED_STREAM` | the server refused the stream before doing any work | retried for every method, for the same reason |
-| :lucide-corner-down-right: [RFC 9110 §15.4](https://www.rfc-editor.org/rfc/rfc9110#section-15.4) Redirects | 303 becomes GET; 307 and 308 keep the method and body | followed as written, except a 307 or 308 that would [re-send a one-shot body](security.md#redirects) and any https-to-http hop |
+| :lucide-corner-down-right: [RFC 9110 §15.4](https://www.rfc-editor.org/rfc/rfc9110#section-15.4) Redirects | 303 becomes GET; 307 and 308 keep the method and body | followed as written, except a 307 or 308 (or a 301 on a method other than POST) that would [re-send a one-shot body](security.md#redirects) and any https-to-http hop |
 
 ## Waiting when asked
 

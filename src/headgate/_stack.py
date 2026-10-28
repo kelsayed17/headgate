@@ -74,25 +74,30 @@ _RESPONSE_HOOKS = (refuse_https_downgrade, refuse_unreplayable_redirect, drop_fo
 
 @dataclass(frozen=True, slots=True)
 class Credentials:
-    """A client's credentials as its stack sees them: the auth, and the one guard that keeps them on trusted origins.
+    """A client's credentials as its stack sees them: the auth, the guard that keeps them on trusted origins, the jar.
 
     The same guard runs as the first request hook and below the last middleware (see :func:`build_transport_stack`).
+    The jar is the client's: one that stores nothing unless ``HttpOptions(cookies=True)``, and the guard sends an
+    untrusted origin only that jar's cookies for it.
     """
 
     auth: httpx2.Auth | None
     guard: CredentialGuard
+    cookie_jar: CookieJar
 
     @classmethod
     def of(cls, *, base_url: str, auth: httpx2.Auth | None, http: HttpOptions) -> Credentials:
         """Return *auth*, with a guard withholding its and *http*'s middleware's credentials from untrusted origins."""
+        # httpx2.Cookies() makes the jar httpx2 would make for itself.
+        jar = httpx2.Cookies().jar if http.cookies else _refusing_jar()
         guard = CredentialGuard(
             auth=auth,
             base_url=httpx2.URL(base_url),
             trusted_origins=http.security.trusted_origins,
-            cookie_jar=http.cookies,
+            cookie_jar=jar if http.cookies else None,
             middleware=http.middleware,
         )
-        return cls(auth, guard)
+        return cls(auth, guard, jar)
 
 
 def build_http_client(
@@ -106,7 +111,7 @@ def build_http_client(
         auth=credentials.auth,
         base_url=base_url,
         headers=_default_headers(http),
-        cookies=None if http.cookies else _refusing_jar(),
+        cookies=credentials.cookie_jar,
         follow_redirects=http.follow_redirects,
         max_redirects=http.max_redirects,
         event_hooks={
@@ -134,7 +139,7 @@ def build_transport_stack(
     budgets = PathBudgets(default=rate, rules=policy.rate_limits, timing=timing)
     layer = RateLimitTransport(budgets=budgets, transport=layer)
     if (cache := policy.cache) is not None:
-        scope = credential_scope(cache, credentials.auth)
+        scope = credential_scope(cache, credentials.auth, middleware=http.middleware, headers=http.headers)
         layer = ResilientCacheTransport(layer, cache, max_body_bytes=http.max_response_bytes, scope=scope)
     if http.middleware:
         layer = MiddlewareTransport(transport=layer, middleware=http.middleware, guard=credentials.guard)

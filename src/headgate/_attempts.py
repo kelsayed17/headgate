@@ -5,7 +5,8 @@
 
 It sits directly under the retry layer (see :mod:`headgate._stack`), which begins each attempt on the call's context
 before sending it, so the attempt number is read when the send starts; and it is installed only on a client with
-observers.
+observers. A send the rate budget refused before the deadline (``BudgetBacklogError``, ``BudgetPausedError``) never
+reached the network, and the retry layer withdraws its attempt, so it is not reported.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from typing import override
 
 import httpx2
 
-from headgate._core import AttemptFinished, CallContext
+from headgate._core import AttemptFinished, BudgetBacklogError, BudgetPausedError, CallContext
 
 __all__ = ["AttemptTransport"]
 
@@ -34,6 +35,8 @@ class AttemptTransport(httpx2.AsyncBaseTransport):
         started = context.clock()
         try:
             response = await self._transport.handle_async_request(request)
+        except BudgetBacklogError, BudgetPausedError:
+            raise
         except BaseException as exc:
             elapsed = context.clock() - started
             context.emit(AttemptFinished(call=context.info, attempt=attempt, error=type(exc).__name__, elapsed=elapsed))

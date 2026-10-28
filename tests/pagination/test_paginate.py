@@ -19,7 +19,6 @@ from hypothesis import strategies as st
 from headgate import (
     ClientError,
     Cursor,
-    EncodedBody,
     Expect,
     HttpOptions,
     LinkHeader,
@@ -341,22 +340,16 @@ async def test_a_repeating_cursor_on_a_template_url_raises() -> None:
     assert str(raised.value) == "[StubClient] pagination loop: the page after page 2 repeats an earlier page's request"
 
 
-#: One request body of each kind.
-_BODIES: list[RequestOptions] = [
-    {"body": EncodedBody(b"{}")},
-    {"json": {}},
-    {"data": {}},
-    {"content": b"x"},
-    {"files": {"f": b"x"}},
-]
+#: One request body of each kind no pager can rewrite.
+_BODIES: list[RequestOptions] = [{"data": {}}, {"content": b"x"}, {"files": {"f": b"x"}}]
 
 
-@pytest.mark.parametrize("body", _BODIES, ids=["body", "json", "data", "content", "files"])
-def test_a_body_option_is_refused(body: RequestOptions) -> None:
-    """Refuse a request body: every page is a GET."""
+@pytest.mark.parametrize("body", _BODIES, ids=["data", "content", "files"])
+def test_a_body_no_pager_can_rewrite_is_refused(body: RequestOptions) -> None:
+    """Refuse a form, raw or multipart body: a walk's body is ``json=``, or ``body=`` with ``write=``."""
     client = _Api(_by_cursor).client()
-    with pytest.raises(ValueError, match="no body option"):
-        client.paginate("items", expect=decoder(Page), pages=LinkHeader(items=items_of), **body)
+    with pytest.raises(ValueError, match="takes no data=, content= or files="):
+        client.paginate("items", expect=decoder(Page), pages=LinkHeader(items=items_of), **body)  # ty: ignore[no-matching-overload]
 
 
 @pytest.mark.parametrize(

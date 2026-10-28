@@ -8,7 +8,6 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-import httpx2
 import pytest
 
 from headgate.retry import IDEMPOTENT_METHODS, NO_RETRY, RETRY_STATUSES, Backoff, Hedge, RetryBudget, RetryPolicy
@@ -103,14 +102,13 @@ def test_the_default_jitter_is_a_uniform_draw() -> None:
 
 
 def test_wait_after_waits_a_retry_after_exactly_and_backs_off_otherwise() -> None:
-    """Wait the header's delay uncapped when it parses, and the backoff after anything else."""
+    """Wait the delay the failure asked for uncapped, and the backoff when it asked for none."""
     policy = RetryPolicy(backoff=Backoff(jitter=lambda: 1.0))
     long_wait = 60.0
-    asked = httpx2.Response(503, headers={"Retry-After": f"{long_wait:g}"})
 
-    assert policy.wait_after(asked, 1) == long_wait, "past the backoff's cap: max_retry_after governs instead"
-    assert policy.wait_after(httpx2.Response(503), 1) == _FACTOR * 2
-    assert policy.wait_after(httpx2.ConnectError("boom"), 1) == _FACTOR * 2
+    assert policy.wait_after(long_wait, 1) == long_wait, "past the backoff's cap: max_retry_after governs instead"
+    assert policy.wait_after(0.0, 1) == 0.0
+    assert policy.wait_after(None, 1) == _FACTOR * 2
 
 
 @pytest.mark.parametrize(

@@ -9,6 +9,8 @@ redacted), the t-string route template, and a call id. Durations are on the cloc
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, override
+
 import httpx2
 import pytest
 
@@ -21,7 +23,12 @@ from headgate.testing import FakeTransport, Reply, TestClock
 from tests.support.clients import StubClient
 from tests.support.events import Recorder
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
 _BASE = "https://api.example.test/v1"
+#: The key a stream block's own lookup fails on.
+_NO_SUCH_KEY = "id"
 _RATE = Rate.per_second(1000)
 #: How long each send takes on the test clock.
 _SEND_TIME = 0.25
@@ -38,6 +45,21 @@ class _Broken:
 def _get(path: str, *replies: Reply) -> FakeTransport:
     """Return a fake network answering ``GET /v1/<path>`` with *replies*."""
     return FakeTransport().reply("GET", f"/v1/{path}", *replies)
+
+
+class _Dropped(httpx2.AsyncByteStream):
+    """A response body whose connection drops after its first chunk."""
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"abc"
+        msg = "connection reset"
+        raise httpx2.ReadError(msg)
+
+
+def _dropping(request: httpx2.Request) -> httpx2.Response:
+    """Answer 200 with a body whose connection drops part-way."""
+    return httpx2.Response(200, stream=_Dropped(), request=request)
 
 
 def _client(
@@ -174,6 +196,32 @@ async def test_a_streamed_get_reports_its_start_and_end() -> None:
     finished = recorder.events[-1]
     assert isinstance(finished, CallFinished)
     assert (finished.status_code, finished.error) == (200, None)
+
+
+async def test_an_error_of_the_stream_blocks_own_is_not_the_calls() -> None:
+    """Report a stream whose block raised its own exception as the success the exchange was."""
+    recorder = Recorder()
+    client = _client(_get("f", httpx2.Response(200, content=b"abc")), recorder)
+    with pytest.raises(KeyError):
+        async with client.stream("f"):
+            raise KeyError(_NO_SUCH_KEY)
+
+    finished = recorder.events[-1]
+    assert isinstance(finished, CallFinished)
+    assert (finished.status_code, finished.error) == (200, None)
+
+
+async def test_a_network_failure_mid_stream_is_the_calls_error() -> None:
+    """Report a network failure while the body arrives as the call's ``TransportError``."""
+    recorder = Recorder()
+    client = _client(_get("f", _dropping), recorder)
+    with pytest.raises(TransportError):
+        async with client.stream("f") as stream:
+            _ = [chunk async for chunk in stream.aiter_bytes()]
+
+    finished = recorder.events[-1]
+    assert isinstance(finished, CallFinished)
+    assert (finished.status_code, finished.error) == (200, "TransportError")
 
 
 async def test_a_client_without_observers_emits_nothing_and_still_works() -> None:

@@ -30,7 +30,9 @@ it:
 - **refresh before expiry**, `refresh_margin` (120 s) before the token expires, or at half its life when that is
   shorter, because a token expiring mid-flight fails a request that may be a write;
 - **one re-mint on a 401**, for a token revoked early, and never a loop. A token minted in the last 60 seconds is not
-  re-minted: a 401 on it is a permissions problem, which reaches the caller as the `AuthError` it is.
+  re-minted: a 401 on it is a permissions problem, which reaches the caller as the `AuthError` it is. Nor is a token
+  re-minted for a 401 to a request sent without it, such as a call to an origin you do not trust, where the credential
+  guard withheld it.
 
 The exchange is one of two methods. `mint_token()` makes it on a client of its own and returns `(token, lifetime)`:
 
@@ -76,7 +78,9 @@ one. What the flow can count on:
 
 Each hop counts toward `HttpOptions.max_redirects`, because httpx2 keeps one history per call; a mint of several hops
 needs a higher limit. A hop may carry the mint's credentials to the origin it addresses and to same-origin redirects,
-and nowhere else.
+and nowhere else: a redirect to another origin is refused before it is sent, as `ForbiddenDestinationError`, since a
+client secret in the hop's own headers or form body would go with it. A flow that means to follow it yields the
+redirected request itself.
 
 A failed mint is reported as the token endpoint's failure, never the API call's: a `raise_for_status()` becomes
 `AuthError` (401, 403) or `UpstreamStatusError`, a network failure (in the send or reading the body) `TransportError`,

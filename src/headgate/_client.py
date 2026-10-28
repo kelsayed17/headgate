@@ -34,9 +34,12 @@ import copy
 import functools
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Literal, Self, TypedDict, Unpack, overload
+from typing import TYPE_CHECKING, Literal, Self, Unpack, overload
 
 import httpx2
+
+# A closed TypedDict (PEP 728) refuses a keyword it does not name, so a stray or misspelled option is a type error.
+from typing_extensions import TypedDict
 
 from headgate._auth import failed_on_auth_hop
 from headgate._body import read_capped, read_head
@@ -71,6 +74,7 @@ from headgate._options import (
     HttpOptions,
     Timeouts,
     TransportPolicy,
+    check_deadline,
     check_timeout_fits,
     httpx_timeout,
     match_route,
@@ -94,7 +98,7 @@ from headgate.errors import (
     ForbiddenDestinationError,
     RateLimitError,
 )
-from headgate.pagination import PageRequest
+from headgate.pagination import PageRequest, WritingPager
 from headgate.pagination._paginated import PageWalk
 from headgate.ratelimit import UNLIMITED
 from headgate.ratelimit._budget import BudgetPausedError
@@ -107,7 +111,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
     from headgate._options import Route
-    from headgate._request_body import Body, EncodedBody, UploadFiles
+    from headgate._request_body import Body, EncodedBody, UploadFiles, Writer
     from headgate._responses import RefusalCheck
     from headgate.breaker._breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
@@ -131,15 +135,25 @@ _STREAM_ERROR_HEAD_BYTES = 4096
 #: past ``max_redirects`` (the origin answered every hop; the loop is one URL's configuration, as a 4xx is).
 _LOCAL_FAILURES = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2.PoolTimeout, httpx2.TooManyRedirects)
 
-#: The request options that make a body, which a page (a GET) cannot carry.
-_BODY_OPTIONS = ("body", "json", "data", "content", "files")
+#: The request options that make a body a walk cannot rewrite page by page, so ``paginate`` refuses them.
+_UNPAGEABLE_BODIES = ("data", "content", "files")
 
 #: The option groups a client gets when it passes none: frozen, so one instance serves every client.
 _DEFAULT_POLICY = TransportPolicy()
 _DEFAULT_HTTP = HttpOptions()
 
 
-class RequestOptions(TypedDict, total=False):
+class _SendOptions(TypedDict, total=False):
+    """The per-call options every request takes, a verb's, a stream's or a page's: all of them but the body."""
+
+    params: Mapping[str, object] | None
+    headers: Mapping[str, str]
+    timeout: Timeouts
+    deadline: float | None
+    idempotency_key: str
+
+
+class RequestOptions(_SendOptions, total=False, closed=True):
     """The per-call options a verb takes beyond its URL, ``expect=`` and the three explicit overrides.
 
     * ``params``: the query, ``Mapping[str, object]`` so that a client can pass a TypedDict (a TypedDict is assignable
@@ -147,7 +161,8 @@ class RequestOptions(TypedDict, total=False):
       once per item, and any value that is not a ``str``, number, bool or ``None`` is sent as its ``str()``.
     * ``headers``: added to the client's; a clash is won by the call.
     * ``body``: an :class:`~headgate.EncodedBody` a codec's ``encoder`` wrote (``body=NEW_ORDER(order)``), sent
-      with its ``Content-Type`` unless ``headers=`` sets one. It combines with no other body option.
+      with its ``Content-Type`` unless ``headers=`` (the call's or its view's, not the client's defaults) sets one. It
+      combines with no other body option.
     * ``json`` / ``data``: a JSON body of builtins (a codec's ``to_builtins`` builds one) or a form body.
     * ``content``: a raw body: ``bytes``; an async iterable of ``bytes``, streamed once, so the call is never re-sent
       and a redirect that asks for the body again is not followed; or a callable returning one, called once for each
@@ -161,27 +176,36 @@ class RequestOptions(TypedDict, total=False):
       ``IdempotencyKeys`` header (``Idempotency-Key`` by default).
     """
 
-    params: Mapping[str, object] | None
-    headers: Mapping[str, str]
     body: EncodedBody
     json: object
     data: Mapping[str, object]
     content: Body
     files: UploadFiles
-    timeout: Timeouts
-    deadline: float | None
-    idempotency_key: str
 
 
-class PageOptions(RequestOptions, total=False):
-    """The per-page options :meth:`AsyncBaseClient.paginate` takes: :class:`RequestOptions`, plus the two a verb names.
+class _PerPage(_SendOptions, total=False):
+    """The options :meth:`AsyncBaseClient.paginate` applies to each page: every request's, plus two a verb names."""
+
+    follow_redirects: bool | None
+    cache_ttl: float | None
+
+
+class PageOptions(_PerPage, total=False, closed=True):
+    """The per-page options :meth:`AsyncBaseClient.paginate` takes: :class:`RequestOptions` but the body, plus two more.
+
+    A walk's body is a keyword of its own, ``body=`` or ``json=``, since its type is the pager's. The two more are the
+    ones a verb names:
 
     * ``follow_redirects``: ``False`` makes a page's redirect raise as its 3xx, as on a verb.
     * ``cache_ttl``: each page's cache lifetime, as on a verb.
     """
 
-    follow_redirects: bool | None
-    cache_ttl: float | None
+
+class _WalkOptions[B](_PerPage, total=False, closed=True):
+    """What :meth:`AsyncBaseClient.paginate`'s implementation takes: the per-page options, and the walk's body."""
+
+    body: B
+    json: B
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +218,15 @@ class _Call:
     retry: bool | RetryPolicy = True
     follow_redirects: bool | None = None
     cache_ttl: float | None = None
+
+
+class _BlockError(Exception):
+    """An exception a ``stream()`` block raised, carried past the exchange's failure mapping to be raised unchanged."""
+
+    def __init__(self, error: Exception) -> None:
+        """Carry *error*."""
+        super().__init__()
+        self.error = error
 
 
 class _Report:
@@ -326,7 +359,9 @@ class AsyncBaseClient:
         closing a view, or leaving its ``async with`` block, closes nothing, and a view stops working once that client
         is closed.
 
-        :raises ValueError: for a timeout or deadline that is not positive.
+        :raises ValueError: for a deadline that is not positive and finite, and for a timeout longer than the deadline
+            the view's calls run under, since it could never take effect. A deadline shorter than the timeouts is
+            accepted: cutting each attempt's timeouts to the time left is what a short deadline is for.
         """
         layered = self._view.layered(options)
         if (timeout := options.get("timeout")) is not None:
@@ -445,7 +480,8 @@ class AsyncBaseClient:
     ) -> object:
         """Send a HEAD and read the reply through *expect*: by default :func:`~headgate.nothing`, as a HEAD has no body.
 
-        A reader still has the status line and headers, so ``expect=`` reads a header off a HEAD.
+        A reader still has the status line and headers, ``Content-Length`` and ``Content-Encoding`` included, so
+        ``expect=`` reads a header off a HEAD; the size cap is not applied to a body that does not exist.
         """
         call = _Call("HEAD", url, options, retry=retry, follow_redirects=follow_redirects, cache_ttl=cache_ttl)
         return await self._request(call, expect)
@@ -476,27 +512,69 @@ class AsyncBaseClient:
         * a retry covers opening only; a failure while the body arrives raises ``TransportError`` or
           ``ClientTimeoutError`` from the iteration;
         * the origin's circuit breaker spans the whole block: a network failure mid-body that leaves the block counts
-          against the origin, and a clean exit as a success.
+          against the origin, and a clean exit as a success;
+        * an exception the block raises that is not a ``ClientError`` is the caller's own, even an ``OSError`` or an
+          httpx2 error: it propagates unchanged, the breaker is charged nothing for it, and ``CallFinished`` reports
+          the status the stream opened with and no error.
 
-        ``last_event_id=`` sends ``Last-Event-ID`` (when not empty), to resume a server-sent event stream after the
-        last event a previous :class:`~headgate.streaming.Stream` saw (its ``last_event_id``).
+        ``last_event_id=`` sends ``Last-Event-ID`` (when not empty, and in place of one in ``headers=``), to resume a
+        server-sent event stream after the last event a previous :class:`~headgate.streaming.Stream` saw (its
+        ``last_event_id``).
 
         The request goes out when the block is entered.
         """
         if bool(last_event_id):
+            # Merged case-insensitively, so it replaces a Last-Event-ID however headers= spelled it.
+            headers = httpx2.Headers(options.get("headers"))
+            headers["Last-Event-ID"] = last_event_id
             options = options.copy()
-            options["headers"] = {**options.get("headers", {}), "Last-Event-ID": last_event_id}
+            options["headers"] = headers
         return self._streamed(_Call(method, url, options, retry=retry, follow_redirects=follow_redirects))
 
+    @overload
+    def paginate[P, I](
+        self,
+        url: str | Template,
+        *,
+        expect: Reader[P] | Expect[P],
+        pages: Pager[P, I, None],
+        retry: bool | RetryPolicy = True,
+        limit: PageLimit | None = None,
+        **options: Unpack[PageOptions],
+    ) -> Paginated[P, I]: ...
+    @overload
     def paginate[P, I, B](
         self,
-        url: str | Template | PageRequest[B],
+        url: str | Template,
         *,
+        body: B | None,
+        expect: Reader[P] | Expect[P],
+        pages: WritingPager[P, I, B],
+        retry: bool | RetryPolicy = True,
+        limit: PageLimit | None = None,
+        **options: Unpack[PageOptions],
+    ) -> Paginated[P, I]: ...
+    @overload
+    def paginate[P, I, B](
+        self,
+        url: str | Template,
+        *,
+        json: B | None,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, B],
         retry: bool | RetryPolicy = True,
         limit: PageLimit | None = None,
         **options: Unpack[PageOptions],
+    ) -> Paginated[P, I]: ...
+    def paginate[P, I, B](
+        self,
+        url: str | Template,
+        *,
+        expect: Reader[P] | Expect[P],
+        pages: Pager[P, I, B],
+        retry: bool | RetryPolicy = True,
+        limit: PageLimit | None = None,
+        **options: Unpack[_WalkOptions[B]],
     ) -> Paginated[P, I]:
         """Return the pages *pages* follows from *url*, each read through *expect*, iterated lazily.
 
@@ -506,36 +584,34 @@ class AsyncBaseClient:
         other. Iterating again starts again from the first page. ``retry=``, ``follow_redirects=``, ``cache_ttl=`` and
         the request options apply to every page, as they do to one :meth:`get`.
 
-        A walk of POSTs passes its first request as *url*: a :class:`~headgate.pagination.PageRequest` with a
-        ``body``, the caller's own value, which a pager (:class:`~headgate.BodyCursor`, :class:`~headgate.BodyOffset`)
-        rewrites for each next page. Each page's body is sent as ``body=write(body)``, or as ``json=`` when the
-        request has no ``write``. A page is then a :meth:`post` in every respect: in particular it is re-sent only
-        when that is safe, unless ``retry=`` says otherwise.
+        A walk of POSTs passes its body as :meth:`post` does, as ``json=`` or ``body=``, either ``None`` for no body.
+        ``json=`` is builtins, sent as JSON. ``body=`` is the caller's own value, which the pager's ``write`` (a codec's
+        ``encoder``, see :class:`~headgate.pagination.WritingPager`) encodes for each page: the writer belongs to the
+        endpoint, like the reader and the pager, and a pager that rewrites the body (:class:`~headgate.BodyCursor`,
+        :class:`~headgate.BodyOffset`) needs the value, not its bytes. A page with a body is then a :meth:`post` in
+        every respect: in particular it is re-sent only when that is safe, unless ``retry=`` says otherwise.
 
         *limit* is a page budget (:class:`~headgate.PageLimit`): at most ``max_pages`` pages are fetched. When more
         would follow, the walk raises :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or
         with ``on_limit="stop"`` ends there. A walk that ends within the budget is unaffected.
 
-        :raises ValueError: for a body option (``body``, ``json``, ``data``, ``content``, ``files``), as a walk's body
-            is its first request's; for ``params=`` beside a ``PageRequest``, which carries its own query; and for an
-            idempotency key (``idempotency_key=``, or the policy's header in ``headers=``) on a walk of POSTs, as one
-            key on pages with different bodies would have the server replay the first page's answer.
+        :raises ValueError: for ``data=``, ``content=`` or ``files=``, a body no pager can rewrite, and for ``json=``
+            and ``body=`` together, both of which the overloads refuse too; for a walk its pager refuses
+            (:meth:`~headgate.pagination.Pager.first` runs here, once); and for a first page with a body that cannot
+            be sent as the walk says: a ``body=`` whose pager has no ``write``, a ``json=`` whose pager has one, or an
+            idempotency key (``idempotency_key=``, or the policy's header in ``headers=``), as one key on pages with
+            different bodies would have the server replay the first page's answer. A later page with a body is held
+            to the same rules, and raises from the iteration.
         """
-        if any(name in options for name in _BODY_OPTIONS):
-            msg = "paginate takes no body option: a walk of POSTs passes its body in a PageRequest"
-            raise ValueError(msg)
-        call_options = options.copy()
-        params = call_options.pop("params", None)
-        if not isinstance(url, PageRequest):
-            first: PageRequest[B] = PageRequest(url, params)
-        elif "params" in options:
-            msg = "a PageRequest carries its own query, so paginate takes no params= beside one"
-            raise ValueError(msg)
-        else:
-            first = url
-        if first.body is not None and self._one_key_for_every_page(options):
-            msg = "an idempotency key would be sent with every page's body; a walk of POSTs takes none"
-            raise ValueError(msg)
+        body, as_json, call_options = _walk_body(**options)
+        # How a body is sent is the walk's: the pager's writer encodes every page's, whatever request the pager returns.
+        write = pages.write if isinstance(pages, WritingPager) else None
+        first = pages.first(PageRequest(url, call_options.pop("params", None), body))
+        # Whether a page's body can be sent is the walk's too: refused for the first page here, and for a later one
+        # (a pager that turns GETs into POSTs) before it is sent.
+        refusal = _post_refusal(write, as_json=as_json, fixed_key=self._one_key_for_every_page(call_options))
+        if first.body is not None and refusal is not None:
+            raise ValueError(refusal)
         spec: Expect[P] = expect if isinstance(expect, Expect) else Expect(expect)
         answers = {status: _paired(read) for status, read in spec.answers.items()}
         paired = Expect(_paired(spec.ok), answers, headers=spec.headers, accept=spec.accept)
@@ -546,11 +622,11 @@ class AsyncBaseClient:
             # A page's follow_redirects and cache_ttl land on the verb's own parameters of those names.
             if request.body is None:
                 return await self.get(request.url, expect=paired, retry=retry, **page_options)
-            if request.write is None:
-                page_options["json"] = request.body
-            else:
-                page_options["body"] = request.write(request.body)
-            return await self.post(request.url, expect=paired, retry=retry, **page_options)
+            if refusal is not None:
+                raise ValueError(refusal)
+            if write is None:
+                return await self.post(request.url, expect=paired, retry=retry, json=request.body, **page_options)
+            return await self.post(request.url, expect=paired, retry=retry, body=write(request.body), **page_options)
 
         return PageWalk(fetch, pages, first, source=self._source, limit=limit)
 
@@ -576,10 +652,10 @@ class AsyncBaseClient:
         """
         spec: Expect[T] = expect if isinstance(expect, Expect) else Expect(expect)
         prepared = self._prepare(call)
-        for name, value in spec.headers.items():
-            prepared.request.headers.setdefault(name, value)
+        explicit = self._view.headers_for(call.options.get("headers"))
+        _stamp_headers(prepared.request, explicit, spec.headers)
         if spec.accept is not None:
-            _stamp_accept(prepared.request, self._view.headers_for(call.options.get("headers")), spec.accept)
+            _stamp_headers(prepared.request, explicit, {"Accept": spec.accept})
         async with self._reported(prepared):
             async with self._deadline(prepared), self._exchange(prepared) as (streamed, _):
                 announce_deprecation(prepared.context, streamed)
@@ -595,23 +671,46 @@ class AsyncBaseClient:
 
         The exchange is entered under the deadline and left open past it, on the exit stack, so the deadline bounds the
         send and the head checks while the breaker scope and the response last until the caller's block exits.
+
+        The caller's block runs at the ``yield``. What it raises is carried past the exchange in a :class:`_BlockError`,
+        out of reach of the exchange's failure mapping, since the stream maps its own network failures as the body
+        arrives and anything else is the caller's; it is raised unchanged once the exchange has closed. A
+        ``ClientError`` is raised inside the report, as the call's error; any other exception after it, so the call
+        reports the exchange it was.
         """
         prepared = self._prepare(call)
-        async with self._reported(prepared), contextlib.AsyncExitStack() as held:
-            async with self._deadline(prepared):
-                streamed, verdict = await held.enter_async_context(self._exchange(prepared))
-                announce_deprecation(prepared.context, streamed)
-                if (refused := _refusal(self._refusal_check, streamed)) is not None:
-                    head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
-                    raise refusal_error(refused, head, self._site(prepared)) from refused
-                if not streamed.is_success:
-                    head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
-                    raise status_error(head, self._site(prepared))
-                # A stream has no reader: passing the head checks is what accepts it.
-                await store_accepted(streamed)
-            yield OpenStream(
-                streamed, self._site(prepared), functools.partial(self._network_failure, prepared, verdict)
-            )
+        own: Exception | None = None
+        async with self._reported(prepared):
+            try:
+                async with contextlib.AsyncExitStack() as held:
+                    streamed, verdict = await self._opened(prepared, held)
+                    fail = functools.partial(self._network_failure, prepared, verdict)
+                    try:
+                        yield OpenStream(streamed, self._site(prepared), fail)
+                    except Exception as exc:
+                        raise _BlockError(exc) from exc
+            except _BlockError as blocked:
+                own = blocked.error
+            # Raised outside the except clause, so the error keeps its own __context__ rather than the carrier.
+            if isinstance(own, ClientError):
+                raise own
+        if own is not None:
+            raise own
+
+    async def _opened(self, prepared: _Prepared, held: contextlib.AsyncExitStack) -> tuple[httpx2.Response, Verdict]:
+        """Send *prepared* under its deadline and check the response head, leaving the exchange open on *held*."""
+        async with self._deadline(prepared):
+            streamed, verdict = await held.enter_async_context(self._exchange(prepared))
+            announce_deprecation(prepared.context, streamed)
+            if (refused := _refusal(self._refusal_check, streamed)) is not None:
+                head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
+                raise refusal_error(refused, head, self._site(prepared)) from refused
+            if not streamed.is_success:
+                head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
+                raise status_error(head, self._site(prepared))
+            # A stream has no reader: passing the head checks is what accepts it.
+            await store_accepted(streamed)
+        return streamed, verdict
 
     # Preparing the request.
 
@@ -619,8 +718,9 @@ class AsyncBaseClient:
         """Build *call*'s request and stamp its context on it.
 
         Raises ``ValueError`` for a t-string value no path segment can hold, for a call that would follow redirects
-        on a client with a ``refusal_check``, for a non-positive ``deadline=`` and for body options that do not
-        combine; and ``ClientError`` for a URL httpx2 cannot parse.
+        on a client with a ``refusal_check``, for a ``deadline=`` that is not positive and finite and for body options
+        that do not combine; ``TypeError`` for a ``content=`` that is no body; and ``ClientError`` for a URL httpx2
+        cannot parse.
         """
         if isinstance(call.url, Template):
             url, route = render_path(call.url), route_template(call.url)
@@ -639,7 +739,7 @@ class AsyncBaseClient:
         check_one_body(
             body=body, content=options.get("content"), json=options.get("json"), data=options.get("data"), files=files
         )
-        content, replayable = request_content(options.get("content") if body is None else body.content)
+        content, replayable = (body.content, True) if body is not None else request_content(options.get("content"))
         try:
             request = self._http_client.build_request(
                 call.method,
@@ -655,7 +755,7 @@ class AsyncBaseClient:
         except httpx2.InvalidURL as exc:
             raise _invalid_url(exc, CallSite(self._source, call.method, log_url)) from exc
         if body is not None:
-            request.headers.setdefault("Content-Type", body.content_type)
+            _stamp_headers(request, self._view.headers_for(options.get("headers")), {"Content-Type": body.content_type})
         # The absolute URL is for observers only (an OpenTelemetry span's url.full and server.address).
         full_url = sanitize_url(str(request.url)) if self._emitter.active else None
         info = CallInfo(method=call.method, url=log_url, route=route, full_url=full_url)
@@ -680,9 +780,7 @@ class AsyncBaseClient:
         """Return the seconds *call* may take: its own ``deadline=``, else the view's, its route's, the policy's."""
         if "deadline" in call.options:
             deadline = call.options["deadline"]
-            if deadline is not None and not deadline > 0:
-                msg = f"deadline must be > 0, or None (got {deadline})"
-                raise ValueError(msg)
+            check_deadline(deadline)
             return deadline
         if self._view.deadline is not KEEP:
             return self._view.deadline
@@ -779,7 +877,7 @@ class AsyncBaseClient:
 
         The response yielded is anything but a 429 or 5xx: one of those means the retry transport ran out of
         attempts, and it is raised here, so no call can declare either as an answer. A network failure or timeout,
-        in the send or in the caller's body read inside the block, becomes ``TransportError`` /
+        in the send or in a verb's body read inside the block, becomes ``TransportError`` /
         ``ClientTimeoutError``; an open breaker ``CircuitOpenError``; a rate budget the server paused past the
         call's deadline ``RateLimitError``; and a hop the SSRF guard refused ``ForbiddenDestinationError``.
 
@@ -967,13 +1065,16 @@ def _query_value(value: object) -> _QueryValue:
     return value if isinstance(value, str | int | float | bool | None) else str(value)
 
 
-def _stamp_accept(request: httpx2.Request, explicit: Mapping[str, str] | None, accept: str) -> None:
-    """Send *accept* as *request*'s ``Accept``, over the client's default but never over an *explicit* one.
+def _stamp_headers(request: httpx2.Request, explicit: Mapping[str, str] | None, headers: Mapping[str, str]) -> None:
+    """Send *headers* on *request*, each over the client's default but never over an *explicit* one.
 
-    *explicit* is what the call and its view set in ``headers=``.
+    *explicit* is what the call and its view set in ``headers=``. The headers stamped this way are the ones the call's
+    own declarations imply: its body's ``Content-Type``, and its ``Expect``'s ``headers`` and ``accept``.
     """
-    if explicit is None or "accept" not in {name.lower() for name in explicit}:
-        request.headers["Accept"] = accept
+    taken = set() if explicit is None else {name.lower() for name in explicit}
+    for name, value in headers.items():
+        if name.lower() not in taken:
+            request.headers[name] = value
 
 
 def _charge_response(response: httpx2.Response, verdict: Verdict) -> None:
@@ -1018,6 +1119,37 @@ def _refusal(check: RefusalCheck | None, resp: httpx2.Response) -> RefusedError 
         return check(resp)
     except RefusedError as refused:
         return refused
+
+
+def _walk_body[B](
+    body: B | None = None, json: B | None = None, **page: Unpack[PageOptions]
+) -> tuple[B | None, bool, PageOptions]:
+    """Split a walk's options into its body, whether it is sent as JSON, and the options every page is sent with.
+
+    A keyword given as ``None`` is no body, as on a verb, so only two bodies are refused, as is a body no pager can
+    rewrite (``data=``, ``content=``, ``files=``, which only an untyped call can pass).
+    """
+    if any(name in page for name in _UNPAGEABLE_BODIES):
+        msg = "paginate takes no data=, content= or files=: a walk of POSTs sends body= or json="
+        raise ValueError(msg)
+    if body is not None and json is not None:
+        msg = "paginate takes body= or json=, not both"
+        raise ValueError(msg)
+    return (json if body is None else body), json is not None, page
+
+
+def _post_refusal[B](write: Writer[B] | None, *, as_json: bool, fixed_key: bool) -> str | None:
+    """Return why a walk's pages cannot carry a body, or ``None`` when they can: by ``write``, or as JSON for ``json=``.
+
+    *fixed_key* is whether the call fixes one idempotency key for every page, which a page with a body cannot carry.
+    """
+    if as_json and write is not None:
+        return "json= is sent as JSON, so its pager takes no write="
+    if not as_json and write is None:
+        return "a POSTed body is encoded by its pager's write=, so the pager needs one; send builtins as json="
+    if fixed_key:
+        return "an idempotency key would be sent with every page's body; a walk of POSTs takes none"
+    return None
 
 
 def _paired[T](read: Reader[T]) -> Reader[tuple[T, httpx2.Response]]:
