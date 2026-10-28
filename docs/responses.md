@@ -63,15 +63,15 @@ A redirect the call does not follow (`follow_redirects=False`) is a 3xx like any
 
 ## Content negotiation
 
-`Expect(reader, accept="application/json")` sends that `Accept` header (unless the call sets one in `headers=`) and
-checks every non-empty response's `Content-Type` before the reader runs. Media types compare without parameters and
-case-insensitively, `*/*` and `type/*` match as in `Accept`, and a structured suffix matches its base type, so
-`application/problem+json` is `application/json`. A mismatch on a 2xx raises `ResponseParseError` with the status and
-the content type; on a declared non-2xx it falls through to the ladder. `accept` may list several types,
+`Expect(reader, accept="application/json")` sends that `Accept` header (unless the call or its view sets one in
+`headers=`) and checks every non-empty response's `Content-Type` before the reader runs. Media types compare without
+parameters and case-insensitively, `*/*` and `type/*` match as in `Accept`, and a structured suffix matches its base
+type, so `application/problem+json` is `application/json`. A mismatch on a 2xx raises `ResponseParseError` with the
+status and the content type; on a declared non-2xx it falls through to the ladder. `accept` may list several types,
 comma-separated.
 
-`Expect(..., headers={...})` sends request headers the declaration needs; a header the call sets itself wins. This is
-how [conditional reads](caching.md#conditional-reads) send their preconditions.
+`Expect(..., headers={...})` sends request headers the declaration needs; a header the call or its view sets in
+`headers=` wins. This is how [conditional reads](caching.md#conditional-reads) send their preconditions.
 
 ## Refusals inside a body
 
@@ -130,7 +130,7 @@ The core imports no serialization library. `headgate.msgspec` and `headgate.pyda
 Drift detection is strict typing: a field that changes type on the wire fails, because it would otherwise corrupt
 values silently. Unknown fields are ignored, because providers add fields routinely and a field nobody models is a field
 nobody reads; a model can still forbid them. A `DecodeError`'s message is the codec's diagnosis, bounded, and never
-quotes an input value.
+quotes an input value or key.
 
 `allow_empty_body=True` reads an empty body as `[]`, for a list endpoint whose "no data" answer is a zero-byte 200.
 Anywhere else an empty 200 is corruption, and decoding it fails.

@@ -76,7 +76,8 @@ A 429's or 503's `retry-after-ms` or `Retry-After` (whole or fractional seconds,
 and is waited **exactly**, not capped by `max_wait`, when it is at most `max_retry_after`. A longer one is not waited:
 the call stops and raises `RateLimitError` (429) or `UpstreamStatusError` with `retry_after` set (and `retryable` as
 [below](#what-retryable-means)), so the caller can reschedule. The [rate budget](rate-budgets.md#server-feedback) reads
-the same header the same way, so the retry's wait and the budget's pause end together.
+the same header the same way, so the retry's wait and the budget's pause end together (up to the budget's one-hour
+cap on a pause, which only a `max_retry_after` past an hour can exceed).
 
 ## The retry budget
 

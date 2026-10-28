@@ -21,8 +21,8 @@ RFCs. headgate reads them so you do not have to, and follows them by default.
 
     ---
 
-    `Retry-After` waited exactly, rate-limit headers obeyed, `Idempotency-Key` sent on writes. Providers see a
-    well-behaved client.
+    `Retry-After` waited exactly, rate-limit headers obeyed, nothing unsafe sent twice. Providers see a well-behaved
+    client.
 
 -   :lucide-shield-check:{ .lg .hg-icon } **Strict where it matters**
 
@@ -41,18 +41,18 @@ RFCs. headgate reads them so you do not have to, and follows them by default.
 
 !!! tip "You do not need to know any of this to use headgate"
 
-    Every row below is something headgate does for you. The page is here for the curious, for reviewers, and for
-    anyone who has to justify a dependency.
+    Every row below is something headgate does for you, by default or once you ask for it (`IdempotencyKeys()`,
+    `conditional()`). The page is here for the curious, for reviewers, and for anyone who has to justify a dependency.
 
 ## Sending and retrying safely
 
 | Standard | What it says | What headgate does |
 | --- | --- | --- |
-| :lucide-repeat: [RFC 9110 §9.2.2](https://www.rfc-editor.org/rfc/rfc9110#section-9.2.2) Idempotent methods | GET, HEAD, OPTIONS, PUT and DELETE can be repeated without extra effect | only these are [retried](retries.md#what-is-re-sent) after an ambiguous failure, and only these can be [hedged](retries.md#hedging) |
-| :lucide-key-round: [Idempotency-Key](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) (IETF draft) | a client key lets a server recognize a re-sent POST or PATCH | [`IdempotencyKeys()`](retries.md#idempotency-keys) stamps one key per call, so every retry carries the same one |
+| :lucide-repeat: [RFC 9110 §9.2.2](https://www.rfc-editor.org/rfc/rfc9110#section-9.2.2) Idempotent methods | GET, HEAD, OPTIONS, PUT and DELETE can be repeated without extra effect | only these, or a request carrying an [idempotency key](retries.md#idempotency-keys), are [retried](retries.md#what-is-re-sent) after an ambiguous failure, and only these can be [hedged](retries.md#hedging) |
+| :lucide-key-round: [Idempotency-Key](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) (IETF draft) | a client key lets a server recognize a re-sent POST or PATCH | opt in with [`IdempotencyKeys()`](retries.md#idempotency-keys): it stamps one key per call, so every retry carries the same one |
 | :lucide-clock-alert: [RFC 8470](https://www.rfc-editor.org/rfc/rfc8470) 425 Too Early | the server did not process the request | retried for every method, POST included, since nothing happened |
 | :lucide-git-pull-request-closed: [RFC 9113 §8.7](https://www.rfc-editor.org/rfc/rfc9113#section-8.7) HTTP/2 `REFUSED_STREAM` | the server refused the stream before doing any work | retried for every method, for the same reason |
-| :lucide-corner-down-right: [RFC 9110 §15.4](https://www.rfc-editor.org/rfc/rfc9110#section-15.4) Redirects | 303 becomes GET; 307 and 308 keep the method and body | followed as written, except a 307 or 308 (or a 301 on a method other than POST) that would [re-send a one-shot body](security.md#redirects) and any https-to-http hop |
+| :lucide-corner-down-right: [RFC 9110 §15.4](https://www.rfc-editor.org/rfc/rfc9110#section-15.4) Redirects | 303 becomes GET; 307 and 308 keep the method and body | followed as written, except a 307 or 308 (or a 301 on a method other than POST) that would [re-send a one-shot body](security.md#redirects), any https-to-http hop, and a [token mint's](auth.md#cachedtokenauth) hop to another origin |
 
 ## Waiting when asked
 

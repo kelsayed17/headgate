@@ -68,7 +68,8 @@ http = otel.install(HttpOptions(user_agent="shop-sync/1.4"))
   `server.address`, `server.port`, `url.full` (redacted), `url.template`, `http.response.status_code`,
   `http.request.resend_count` and `error.type` (the status for a 4xx or 5xx, else the `ClientError` class name). A
   failed call's status is `ERROR`; a cancelled call's is left unset;
-- **the `http.client.request.duration` histogram**, with the same attributes less `url.full` and `url.template`;
+- **the `http.client.request.duration` histogram**, with the same attributes less `url.full`, `url.template` and
+  `http.request.resend_count`;
 - **W3C Trace Context on every attempt**: `traceparent` (and `tracestate`) is written onto each send, re-sends included,
   and the call's span is current while an attempt is in flight. Baggage is not sent unless you pass a propagator that
   sends it.

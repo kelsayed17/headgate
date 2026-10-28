@@ -30,8 +30,11 @@ below act on it as well as the outer timer:
 
 - each attempt's connect, read, write and pool timeouts are cut to the time left, so a send cannot outlast the call;
 - the retry layer starts no retry, hedge or wait with less than `RetryPolicy.min_attempt_time` (0.05 s) left, and
-  raises the last failure with the note `deadline exhausted` instead (a request's first attempt is always sent);
-- a rate-budget pause that would outlast the deadline raises `RateLimitError` at once rather than waiting;
+  raises the last failure with the note `deadline exhausted` instead (`min_attempt_time` never holds back a request's
+  first attempt);
+- a rate-budget pause that would outlast the deadline is not waited for. On the first attempt the call raises
+  `RateLimitError` at once, with `retryable=True` and `retry_after` the pause; on a retry, the call ends with the
+  failure it already has, noted `deadline exhausted`;
 - a turn in the rate budget that comes at or after the deadline is not waited for. On the first attempt the call
   raises `ClientTimeoutError` at once, naming it as never sent, with `attempts=0`, `retryable=True` and `retry_after`
   the wait it was refused. On a retry, the call ends with the failure it already has, noted `deadline exhausted`, and a

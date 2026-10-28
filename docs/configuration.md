@@ -53,7 +53,7 @@ How requests are sent and responses read.
 | Field | Default | |
 | --- | --- | --- |
 | `transport` | `None` | a custom network transport (a test double, `headgate.curl.AsyncCurlTransport`); the default is an HTTP/2 `httpx2.AsyncHTTPTransport` |
-| `headers` | `{}` | sent on every request; a call's `headers=` wins a clash |
+| `headers` | `{}` | sent on every request; any header the call implies or sets wins a clash (see [precedence](#precedence)) |
 | `timeout` | `Timeouts()` | per-phase timeouts; a phase left unset takes its default |
 | `follow_redirects` | `True` | the client's default; a call can override it |
 | `max_redirects` | `5` | the hop limit, auth-flow hops included |
@@ -183,6 +183,7 @@ stops working once that client is closed.
 ### Precedence
 
 For the deadline and the retry policy, the most specific setting wins: the call's own, then the view's, then the first
-matching `Route`'s, then the policy's. Headers merge the same way: the call's over the view's over the client's
-`HttpOptions.headers`. A transport policy switched off with `policy_disabled()` overrides them all (see
+matching `Route`'s, then the policy's. Headers merge the same way: the call's `headers=` over the view's, then the
+headers the call's declarations imply (its body's `Content-Type`, its `Expect`'s `accept=` and `headers=`), then the
+client's `HttpOptions.headers`. A transport policy switched off with `policy_disabled()` overrides them all (see
 [testing](testing.md#switching-the-policy-off)).

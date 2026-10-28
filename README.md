@@ -48,8 +48,8 @@ environment.
 
 ### 📜 Built on the standards
 
-17 RFCs and drafts, followed by default: `Retry-After`, the IETF `RateLimit` headers, Problem Details (RFC 9457), `Link`
-pagination (RFC 8288), `Idempotency-Key`, `Deprecation` and `Sunset`, and more.
+17 specifications, most followed by default: `Retry-After`, the IETF `RateLimit` headers, Problem Details (RFC 9457),
+`Link` pagination (RFC 8288), `Deprecation` and `Sunset`, and `Idempotency-Key` once you turn it on.
 
 ## A client in one screen
 
@@ -105,7 +105,7 @@ go, and nothing needs to. Those come from the base class.
 - 🚦 **Rate limits** (instead of aiolimiter or pyrate-limiter):
   [`RateBudget`](https://kelsayed17.github.io/headgate/rate-budgets/), paced, and paused when the server says so.
 - ⏱️ **Deadlines** (instead of `asyncio.timeout` around each call, by hand): [one
-  deadline](https://kelsayed17.github.io/headgate/deadlines/) over every attempt, wait and read.
+  deadline](https://kelsayed17.github.io/headgate/deadlines/) over every attempt, wait and buffered read.
 - 🔌 **Circuit breaking** (instead of pybreaker or purgatory): [a breaker per
   origin](https://kelsayed17.github.io/headgate/breaker/), charged only for the host's own failures.
 - 🗄️ **Caching** (instead of requests-cache, or hishel wired in by hand):
@@ -149,8 +149,8 @@ pip install 'headgate[otel]'       # + OpenTelemetryObserver (opentelemetry-api 
 pip install 'headgate[cache]'      # + what hishel's AsyncSqliteStorage needs (hishel[async]: anysqlite)
 ```
 
-`pip install headgate` alone brings no serialization library: httpx2 and hishel only. Pick a codec as an extra, or
-bring your own (see [codecs](https://kelsayed17.github.io/headgate/codecs/)).
+`pip install headgate` alone brings no serialization library: httpx2, hishel and typing-extensions only. Pick a codec as
+an extra, or bring your own (see [codecs](https://kelsayed17.github.io/headgate/codecs/)).
 
 <details>
 <summary><b>Why Python 3.14, and why httpx2?</b></summary>
@@ -287,7 +287,7 @@ token, an idempotent POST, a declared business refusal, `Link`-header pages and 
 | [Response cap](https://kelsayed17.github.io/headgate/configuration/#httpoptions) | 32 MiB per buffered body, counted after decompression |
 | [Caching](https://kelsayed17.github.io/headgate/caching/) | Opt-in hishel cache, partitioned by credential, never storing one; coalesced identical GETs; conditional reads |
 | [Streaming and uploads](https://kelsayed17.github.io/headgate/streaming/) | `stream()` for bodies and server-sent events with resume; raw, streamed and multipart request bodies |
-| [Pagination](https://kelsayed17.github.io/headgate/pagination/) | `paginate()` with `Cursor`, `Offset`, `LinkHeader` or `NextUrl`, or `BodyCursor` and `BodyOffset` for a POST body; lazy, loop-safe, bounded by pages or items |
+| [Pagination](https://kelsayed17.github.io/headgate/pagination/) | `paginate()` with `Cursor`, `Offset`, `LinkHeader` or `NextUrl`, and walks of POSTs given `body=` or `json=` (`BodyCursor`, `BodyOffset`); lazy, loop-safe, bounded by pages or items |
 | [Errors](https://kelsayed17.github.io/headgate/errors/) | One `ClientError` tree; method, URL, request id, attempts, `retryable`, `retry_after`, RFC 9457 problems |
 | [Auth](https://kelsayed17.github.io/headgate/auth/) | Static headers, query keys, and a cached minted token with one re-mint on a 401 |
 | [Observability](https://kelsayed17.github.io/headgate/observability/) | Typed events, OpenTelemetry spans and metrics, request ids, `Deprecation` / `Sunset` notices, health snapshots |
@@ -399,7 +399,7 @@ ClientError                      also: an unparsable URL, a pagination loop
 │   └── RateLimitError           429, a quota refusal, or a server pause past the deadline
 ├── ResponseParseError           a 2xx body the reader could not read
 ├── ResponseTooLargeError        a body past max_response_bytes
-├── ForbiddenDestinationError    a hop the SSRF guard refused
+├── ForbiddenDestinationError    a hop the SSRF guard refused, or a token mint sent off its origin
 ├── PageLimitError               a paginated walk spent its page budget with pages left
 └── ClientConfigurationError     our own setup is wrong
 ```

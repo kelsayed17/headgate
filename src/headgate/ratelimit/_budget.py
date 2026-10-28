@@ -350,7 +350,7 @@ class RateBudget:
     """A shareable budget: pacing at ``rate``, at most ``max_in_flight`` responses open, and server feedback.
 
     See the module docstring for the algorithm and for what sharing means. *rate* is the configured rate;
-    *max_in_flight* caps how many requests may be in flight at once, a request counting from its turn until its
+    *max_in_flight* caps how many requests may be in flight at once, a request counting from before its turn until its
     response body is closed (``None``: no cap); *adaptive* lowers the rate on pushback (``None``: never). *timing*'s
     clock (monotonic seconds) and sleep pace requests and wait out pauses; *wall_clock* is Unix time, for the absolute
     times some rate-limit headers carry.

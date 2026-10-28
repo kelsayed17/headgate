@@ -13,7 +13,7 @@ ClientError                      also: an unparsable URL, a pagination loop
 │   └── RateLimitError           429, a quota refusal, or a server pause past the deadline
 ├── ResponseParseError           a 2xx body the reader could not read
 ├── ResponseTooLargeError        a body past max_response_bytes
-├── ForbiddenDestinationError    a hop the SSRF guard refused
+├── ForbiddenDestinationError    a hop the SSRF guard refused, or a token mint sent off its origin
 ├── PageLimitError               a paginated walk spent its page budget with pages left
 └── ClientConfigurationError     our own setup is wrong
 ```
@@ -45,8 +45,9 @@ quote it when you contact the provider.
   `detail`, `instance`, and `extensions` read-only at any depth). The message then quotes its title and detail;
 - otherwise the message ends with a bounded, single-line snippet of the body, which is usually the diagnosis.
 
-`ResponseParseError` adds `status_code` and `content_type`, and its message names the reader's diagnosis, bounded,
-never quoting an input value.
+`ResponseParseError` adds `status_code` and `content_type`, and its message names the reader's diagnosis, bounded. A
+codec's reader never quotes an input value or key there; a hand-written reader's own exception text (a `ValueError`
+from `int(field)`, say) is passed through as it is worded, only shortened.
 
 Every `ClientError` pickles with its attributes, so it can cross a process boundary or be stored by a durable workflow
 engine.

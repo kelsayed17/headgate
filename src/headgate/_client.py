@@ -261,7 +261,8 @@ class AsyncBaseClient:
       quota refusal a reader found inside a 2xx;
     * ``UpstreamStatusError``: a 5xx that survived retries, a status the call did not declare, or a refusal carrying
       the status it arrived with (401/403 become ``AuthError``);
-    * ``ForbiddenDestinationError``: a hop the SSRF guard refused (``SecurityOptions(allow_private_hosts=False)``);
+    * ``ForbiddenDestinationError``: a hop the SSRF guard refused (``SecurityOptions(allow_private_hosts=False)``), or
+      a token mint's hop redirected off its origin;
     * ``ResponseParseError``: a 2xx body the reader could not read;
     * ``ResponseTooLargeError``: a body past ``HttpOptions.max_response_bytes``.
 
@@ -511,8 +512,8 @@ class AsyncBaseClient:
           to bound the whole body, wrap the block in ``asyncio.timeout``;
         * a retry covers opening only; a failure while the body arrives raises ``TransportError`` or
           ``ClientTimeoutError`` from the iteration;
-        * the origin's circuit breaker spans the whole block: a network failure mid-body that leaves the block counts
-          against the origin, and a clean exit as a success;
+        * the origin's circuit breaker spans the whole block: a network failure mid-body counts against the origin, even
+          when the block catches it, and a clean exit with no such failure as a success;
         * an exception the block raises that is not a ``ClientError`` is the caller's own, even an ``OSError`` or an
           httpx2 error: it propagates unchanged, the breaker is charged nothing for it, and ``CallFinished`` reports
           the status the stream opened with and no error.
@@ -579,10 +580,11 @@ class AsyncBaseClient:
         """Return the pages *pages* follows from *url*, each read through *expect*, iterated lazily.
 
         ``async for item in client.paginate(...)`` yields the items of each page in turn; ``.pages()`` yields the
-        pages. Each page is a GET through the whole stack, fetched only when the iteration reaches it, and a next-page
-        URL taken from a response is sent as an absolute URL, under the same credential and destination rules as any
-        other. Iterating again starts again from the first page. ``retry=``, ``follow_redirects=``, ``cache_ttl=`` and
-        the request options apply to every page, as they do to one :meth:`get`.
+        pages. Each page is a GET (a POST, given ``body=`` or ``json=``) through the whole stack, fetched only when the
+        iteration reaches it, and a next-page URL taken from a response is sent as an absolute URL, under the same
+        credential and destination rules as any other. Iterating again starts again from the first page. ``retry=``,
+        ``follow_redirects=``, ``cache_ttl=`` and the request options apply to every page, as they do to one
+        :meth:`get` (or :meth:`post`).
 
         A walk of POSTs passes its body as :meth:`post` does, as ``json=`` or ``body=``, either ``None`` for no body.
         ``json=`` is builtins, sent as JSON. ``body=`` is the caller's own value, which the pager's ``write`` (a codec's
@@ -879,7 +881,8 @@ class AsyncBaseClient:
         attempts, and it is raised here, so no call can declare either as an answer. A network failure or timeout,
         in the send or in a verb's body read inside the block, becomes ``TransportError`` /
         ``ClientTimeoutError``; an open breaker ``CircuitOpenError``; a rate budget the server paused past the
-        call's deadline ``RateLimitError``; and a hop the SSRF guard refused ``ForbiddenDestinationError``.
+        call's deadline ``RateLimitError``; and a hop the SSRF guard refused, or a token mint's hop redirected off its
+        origin, ``ForbiddenDestinationError``.
 
         The breaker is driven here rather than by a transport layer because this is the only scope that spans both the
         send and the body read. It is keyed on the origin the request is addressed to, so a followed redirect's hops

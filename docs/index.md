@@ -30,8 +30,8 @@ Each endpoint method stays one line.
 
     ---
 
-    Idempotent methods only, or a POST under an idempotency key. `Retry-After` is waited exactly, and a budget stops
-    retries multiplying an outage.
+    Idempotent methods only, a POST under an idempotency key, or one the server provably never processed.
+    `Retry-After` is waited exactly, and a budget stops retries multiplying an outage.
 
     [:lucide-arrow-right: Retries](retries.md)
 
@@ -47,7 +47,8 @@ Each endpoint method stays one line.
 
     ---
 
-    One deadline bounds every attempt, wait and read. A per-origin circuit breaker stops calls to a host that is down.
+    One deadline bounds every attempt, wait and buffered read. A per-origin circuit breaker stops calls to a host that
+    is down.
 
     [:lucide-arrow-right: Deadlines](deadlines.md) · [Circuit breaker](breaker.md)
 
