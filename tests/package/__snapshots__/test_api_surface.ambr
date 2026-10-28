@@ -198,7 +198,9 @@
   def decode(content: 'bytes', type_: 'TypeForm[T]', *, strict: 'bool' = True) -> 'T'
   def decoder(type_: 'TypeForm[T]', *, strict: 'bool' = True, allow_empty_body: 'bool' = False, refusal_check: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
   def encoder(type_: 'TypeForm[T]', *, drop_none: 'bool' = False) -> 'Writer[T]'
-  def to_builtins(value: 'object', *, drop_none: 'bool' = False) -> 'object'
+  def to_builtins(value: 'msgspec.Struct | Mapping[str, object]', *, drop_none: 'bool' = Ellipsis) -> 'dict[str, object]'
+  def to_builtins(value: 'list[T]', *, drop_none: 'bool' = Ellipsis) -> 'list[object]'
+  def to_builtins(value: 'object', *, drop_none: 'bool' = Ellipsis) -> 'object'
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.otel]
@@ -214,27 +216,30 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.pagination]
   '''
   module headgate.pagination
-  __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageLimit', 'PageRequest', 'Pager', 'Paginated', 'parse_link_header']
-  class BodyCursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', stop_on_empty: 'bool' = True) -> 'None'
+  __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageLimit', 'PageRequest', 'Pager', 'Paginated', 'WritingPager', 'parse_link_header']
+  class BodyCursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field put: Callable[[B, str], B]
+      field write: Writer[B] | None = None
       field stop_on_empty: bool = True
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class BodyOffset(Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]') -> 'None'
+  class BodyOffset(Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]', write: 'Writer[B] | None' = None) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field offset: Callable[[B], int]
       field put: Callable[[B, int], B]
+      field write: Writer[B] | None = None
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Cursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', stop_on_empty: 'bool' = True) -> 'None'
+  class Cursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field param: str
+      field write: Writer[B] | None = None
       field stop_on_empty: bool = True
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
@@ -256,22 +261,22 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Offset(Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', start: 'int' = 0) -> 'None'
+  class Offset(Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', start: 'int' = 0, write: 'Writer[B] | None' = None) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field param: str = 'offset'
       field start: int = 0
+      field write: Writer[B] | None = None
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
   class PageLimit(object)(max_pages: 'int', on_limit: "Literal['raise', 'stop']" = 'raise') -> 'None'
       field max_pages: int
       field on_limit: Literal['raise', 'stop'] = 'raise'
-  class PageRequest(Generic)(url: 'str | Template', params: 'Mapping[str, object] | None' = None, body: 'B | None' = None, write: 'Writer[B] | None' = None) -> 'None'
+  class PageRequest(Generic)(url: 'str | Template', params: 'Mapping[str, object] | None' = None, body: 'B | None' = None) -> 'None'
       field url: str | Template
       field params: Mapping[str, object] | None = None
       field body: B | None = None
-      field write: Writer[B] | None = None
       def with_body(self, body: 'B') -> 'PageRequest[B]'
       def with_param(self, name: 'str', value: 'object') -> 'PageRequest[B]'
   class Pager(Protocol)(*args, **kwargs)
@@ -281,6 +286,8 @@
   class Paginated(Protocol)(*args, **kwargs)
       def collect(self, *, max_items: 'int | None' = None) -> 'list[I]'
       def pages(self) -> 'AsyncIterator[P]'
+  class WritingPager(Pager, Protocol)(*args, **kwargs)
+      property write
   def parse_link_header(value: 'str') -> 'list[Link]'
   '''
 # ---
@@ -303,7 +310,10 @@
   def decode(content: 'bytes', type_: 'TypeForm[T]', *, strict: 'bool' = True) -> 'T'
   def decoder(type_: 'TypeForm[T]', *, strict: 'bool' = True, allow_empty_body: 'bool' = False, refusal_check: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
   def encoder(type_: 'TypeForm[T]', *, drop_none: 'bool' = False) -> 'Writer[T]'
-  def to_builtins(value: 'object', *, drop_none: 'bool' = False) -> 'object'
+  def to_builtins(value: 'RootModel[Any]', *, drop_none: 'bool' = Ellipsis) -> 'object'
+  def to_builtins(value: 'BaseModel | Mapping[str, object]', *, drop_none: 'bool' = Ellipsis) -> 'dict[str, object]'
+  def to_builtins(value: 'list[T]', *, drop_none: 'bool' = Ellipsis) -> 'list[object]'
+  def to_builtins(value: 'object', *, drop_none: 'bool' = Ellipsis) -> 'object'
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.ratelimit]
@@ -463,8 +473,11 @@
       def aclose(self) -> 'None'
       def delete(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
       def get(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
-      def head(self, url: 'str | Template', *, expect: 'Reader[object] | Expect[object]' = <function nothing at 0x…>, retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'object'
-      def paginate(self, url: 'str | Template | PageRequest[B]', *, expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, B]', retry: 'bool | RetryPolicy' = True, limit: 'PageLimit | None' = None, **options: 'Unpack[PageOptions]') -> 'Paginated[P, I]'
+      def head(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
+      def head(self, url: 'str | Template', *, retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'None'
+      def paginate(self, url: 'str | Template', *, expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, None]', retry: 'bool | RetryPolicy' = True, limit: 'PageLimit | None' = None, **options: 'Unpack[PageOptions]') -> 'Paginated[P, I]'
+      def paginate(self, url: 'str | Template', *, body: 'B | None', expect: 'Reader[P] | Expect[P]', pages: 'WritingPager[P, I, B]', retry: 'bool | RetryPolicy' = True, limit: 'PageLimit | None' = None, **options: 'Unpack[PageOptions]') -> 'Paginated[P, I]'
+      def paginate(self, url: 'str | Template', *, json: 'B | None', expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, B]', retry: 'bool | RetryPolicy' = True, limit: 'PageLimit | None' = None, **options: 'Unpack[PageOptions]') -> 'Paginated[P, I]'
       def patch(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
       def post(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
       def put(self, url: 'str | Template', *, expect: 'Reader[T] | Expect[T]', retry: 'bool | RetryPolicy' = True, follow_redirects: 'bool | None' = None, cache_ttl: 'float | None' = None, **options: 'Unpack[RequestOptions]') -> 'T'
@@ -472,19 +485,21 @@
       def with_options(self, **options: 'Unpack[ViewOptions]') -> 'Self'
   class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
   class BearerAuth(StaticHeaderAuth)(token: 'str') -> 'None'
-  class BodyCursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', stop_on_empty: 'bool' = True) -> 'None'
+  class BodyCursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field put: Callable[[B, str], B]
+      field write: Writer[B] | None = None
       field stop_on_empty: bool = True
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class BodyOffset(Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]') -> 'None'
+  class BodyOffset(Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]', write: 'Writer[B] | None' = None) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field offset: Callable[[B], int]
       field put: Callable[[B, int], B]
+      field write: Writer[B] | None = None
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
@@ -519,10 +534,11 @@
       def encoder(self, type_: 'TypeForm[T]', /) -> 'Callable[[T], bytes]'
       property errors
       property media_type
-  class Cursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', stop_on_empty: 'bool' = True) -> 'None'
+  class Cursor(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field param: str
+      field write: Writer[B] | None = None
       field stop_on_empty: bool = True
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
@@ -586,11 +602,12 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Offset(Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', start: 'int' = 0) -> 'None'
+  class Offset(Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', start: 'int' = 0, write: 'Writer[B] | None' = None) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field param: str = 'offset'
       field start: int = 0
+      field write: Writer[B] | None = None
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
@@ -599,13 +616,9 @@
       field on_limit: Literal['raise', 'stop'] = 'raise'
   class PageLimitError(ClientError)(message: 'str', *, pages: 'int', **details: 'Unpack[ErrorDetails]') -> 'None'
   class PageOptions(dict)(no signature)
+      closed
       key params: Mapping[str, object] | None (optional)
       key headers: Mapping[str, str] (optional)
-      key body: EncodedBody (optional)
-      key json: object (optional)
-      key data: Mapping[str, object] (optional)
-      key content: Body (optional)
-      key files: UploadFiles (optional)
       key timeout: Timeouts (optional)
       key deadline: float | None (optional)
       key idempotency_key: str (optional)
@@ -649,16 +662,17 @@
   type RefusalCheck = Callable[[httpx2.Response], RefusedError | None]
   class RefusedError(Exception)(message: 'str', *, code: 'str | None' = None, kind: 'type[UpstreamStatusError]' = <class 'headgate.errors.UpstreamStatusError'>) -> 'None'
   class RequestOptions(dict)(no signature)
+      closed
       key params: Mapping[str, object] | None (optional)
       key headers: Mapping[str, str] (optional)
+      key timeout: Timeouts (optional)
+      key deadline: float | None (optional)
+      key idempotency_key: str (optional)
       key body: EncodedBody (optional)
       key json: object (optional)
       key data: Mapping[str, object] (optional)
       key content: Body (optional)
       key files: UploadFiles (optional)
-      key timeout: Timeouts (optional)
-      key deadline: float | None (optional)
-      key idempotency_key: str (optional)
   class ResponseParseError(ClientError)(message: 'str', *, status_code: 'int | None' = None, content_type: 'str | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
       property content_type
       property status_code

@@ -165,10 +165,10 @@ async def test_a_streams_last_event_id_joins_the_calls_own_headers() -> None:
 
 
 async def test_paginate_refuses_a_request_body_with_its_reason() -> None:
-    """Refuse a body option on ``paginate``, whose body rides a ``PageRequest``, saying so."""
-    message = r"^paginate takes no body option: a walk of POSTs passes its body in a PageRequest$"
+    """Refuse a body option no pager can rewrite on ``paginate``, naming the ones a walk takes."""
+    message = r"^paginate takes no data=, content= or files=: a walk of POSTs sends body= or json=$"
     with pytest.raises(ValueError, match=message):
-        _client(Script()).paginate("orders", expect=nothing, pages=_ONE_PAGE, json={"a": 1})
+        _client(Script()).paginate("orders", expect=nothing, pages=_ONE_PAGE, data={"a": 1})  # ty: ignore[no-matching-overload]
 
 
 async def test_paginate_sends_each_page_once_with_retry_false() -> None:

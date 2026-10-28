@@ -32,11 +32,18 @@ import asyncio
 import contextlib
 import copy
 import functools
+import sys
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Literal, Self, TypedDict, Unpack, overload
+from typing import TYPE_CHECKING, Literal, Self, Unpack, overload
 
 import httpx2
+
+# A closed TypedDict (PEP 728) refuses a keyword it does not name, so a stray or misspelled option is a type error.
+if sys.version_info >= (3, 15):
+    from typing import TypedDict
+else:
+    from typing_extensions import TypedDict
 
 from headgate._auth import failed_on_auth_hop
 from headgate._body import read_capped, read_head
@@ -94,7 +101,7 @@ from headgate.errors import (
     ForbiddenDestinationError,
     RateLimitError,
 )
-from headgate.pagination import PageRequest
+from headgate.pagination import PageRequest, WritingPager
 from headgate.pagination._paginated import PageWalk
 from headgate.ratelimit import UNLIMITED
 from headgate.ratelimit._budget import BudgetPausedError
@@ -107,7 +114,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
     from headgate._options import Route
-    from headgate._request_body import Body, EncodedBody, UploadFiles
+    from headgate._request_body import Body, EncodedBody, UploadFiles, Writer
     from headgate._responses import RefusalCheck
     from headgate.breaker._breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
@@ -131,15 +138,25 @@ _STREAM_ERROR_HEAD_BYTES = 4096
 #: past ``max_redirects`` (the origin answered every hop; the loop is one URL's configuration, as a 4xx is).
 _LOCAL_FAILURES = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2.PoolTimeout, httpx2.TooManyRedirects)
 
-#: The request options that make a body, which a page (a GET) cannot carry.
-_BODY_OPTIONS = ("body", "json", "data", "content", "files")
+#: The request options that make a body a walk cannot rewrite page by page, so ``paginate`` refuses them.
+_UNPAGEABLE_BODIES = ("data", "content", "files")
 
 #: The option groups a client gets when it passes none: frozen, so one instance serves every client.
 _DEFAULT_POLICY = TransportPolicy()
 _DEFAULT_HTTP = HttpOptions()
 
 
-class RequestOptions(TypedDict, total=False):
+class _SendOptions(TypedDict, total=False):
+    """The per-call options every request takes, a verb's, a stream's or a page's: all of them but the body."""
+
+    params: Mapping[str, object] | None
+    headers: Mapping[str, str]
+    timeout: Timeouts
+    deadline: float | None
+    idempotency_key: str
+
+
+class RequestOptions(_SendOptions, total=False, closed=True):
     """The per-call options a verb takes beyond its URL, ``expect=`` and the three explicit overrides.
 
     * ``params``: the query, ``Mapping[str, object]`` so that a client can pass a TypedDict (a TypedDict is assignable
@@ -161,27 +178,36 @@ class RequestOptions(TypedDict, total=False):
       ``IdempotencyKeys`` header (``Idempotency-Key`` by default).
     """
 
-    params: Mapping[str, object] | None
-    headers: Mapping[str, str]
     body: EncodedBody
     json: object
     data: Mapping[str, object]
     content: Body
     files: UploadFiles
-    timeout: Timeouts
-    deadline: float | None
-    idempotency_key: str
 
 
-class PageOptions(RequestOptions, total=False):
-    """The per-page options :meth:`AsyncBaseClient.paginate` takes: :class:`RequestOptions`, plus the two a verb names.
+class _PerPage(_SendOptions, total=False):
+    """The options :meth:`AsyncBaseClient.paginate` applies to each page: every request's, plus two a verb names."""
+
+    follow_redirects: bool | None
+    cache_ttl: float | None
+
+
+class PageOptions(_PerPage, total=False, closed=True):
+    """The per-page options :meth:`AsyncBaseClient.paginate` takes: :class:`RequestOptions` but the body, plus two more.
+
+    A walk's body is a keyword of its own, ``body=`` or ``json=``, since its type is the pager's. The two more are the
+    ones a verb names:
 
     * ``follow_redirects``: ``False`` makes a page's redirect raise as its 3xx, as on a verb.
     * ``cache_ttl``: each page's cache lifetime, as on a verb.
     """
 
-    follow_redirects: bool | None
-    cache_ttl: float | None
+
+class _WalkOptions[B](_PerPage, total=False, closed=True):
+    """What :meth:`AsyncBaseClient.paginate`'s implementation takes: the per-page options, and the walk's body."""
+
+    body: B
+    json: B
 
 
 @dataclass(frozen=True, slots=True)
@@ -488,15 +514,50 @@ class AsyncBaseClient:
             options["headers"] = {**options.get("headers", {}), "Last-Event-ID": last_event_id}
         return self._streamed(_Call(method, url, options, retry=retry, follow_redirects=follow_redirects))
 
+    @overload
+    def paginate[P, I](
+        self,
+        url: str | Template,
+        *,
+        expect: Reader[P] | Expect[P],
+        pages: Pager[P, I, None],
+        retry: bool | RetryPolicy = True,
+        limit: PageLimit | None = None,
+        **options: Unpack[PageOptions],
+    ) -> Paginated[P, I]: ...
+    @overload
     def paginate[P, I, B](
         self,
-        url: str | Template | PageRequest[B],
+        url: str | Template,
         *,
+        body: B | None,
+        expect: Reader[P] | Expect[P],
+        pages: WritingPager[P, I, B],
+        retry: bool | RetryPolicy = True,
+        limit: PageLimit | None = None,
+        **options: Unpack[PageOptions],
+    ) -> Paginated[P, I]: ...
+    @overload
+    def paginate[P, I, B](
+        self,
+        url: str | Template,
+        *,
+        json: B | None,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, B],
         retry: bool | RetryPolicy = True,
         limit: PageLimit | None = None,
         **options: Unpack[PageOptions],
+    ) -> Paginated[P, I]: ...
+    def paginate[P, I, B](
+        self,
+        url: str | Template,
+        *,
+        expect: Reader[P] | Expect[P],
+        pages: Pager[P, I, B],
+        retry: bool | RetryPolicy = True,
+        limit: PageLimit | None = None,
+        **options: Unpack[_WalkOptions[B]],
     ) -> Paginated[P, I]:
         """Return the pages *pages* follows from *url*, each read through *expect*, iterated lazily.
 
@@ -506,36 +567,32 @@ class AsyncBaseClient:
         other. Iterating again starts again from the first page. ``retry=``, ``follow_redirects=``, ``cache_ttl=`` and
         the request options apply to every page, as they do to one :meth:`get`.
 
-        A walk of POSTs passes its first request as *url*: a :class:`~headgate.pagination.PageRequest` with a
-        ``body``, the caller's own value, which a pager (:class:`~headgate.BodyCursor`, :class:`~headgate.BodyOffset`)
-        rewrites for each next page. Each page's body is sent as ``body=write(body)``, or as ``json=`` when the
-        request has no ``write``. A page is then a :meth:`post` in every respect: in particular it is re-sent only
-        when that is safe, unless ``retry=`` says otherwise.
+        A walk of POSTs passes its body as :meth:`post` does, as ``json=`` or ``body=``, either ``None`` for no body.
+        ``json=`` is builtins, sent as JSON. ``body=`` is the caller's own value, which the pager's ``write`` (a codec's
+        ``encoder``, see :class:`~headgate.pagination.WritingPager`) encodes for each page: the writer belongs to the
+        endpoint, like the reader and the pager, and a pager that rewrites the body (:class:`~headgate.BodyCursor`,
+        :class:`~headgate.BodyOffset`) needs the value, not its bytes. A page with a body is then a :meth:`post` in
+        every respect: in particular it is re-sent only when that is safe, unless ``retry=`` says otherwise.
 
         *limit* is a page budget (:class:`~headgate.PageLimit`): at most ``max_pages`` pages are fetched. When more
         would follow, the walk raises :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or
         with ``on_limit="stop"`` ends there. A walk that ends within the budget is unaffected.
 
-        :raises ValueError: for a body option (``body``, ``json``, ``data``, ``content``, ``files``), as a walk's body
-            is its first request's; for ``params=`` beside a ``PageRequest``, which carries its own query; and for an
-            idempotency key (``idempotency_key=``, or the policy's header in ``headers=``) on a walk of POSTs, as one
-            key on pages with different bodies would have the server replay the first page's answer.
+        :raises ValueError: for ``data=``, ``content=`` or ``files=``, a body no pager can rewrite, and for ``json=``
+            and ``body=`` together, both of which the overloads refuse too; for a walk its pager refuses
+            (:meth:`~headgate.pagination.Pager.first` runs here, once); and for a first page with a body that cannot
+            be sent as the walk says: a ``body=`` whose pager has no ``write``, a ``json=`` whose pager has one, or an
+            idempotency key (``idempotency_key=``, or the policy's header in ``headers=``), as one key on pages with
+            different bodies would have the server replay the first page's answer. A later page with a body is held
+            to the same rules, and raises from the iteration.
         """
-        if any(name in options for name in _BODY_OPTIONS):
-            msg = "paginate takes no body option: a walk of POSTs passes its body in a PageRequest"
-            raise ValueError(msg)
-        call_options = options.copy()
-        params = call_options.pop("params", None)
-        if not isinstance(url, PageRequest):
-            first: PageRequest[B] = PageRequest(url, params)
-        elif "params" in options:
-            msg = "a PageRequest carries its own query, so paginate takes no params= beside one"
-            raise ValueError(msg)
-        else:
-            first = url
-        if first.body is not None and self._one_key_for_every_page(options):
-            msg = "an idempotency key would be sent with every page's body; a walk of POSTs takes none"
-            raise ValueError(msg)
+        body, as_json, call_options = _walk_body(**options)
+        # How a body is sent is the walk's: the pager's writer encodes every page's, whatever request the pager returns.
+        write = pages.write if isinstance(pages, WritingPager) else None
+        first = pages.first(PageRequest(url, call_options.pop("params", None), body))
+        fixed_key = self._one_key_for_every_page(call_options)
+        if first.body is not None:
+            _check_post(write, as_json=as_json, fixed_key=fixed_key)
         spec: Expect[P] = expect if isinstance(expect, Expect) else Expect(expect)
         answers = {status: _paired(read) for status, read in spec.answers.items()}
         paired = Expect(_paired(spec.ok), answers, headers=spec.headers, accept=spec.accept)
@@ -546,11 +603,10 @@ class AsyncBaseClient:
             # A page's follow_redirects and cache_ttl land on the verb's own parameters of those names.
             if request.body is None:
                 return await self.get(request.url, expect=paired, retry=retry, **page_options)
-            if request.write is None:
-                page_options["json"] = request.body
-            else:
-                page_options["body"] = request.write(request.body)
-            return await self.post(request.url, expect=paired, retry=retry, **page_options)
+            _check_post(write, as_json=as_json, fixed_key=fixed_key)
+            if write is None:
+                return await self.post(request.url, expect=paired, retry=retry, json=request.body, **page_options)
+            return await self.post(request.url, expect=paired, retry=retry, body=write(request.body), **page_options)
 
         return PageWalk(fetch, pages, first, source=self._source, limit=limit)
 
@@ -1018,6 +1074,39 @@ def _refusal(check: RefusalCheck | None, resp: httpx2.Response) -> RefusedError 
         return check(resp)
     except RefusedError as refused:
         return refused
+
+
+def _walk_body[B](
+    body: B | None = None, json: B | None = None, **page: Unpack[PageOptions]
+) -> tuple[B | None, bool, PageOptions]:
+    """Split a walk's options into its body, whether it is sent as JSON, and the options every page is sent with.
+
+    A keyword given as ``None`` is no body, as on a verb, so only two bodies are refused, as is a body no pager can
+    rewrite (``data=``, ``content=``, ``files=``, which only an untyped call can pass).
+    """
+    if any(name in page for name in _UNPAGEABLE_BODIES):
+        msg = "paginate takes no data=, content= or files=: a walk of POSTs sends body= or json="
+        raise ValueError(msg)
+    if body is not None and json is not None:
+        msg = "paginate takes body= or json=, not both"
+        raise ValueError(msg)
+    return (json if body is None else body), json is not None, page
+
+
+def _check_post[B](write: Writer[B] | None, *, as_json: bool, fixed_key: bool) -> None:
+    """Refuse a page's body that cannot be sent as the walk says: by the pager's ``write``, or as JSON for ``json=``.
+
+    *fixed_key* is whether the call fixes one idempotency key for every page, which a page with a body cannot carry.
+    """
+    if as_json and write is not None:
+        msg = "json= is sent as JSON, so its pager takes no write="
+        raise ValueError(msg)
+    if not as_json and write is None:
+        msg = "a POSTed body is encoded by its pager's write=, so the pager needs one; send builtins as json="
+        raise ValueError(msg)
+    if fixed_key:
+        msg = "an idempotency key would be sent with every page's body; a walk of POSTs takes none"
+        raise ValueError(msg)
 
 
 def _paired[T](read: Reader[T]) -> Reader[tuple[T, httpx2.Response]]:

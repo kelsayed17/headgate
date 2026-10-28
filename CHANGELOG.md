@@ -6,6 +6,44 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+A walk of POSTs is written as a `post` is: `paginate()` takes its body as `body=` or `json=`, and the writer that
+encodes a `body=` belongs to the pager, built once with the endpoint's reader. This is a minor release: see
+**Changed** and **Removed**.
+
+### Added
+
+- `paginate()` takes a walk's body as `body=` (your own value) or `json=` (builtins, sent as JSON), as `post()` does;
+  either as `None` is no body, so an optional body is one call. Overloads make a GET walk under a body pager, a body
+  walk under a GET-only pager, a `body=` under a pager with no `write`, a body of another type than the pager's, and
+  `body=` beside `json=` type errors. See [Walks of POSTs](docs/pagination.md#walks-of-posts).
+- `write=` on `Cursor`, `Offset`, `BodyCursor` and `BodyOffset`: the writer (a codec's `encoder`) that encodes a
+  walk's `body=` for every page, whatever request the pager returns. The new `WritingPager` protocol is a `Pager`
+  with that `write` property, for a custom pager walked with `body=`.
+
+### Changed
+
+- `RequestOptions` and `PageOptions` are closed TypedDicts (PEP 728), so a keyword a verb or `paginate()` does not
+  name, such as a misspelled option, is a type error. So is a TypedDict that subclasses one of them to add keys: declare
+  your own keys in a TypedDict of your own and pass them beside the options, not inside them.
+- `PageOptions` no longer has the body keys (`body`, `json`, `data`, `content`, `files`), which `paginate()` refused
+  at runtime; `paginate()` takes `body=` and `json=` itself. A dict typed `RequestOptions` that is splatted into
+  `paginate()` should be typed `PageOptions`.
+- A walk's body is sent as its keyword says, and a mismatch raises `ValueError` instead of being sent another way:
+  `body=` and `json=` together; `data=`, `content=` or `files=` ("paginate takes no data=, content= or files=: a walk
+  of POSTs sends body= or json="); a `body=` whose pager has no `write`; and a `json=` whose pager has one. Every page
+  with a body is held to these rules and to the refusal of a fixed idempotency key, not only the first.
+- `paginate()` calls the pager's `first()` once, when the walk is built, and every iteration starts from the request it
+  returned, so a custom `first()` must be a function of the request alone (nothing that should change between
+  iterations, such as the time). A pager's refusals (`LinkHeader` or `NextUrl` given a body, `BodyCursor` or
+  `BodyOffset` given none) now raise from the `paginate()` call rather than from the first iteration.
+
+### Removed
+
+- `paginate()` no longer takes a `PageRequest` as its URL. Write `paginate(url, params=params, body=body, ...)` for
+  `paginate(PageRequest(url, params, body=body, write=write), ...)` and put `write=` on the pager, or pass `json=body`
+  for a request that had no `write`. `PageRequest` stays public as what a `Pager` reads and returns.
+- `PageRequest.write`: how a body is sent is the walk's, set by the pager's `write`, not each request's.
+
 ## [0.8.0] - 2026-10-27
 
 Pages endpoints whose query is a POST body: `paginate()` walks POSTs, and `BodyCursor` and `BodyOffset` carry the page

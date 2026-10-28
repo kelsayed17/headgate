@@ -17,12 +17,15 @@ import importlib
 import inspect
 import pkgutil
 import re
-from typing import TYPE_CHECKING, TypeAliasType, is_typeddict
+from typing import TYPE_CHECKING, TypeAliasType, get_overloads
 
 import pytest
 
+# typing's is_typeddict misses a typing_extensions TypedDict, which a closed one (PEP 728) is before 3.15.
+from typing_extensions import is_typeddict
+
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from syrupy.assertion import SnapshotAssertion
 
@@ -72,6 +75,11 @@ def _signature(obj: Callable[..., object]) -> str:
         return "(no signature)"
 
 
+def _forms(func: Callable[..., object]) -> Sequence[Callable[..., object]]:
+    """Return the signatures *func* is called through: its overloads when it has any, else itself."""
+    return get_overloads(func) or [func]
+
+
 def _field_default(field: dataclasses.Field[object]) -> str:
     """Return a dataclass field's default as text: its value, ``<factory>``, or nothing when it is required."""
     if field.default is not dataclasses.MISSING:
@@ -82,7 +90,7 @@ def _field_default(field: dataclasses.Field[object]) -> str:
 
 
 def _members(cls: type) -> list[str]:
-    """Render the public methods, properties and enum members *cls* defines itself."""
+    """Render the public methods (an overloaded one as its overloads), properties and enum members *cls* defines."""
     lines: list[str] = []
     if issubclass(cls, enum.Enum):
         lines.extend(f"    {member.name} = {member.value!r}" for member in cls)
@@ -93,9 +101,10 @@ def _members(cls: type) -> list[str]:
         if isinstance(member, property):
             lines.append(f"    property {name}")
         elif isinstance(member, classmethod | staticmethod):
-            lines.append(f"    {type(member).__name__} {name}{_signature(member.__func__)}")
+            kind = type(member).__name__
+            lines.extend(f"    {kind} {name}{_signature(form)}" for form in _forms(member.__func__))
         elif callable(member):
-            lines.append(f"    def {name}{_signature(member)}")
+            lines.extend(f"    def {name}{_signature(form)}" for form in _forms(member))
     return lines
 
 
@@ -108,6 +117,8 @@ def _render_class(name: str, cls: type) -> list[str]:
     elif is_typeddict(cls):
         annotations = annotationlib.get_annotations(cls, format=annotationlib.Format.STRING)
         required = getattr(cls, "__required_keys__", frozenset())
+        if getattr(cls, "__closed__", False):
+            lines.append("    closed")
         lines.extend(
             f"    key {key}: {kind}{'' if key in required else ' (optional)'}" for key, kind in annotations.items()
         )
@@ -128,7 +139,7 @@ def _render(module_name: str) -> str:
         elif isinstance(obj, type):
             lines.extend(_render_class(name, obj))
         elif callable(obj):
-            lines.append(f"def {name}{_signature(obj)}")
+            lines.extend(f"def {name}{_signature(form)}" for form in _forms(obj))
         else:
             lines.append(f"{name} = {_masked(repr(obj))}")
     return "\n".join(lines)

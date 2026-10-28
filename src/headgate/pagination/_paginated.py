@@ -92,6 +92,9 @@ class PageWalk[P, I, B]:
     ) -> None:
         """Fetch pages with *fetch*, linked by *pager*, starting at *first*, for the client named *source*.
 
+        *first* is the first page's request as the pager prepared it (its :meth:`~Pager.first`), so every iteration
+        starts from it and the pager's refusals were raised when the walk was built.
+
         *limit* is the walk's page budget, or ``None`` for none.
         """
         self._fetch = fetch
@@ -106,7 +109,7 @@ class PageWalk[P, I, B]:
 
     async def pages(self) -> AsyncIterator[P]:
         """Iterate the pages, in order."""
-        request: PageRequest[B] | None = self._pager.first(self._first)
+        request: PageRequest[B] | None = self._first
         seen: set[str] = set()
         while request is not None:
             if self._limit is not None and len(seen) == self._limit.max_pages:

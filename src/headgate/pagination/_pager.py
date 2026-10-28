@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from headgate.pagination._link import next_link
 
@@ -34,30 +34,38 @@ if TYPE_CHECKING:
 
     from headgate._request_body import Writer
 
-__all__ = ["BodyCursor", "BodyOffset", "Cursor", "LinkHeader", "NextUrl", "Offset", "PageRequest", "Pager"]
+__all__ = [
+    "BodyCursor",
+    "BodyOffset",
+    "Cursor",
+    "LinkHeader",
+    "NextUrl",
+    "Offset",
+    "PageRequest",
+    "Pager",
+    "WritingPager",
+]
 
 
 @dataclass(frozen=True, slots=True)
 class PageRequest[B = None]:
-    """The request for one page: its URL (as a verb takes it), its query, which replaces the call's ``params=``.
+    """The request for one page, as a :class:`Pager` reads and returns it: its URL (as a verb takes it), its query.
 
-    A request with no ``body`` is a GET. One with a ``body`` is a POST of ``write(body)`` (a codec's ``encoder``), or
-    of the body as JSON without ``write``. The body stays the caller's own value, of type ``B``, so that a pager can
-    rewrite it for the next page; ``write`` carries over to every page.
+    ``paginate`` builds the first from its URL, ``params=`` and body; a pager derives each next one from it.
+
+    A request with no ``body`` is a GET, and one with a ``body`` a POST. The body stays the caller's own value, of type
+    ``B``, so that a pager can rewrite it for the next page; how it is sent is the walk's, not the request's (see
+    :class:`WritingPager`).
     """
 
     url: str | Template
     params: Mapping[str, object] | None = None
     body: B | None = None
-    write: Writer[B] | None = None
 
     def __post_init__(self) -> None:
-        """Freeze the query, and refuse a ``write`` with no body to write."""
+        """Freeze the query."""
         if self.params is not None:
             object.__setattr__(self, "params", MappingProxyType(dict(self.params)))
-        if self.write is not None and self.body is None:
-            msg = "write= encodes a request body, so it needs one"
-            raise ValueError(msg)
 
     def with_param(self, name: str, value: object) -> PageRequest[B]:
         """Return this request with the query parameter *name* set to *value*."""
@@ -75,7 +83,12 @@ class Pager[P, I, B = None](Protocol):
     """
 
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
-        """Return the request for the first page, given the one the caller wrote."""
+        """Return the request for the first page, given the one the caller wrote.
+
+        It runs once, when :meth:`~headgate.AsyncBaseClient.paginate` builds the walk, and every iteration starts from
+        what it returned, so it is a function of *request* alone: nothing that should change between iterations, such
+        as the time, belongs here. Its refusals raise from ``paginate``.
+        """
         ...
 
     def page_items(self, page: P) -> Iterable[I]:
@@ -84,6 +97,21 @@ class Pager[P, I, B = None](Protocol):
 
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return the request for the page after *page* (fetched by *request*, answered by *response*), or ``None``."""
+        ...
+
+
+@runtime_checkable
+class WritingPager[P, I, B](Pager[P, I, B], Protocol):
+    """A :class:`Pager` that writes the walk's request bodies: ``write`` encodes a ``body=`` for every page.
+
+    A walk given ``body=`` needs one, since the body is the caller's own value, and a walk given ``json=`` needs one
+    whose ``write`` is ``None``, since builtins are sent as JSON. :class:`Cursor`, :class:`Offset`,
+    :class:`BodyCursor` and :class:`BodyOffset` are writing pagers; a pager of GETs is not one.
+    """
+
+    @property
+    def write(self) -> Writer[B] | None:
+        """The writer (a codec's ``encoder``) that encodes each page's body, or ``None`` for one sent as JSON."""
         ...
 
 
@@ -109,7 +137,7 @@ def _check_get[B](request: PageRequest[B], pager: str) -> None:
 def _posted[B](request: PageRequest[B], pager: str) -> B:
     """Return *request*'s body, refusing a request with none: *pager* rewrites the body, so its walk is POSTs."""
     if request.body is None:
-        msg = f"{pager} rewrites the request body, so its walk needs one: pass a PageRequest with a body as the url"
+        msg = f"{pager} rewrites the request body, so its walk needs one: pass body= or json="
         raise ValueError(msg)
     return request.body
 
@@ -121,12 +149,14 @@ class Cursor[P, I, B = None]:
     The last page is the one whose ``next`` returns ``None`` or ``""``, or one with no items: a cursor that advances
     while returning nothing makes no progress. Set ``stop_on_empty=False`` for an endpoint that sends empty pages
     mid-walk. ``B`` is the type of the request body for a walk of POSTs (``Cursor[Page, Item, Query]``), and
-    ``None`` for a walk of GETs.
+    ``None`` for a walk of GETs. ``write`` encodes a ``body=`` on each page (a codec's ``encoder``); a walk of POSTs
+    without one sends ``json=``, and a walk of GETs leaves it unused.
     """
 
     items: Callable[[P], Sequence[I]]
     next: Callable[[P], str | None]
     param: str
+    write: Writer[B] | None = None
     stop_on_empty: bool = True
 
     def __post_init__(self) -> None:
@@ -157,13 +187,14 @@ class Offset[P, I, B = None]:
     The offset starts at ``start`` and advances by the number of items each page held. A page holding fewer than
     ``page_size`` items (or none) is the last. The page size itself is the caller's to send, in ``params=`` under
     whatever name the endpoint uses, since that name varies (``limit``, ``per_page``, ``page_size``). ``B`` is the
-    type of the request body for a walk of POSTs, as on :class:`Cursor`.
+    type of the request body for a walk of POSTs, and ``write`` its writer, as on :class:`Cursor`.
     """
 
     items: Callable[[P], Sequence[I]]
     page_size: int
     param: str = "offset"
     start: int = 0
+    write: Writer[B] | None = None
 
     def __post_init__(self) -> None:
         """Refuse a page size below one, a negative start and an empty parameter name."""
@@ -257,16 +288,18 @@ class NextUrl[P, I]:
 class BodyCursor[P, I, B]:
     """Pages linked by an opaque cursor carried in the POSTed body: ``put`` writes it into the next page's body.
 
-    For an endpoint whose query is a request body (a search API, a JSON-RPC call): the walk POSTs the body of the
-    :class:`PageRequest` the caller passed as the URL, and each next page POSTs ``put(body, cursor)``, the same body
-    carrying the cursor ``next`` read from the page. ``put`` returns a new body, leaving the one it was given as it
-    was. The last page is the one whose ``next`` returns ``None`` or ``""``, or one with no items
-    (``stop_on_empty=False`` follows the cursor past an empty page).
+    For an endpoint whose query is a request body (a search API, a JSON-RPC call): the walk POSTs the body the caller
+    passed ``paginate``, and each next page POSTs ``put(body, cursor)``, the same body carrying the cursor ``next``
+    read from the page. ``put`` returns a new body, leaving the one it was given as it was. ``write`` encodes each
+    page's body (a codec's ``encoder``); without it the body is sent as JSON, so it is builtins. The last page is the
+    one whose ``next`` returns ``None`` or ``""``, or one with no items (``stop_on_empty=False`` follows the cursor
+    past an empty page).
     """
 
     items: Callable[[P], Sequence[I]]
     next: Callable[[P], str | None]
     put: Callable[[B, str], B]
+    write: Writer[B] | None = None
     stop_on_empty: bool = True
 
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
@@ -296,13 +329,14 @@ class BodyOffset[P, I, B]:
     ``offset`` reads the offset from a body and ``put`` returns a new body at another one. The walk starts at the
     offset the first request's body carries, and advances by the number of items each page held. A page holding fewer
     than ``page_size`` items (or none) is the last. The page size itself is the caller's to put in the body, as it is
-    the caller's to put in :class:`Offset`'s query.
+    the caller's to put in :class:`Offset`'s query. ``write`` encodes each page's body, as for :class:`BodyCursor`.
     """
 
     items: Callable[[P], Sequence[I]]
     page_size: int
     offset: Callable[[B], int]
     put: Callable[[B, int], B]
+    write: Writer[B] | None = None
 
     def __post_init__(self) -> None:
         """Refuse a page size below one."""
