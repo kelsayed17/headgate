@@ -6,6 +6,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-02
+
+A client whose wire is not JSON names its reader on one line: `body_reader` builds a reader from a bytes decoder in
+any format. Nothing existing changes behavior; this is a minor release because it adds to the public API.
+
 ### Added
 
 - `body_reader(decode, *, empty=None, refusal_check=None)` builds a reader from a bytes decoder in any format (an
@@ -528,7 +533,8 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/kelsayed17/headgate/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/kelsayed17/headgate/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/kelsayed17/headgate/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/kelsayed17/headgate/compare/v0.6.0...v0.7.0
