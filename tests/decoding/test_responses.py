@@ -14,9 +14,12 @@ import httpx2
 import msgspec
 import pytest
 
+from headgate import HttpOptions, body_reader
 from headgate._responses import Expect, RefusedError, as_bytes, json_reader, nothing
-from headgate.errors import DecodeError, RateLimitError, UpstreamStatusError
+from headgate.errors import DecodeError, RateLimitError, ResponseParseError, UpstreamStatusError
 from headgate.msgspec import decode, decoder
+from headgate.testing import FakeTransport
+from tests.support.clients import StubClient
 from tests.support.responses import response
 
 
@@ -109,6 +112,48 @@ def test_a_json_reader_raises_the_refused_its_check_returns() -> None:
     with pytest.raises(RefusedError, match="refused: QUOTA"):
         read(response(b'{"status": "QUOTA"}'))
     assert read(response(b'{"status": "OK"}')) == _Env(status="OK")
+
+
+def _fixed_width(content: bytes) -> list[tuple[str, int]]:
+    """Decode a fixed-width TXT file of a 4-character name then a count: a bytes decoder in no codec's format."""
+    return [(line[:4].decode().strip(), int(line[4:])) for line in content.splitlines()]
+
+
+def test_a_body_reader_hands_decode_the_body_bytes() -> None:
+    """Return what *decode* makes of the body, whatever its format."""
+    assert body_reader(_fixed_width)(response(b"ab    1\ncd   22")) == [("ab", 1), ("cd", 22)]
+
+
+def test_a_body_reader_hands_decode_an_empty_body_as_it_is_by_default() -> None:
+    """Substitute nothing for an empty body unless ``empty`` is given, so no format's empty value is assumed."""
+    seen: list[bytes] = []
+    body_reader(seen.append)(response(b" \n"))
+    assert seen == [b" \n"]
+
+
+def test_a_body_reader_reads_an_empty_body_as_empty_when_given() -> None:
+    """Hand *decode* the bytes ``empty`` names for an empty body, and the body itself otherwise."""
+    read = body_reader(_fixed_width, empty=b"")
+    assert read(response(b"  \n ")) == []
+    assert read(response(b"ab    1")) == [("ab", 1)]
+
+
+def test_a_body_reader_raises_the_refused_its_check_returns() -> None:
+    """Run ``refusal_check`` on what *decode* returned, as ``json_reader`` does."""
+    read = body_reader(lambda content: _Env(status=content.decode()), refusal_check=_quota_check)
+    with pytest.raises(RefusedError, match="refused: QUOTA"):
+        read(response(b"QUOTA"))
+    assert read(response(b"OK")) == _Env(status="OK")
+
+
+async def test_a_body_readers_decode_failure_is_a_parse_error() -> None:
+    """Report a hand-written decoder's ``ValueError`` on a 2xx as ``ResponseParseError``, as any reader's."""
+    fake = FakeTransport().reply("GET", "/rows", httpx2.Response(200, content=b"ab  one"))
+    client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
+
+    with pytest.raises(ResponseParseError) as raised:
+        await client.get("rows", expect=body_reader(_fixed_width))
+    assert isinstance(raised.value.__cause__, ValueError)
 
 
 def test_as_bytes_hands_back_the_body_undecoded() -> None:

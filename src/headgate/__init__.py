@@ -43,7 +43,17 @@ from headgate._codec import Codec, decode_with, decoder_for, encoder_for
 from headgate._middleware import Middleware, Next
 from headgate._options import HttpOptions, IdempotencyKeys, Route, SecurityOptions, Timeouts, TransportPolicy
 from headgate._request_body import EncodedBody, Writer, json_writer
-from headgate._responses import Expect, Reader, RefusalCheck, RefusedError, as_bytes, event_stream, json_reader, nothing
+from headgate._responses import (
+    Expect,
+    Reader,
+    RefusalCheck,
+    RefusedError,
+    as_bytes,
+    body_reader,
+    event_stream,
+    json_reader,
+    nothing,
+)
 from headgate._view import ViewOptions
 from headgate.breaker import BreakerPolicy
 from headgate.cache import HttpCache
@@ -123,6 +133,7 @@ __all__ = [
     "ViewOptions",
     "Writer",
     "as_bytes",
+    "body_reader",
     "decode_with",
     "decoder_for",
     "encoder_for",

@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from headgate._failures import shorten
 from headgate._request_body import EncodedBody
-from headgate._responses import reader_over
+from headgate._responses import body_reader
 from headgate.errors import DecodeError
 
 if TYPE_CHECKING:
@@ -104,10 +104,10 @@ def decoder_for[T](
     A body *codec* finds malformed or of another type raises :class:`~headgate.errors.DecodeError`, described by the
     codec. ``allow_empty_body`` reads an empty body as an empty array, as *codec* encodes one, for a list-shaped type
     whose provider answers "no data" with nothing; ``refusal_check`` runs on the decoded value, as on
-    :func:`~headgate.json_reader`.
+    :func:`~headgate.body_reader`.
     """
     empty = codec.encoder(list[object])([]) if allow_empty_body else None
-    return reader_over(_translated(codec, codec.decoder(type_)), empty=empty, refusal_check=refusal_check)
+    return body_reader(_translated(codec, codec.decoder(type_)), empty=empty, refusal_check=refusal_check)
 
 
 def encoder_for[T](codec: Codec, type_: TypeForm[T]) -> Writer[T]:

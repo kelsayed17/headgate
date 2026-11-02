@@ -15,7 +15,7 @@ receive an undeclared status. A refusal the provider writes inside a body is rai
 
 This module is codec-free: it imports neither msgspec nor pydantic. The JSON ``decoder`` a client builds its success
 reader with comes from the flavor module it chose, :mod:`headgate.msgspec` or :mod:`headgate.pydantic`, and both build
-on :func:`json_reader`.
+on :func:`body_reader`, as :func:`json_reader` does.
 """
 
 from __future__ import annotations
@@ -39,10 +39,10 @@ __all__ = [
     "RefusedError",
     "accepts",
     "as_bytes",
+    "body_reader",
     "event_stream",
     "json_reader",
     "nothing",
-    "reader_over",
 ]
 
 
@@ -225,40 +225,32 @@ def _media_ranges(accept: str) -> tuple[tuple[str, str], ...]:
     return tuple(ranges)
 
 
-def json_reader[T](
+def body_reader[T](
     decode: Callable[[bytes], T],
+    /,
     *,
-    allow_empty_body: bool = False,
+    empty: bytes | None = None,
     refusal_check: Callable[[T], RefusedError | None] | None = None,
 ) -> Reader[T]:
-    """Build a reader around a JSON bytes-to-value function, for a decoder that is not a :class:`~headgate.Codec`.
+    """Build a reader that decodes the body with *decode*: for a bytes decoder in any format.
 
-    :func:`~headgate.decoder_for`, which every codec's ``decoder`` builds on, shares this reader's empty-body rule and
-    ``refusal_check`` hook, so they behave identically whichever builds the reader.
+    It suits a hand-written decoder over a wire that is not JSON (an ``.xls`` workbook, a fixed-width TXT, a CSV, a
+    ZIP), which its tests feed fixture files without a response. Name the reader once, at module level::
 
-    ``allow_empty_body`` reads an empty body (zero bytes or only whitespace) as the empty array ``[]``. It suits only a
-    list-shaped type, for a provider whose no-data answer is a zero-byte 200 or a 204. For every other provider an empty
-    200 is corruption, and decoding it fails.
+        ALLOTMENTS: Final = body_reader(decode_allotments)
+        STATEMENTS: Final = body_reader(partial(decode_statements, table=Statement))
+
+    A ``ValueError``, ``LookupError``, ``TypeError`` or :class:`~headgate.errors.DecodeError` from *decode* is a body
+    of the wrong shape, which the client raises as :class:`~headgate.errors.ResponseParseError` on a 2xx.
+
+    ``empty`` is what *decode* is handed for an empty body (zero bytes or only whitespace), such as the encoding of an
+    empty array in the body's format. Left ``None``, an empty body is handed over as it is.
 
     ``refusal_check`` runs on the decoded value and returns a :class:`RefusedError` for a refusal written inside a 2xx
     body, or ``None``; the reader raises what it returns. Type a check over a small structural ``Protocol`` naming only
     the envelope fields it reads. Have it refuse only codes every consumer of the endpoint would read as failure (auth,
     quota, rate limit, server, a malformed request, any undocumented code) and leave a code about the subject (an
     unknown instrument, a rejected order) in the value for the caller.
-    """
-    return reader_over(decode, empty=b"[]" if allow_empty_body else None, refusal_check=refusal_check)
-
-
-def reader_over[T](
-    decode: Callable[[bytes], T],
-    *,
-    empty: bytes | None,
-    refusal_check: Callable[[T], RefusedError | None] | None,
-) -> Reader[T]:
-    """Build a reader that decodes the body with *decode*, reading an empty body as *empty* when it is given.
-
-    An empty body is zero bytes or only whitespace. *empty* is the encoding of an empty array in the body's format
-    (``b"[]"`` for JSON), or ``None`` to decode an empty body as it is, which fails for every format worth declaring.
     """
 
     def _read(resp: httpx2.Response, /) -> T:
@@ -271,6 +263,27 @@ def reader_over[T](
         return value
 
     return _read
+
+
+def json_reader[T](
+    decode: Callable[[bytes], T],
+    *,
+    allow_empty_body: bool = False,
+    refusal_check: Callable[[T], RefusedError | None] | None = None,
+) -> Reader[T]:
+    """Build a reader around a JSON bytes-to-value function, for a decoder that is not a :class:`~headgate.Codec`.
+
+    It is :func:`body_reader` with JSON's empty array. :func:`~headgate.decoder_for`, which every codec's ``decoder``
+    builds on, shares this reader's empty-body rule and ``refusal_check`` hook, so they behave identically whichever
+    builds the reader.
+
+    ``allow_empty_body`` reads an empty body (zero bytes or only whitespace) as the empty array ``[]``. It suits only a
+    list-shaped type, for a provider whose no-data answer is a zero-byte 200 or a 204. For every other provider an empty
+    200 is corruption, and decoding it fails.
+
+    ``refusal_check`` is documented on :func:`body_reader`.
+    """
+    return body_reader(decode, empty=b"[]" if allow_empty_body else None, refusal_check=refusal_check)
 
 
 def as_bytes(resp: httpx2.Response, /) -> bytes:
