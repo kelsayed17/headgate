@@ -6,6 +6,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Added
+
+- `body_reader(decode, *, empty=None, refusal_check=None)` builds a reader from a bytes decoder in any format (an
+  `.xls` workbook, a fixed-width TXT, a CSV), so an endpoint names its reader on one module-level line instead of
+  writing a function around the decoder. `json_reader` and every codec's `decoder` build on it. See
+  [Readers](docs/responses.md#readers).
+
 ### Fixed
 
 - The guides and docstrings say what 0.9.0 does. `Idempotency-Key` is opt-in, not sent by default. The options that

@@ -13,7 +13,8 @@ read and capped, because some readers need a header too. headgate ships these:
 | Reader | Returns | For |
 | --- | --- | --- |
 | `decoder(Type)` from `headgate.msgspec` or `headgate.pydantic` | the decoded value | a JSON body |
-| `json_reader(decode)` | what `decode(body_bytes)` returns | a codec of your own |
+| `json_reader(decode)` | what `decode(body_bytes)` returns | a JSON decoder of your own |
+| `body_reader(decode)` | what `decode(body_bytes)` returns | a decoder of your own in any format: XLS, fixed-width TXT, CSV |
 | `as_bytes` | the body, undecoded | CSV, ZIP, PDF, a dump another parser reads |
 | `nothing` | `None` | a void write (`DELETE`, a cancel) or a `HEAD` |
 | `event_stream` | each server-sent event (`event`, `data`, `id`, `retry`), in order | a buffered `text/event-stream` body |
@@ -22,6 +23,22 @@ A reader that finds the body is not the shape it expected raises: a codec raises
 `LookupError` or `TypeError` hand-written code over `response.json()` raises counts the same. On a 2xx the client turns
 it into `ResponseParseError`, naming the status, the request line and the reader's diagnosis. A reader never builds a
 `ClientError` itself: the client does, so the error carries the real status and the client's name.
+
+`body_reader` turns a hand-written bytes decoder, the kind its tests feed fixture files, into a reader. Name each
+reader once, at module level, and pass a fixed argument with `functools.partial`:
+
+```python
+from functools import partial
+from typing import Final
+
+from headgate import body_reader
+
+ALLOTMENTS: Final = body_reader(decode_allotments)
+STATEMENTS: Final = body_reader(partial(decode_statements, table=Statement))
+```
+
+It hands `decode` an empty body as it is, unless `empty=` names the bytes to decode instead, and takes the same
+`refusal_check=` as `json_reader`. `json_reader(decode, allow_empty_body=True)` is `body_reader(decode, empty=b"[]")`.
 
 `nothing` is a claim about the wire, so declare it only for an endpoint documented to send no body you need. Await
 such a call as a statement.
