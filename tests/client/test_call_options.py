@@ -9,7 +9,7 @@ and what the call returned or raised. A POST or PATCH carries an idempotency key
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx2
 import pytest
@@ -167,8 +167,9 @@ async def test_a_streams_last_event_id_joins_the_calls_own_headers() -> None:
 async def test_paginate_refuses_a_request_body_with_its_reason() -> None:
     """Refuse a body option no pager can rewrite on ``paginate``, naming the ones a walk takes."""
     message = r"^paginate takes no data=, content= or files=: a walk of POSTs sends body= or json=$"
+    form: dict[str, Any] = {"data": {"a": 1}}
     with pytest.raises(ValueError, match=message):
-        _client(Script()).paginate("orders", expect=nothing, pages=_ONE_PAGE, data={"a": 1})  # ty: ignore[no-matching-overload]
+        _client(Script()).paginate("orders", expect=nothing, pages=_ONE_PAGE, **form)
 
 
 async def test_paginate_sends_each_page_once_with_retry_false() -> None:

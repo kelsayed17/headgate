@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 import json
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Final, assert_type, override
+from typing import TYPE_CHECKING, Any, Final, assert_type, cast, override
 
 import httpx2
 import msgspec
@@ -569,17 +569,17 @@ async def test_a_json_walk_sends_every_page_with_the_walks_retry_and_options() -
 
 
 #: The body arguments ``paginate`` refuses, each with the reason it gives.
-_BAD_BODY_ARGUMENTS: Final[list[tuple[dict[str, object], str]]] = [
+_BAD_BODY_ARGUMENTS: Final[list[tuple[dict[str, Any], str]]] = [
     ({"json": {}, "body": Query(kind="a", limit=2)}, r"^paginate takes body= or json=, not both$"),
     ({"data": {}}, r"^paginate takes no data=, content= or files=: a walk of POSTs sends body= or json=$"),
 ]
 
 
 @pytest.mark.parametrize(("arguments", "message"), _BAD_BODY_ARGUMENTS, ids=["both", "data"])
-def test_a_bad_body_argument_is_refused(arguments: dict[str, object], message: str) -> None:
+def test_a_bad_body_argument_is_refused(arguments: dict[str, Any], message: str) -> None:
     """Refuse two bodies, and a body no pager can rewrite."""
     with pytest.raises(ValueError, match=message):
-        _Api(_by_body_cursor).client().paginate("search", expect=decoder(Page), pages=QUERY_CURSOR, **arguments)  # ty: ignore[no-matching-overload]
+        _Api(_by_body_cursor).client().paginate("search", expect=decoder(Page), pages=QUERY_CURSOR, **arguments)
 
 
 #: A cursor walk over :class:`Query` bodies with no writer, so a ``body=`` has nothing to encode it.
@@ -597,7 +597,8 @@ def test_a_body_whose_pager_has_no_writer_is_refused() -> None:
 def test_json_whose_pager_has_a_writer_is_refused() -> None:
     """Refuse a ``json=`` under a pager with a ``write`` when the walk is built, rather than encode builtins with it."""
     query: dict[str, object] = {"kind": "a"}
-    pages = Cursor[Page, Item, dict[str, object]](items=items_of, next=cursor_of, param="after", write=QUERY)  # ty: ignore[invalid-argument-type]
+    wrong_writer = cast("Any", QUERY)
+    pages = Cursor[Page, Item, dict[str, object]](items=items_of, next=cursor_of, param="after", write=wrong_writer)
     client = _Api(_by_body_cursor).client()
     with pytest.raises(ValueError, match=r"^json= is sent as JSON, so its pager takes no write=$"):
         client.paginate("search", json=query, expect=decoder(Page), pages=pages)
@@ -607,7 +608,7 @@ def test_a_pagers_refusal_is_raised_when_the_walk_is_built() -> None:
     """Raise a pager's refusal from ``paginate`` itself, before any iteration: here a body pager given no body."""
     client = _Api(_by_body_cursor).client()
     with pytest.raises(ValueError, match="BodyCursor rewrites the request body, so its walk needs one"):
-        client.paginate("search", expect=decoder(Page), pages=QUERY_CURSOR)  # ty: ignore[invalid-argument-type]
+        client.paginate("search", expect=decoder(Page), pages=cast("Any", QUERY_CURSOR))
 
 
 class _Rebuilt(WritingPager[Page, Item, Query]):
@@ -661,7 +662,8 @@ async def test_a_body_given_as_none_is_no_body() -> None:
     api = _Api(_by_body_cursor)
     pages = BodyCursor[Page, Item, dict[str, object]](items=items_of, next=cursor_of, put=put)
     query: dict[str, object] = {"kind": "a"}
-    paginated = api.client().paginate("search", body=None, json=query, expect=decoder(Page), pages=pages)  # ty: ignore[no-matching-overload]
+    both: dict[str, Any] = {"body": None, "json": query}
+    paginated = api.client().paginate("search", expect=decoder(Page), pages=pages, **both)
 
     assert [item.id async for item in paginated] == [1, 2, 3, 4]
 
@@ -751,7 +753,7 @@ async def test_a_body_that_appears_mid_walk_is_held_to_the_same_rules(
 ) -> None:
     """Refuse a later page's body that cannot be sent as the walk says, from the iteration, before sending it."""
     api = _Api(_by_param_cursor)
-    paginated = api.client().paginate("search", expect=decoder(Page), pages=pages, **options)  # ty: ignore[invalid-argument-type]
+    paginated = api.client().paginate("search", expect=decoder(Page), pages=cast("Any", pages), **options)
 
     with pytest.raises(ValueError, match=message):
         _ = [item async for item in paginated]
@@ -812,4 +814,4 @@ def test_a_writing_pager_missing_a_method_cannot_be_built() -> None:
             return page.data
 
     with pytest.raises(TypeError, match="abstract method 'next_page'"):
-        Unfinished()  # ty: ignore[call-non-callable]
+        cast("Any", Unfinished)()

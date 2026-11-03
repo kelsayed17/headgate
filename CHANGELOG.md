@@ -6,6 +6,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Fixed
+
+- The [standards page](https://kelsayed17.github.io/headgate/standards/) now lists the two RFCs headgate follows but
+  left out: RFC 10008 (a 302 keeps a QUERY's body, so a one-shot body is refused there) and RFC 3879 (the SSRF guard
+  refuses IPv6 site-local addresses). It also names the RateLimit draft revision headgate reads, -11.
+
 ## [0.11.0] - 2026-11-02
 
 What an API client wrote around headgate is now headgate's: a pager over numbered pages, an offset walk that ends at

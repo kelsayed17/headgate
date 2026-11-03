@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import io
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, Any, cast, override
 
 import httpx2
 import pytest
@@ -178,7 +178,7 @@ async def test_a_content_that_is_no_body_is_refused_by_name(content: object, kin
     """Refuse a ``content=`` that is neither bytes, an async iterable nor a callable, naming it, before any send."""
     server = _Server()
     with pytest.raises(TypeError) as raised:
-        await server.client().post("upload", expect=nothing, content=content)  # ty: ignore[invalid-argument-type]
+        await server.client().post("upload", expect=nothing, content=cast("Any", content))
     assert str(raised.value) == (
         f"content= takes bytes, an async iterable of bytes, or a callable returning one (got {kind})"
     )
