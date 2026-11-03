@@ -1,7 +1,8 @@
 # Auth
 
 A client's `auth=` is an `httpx2.Auth`. httpx2 runs its flow once per call, above the transport stack, so a retry
-re-sends the request already signed. headgate ships four (the three static ones below and `CachedTokenAuth`), each a
+re-sends the request already signed. headgate ships five (the three static ones below, `SigningAuth` and
+`CachedTokenAuth`), each a
 `CredentialStamper` that declares what it stamps, so the [credential guard](security.md#credentials-stay-on-your-origin)
 keeps it on your origin and the [cache](caching.md#partitions) keeps each credential's entries apart and the credential
 itself out of storage.
@@ -21,6 +22,59 @@ query_key = QueryParamAuth({"api_key": api_key})
 `StaticHeaderAuth({})` is a no-op, so a builder with no key configured can return one rather than `None`.
 `QueryParamAuth` registers its parameter names as secret, so they are redacted from every error message and kept out of
 the cache; prefer a header where the provider allows one (see [security](security.md#redaction)).
+
+## SigningAuth
+
+For a provider that signs every request with a long-lived key: a JWT bound to the method and path, an HMAC or Ed25519
+signature over a timestamp and the body. A subclass supplies the signer, `sign(request)`, and declares what it sets;
+the base class gives it:
+
+- **the body, read**, so the signature can cover `request.content`;
+- **a caller's signature left alone.** A request that already carries any of the signed headers or parameters is sent
+  as it is;
+- **one re-sign on a 401**, and never a loop. A retry re-sends the request as it was signed, so a short-lived
+  signature can expire before a late attempt; the 401 that rejects it is signed again, at the current time, and sent
+  once more. A 401 to a request sent without its signature (to an origin the credential guard withheld it from) is
+  not re-sent.
+
+```python
+import hashlib
+import hmac
+import time
+from typing import ClassVar, override
+
+import httpx2
+
+from headgate import SigningAuth
+
+
+class ExchangeAuth(SigningAuth):
+    signed_headers: ClassVar = frozenset({"X-Api-Key", "X-Timestamp", "X-Signature"})
+
+    def __init__(self, api_key: str, secret: bytes) -> None:
+        self._api_key, self._secret = api_key, secret
+
+    @override
+    def sign(self, request: httpx2.Request) -> None:
+        timestamp = str(int(time.time()))
+        message = timestamp.encode() + request.method.encode() + request.url.raw_path + request.content
+        request.headers["X-Api-Key"] = self._api_key
+        request.headers["X-Timestamp"] = timestamp
+        request.headers["X-Signature"] = hmac.new(self._secret, message, hashlib.sha256).hexdigest()
+
+    @override
+    def credential_identity(self) -> bytes:
+        return self._secret
+```
+
+- `sign` replaces what an earlier call set, since the re-send after a 401 calls it a second time.
+- `signed_headers` and `signed_params` declare what `sign` sets, so the credential guard withholds exactly those from
+  an origin you do not trust, and the cache keeps them out of storage. A subclass that declares neither fails when
+  it is defined. Signed parameters are registered as secret, so error messages redact them.
+- `skips(request)` says a request is sent unsigned: by default, one already carrying a signed header or parameter.
+  Override it for requests that need no signature, such as a provider's public reads.
+- `credential_identity()` names the key for the cache partition. By default each instance is its own identity; return
+  the key's secret material (hashed, never stored) to let instances holding the same key share entries.
 
 ## CachedTokenAuth
 

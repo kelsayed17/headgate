@@ -289,7 +289,7 @@ token, an idempotent POST, a declared business refusal, `Link`-header pages and 
 | [Streaming and uploads](https://kelsayed17.github.io/headgate/streaming/) | `stream()` for bodies and server-sent events with resume; raw, streamed and multipart request bodies |
 | [Pagination](https://kelsayed17.github.io/headgate/pagination/) | `paginate()` with `Cursor`, `Offset`, `PageNumber`, `LinkHeader` or `NextUrl`, and walks of POSTs given `body=` or `json=` (`BodyCursor`, `BodyOffset`); lazy, loop-safe, bounded by pages or items |
 | [Errors](https://kelsayed17.github.io/headgate/errors/) | One `ClientError` tree; method, URL, request id, attempts, `retryable`, `retry_after`, RFC 9457 problems |
-| [Auth](https://kelsayed17.github.io/headgate/auth/) | Static headers, query keys, and a cached minted token with one re-mint on a 401 |
+| [Auth](https://kelsayed17.github.io/headgate/auth/) | Static headers, query keys, per-request signatures with one re-sign on a 401, and a cached minted token with one re-mint on a 401 |
 | [Observability](https://kelsayed17.github.io/headgate/observability/) | Typed events, OpenTelemetry spans and metrics, request ids, `Deprecation` / `Sunset` notices, health snapshots |
 | [Testing kit](https://kelsayed17.github.io/headgate/testing/) | `FakeTransport`, `FaultyTransport`, `TestClock`, `isolated_breakers`, vcrpy cassette filters |
 | [Per-call options](https://kelsayed17.github.io/headgate/configuration/#per-call-options) | `retry=`, `deadline=`, `timeout=`, `idempotency_key=`, `cache_ttl=`, and `with_options()` views |
