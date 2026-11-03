@@ -107,6 +107,10 @@ name, so TLS still sends it as SNI and verifies the certificate against it, and 
 - The guard cannot be combined with `proxy=`, since a proxy resolves the target itself.
 - `HttpOptions(security=SecurityOptions(resolver=...))` replaces the event loop's `getaddrinfo` (an async function of
   host and port returning addresses as text), and is accepted only with the guard on.
+- The pieces are public in `headgate.security`, for a transport of your own: `AddressGuard(resolver, check=...)`
+  resolves a host and refuses it unless every address passes; `forbidden_reason(address)`, the default check, says why
+  an address is refused (`"loopback"`, `"site-local"`, ...) or returns `None`; `PinnedHTTPTransport` is the pinned
+  default transport. `Resolver` and `AddressCheck` are the types of the two functions.
 
 ## Paths built from values
 

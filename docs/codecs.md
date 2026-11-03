@@ -84,6 +84,9 @@ ORDER = decoder_for(CODEC, Order)
 NEW_ORDER = encoder_for(CODEC, NewOrder)
 ```
 
+A writer is a function of a value returning an `EncodedBody`: the bytes and the `Content-Type` they are sent with.
+`json_writer(encode)` builds one from any value-to-bytes function, sending JSON, for a body written without a codec.
+
 A format other than JSON is the same five members with another `media_type`: a msgpack codec says
 `"application/msgpack"`, and its writers send that. To read only that type back, declare it on the call's `Expect`:
 `Expect(ORDER, accept="application/msgpack")`.

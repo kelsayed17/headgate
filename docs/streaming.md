@@ -51,7 +51,7 @@ an `httpx2.ServerSentEvent`: `event`, `data` (multi-line joined), `id` and the `
 UTF-8 whatever its `charset` says, a leading byte order mark is skipped, and a block without data (an `event: ping`
 heartbeat, a `retry:` or `id:` alone) is not an event, so `event.data` is always what a `data:` field sent. A response
 that does not declare `text/event-stream` raises `ResponseParseError` at once; an event larger than `max_event_size`
-(`None` for no limit) raises `ResponseTooLargeError`.
+(`None` for no limit) raises `ResponseTooLargeError`. The 1 MiB default is `headgate.streaming.DEFAULT_MAX_EVENT_SIZE`.
 
 `stream.last_event_id` is the id the server last set, `None` until it sets one and `""` once it resets it with an
 empty `id`. Pass it as `last_event_id=` when re-opening, and the request carries `Last-Event-ID` (none when it is

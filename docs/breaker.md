@@ -68,11 +68,11 @@ so it is not refused by a breaker another client opened.
 ## Watching it
 
 Every transition a call causes is a `BreakerChanged` event (origin, previous and new state, failure count, and the
-call). `headgate.health.breaker_states()` returns a snapshot per origin of the shared registry (pass `registry=` for
-another), with `refusing` alongside `state`: an open breaker whose cooldown has elapsed still reads open until a call
-takes the probe, so `refusing` is what says whether a call made now would be turned away. Where clients with different
-thresholds keep several breakers for one origin, the snapshot reports the most degraded. See
-[observability](observability.md).
+call); a state is a `BreakerState`, a string enum of `closed`, `open` and `half_open`.
+`headgate.health.breaker_states()` returns a snapshot per origin of the shared registry (pass `registry=` for another),
+with `refusing` alongside `state`: an open breaker whose cooldown has elapsed still reads open until a call takes the
+probe, so `refusing` is what says whether a call made now would be turned away. Where clients with different thresholds
+keep several breakers for one origin, the snapshot reports the most degraded. See [observability](observability.md).
 
 In tests, `headgate.testing.isolated_breakers()` gives the clients built in its block a fresh registry, so no breaker
 state crosses between tests. See [testing](testing.md).

@@ -39,7 +39,7 @@ fake = (
 - A route's replies are served in order, the last repeating, so a retry sequence is one route.
 - A reply is a `Respond` (the step `FaultyTransport` answers with), an `httpx2.Response` built with `content=`, `json=`
   or `text=` (copied for each request), a bare status, or a function of the request returning a response, sync or
-  async. A function can raise an httpx2 error to simulate a
+  async (the type `Reply` names all four). A function can raise an httpx2 error to simulate a
   network failure.
 - `fake.calls` is every request sent, in order, body read; `fake.calls_to(method, path)` filters it; `fake.closed`
   says whether the client closed it.
@@ -147,6 +147,8 @@ given, redacts secret query values and userinfo before a request is recorded or 
 recorded responses. Installed as middleware, it marks a `CachedTokenAuth` mint's hops so they are not recorded: a token
 response is a credential. When replaying, seed the auth with a token (`auth.seed("test-token", 3600)`). A custom
 transport (`FakeTransport`, the curl transport) is not patched by vcrpy, so it is neither recorded nor replayed.
+`RecordedRequest` is the protocol of the vcrpy request `before_record_request` reads, for a hook of your own that
+calls it first.
 
 ## Switching the policy off
 
