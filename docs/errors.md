@@ -34,6 +34,9 @@ into `ResponseParseError` before a caller sees it.
 | `retry_after` | the seconds the upstream (or an open breaker, or a paused budget) asked to wait, or `None` |
 | notes | one line per attempt, and the reason the retries stopped (see [retries](retries.md#attempt-history)) |
 
+An error your own code raises takes these attributes, the notes aside, as optional keywords:
+`ClientError(message, **details)`, where `details` is the TypedDict `ErrorDetails`.
+
 `request_id` is read from `x-request-id`, `request-id`, `x-amzn-requestid`, `x-ms-request-id` and `cf-ray` by default;
 quote it when you contact the provider.
 

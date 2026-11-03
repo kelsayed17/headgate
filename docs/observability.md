@@ -34,13 +34,14 @@ http = HttpOptions(observers=(Metrics(),))
 | `RetryScheduled` | the retry layer will send again | `attempt`, `delay`, `reason` (`"503"`, `"ConnectError"`, `"hedge"`) |
 | `RateLimited` | the rate budget held the call, or its response paused the budget | `delay`, `reason`: `paced`, `throttled`, `paused`, `pushback` |
 | `BreakerChanged` | an origin's breaker changed state | `origin`, `previous`, `state`, `failures`, `call` |
-| `CacheResult` | the cache answered | `outcome`: `hit`, `miss`, `shared`, `degraded` |
+| `CacheResult` | the cache answered | `outcome`, a `CacheOutcome`: `hit`, `miss`, `shared`, `degraded` |
 | `Deprecated` | the response announced deprecation or a sunset | `deprecated`, `deprecated_at`, `sunset_at`, `link`, `sunset_link` |
 | `CallFinished` | a call ends, either way | `status_code`, `error` (the exception type's name; not that of a non-`ClientError` a `stream()` block raised itself), `attempts`, `elapsed` |
 
-Every call event carries `call`, a `CallInfo`: the `method`, the `url` as given (sanitized), the `route` (the t-string
-template, `"series/{series_id}"`, or `None` for a `str` URL), the absolute `full_url` (sanitized), and a process-unique
-`call_id` that groups the events of one call among many concurrent ones. Durations are seconds on the client's clock.
+Every call event is a `CallEvent` and carries `call`, a `CallInfo`: the `method`, the `url` as given (sanitized), the
+`route` (the t-string template, `"series/{series_id}"`, or `None` for a `str` URL), the absolute `full_url` (sanitized),
+and a process-unique `call_id` that groups the events of one call among many concurrent ones. Durations are seconds on
+the client's clock.
 
 Events carry **sanitized data only**: no header, no body, no credential. They are frozen dataclasses, so an observer can
 queue them for another thread.

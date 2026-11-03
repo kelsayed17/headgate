@@ -124,10 +124,10 @@ leave a code about the subject (an unknown instrument, a rejected order) in the 
 inside a 200 bypasses the retry backoff and the breaker, because a 200 looks healthy to both, so retrying it is the
 caller's decision.
 
-A refusal written in the status line or headers rather than the body (a key-error redirect to a sign-in page) belongs
-to a host-wide `HttpOptions(refusal_check=...)`: a function of the response that returns a `RefusedError` or `None`.
-It sees only the final response, so it requires `follow_redirects=False`, and a call that asks to follow redirects on
-such a client raises `ValueError`.
+A refusal written in the status line or headers rather than the body (a key-error redirect to a sign-in page) belongs to
+a host-wide `HttpOptions(refusal_check=...)`: a function of the response that returns a `RefusedError` or `None` (its
+type is `RefusalCheck`). It sees only the final response, so it requires `follow_redirects=False`, and a call that asks
+to follow redirects on such a client raises `ValueError`.
 
 ## Codecs
 

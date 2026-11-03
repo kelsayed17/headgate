@@ -165,6 +165,11 @@ plus `body=` (what a codec's `encoder` wrote), `json=`, `data=`, `content=` or `
 takes `expect=`, `pages=`, `limit=` and the same options, applied to each page; a walk of POSTs takes `body=` or
 `json=` and no other body option ([Walks of POSTs](pagination.md#walks-of-posts)).
 
+The options are typed, so a wrapper can forward them with every key checked: `RequestOptions` is the TypedDict of a
+verb's options (`**options: Unpack[RequestOptions]`), `PageOptions` the ones `paginate()` applies to each page (the
+same, less the body, plus `follow_redirects` and `cache_ttl`), and `ViewOptions` what `with_options()` takes. `Method`
+is the literal type of the six verbs, which `stream(method=...)` takes.
+
 ### Views
 
 `client.with_options(headers=..., timeout=..., deadline=..., retry=...)` returns a view: the same client with other
