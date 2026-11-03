@@ -24,6 +24,14 @@ change the public API; such changes are listed under **Changed** and **Removed**
   searched for in the URL path, so a cache can keep what segments cannot name, such as a file name's prefix or
   extension (`re.compile(r"/fut_fin_txt_\d{4}\.zip$")`). A pattern that matches an empty path raises `ValueError`, as a
   fragment naming no segment does. See [What is stored](docs/caching.md#what-is-stored-and-for-how-long).
+- `headgate.testing.cache_of(client)` and `budget_for(client, url=None)` read back what a client was built with: the
+  `HttpCache` (or `None`), and the `RateBudget` a request to `url` spends from (the default budget without one). A
+  client's tests no longer import `headgate.cache._policy` or `headgate.ratelimit._budgets`, or walk its transport
+  stack. See [What a client was built with](docs/testing.md#what-a-client-was-built-with).
+- `HttpCache.filter_policy()` returns the hishel `FilterPolicy` the cache stores by: its own `policy`, or the one built
+  from `methods`, `paths` and `statuses`.
+- `headgate.DEFAULT_TIMEOUTS`, the timeouts of every phase a client leaves unset, is public, so a deadline computed from
+  a client's timeouts reads the real defaults. See [Timeouts](docs/deadlines.md#timeouts).
 
 ## [0.10.0] - 2026-11-02
 
