@@ -14,6 +14,7 @@ import importlib
 import json
 import re
 import sys
+import traceback
 from typing import TYPE_CHECKING, ClassVar, cast, override
 
 import httpx2
@@ -116,7 +117,7 @@ async def test_a_codecs_own_error_is_a_parse_error_with_its_description() -> Non
 
     with pytest.raises(ResponseParseError, match=r"shape: Expected `int`, got `str` - at `\$\.value`") as raised:
         await client.get("rows", expect=decoder_for(_TAGGED, _Row))
-    assert isinstance(raised.value.__cause__, DecodeError)
+    assert raised.value.__cause__ is None
 
 
 def test_an_empty_body_reads_as_the_codecs_empty_array() -> None:
@@ -157,6 +158,25 @@ def test_a_description_is_bounded() -> None:
     with pytest.raises(DecodeError) as raised:
         decode_with(_Wordy(), b"{", _Row)
     assert len(str(raised.value)) <= MESSAGE_TEXT_LIMIT
+
+
+@pytest.mark.parametrize(
+    ("codec", "record"),
+    [(msgspec_flavor.CODEC, _Row), (pydantic_flavor.CODEC, _Model)],
+    ids=["msgspec", "pydantic"],
+)
+def test_a_refusal_does_not_chain_the_library_error_that_quotes_the_input(codec: Codec, record: type) -> None:
+    """Raise the description alone: a chained library error repeats the input to any traceback or ``logger.exception``.
+
+    msgspec quotes an enum value it refuses, and pydantic its input, either of which may be a credential. The value is
+    named, not written in the call, since a traceback quotes the line that raised.
+    """
+    planted = "sk-planted"
+    with pytest.raises(DecodeError) as raised:
+        decode_with(codec, json.dumps({"value": planted}).encode(), record)
+    assert raised.value.__cause__ is None
+    assert raised.value.__suppress_context__
+    assert planted not in "".join(traceback.format_exception(raised.value))
 
 
 # --- The conformance check refuses a codec that breaks a promise ---
@@ -210,6 +230,21 @@ class _QuotesTheKeys(MsgspecCodec):
             except msgspec.ValidationError as exc:
                 msg = f"bad keys {sorted(msgspec.json.decode(content))}"
                 raise msgspec.ValidationError(msg) from exc
+
+        return _decode
+
+
+class _ChainsTheInput(MsgspecCodec):
+    @override
+    def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
+        decode = super().decoder(type_)
+
+        def _decode(content: bytes) -> T:
+            try:
+                return decode(content)
+            except msgspec.ValidationError:
+                msg = "the body is of another type"
+                raise DecodeError(msg) from ValueError(content)
 
         return _decode
 
@@ -287,6 +322,7 @@ class _ReadsRecordsAsDicts(MsgspecCodec):
         (_ReadsMalformedBodiesAsEmpty(), r"^_ReadsMalformedBodiesAsEmpty accepted a cut-short body as \{\}"),
         (_QuotesTheInput(), r"^_QuotesTheInput\.describe\(\) repeats the input \(.*bad body"),
         (_QuotesTheKeys(), r"^_QuotesTheKeys\.describe\(\) repeats the input \(.*bad keys"),
+        (_ChainsTheInput(), r"^_ChainsTheInput's refusal repeats the input in its traceback: .* chains"),
         (
             _UnlistedError(),
             r"^_UnlistedError raised ValidationError for a string where an int is declared, which is not one of",
@@ -303,6 +339,7 @@ class _ReadsRecordsAsDicts(MsgspecCodec):
         "cut-short",
         "quiet",
         "quiet-keys",
+        "quiet-chain",
         "errors",
         "unknown-field",
         "record",

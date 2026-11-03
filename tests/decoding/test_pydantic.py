@@ -382,6 +382,26 @@ def test_the_encoder_applies_aliases_and_can_leave_out_none() -> None:
     assert encoder(_Aliased, drop_none=True)(order).content == b'{"orderId":"a1"}'
 
 
+def test_the_encoder_drops_none_as_to_builtins_and_the_msgspec_encoder_do() -> None:
+    """Drop a ``None`` in a nested ``dict`` too, keeping one in a list, byte for byte as the msgspec encoder does."""
+
+    class Row(BaseModel):
+        m: dict[str, int | None]
+        items: list[int | None]
+        note: str | None = None
+
+    class RowStruct(msgspec.Struct, frozen=True):
+        m: dict[str, int | None]
+        items: list[int | None]
+        note: str | None = None
+
+    row, struct = Row(m={"x": None, "y": 1}, items=[None, 1]), RowStruct(m={"x": None, "y": 1}, items=[None, 1])
+    written = encoder(Row, drop_none=True)(row).content
+    assert written == b'{"m":{"y":1},"items":[null,1]}'
+    assert written == msgspec_flavor.encoder(RowStruct, drop_none=True)(struct).content
+    assert msgspec.json.decode(written) == to_builtins(row, drop_none=True)
+
+
 def test_decode_coerces_when_lax() -> None:
     """Coerce a quoted number with ``decode(..., strict=False)``, as the reader does."""
     assert decode(b'["3"]', list[int], strict=False) == [3]

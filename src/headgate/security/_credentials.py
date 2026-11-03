@@ -16,6 +16,9 @@ auth flow yields. On any of them addressed elsewhere it removes:
 * ``Cookie``. A client that keeps a cookie jar (``HttpOptions(cookies=True)``) then gets back what the jar holds for
   the hop's origin, since the jar scopes the cookies it stores to their domains; a ``Cookie`` header set explicitly
   (client-wide or on the call) is not the jar's, and stays off.
+* every header the client sets on all its requests (``HttpOptions.headers``), where a static key is often configured,
+  except ``User-Agent`` and the content negotiation headers (``Accept``, ``Accept-Encoding``, ``Accept-Language``):
+  those name the client and the format it wants, never a caller, and the request would be malformed without them.
 
 The request is still sent, unsigned: a provider may hand out a signed download URL on another host. A header of one of
 those names that the call set itself is removed too, since nothing on the request tells the two apart; a credential
@@ -49,8 +52,9 @@ from headgate._core import CredentialCarrier, CredentialStamper, origin_text
 from headgate.errors import ForbiddenDestinationError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
     from http.cookiejar import CookieJar
+
+    from headgate._options import HttpOptions
 
 __all__ = ["CHAIN_ORIGIN", "CredentialGuard"]
 
@@ -61,6 +65,10 @@ CHAIN_ORIGIN: Final = "headgate.chain_origin"
 
 #: The headers withheld from an untrusted origin whatever the client's auth declares.
 _ALWAYS_WITHHELD: Final = frozenset({"authorization", "proxy-authorization", "cookie"})
+
+#: The client-wide headers still sent to an untrusted origin: they name the client and the format it wants, never a
+#: caller. Lower case.
+_NEVER_CREDENTIALS: Final = frozenset({"user-agent", "accept", "accept-encoding", "accept-language"})
 
 
 class CredentialGuard:
@@ -77,17 +85,17 @@ class CredentialGuard:
         *,
         auth: httpx2.Auth | None,
         base_url: httpx2.URL,
-        trusted_origins: Iterable[str],
+        http: HttpOptions,
         cookie_jar: CookieJar | None,
-        middleware: Iterable[object] = (),
     ) -> None:
-        """Trust *base_url*'s origin and *trusted_origins* (normalized origin text); withhold *auth*'s credentials.
+        """Trust *base_url*'s origin and *http*'s ``trusted_origins``; withhold *auth*'s credentials and *http*'s.
 
-        *cookie_jar* is the jar the client keeps, if any, whose cookies for the hop's origin replace a withheld
-        ``Cookie``. Each of *middleware* that is a :class:`~headgate._core.CredentialCarrier` has its declared
-        credentials withheld too.
+        *http*'s are each header in its ``headers`` but ``User-Agent`` and the content negotiation headers, and what
+        each of its ``middleware`` that is a :class:`~headgate._core.CredentialCarrier` declares. *cookie_jar* is the
+        jar the client keeps, if any, whose cookies for the hop's origin replace a withheld ``Cookie``.
         """
         headers = set(_ALWAYS_WITHHELD)
+        headers.update({name.lower() for name in http.headers} - _NEVER_CREDENTIALS)
         params = frozenset[str]()
         if isinstance(auth, CredentialStamper):
             headers.update(name.lower() for name in auth.credential_headers)
@@ -95,10 +103,11 @@ class CredentialGuard:
         self._headers = frozenset(headers)
         self._params = params
         self._cookie_jar = cookie_jar
-        carriers = [item for item in middleware if isinstance(item, CredentialCarrier)]
+        carriers = [item for item in http.middleware if isinstance(item, CredentialCarrier)]
         self._middleware_headers = frozenset(name.lower() for item in carriers for name in item.credential_headers)
         self._middleware_params = frozenset(name for item in carriers for name in item.credential_params)
-        self._trusted = frozenset({base_url.origin, *(httpx2.Origin(origin) for origin in trusted_origins)})
+        trusted = (httpx2.Origin(origin) for origin in http.security.trusted_origins)
+        self._trusted = frozenset({base_url.origin, *trusted})
 
     def trusts(self, request: httpx2.Request) -> bool:
         """Return whether *request* may carry credentials: it is addressed to a trusted origin or its chain's own."""

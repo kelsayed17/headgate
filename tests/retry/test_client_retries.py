@@ -225,3 +225,12 @@ async def test_x_should_retry_false_stops_a_retryable_status() -> None:
 
     assert len(network.calls) == 1
     assert raised.value.retryable is False
+
+
+async def test_x_should_retry_true_on_a_created_post_sends_it_once() -> None:
+    """Return a POST's 201 marked ``x-should-retry: true`` as the answer it is, never sending the POST again."""
+    network = FaultyTransport(schedule=[Respond(201, headers={"x-should-retry": "true"}), Respond(201)])
+
+    await _client(network).post("series", expect=nothing)
+
+    assert len(network.calls) == 1

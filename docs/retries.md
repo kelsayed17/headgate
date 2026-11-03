@@ -40,11 +40,13 @@ policy = TransportPolicy(
 
 Each attempt's result is classified, in this order:
 
-1. **An answer** (any status not in `statuses`, unless the server says `x-should-retry: true`) is returned.
+1. **An answer** (any status not in `statuses`, unless the server says `x-should-retry: true` on an error status) is
+   returned.
 2. **A failure re-sending cannot cure** is never re-sent: a local mistake (`LocalProtocolError`, such as a header
    value that cannot be encoded; `UnsupportedProtocol`; `InvalidURL`), and a redirect chain past `max_redirects`
    (`TooManyRedirects`), which the same request follows the same way again.
-3. **The server's word** decides when it sends `x-should-retry: true` or `false`.
+3. **The server's word** decides when it sends `x-should-retry: true` or `false` with an error status (400 and up). On
+   a success or a redirect the header is ignored: an answer is never sent again.
 4. **Not processed** is retryable for every method: a `425 Too Early` (RFC 8470), and an HTTP/2 stream the server
    reset with `REFUSED_STREAM` (RFC 9113). A GOAWAY covering streams the server never started is retried inside the
    connection pool, below this layer.
@@ -87,8 +89,8 @@ same budget. A client keeps one account per distinct `RetryBudget` value, shared
 `with_options` views, so once traffic is above the floor a failing upstream sees about 1.2 times its normal load from
 a client, not three times. A call that finds the budget
 spent raises its last failure with the note `retry budget exhausted`. A retry or hedge that is never sent (the breaker
-opened or the deadline came during the wait, the rate budget could not send it in time, or the call was cancelled)
-gives its share back. `budget=None` removes the cap.
+opened or the deadline came during the wait, the rate budget could not send it in time, or it or the call was
+cancelled before the rate budget let it out) gives its share back. `budget=None` removes the cap.
 
 ## Deadlines and the breaker
 
@@ -106,7 +108,8 @@ with the note `circuit opened` once it refuses. A whole retry sequence counts on
 A hedge sends a second copy of a slow idempotent request instead of waiting for it to time out. With
 `RetryPolicy(hedge=Hedge(after=0.5, max_extra=1))`, a request that has not answered after 0.5 s is sent again beside
 the first; the first answer wins, and the other send is cancelled and its response closed. A retryable failure from
-one send leaves the others running. Hedges count as attempts, spend the retry budget, respect the deadline and the
+one send leaves the others running, its body read (a bounded head) and its connection and rate-budget slot released
+meanwhile; no hedge starts once an answer is in. Hedges count as attempts, spend the retry budget, respect the deadline and the
 breaker, and appear in events (`RetryScheduled` with reason `hedge`) and in the history (`attempt 2/3 (hedge): ...`).
 
 Only `methods` are hedged, and only with a replayable body. A policy whose `methods` include POST or PATCH refuses a

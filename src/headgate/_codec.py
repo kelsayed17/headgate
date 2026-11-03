@@ -72,14 +72,17 @@ class Codec(Protocol):
 
 
 def _translated[T](codec: Codec, decode: Callable[[bytes], T]) -> Callable[[bytes], T]:
-    """Return *decode*, raising each of *codec*'s ``errors`` as a :class:`DecodeError` with its bounded description."""
+    """Return *decode*, raising each of *codec*'s ``errors`` as a :class:`DecodeError` with its bounded description.
+
+    The library's error is not chained: it may quote the input, which a traceback or ``logger.exception`` would repeat.
+    """
     errors = codec.errors
 
     def _decode(content: bytes) -> T:
         try:
             return decode(content)
         except errors as exc:
-            raise DecodeError(shorten(codec.describe(exc))) from exc
+            raise DecodeError(shorten(codec.describe(exc))) from None
 
     return _decode
 

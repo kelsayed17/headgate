@@ -3,6 +3,9 @@
 
 """Memory stays bounded: streamed bodies are never held whole, and repeated requests retain nothing.
 
+A successful call leaves no reference cycle either, so what it allocated is freed when it ends rather than at the next
+garbage collection, which would raise the peak a stream of calls holds.
+
 These measure allocations with ``tracemalloc`` rather than wall-clock time, so they are deterministic enough to run in
 the regular suite. Timing lives in ``benchmarks/``.
 """
@@ -102,6 +105,18 @@ async def _growth_per_window(operation: Callable[[], Awaitable[object]]) -> int:
     return sum(stat.size_diff for stat in after.compare_to(before, "filename"))
 
 
+async def _garbage_per_call(operation: Callable[[], Awaitable[object]]) -> int:
+    """Return how many objects a run of *operation* leaves only the garbage collector can free: those in cycles."""
+    await operation()
+    gc.collect()
+    gc.disable()
+    try:
+        await operation()
+        return gc.collect()
+    finally:
+        gc.enable()
+
+
 async def test_streaming_a_large_body_holds_a_few_chunks_at_most() -> None:
     """Stream 64 MiB through ``stream()`` while holding no more than a few MiB at any moment."""
     client = _client(lambda request: httpx2.Response(httpx2.codes.OK, stream=_Chunks(_STREAMED_BYTES), request=request))
@@ -122,6 +137,12 @@ async def test_repeated_gets_retain_nothing() -> None:
     """Retain nothing per request across thousands of successful GETs."""
     client = _client()
     assert await _growth_per_window(lambda: client.get("series", expect=as_bytes)) < _GROWTH_LIMIT
+
+
+async def test_a_get_leaves_no_reference_cycle() -> None:
+    """Free everything a successful GET allocated when it returns, by reference counting alone."""
+    client = _client()
+    assert await _garbage_per_call(lambda: client.get("series", expect=as_bytes)) == 0
 
 
 async def test_repeated_failures_retain_nothing() -> None:
@@ -158,6 +179,16 @@ async def test_repeated_cache_hits_retain_nothing() -> None:
     client = _client(cache=HttpCache(policy=policy, storage=storage, ttl=3600))
     try:
         assert await _growth_per_window(lambda: client.get("series", expect=as_bytes)) < _GROWTH_LIMIT
+    finally:
+        await storage.close()
+
+
+async def test_a_cache_hit_leaves_no_reference_cycle() -> None:
+    """Free everything a GET served from the HTTP cache allocated when it returns, by reference counting alone."""
+    storage = AsyncSqliteStorage(connection=await anysqlite.connect(":memory:"))
+    client = _client(cache=HttpCache(storage=storage, ttl=3600))
+    try:
+        assert await _garbage_per_call(lambda: client.get("series", expect=as_bytes)) == 0
     finally:
         await storage.close()
 

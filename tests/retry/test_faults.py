@@ -12,6 +12,7 @@ import httpx2
 import pytest
 
 from headgate._core import CallContext, CallInfo
+from headgate._core._retry_after import parse_retry_after
 from headgate.retry._classify import refused_stream
 from headgate.retry._tracking import SendTrackingTransport, head_size
 from headgate.testing import (
@@ -347,6 +348,29 @@ def test_respond_declares_its_json_and_its_retry_after() -> None:
 
     assert headers == [("X-Id", "7"), ("Retry-After", "2"), ("Content-Type", "application/json")]
     assert body == b'{"a": 1}'
+
+
+@pytest.mark.parametrize(
+    ("seconds", "header"),
+    [(1e6, "1000000"), (1e22, "10000000000000000000000"), (0, "0"), (2.5, "2.5"), (1e-7, "0.0000001")],
+    ids=["million", "huge", "zero", "fraction", "tiny-fraction"],
+)
+def test_a_retry_after_is_written_as_plain_decimal_seconds(seconds: float, header: str) -> None:
+    """Write whole seconds as RFC 9110's delta-seconds and a fraction in plain digits, never with an exponent.
+
+    Either way the value reads back as the same number of seconds, as headgate's own ``Retry-After`` parser reads it.
+    """
+    headers, _ = Respond(503, retry_after=seconds).response()
+
+    assert headers == [("Retry-After", header)]
+    assert parse_retry_after(header, now=0.0) == seconds
+
+
+@pytest.mark.parametrize("seconds", [-1.0, float("inf"), float("nan")], ids=["negative", "infinite", "nan"])
+def test_a_retry_after_that_is_no_number_of_seconds_is_refused(seconds: float) -> None:
+    """Refuse a negative or non-finite ``retry_after`` when the step is built: no ``Retry-After`` can say it."""
+    with pytest.raises(ValueError, match="retry_after"):
+        Respond(503, retry_after=seconds)
 
 
 async def test_a_response_is_built_on_the_request_it_answers() -> None:

@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, overload
 
 try:
     from pydantic import BaseModel, RootModel, TypeAdapter, ValidationError
-    from pydantic_core import PydanticKnownError, to_jsonable_python
+    from pydantic_core import PydanticKnownError, to_json, to_jsonable_python
 except ImportError as exc:
     msg = "headgate.pydantic needs pydantic: pip install headgate[pydantic]"
     raise ImportError(msg) from exc
@@ -105,7 +105,7 @@ class PydanticCodec:
 
     *strict* (the default) rejects pydantic's lax coercions, so a JSON string where an ``int`` is declared is wire
     drift. Field aliases are the wire's names both ways. *drop_none* leaves ``None``-valued fields out of what it
-    encodes.
+    encodes, recursively, as :func:`to_builtins` does.
     """
 
     __slots__ = ("_drop_none", "_strict")
@@ -130,12 +130,17 @@ class PydanticCodec:
         return decode
 
     def encoder[T](self, type_: TypeForm[T], /) -> Callable[[T], bytes]:
-        """Return a function serializing a value by *type_*'s cached adapter, by alias."""
+        """Return a function serializing a value by *type_*'s cached adapter, by alias.
+
+        With *drop_none*, ``None`` goes from nested dicts too, as :func:`to_builtins` drops it (``exclude_none`` would
+        keep a ``dict[str, int | None]``'s), so the bytes match the msgspec flavor's.
+        """
         adapter = _adapter(type_)
-        drop_none = self._drop_none
+        if not self._drop_none:
+            return functools.partial(adapter.dump_json, by_alias=True)
 
         def encode(value: T) -> bytes:
-            return adapter.dump_json(value, by_alias=True, exclude_none=drop_none)
+            return to_json(_drop_none(adapter.dump_python(value, mode="json", by_alias=True)))
 
         return encode
 
@@ -210,7 +215,8 @@ def encoder[T](type_: TypeForm[T], *, drop_none: bool = False) -> Writer[T]:
 
     The mirror of :func:`decoder`: build it once, at import (``NEW_ORDER = encoder(NewOrder)``), and send with
     ``body=NEW_ORDER(order)``. The value is serialized by *type_*'s ``TypeAdapter``, with field aliases applied, as
-    :func:`to_builtins` applies them. ``drop_none=True`` leaves out ``None``-valued fields.
+    :func:`to_builtins` applies them. ``drop_none=True`` removes ``None``-valued fields recursively, as
+    :func:`to_builtins` does.
     """
     return encoder_for(_DROPPING_NONE if drop_none else CODEC, type_)
 

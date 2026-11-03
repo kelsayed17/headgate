@@ -23,7 +23,9 @@ Both decode strictly (a field that changes type on the wire fails rather than be
 does not declare, and describe a failure without repeating the body. A message keeps the path to the failure and the
 names the type declares, and leaves out anything the body chose: a key of a `dict[str, int]`, an unknown enum value or
 tag, an unknown field's name. msgspec drops it (`Invalid enum value - at $.status`; a dict key shows as `$[...]` in the
-path), and pydantic shows `[...]` in its place. Each module's `CODEC` is the codec itself, for the functions below.
+path), and pydantic shows `[...]` in its place. The library's own error, which may quote the body, is not chained to
+the `DecodeError`, so a traceback or `logger.exception` cannot repeat it either. Each module's `CODEC` is the codec
+itself, for the functions below.
 
 ## Any codec, the same way
 
@@ -105,7 +107,8 @@ It raises `AssertionError` naming the first promise broken:
 - a value it writes reads back equal;
 - a string where an `int` is declared is refused, not coerced;
 - a body cut short at its middle is refused, so a codec whose bodies end in a newline passes;
-- each refusal raises one of `errors`, and its description never repeats the input, whether a value or a key;
+- each refusal raises one of `errors`, and neither its description nor its traceback (chained errors included)
+  repeats the input, whether a value or a key;
 - a field the record does not declare is ignored, since providers add fields without notice (checked only when
   `record=` is given).
 

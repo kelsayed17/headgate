@@ -11,12 +11,14 @@ from typing import TYPE_CHECKING, Literal, Protocol, final
 
 from headgate._failures import loggable_url
 from headgate.errors import ClientError, PageLimitError
+from headgate.pagination._pager import WritingPager
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 
     import httpx2
 
+    from headgate._request_body import Writer
     from headgate.pagination._pager import Pager, PageRequest
 
 __all__ = ["PageLimit", "PageWalk", "Paginated"]
@@ -58,8 +60,8 @@ class Paginated[P, I](Protocol):
 
     A page that leads back to a request already made (a cursor or next URL that repeats) raises ``ClientError``
     instead of looping forever; the requests made are remembered for that, one key per page (its URL, query and, for a
-    POST, the ``repr`` of its body). A walk with a
-    :class:`PageLimit` fetches at most its ``max_pages``, then raises ``PageLimitError`` or stops, as it says.
+    POST, the bytes its pager's ``write`` encodes the body to, or the ``repr`` of a ``json=`` body's builtins). A walk
+    with a :class:`PageLimit` fetches at most its ``max_pages``, then raises ``PageLimitError`` or stops, as it says.
     """
 
     def __aiter__(self) -> AsyncIterator[I]:
@@ -79,7 +81,7 @@ class Paginated[P, I](Protocol):
 class PageWalk[P, I, B]:
     """The :class:`Paginated` :meth:`AsyncBaseClient.paginate <headgate.AsyncBaseClient.paginate>` builds."""
 
-    __slots__ = ("_fetch", "_first", "_limit", "_pager", "_source")
+    __slots__ = ("_fetch", "_first", "_limit", "_pager", "_source", "_write")
 
     def __init__(
         self,
@@ -102,6 +104,8 @@ class PageWalk[P, I, B]:
         self._first = first
         self._source = source
         self._limit = limit
+        # A page is remembered by the body it sends: the bytes the writer encodes, as the walk's fetch encodes them.
+        self._write = pager.write if isinstance(pager, WritingPager) else None
 
     def __aiter__(self) -> AsyncIterator[I]:
         """Iterate the items of every page, in order."""
@@ -116,7 +120,7 @@ class PageWalk[P, I, B]:
                 if self._limit.on_limit == "stop":
                     return
                 raise self._limit_error(request, len(seen))
-            key = _key(request)
+            key = _key(request, self._write)
             if key in seen:
                 raise self._loop_error(request, len(seen))
             seen.add(key)
@@ -169,10 +173,15 @@ class PageWalk[P, I, B]:
         return ClientError(msg, source=self._source, method=_method(request), url=url)
 
 
-def _key[B](request: PageRequest[B]) -> str:
-    """Return a text key identifying *request*'s URL (a string or a template, by its parts), query and body."""
+def _key[B](request: PageRequest[B], write: Writer[B] | None) -> str:
+    """Return a text key identifying *request*'s URL (a string or a template, by its parts), query and body.
+
+    A body is keyed by the bytes *write* encodes it to, as it is sent, since a body type's ``repr`` may be its address,
+    which a later body can reuse. Without *write*, a body is builtins sent as JSON, whose ``repr`` is their value.
+    """
     query = None if request.params is None else tuple(request.params.items())
-    return repr((request.url, query, request.body))
+    body = request.body if request.body is None or write is None else write(request.body).content
+    return repr((request.url, query, body))
 
 
 def _method[B](request: PageRequest[B]) -> Literal["GET", "POST"]:

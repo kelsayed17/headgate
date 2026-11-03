@@ -5,11 +5,12 @@
 
 The rules, in order:
 
-* A response whose status is not in the policy's ``statuses`` is an answer (unless ``x-should-retry: true`` says
-  otherwise). Only network failures (:data:`~headgate.retry._policy.NETWORK_ERRORS`) are classified at all; anything
-  else propagates at once, and a failure re-sending cannot cure (:data:`~headgate.retry._policy.UNRETRYABLE_ERRORS`: a
-  local mistake, a redirect loop) is never retried.
-* ``x-should-retry: true|false`` decides when the policy respects it: the server knows whether a re-send is safe.
+* A response whose status is not in the policy's ``statuses`` is an answer (unless ``x-should-retry: true`` on an
+  error status says otherwise). Only network failures (:data:`~headgate.retry._policy.NETWORK_ERRORS`) are classified
+  at all; anything else propagates at once, and a failure re-sending cannot cure
+  (:data:`~headgate.retry._policy.UNRETRYABLE_ERRORS`: a local mistake, a redirect loop) is never retried.
+* ``x-should-retry: true|false`` on an error status (400 and up) decides when the policy respects it: the server knows
+  whether a re-send is safe. On a success or a redirect it is ignored, so no answer is ever sent again.
 * A failure that proves the request was not processed is retryable for every method: 425 Too Early (RFC 8470), and an
   HTTP/2 stream the server reset with ``REFUSED_STREAM`` (RFC 9113 §8.7).
 * An idempotent method (the policy's ``methods``), or a request carrying an idempotency key, is retryable.
@@ -48,6 +49,9 @@ _CAUSE_DEPTH: Final = 4
 
 #: The status RFC 8470 defines for a request the server will not process yet: it was not processed.
 _TOO_EARLY: Final = 425
+
+#: The lowest error status: below it a response is a success or a redirect, an answer whatever ``x-should-retry`` says.
+_FIRST_ERROR: Final = 400
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,8 +100,8 @@ def _nothing_sent(progress: SendProgress, exc: Exception) -> bool:
 
 
 def _should_retry(response: httpx2.Response, policy: RetryPolicy) -> bool | None:
-    """Return the server's ``x-should-retry`` answer, or ``None`` when it gave none or the policy ignores it."""
-    if not policy.respect_should_retry:
+    """Return the server's ``x-should-retry`` answer to an error status, or ``None``: none, or the policy ignores it."""
+    if not policy.respect_should_retry or response.status_code < _FIRST_ERROR:
         return None
     header = response.headers.get("x-should-retry", "").strip().lower()
     return {"true": True, "false": False}.get(header)

@@ -55,6 +55,21 @@ def test_the_last_event_id_is_none_until_a_block_ends() -> None:
     assert parser.last_event_id is None
 
 
+def test_the_reconnection_time_persists_across_blocks() -> None:
+    """Keep the last valid ``retry:`` on the parser from the moment its line ends, through blocks that do not name one.
+
+    Each event's own ``retry`` stays the field its block named, as httpx2's does.
+    """
+    parser = EventParser()
+    assert parser.retry is None
+    assert list(parser.feed(b"retry: 5000\n")) == []
+    assert (parser.retry, parser.last_event_id) == (5000, None)
+    (event,) = parser.feed(b"\ndata: x\n\nretry: soon\n\n")
+    assert (event.retry, parser.retry) == (None, 5000)
+    (event,) = parser.feed(b"retry: 20\ndata: y\n\n")
+    assert (event.retry, parser.retry) == (20, 20)
+
+
 def test_events_of_exactly_the_size_limit_are_read() -> None:
     """Read an event whose field lines hold exactly ``max_event_size`` bytes, the first and every later one."""
     assert _data(b"data: abcd\n\ndata: efgh\n\n", max_event_size=10) == ["abcd", "efgh"]

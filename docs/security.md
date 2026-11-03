@@ -20,8 +20,8 @@ Every hop goes through the same checks, not only the first request: each redirec
 auth flow sends.
 
 <ol class="hg-pipeline">
-  <li><strong>Origin check</strong><span>not your origin or a trusted one? Credentials, <code>Authorization</code> and
-    <code>Cookie</code> are removed, and it goes out unsigned</span></li>
+  <li><strong>Origin check</strong><span>not your origin or a trusted one? Credentials, <code>Authorization</code>,
+    <code>Cookie</code> and client-wide headers are removed, and it goes out unsigned</span></li>
   <li><strong>Address check</strong><span>with the SSRF guard on, every address the host resolves to must be public, or
     nothing is sent</span></li>
   <li><strong>Pinned connect</strong><span>the connection goes to the address that was checked, so DNS cannot swap it</span></li>
@@ -40,7 +40,11 @@ first request, each redirect, and each request an auth flow sends. On any hop ad
   travel either;
 - `Cookie`. A client that keeps a cookie jar (`cookies=True`) then sends the cookies its jar holds for that origin,
   since the jar scopes them to their domains; a `Cookie` header you set yourself, client-wide or on a call, is not the
-  jar's and stays off.
+  jar's and stays off;
+- every header set in `HttpOptions(headers=...)`, where a static key is often configured, except `User-Agent` and the
+  content negotiation headers `Accept`, `Accept-Encoding` and `Accept-Language`: those name the client and the format it
+  wants, never a caller, so they go everywhere. Any other name is withheld, whatever it holds; a client-wide header
+  another origin needs (a tracing or tenant header, say) needs that origin in `trusted_origins`.
 
 The request still goes out, unsigned, so a signed download URL on a CDN works. A credential meant for another origin
 needs that origin in `trusted_origins`, written as a bare origin:

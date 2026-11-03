@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import asyncio
 import json as jsonlib
+import math
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import TYPE_CHECKING, override
 
 import h2.errors
@@ -64,7 +66,9 @@ class PoolFull:
 class Respond:
     """Answer with ``status_code``, ``headers``, and a body: ``json`` encoded if given, else ``content``.
 
-    ``retry_after`` adds a ``Retry-After`` header with that many seconds.
+    ``retry_after`` adds a ``Retry-After`` header with that many seconds, in plain digits: whole seconds as RFC 9110's
+    delta-seconds, and a fraction as a decimal, which headgate reads too. A negative or non-finite one raises
+    ``ValueError``.
     """
 
     status_code: int = 200
@@ -73,11 +77,17 @@ class Respond:
     content: bytes = b""
     retry_after: float | None = None
 
+    def __post_init__(self) -> None:
+        """Refuse a ``retry_after`` no ``Retry-After`` can say: a negative or non-finite one."""
+        if self.retry_after is not None and not (math.isfinite(self.retry_after) and self.retry_after >= 0):
+            msg = f"retry_after must be a finite, non-negative number of seconds, got {self.retry_after!r}"
+            raise ValueError(msg)
+
     def response(self) -> tuple[list[tuple[str, str]], bytes]:
         """Return the headers and the body this step answers with."""
         headers = list(self.headers.items())
         if self.retry_after is not None:
-            headers.append(("Retry-After", f"{self.retry_after:g}"))
+            headers.append(("Retry-After", _seconds(self.retry_after)))
         if self.json is None:
             return headers, self.content
         headers.append(("Content-Type", "application/json"))
@@ -159,6 +169,13 @@ class _TrackedBody(httpx2.AsyncByteStream):
     async def aclose(self) -> None:
         """Record the close."""
         self._call.response_closed = True
+
+
+def _seconds(value: float) -> str:
+    """Return *value* in plain decimal digits, never with an exponent: an integer when it is whole."""
+    if float(value).is_integer():
+        return str(int(value))
+    return format(Decimal(repr(float(value))), "f")
 
 
 def _refused_stream(request: httpx2.Request) -> httpx2.RemoteProtocolError:
