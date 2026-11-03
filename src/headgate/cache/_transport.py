@@ -495,8 +495,20 @@ def _cut_short(request: httpx2.Request, failure: Exception) -> bool:
     """Return whether *failure* is a timeout of *request*'s own deadline-fitted timeouts, not of the ones it asked for.
 
     The requests waiting on it asked for the same timeouts, but each has a deadline of its own: one with more time left
-    must fetch for itself rather than inherit a timeout it would not have hit.
+    must fetch for itself rather than inherit a timeout it would not have hit. When the failed phase is known, only
+    that phase matters; a timeout of no known phase is handed off when any phase was shortened.
     """
+    for error_type, phase in (
+        (httpx2.ConnectTimeout, "connect"),
+        (httpx2.ReadTimeout, "read"),
+        (httpx2.WriteTimeout, "write"),
+        (httpx2.PoolTimeout, "pool"),
+    ):
+        if isinstance(failure, error_type):
+            requested = dict(CallContext.requested_timeouts(request))
+            current = request.extensions.get("timeout")
+            return isinstance(current, dict) and phase in current and bool(current[phase] != requested.get(phase))
+    # A timeout of no known phase may be any of them: hand off when the deadline shortened any.
     return isinstance(failure, httpx2.TimeoutException) and CallContext.timeouts_cut(request)
 
 
