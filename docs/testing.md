@@ -80,7 +80,7 @@ response, whether that response was closed, and the error raised.
 | --- | --- |
 | `ConnectFail(timeout=False)` | raises `ConnectError` (`ConnectTimeout` with `timeout=True`); nothing sent |
 | `PoolFull()` | raises `PoolTimeout`; nothing sent |
-| `Respond(status_code=200, headers=..., json=..., content=..., retry_after=None)` | answers |
+| `Respond(status_code=200, headers=..., json=..., content=..., retry_after=None)` | answers; `retry_after` adds `Retry-After` in plain digits (whole seconds as delta-seconds, a fraction as a decimal headgate also reads), and a negative or non-finite one raises `ValueError` |
 | `DropMidBody(after_bytes)` | writes that many request bytes, then loses the connection; `0` writes nothing, and any more counts the whole head as written, as httpx2's trace does |
 | `Slow(seconds, then=Respond())` | waits (honoring the read timeout), then takes `then` |
 | `RefusedStream()` | resets the HTTP/2 stream with `REFUSED_STREAM`, exactly as httpx2 raises it |

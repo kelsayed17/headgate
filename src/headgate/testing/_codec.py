@@ -11,6 +11,7 @@ unknown-field promise, a record type of the codec's own kind.
 from __future__ import annotations
 
 import re
+import traceback
 from typing import TYPE_CHECKING, Final
 
 from headgate._codec import decode_with
@@ -53,8 +54,9 @@ def check_codec(codec: Codec, *, record: TypeForm[object] | None = None) -> None
     * a value it writes reads back equal;
     * a value of the wrong type is refused, not coerced: a string where an ``int`` is declared;
     * malformed bytes (a body cut short at its middle, so a final delimiter is not all that is lost) are refused;
-    * each refusal raises one of its ``errors``, so a call raises it as ``ResponseParseError``, and its description
-      never repeats the input, a value or a key, which may carry a credential;
+    * each refusal raises one of its ``errors``, so a call raises it as ``ResponseParseError``, and neither its
+      description nor its traceback (what ``logger.exception`` logs, chained errors included) repeats the input, a
+      value or a key, which may carry a credential;
     * with *record*, a type of the codec's own kind holding one field ``value: int``, a field the type does not declare
       is ignored, since providers add fields without notice.
 
@@ -75,6 +77,12 @@ def check_codec(codec: Codec, *, record: TypeForm[object] | None = None) -> None
         refusal = _refused(codec, mistyped, dict[str, int], "a string where an int is declared")
         if _PLANTED in str(refusal):
             msg = f"{name}.describe() repeats the input ({str(refusal)!r}): a body's value or key may be a credential"
+            raise AssertionError(msg)
+        if _PLANTED in "".join(traceback.format_exception(refusal)):
+            msg = (
+                f"{name}'s refusal repeats the input in its traceback: the DecodeError chains an error that quotes "
+                "it, which logger.exception would log"
+            )
             raise AssertionError(msg)
 
     _refused(codec, counts[: len(counts) // 2], dict[str, int], "a cut-short body")

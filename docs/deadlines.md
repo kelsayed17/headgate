@@ -44,6 +44,9 @@ below act on it as well as the outer timer:
 A deadline that passes before the request is sent (waiting for an in-flight slot, say) says so too:
 `GET item/3: deadline exceeded after 3s, before attempt 1 was sent`, with `attempts` counting only the sends made.
 
+A deadline that cuts off an attempt already on the network is a timeout of the origin's, and the
+[circuit breaker](breaker.md#what-counts) counts it as a failure; one that passes before the send counts nothing.
+
 For [`stream()`](streaming.md) the deadline bounds opening the stream (every attempt, backoff and the head checks), not
 reading it: the caller's pace of iteration decides how long the body takes. Wrap the block in `asyncio.timeout` to
 bound the whole body.

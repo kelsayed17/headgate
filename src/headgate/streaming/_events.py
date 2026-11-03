@@ -7,7 +7,8 @@
 :func:`~headgate.event_stream` reader share. It follows the grammar where httpx2's ``EventSource`` departs from it: the
 stream is UTF-8 whatever its ``charset`` says, one leading byte order mark is skipped, a block whose data buffer is
 empty (``event: ping``, ``retry:`` or ``id:`` alone) dispatches nothing, and ``retry:`` takes only ASCII digits. Each
-event is still an ``httpx2.ServerSentEvent``, carrying the ``retry`` its own block named, as httpx2's does.
+event is still an ``httpx2.ServerSentEvent``, carrying the ``retry`` its own block named, as httpx2's does; the
+reconnection time the grammar keeps across blocks, a ``retry:`` alone included, is :attr:`EventParser.retry`.
 """
 
 from __future__ import annotations
@@ -52,6 +53,7 @@ class EventParser:
         "_size",
         "_type",
         "last_event_id",
+        "retry",
     )
 
     def __init__(self, max_event_size: int | None = None) -> None:
@@ -67,6 +69,8 @@ class EventParser:
         self._retry: int | None = None
         #: The last event ID as of the last block ended (``""`` once the server reset it), ``None`` before any id.
         self.last_event_id: str | None = None
+        #: The reconnection time in milliseconds the last valid ``retry:`` set, as its line ended; ``None`` before one.
+        self.retry: int | None = None
 
     def feed(self, chunk: bytes) -> Iterator[httpx2.ServerSentEvent]:
         """Yield each event *chunk* completes, in order, updating :attr:`last_event_id` as each block ends."""
@@ -109,7 +113,7 @@ class EventParser:
             case "id" if "\0" not in value:
                 self._id = value
             case "retry" if value.isascii() and value.isdigit():
-                self._retry = int(value)
+                self._retry = self.retry = int(value)
         return None
 
     def _dispatch(self) -> httpx2.ServerSentEvent | None:

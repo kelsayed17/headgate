@@ -153,7 +153,7 @@ async def test_a_body_readers_decode_failure_is_a_parse_error() -> None:
 
     with pytest.raises(ResponseParseError) as raised:
         await client.get("rows", expect=body_reader(_fixed_width))
-    assert isinstance(raised.value.__cause__, ValueError)
+    assert raised.value.__cause__ is None
 
 
 def test_as_bytes_hands_back_the_body_undecoded() -> None:

@@ -327,7 +327,8 @@ class HttpOptions:
     * ``transport``: a custom network transport (``headgate.curl.AsyncCurlTransport``, a test double), which then owns
       its own TLS, pool and proxy: ``ssl_context``, ``limits`` and ``proxy`` configure only the default transport, an
       HTTP/2 ``httpx2.AsyncHTTPTransport``.
-    * ``headers``: sent on every request; a call's ``headers=`` wins a clash.
+    * ``headers``: sent on every request to ``base_url``'s origin and the ``trusted_origins``; any other origin gets
+      only ``User-Agent`` and the ``Accept`` headers among them. A call's ``headers=`` wins a clash.
     * ``timeout``: :class:`Timeouts`; a phase it leaves unset takes its default (:data:`DEFAULT_TIMEOUTS`).
     * ``follow_redirects`` and ``max_redirects``: the client's default, which a call can override, and the hop limit.
       httpx2 counts an auth flow's hops in the same history as redirects, so each request a

@@ -77,4 +77,6 @@ except ClientError as exc:
 A message can reach an API response or a log, so every part that comes from outside is bounded and sanitized: URLs
 have userinfo and secret query values redacted, exception messages and decoder diagnoses are cut to 1,000 characters,
 body snippets to 300, and a header value the HTTP library refused to encode is named by its header, never its value.
+A snippet is read in the body's `charset`, or as UTF-8 when it declares none or one that is no text encoding
+(`base64`, say). A decoding library's error is never chained to a `DecodeError`, since it may quote the body.
 A failed token mint is reported against the token endpoint, never the API URL that needed the token.

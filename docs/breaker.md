@@ -28,19 +28,20 @@ Only what the origin itself showed:
 | Counts as a failure | Records nothing |
 | --- | --- |
 | a 5xx the call fetched itself, retryable or not: a 501 or 505, which the retry policy does not re-send, still means the origin could not serve the request | a 429: the origin is up and asked us to slow down, which the rate budget handles |
-| a network failure or timeout, in the send or the body read | our own side's failures: an unencodable header, an unsupported scheme, an invalid URL, our pool running out of connections |
+| a network failure or timeout, in the send or the body read, the call's deadline cutting off an attempt on the network included | our own side's failures: an unencodable header, an unsupported scheme, an invalid URL, our pool running out of connections |
 | | a redirect loop past `max_redirects`: the origin answered every hop, and the loop is one URL's configuration, as a 4xx is |
 | | a failure on a hop an auth flow made to mint a credential (that is the token host's failure) |
 | | a cache hit, a stored 5xx, or an outcome shared from another identical request's fetch |
-| | a call cancelled (by its caller, or by the deadline's own timer), a body over the size cap, a refused SSRF destination |
+| | a call its caller cancelled, a deadline passing before the request reached the network, a body over the size cap, a refused SSRF destination |
 | | an exception a `stream()` block's own code raises, even an `OSError` or an httpx2 error: it is the caller's, not the origin's |
 
 Every other response is a success: a 4xx says the origin is answering.
 
-A call's deadline usually ends in a timeout that **does** count. Each attempt's timeouts are cut to the time the
-deadline leaves, so near the deadline httpx2's own connect or read timeout fires first, and that is a network timeout
-like any other. Only when the deadline's timer cancels the call first (during a backoff or a rate-budget wait, say)
-does it record nothing.
+A call that ends on its deadline while an attempt is on the network, waiting for the head or partway through the body,
+**does** count, as a timeout: an origin that hangs is failing, and it is the deadline's timer, not httpx2's own
+timeout, that ends such a call (each attempt's timeouts are cut to the time left, but httpx2 starts each phase's clock
+later). A deadline that passes before the attempt reached the network (in a rate-budget wait, a middleware or a token
+mint) records nothing, as does a caller cancelling the call itself, with `asyncio.timeout` or `wait_for` around it.
 
 ## Sharing and keying
 

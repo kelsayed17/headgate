@@ -406,6 +406,7 @@
       property headers
       property last_event_id
       property request_id
+      property retry
       property status_code
   '''
 # ---

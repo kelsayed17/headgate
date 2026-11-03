@@ -6,6 +6,45 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Added
+
+- `Stream.retry` and `EventParser.retry`: the reconnection time the server last set with an SSE `retry:` field, kept
+  across events as the WHATWG spec says, including a `retry:` sent in a block of its own. `Event.retry` is unchanged:
+  the field in that event's own block.
+
+### Changed
+
+- A header set in `HttpOptions(headers=...)` is withheld from an origin that is neither `base_url`'s nor trusted, as
+  the auth's credentials are, since a static key is often configured there. `User-Agent`, `Accept`,
+  `Accept-Encoding` and `Accept-Language` are still sent. Add an origin to `trusted_origins` if it needs the rest.
+- `x-should-retry: true` counts only on an error status: a 2xx or 3xx carrying it is the answer, never re-sent.
+
+### Fixed
+
+- A client-wide header such as `X-Api-Key` was sent to another origin on a cross-origin redirect or an absolute
+  next-page link.
+- The HTTP cache served one caller's response to another when a call set its own value for a credential the auth
+  declares (an `Authorization` with `BearerAuth` or `CachedTokenAuth`, an `api_key` with `QueryParamAuth`). That value
+  now goes into the partition.
+- A `DecodeError` or `ResponseParseError` chained the codec's own error, which quotes the input, so a traceback or
+  `logger.exception` logged the body's values. They are raised without a cause, and `check_codec` checks the traceback.
+- A hedged call hung when its rate budget's `max_in_flight` was full: a failed send kept its slot while the hedge
+  waited for it. An answer arriving as the hedge timer fires no longer spends a retry, and a hedge cancelled before it
+  is sent gives its share back.
+- A call ended by its deadline while waiting on the origin never counted against the circuit breaker, so an origin that
+  accepts connections and never answers was never isolated. It now counts as a timeout, and a failure the fetch
+  marked counts however the block exits.
+- A POST answered `201` with `x-should-retry: true` was sent again.
+- `paginate` refused one `Idempotency-Key` for every page only when the call set it, not a view or the client.
+- Loop detection in a walk of POSTs compared the body's `repr`, which for an object without a value `repr` is its
+  address: a false "pagination loop", or a missed one. It compares the bytes sent.
+- An error response with a `charset` that names no text encoding (`base64`) raised a bare `LookupError`.
+- With an observer attached, a malformed `Link` on a deprecated response turned a success into a `ClientError`.
+- The pydantic encoder's `drop_none=True` kept a `None` inside a nested dict, unlike `to_builtins` and msgspec.
+- `testing.Respond(retry_after=1e6)` wrote `1e+06`, which no parser reads; it writes plain digits and refuses a
+  negative or non-finite value.
+- A deadline message wrote a long elapsed time in scientific notation (`1.23e+03s`).
+
 ## [0.10.0] - 2026-11-02
 
 A client whose wire is not JSON names its reader on one line: `body_reader` builds a reader from a bytes decoder in

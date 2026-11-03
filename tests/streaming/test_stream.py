@@ -356,6 +356,15 @@ async def test_a_block_without_data_yields_nothing_but_its_id_is_kept() -> None:
     assert events == [("a", "9")]
 
 
+async def test_the_reconnection_time_is_the_last_the_server_set() -> None:
+    """Report ``None`` before any ``retry:``, then the last one read, a ``retry:`` alone included."""
+    body = _Body(b"data: a\n\n", b"retry: 5000\n\n", b"data: b\n\n")
+    async with _client(_streaming(body, _SSE)).stream("events") as stream:
+        assert stream.retry is None
+        seen = [(event.data, event.retry, stream.retry) async for event in stream.aiter_events()]
+    assert seen == [("a", None, None), ("b", None, 5000)]
+
+
 async def test_events_split_anywhere_across_chunks_parse_whole() -> None:
     """Join a BOM, a UTF-8 character and a CRLF that arrive split across chunks."""
     body = _Body(b"\xef\xbb", b"\xbfdata: \xc3", b"\xa9t\xc3\xa9\r", b"\n\r", b"\ndata: b\r", b"\r")

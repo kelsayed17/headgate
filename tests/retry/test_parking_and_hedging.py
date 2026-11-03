@@ -351,6 +351,154 @@ async def test_an_answer_before_the_hedge_delay_cancels_the_hedge_timer() -> Non
     assert gate.cancelled == 1
 
 
+class _Releasing(httpx2.AsyncByteStream):
+    """A response body that calls *release* once, when it is closed."""
+
+    def __init__(self, inner: httpx2.AsyncByteStream, release: Callable[[], None]) -> None:
+        """Stream *inner*, releasing on the first close."""
+        self._inner = inner
+        self._release: Callable[[], None] | None = release
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self._inner:
+            yield chunk
+
+    @override
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+        if self._release is not None:
+            self._release()
+            self._release = None
+
+
+class _OneSlot(_Held):
+    """A held network that sends one request at a time, as a rate budget with ``max_in_flight=1`` does.
+
+    A send holds the slot from before it starts until its response is closed.
+    """
+
+    def __init__(self, changes: _Changes) -> None:
+        """Start with the slot free."""
+        super().__init__(changes)
+        self._slot = asyncio.Semaphore(1)
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        await self._slot.acquire()
+        response = await super().handle_async_request(request)
+        assert isinstance(response.stream, httpx2.AsyncByteStream)
+        response.stream = _Releasing(response.stream, self._slot.release)
+        return response
+
+
+async def test_a_failure_kept_while_a_hedge_waits_for_its_slot_gives_the_slot_up() -> None:
+    """Park a send's retryable failure while the hedge still runs, so a hedge queued for that send's slot is sent."""
+    changes = _Changes()
+    network, gate = _OneSlot(changes), _Gate(changes)
+    retry = RetryTransport(
+        transport=network, policy=RetryPolicy(budget=None, hedge=Hedge(after=_HEDGE_AFTER)), sleep=gate.sleep
+    )
+    request, context = _request(TestClock())
+
+    call = asyncio.create_task(retry.handle_async_request(request))
+    await changes.until(lambda: network.started and gate.waits)
+    gate.opened.set()
+    await _settle()
+    network.started[0].set_result(503)
+    await _settle()
+
+    assert len(network.started) == len(("first", "hedge")), "the hedge got the slot the failure gave up"
+    network.started[1].set_result(200)
+    assert (await call).status_code == httpx2.codes.OK
+    assert context.attempt == len(("first", "hedge"))
+
+
+async def test_a_failure_replaced_by_a_later_one_is_closed_and_the_later_one_answers() -> None:
+    """Close the failure a hedged round kept once a later send fails too, and end with that later failure."""
+    retry, network, gate, changes = _held(RetryPolicy(attempts=2, budget=None, hedge=Hedge(after=_HEDGE_AFTER)))
+    request, _ = _request(TestClock())
+
+    call = asyncio.create_task(retry.handle_async_request(request))
+    await changes.until(lambda: network.started and gate.waits)
+    gate.opened.set()
+    await changes.until(lambda: len(network.started) == len(("first", "hedge")))
+    network.started[0].set_result(503)
+    await _settle()
+    network.started[1].set_result(502)
+    response = await call
+
+    assert response.status_code == httpx2.codes.BAD_GATEWAY
+    assert not response.is_closed, "the last failure is answered unread, as without a hedge"
+    assert await response.aread() == b"answer"
+
+
+async def test_an_answer_with_the_hedge_timer_admits_no_hedge() -> None:
+    """Start no hedge, and spend no retry budget on one, when the first send answers as the hedge timer fires."""
+    clock = TestClock()
+    retry, network, gate, changes = _held(RetryPolicy(budget=_one_retry(clock), hedge=Hedge(after=_HEDGE_AFTER)))
+    observer = _Events()
+
+    first = asyncio.create_task(retry.handle_async_request(_observed(clock, observer)))
+    await changes.until(lambda: network.started and gate.waits)
+    network.started[0].set_result(200)
+    gate.opened.set()
+    assert (await first).status_code == httpx2.codes.OK
+
+    assert len(network.started) == 1
+    assert not [event for event in observer.events if isinstance(event, RetryScheduled)]
+    second = asyncio.create_task(retry.handle_async_request(_request(clock)[0]))
+    await changes.until(lambda: len(network.started) == len(("the first call", "the second", "its hedge")))
+    network.started[1].set_result(200)
+    assert (await second).status_code == httpx2.codes.OK
+
+
+class _Queued(_Held):
+    """A held network behind a rate budget: a send marks itself dispatched, unless :attr:`queue` holds it back."""
+
+    def __init__(self, changes: _Changes) -> None:
+        """Dispatch every send until :attr:`queue` is set."""
+        super().__init__(changes)
+        self.queue = False
+        self.queued = 0
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        if self.queue:
+            self.queued += 1
+            self._changes.note()
+            await asyncio.Event().wait()
+        CallContext.of(request).progress.mark_dispatched()
+        return await super().handle_async_request(request)
+
+
+@pytest.mark.parametrize(("queued", "hedged_again"), [(True, True), (False, False)], ids=["queued", "dispatched"])
+async def test_a_cancelled_hedge_gives_its_retry_back_if_never_dispatched(*, queued: bool, hedged_again: bool) -> None:
+    """Refund a losing hedge cancelled while queued in the rate budget, but not one the network was handed."""
+    clock = TestClock()
+    changes = _Changes()
+    network, gate = _Queued(changes), _Gate(changes)
+    policy = RetryPolicy(budget=_one_retry(clock), hedge=Hedge(after=_HEDGE_AFTER))
+    retry = RetryTransport(transport=network, policy=policy, sleep=gate.sleep, clock=clock)
+
+    first = asyncio.create_task(retry.handle_async_request(_request(clock)[0]))
+    await changes.until(lambda: network.started and gate.waits)
+    network.queue = queued
+    gate.opened.set()
+    await changes.until(lambda: network.queued or len(network.started) == len(("first", "hedge")))
+    network.started[0].set_result(200)
+    assert (await first).status_code == httpx2.codes.OK
+
+    network.queue = False
+    sent = len(network.started)
+    second = asyncio.create_task(retry.handle_async_request(_request(clock)[0]))
+    await changes.until(lambda: len(network.started) > sent)
+    await _settle()
+    assert len(network.started) - sent == (2 if hedged_again else 1)
+    network.started[sent].set_result(200)
+    assert (await second).status_code == httpx2.codes.OK
+
+
 # --- Sends the rate budget cannot admit before the deadline ---
 
 
@@ -619,3 +767,10 @@ async def test_a_status_the_server_says_to_retry_keeps_its_retry_after_and_is_na
     scheduled = [event for event in observer.events if isinstance(event, RetryScheduled)]
     assert [(event.reason, event.delay) for event in scheduled] == [("503", 2.0)]
     await response.aclose()
+
+
+def _observed(clock: TestClock, observer: _Events) -> httpx2.Request:
+    """Build a GET on *clock* whose call delivers every event to *observer*."""
+    request = httpx2.Request("GET", "https://api.test/orders")
+    CallContext(CallInfo(method="GET", url="orders"), clock=clock, emitter=Emitter((observer,))).attach(request)
+    return request

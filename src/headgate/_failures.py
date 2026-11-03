@@ -169,8 +169,8 @@ class CallSite:
     def retries_status(self, resp: httpx2.Response) -> bool:
         """Return whether the call's retry policy counts *resp*'s status as a failure to re-send, not an answer.
 
-        That is a status in its ``statuses``, or the server's ``x-should-retry: true``. Method safety plays no part: a
-        503 to a POST is a failure the policy would re-send were the POST safe to send again.
+        That is a status in its ``statuses``, or the server's ``x-should-retry: true`` on an error status. Method safety
+        plays no part: a 503 to a POST is a failure the policy would re-send were the POST safe to send again.
         """
         return self.retry is not None and self.retry.about(resp).failure
 
@@ -206,9 +206,15 @@ def body_snippet(resp: httpx2.Response) -> str | None:
     """Return a bounded, single-line view of an error response body, or ``None`` for a blank one.
 
     The upstream's own reason for a 4xx is the diagnosis (a 400 that names the missing field), so it is folded into the
-    ``ClientError`` message, bounded and whitespace-collapsed because that message may reach an API response.
+    ``ClientError`` message, bounded and whitespace-collapsed because that message may reach an API response. A
+    ``charset`` that is no text encoding (httpx2 takes ``base64`` or ``rot13``, which ``bytes.decode`` refuses) is read
+    as UTF-8, as no ``charset`` is.
     """
-    head = resp.content[:_SNIPPET_SCAN_BYTES].decode(resp.encoding or "utf-8", errors="replace")
+    scanned = resp.content[:_SNIPPET_SCAN_BYTES]
+    try:
+        head = scanned.decode(resp.encoding or "utf-8", errors="replace")
+    except LookupError:
+        head = scanned.decode("utf-8", errors="replace")
     text = " ".join(head.split())
     if not text:
         return None

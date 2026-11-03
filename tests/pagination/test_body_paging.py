@@ -35,6 +35,7 @@ from headgate import (
     TransportPolicy,
     UpstreamStatusError,
     Writer,
+    json_writer,
 )
 from headgate.msgspec import decoder, encoder
 from headgate.pagination import PageRequest, WritingPager
@@ -362,6 +363,54 @@ async def test_a_repeating_body_cursor_raises_instead_of_looping() -> None:
     assert (raised.value.method, raised.value.url) == ("POST", "search")
 
 
+class _Opaque:
+    """A body type with no repr of its own, so its repr is its address, which CPython reuses once it is freed."""
+
+    __slots__ = ("cursor",)
+
+    def __init__(self, cursor: str | None = None) -> None:
+        self.cursor = cursor
+
+
+#: A cursor walk over :class:`_Opaque` bodies, written as JSON.
+_OPAQUE_CURSOR: Final = BodyCursor[Page, Item, _Opaque](
+    items=items_of,
+    next=cursor_of,
+    put=lambda _body, cursor: _Opaque(cursor),
+    write=json_writer(lambda body: json.dumps({"cursor": body.cursor}).encode()),
+)
+
+#: Enough pages for CPython to hand a freed body's address to a later one.
+_MANY: Final = 50
+
+
+async def test_a_walk_tells_its_pages_apart_by_the_bytes_it_sends() -> None:
+    """Remember each page by its written body, not its repr: distinct cursors never read as a loop."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        cursor = json.loads(request.content)["cursor"]
+        number = 0 if cursor is None else int(cursor)
+        return _page(request, [number], None if number + 1 == _MANY else str(number + 1))
+
+    paginated = _Api(answer).client().paginate("search", body=_Opaque(), expect=decoder(Page), pages=_OPAQUE_CURSOR)
+
+    assert [item.id async for item in paginated] == list(range(_MANY))
+
+
+async def test_a_walk_finds_a_loop_among_bodies_that_are_equal_only_as_sent() -> None:
+    """Raise for a body written as one already sent, though it is another object of a type with no value repr."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return _page(request, [1], "same")
+
+    api = _Api(answer)
+    paginated = api.client().paginate("search", body=_Opaque(), expect=decoder(Page), pages=_OPAQUE_CURSOR)
+
+    with pytest.raises(ClientError, match="pagination loop"):
+        _ = [page async for page in paginated.pages()]
+    assert [json.loads(request.content) for request in api.sent] == [{"cursor": None}, {"cursor": "same"}]
+
+
 #: A 503, then the pages: the first send of the first page fails after it was written.
 def _flaky() -> Callable[[httpx2.Request], httpx2.Response]:
     """Answer the first request with a retryable 503, and every later one from the cursor pages."""
@@ -506,6 +555,22 @@ def test_a_walk_of_posts_refuses_a_fixed_key_in_the_configured_idempotency_heade
         _Api(_by_body_cursor, policy=policy).client().paginate(
             "search", body=first, expect=decoder(Page), pages=QUERY_CURSOR, headers={"x-request-key": "k"}
         )
+
+
+@pytest.mark.parametrize("where", ["view", "client"])
+def test_a_walk_of_posts_refuses_a_fixed_key_the_client_or_a_view_sends(where: str) -> None:
+    """Refuse a fixed key from ``with_options(headers=...)`` or ``HttpOptions(headers=...)``, in any case."""
+    api = _Api(_by_body_cursor)
+    headers = {"IDEMPOTENCY-KEY": "k"}
+    transport = httpx2.MockTransport(api.handle)
+    if where == "view":
+        client = api.client().with_options(headers=headers)
+    else:
+        client = StubClient(
+            base_url=_BASE, rate=_RATE, policy=api.policy, http=HttpOptions(transport=transport, headers=headers)
+        )
+    with pytest.raises(ValueError, match="idempotency key would be sent with every page's body"):
+        client.paginate("search", body=Query(kind="a", limit=2), expect=decoder(Page), pages=QUERY_CURSOR)
 
 
 def test_a_walk_of_gets_may_carry_an_idempotency_header() -> None:

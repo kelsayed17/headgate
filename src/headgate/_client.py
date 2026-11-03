@@ -53,6 +53,7 @@ from headgate._core import (
     CallInfo,
     CallStarted,
     Emitter,
+    Slot,
     current_timing,
     policy_is_disabled,
 )
@@ -134,6 +135,10 @@ _STREAM_ERROR_HEAD_BYTES = 4096
 #: refused to write, a scheme it cannot speak, our own connection pool running out of connections, and a redirect chain
 #: past ``max_redirects`` (the origin answered every hop; the loop is one URL's configuration, as a 4xx is).
 _LOCAL_FAILURES = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2.PoolTimeout, httpx2.TooManyRedirects)
+
+#: The running timer of the call's deadline, put on its context by ``AsyncBaseClient._deadline``: whether it fired is
+#: what tells the deadline cutting an attempt off from the caller's task being cancelled.
+_DEADLINE_TIMER = Slot[asyncio.Timeout]("deadline_timer")
 
 #: The request options that make a body a walk cannot rewrite page by page, so ``paginate`` refuses them.
 _UNPAGEABLE_BODIES = ("data", "content", "files")
@@ -601,9 +606,9 @@ class AsyncBaseClient:
             and ``body=`` together, both of which the overloads refuse too; for a walk its pager refuses
             (:meth:`~headgate.pagination.Pager.first` runs here, once); and for a first page with a body that cannot
             be sent as the walk says: a ``body=`` whose pager has no ``write``, a ``json=`` whose pager has one, or an
-            idempotency key (``idempotency_key=``, or the policy's header in ``headers=``), as one key on pages with
-            different bodies would have the server replay the first page's answer. A later page with a body is held
-            to the same rules, and raises from the iteration.
+            idempotency key (``idempotency_key=``, or the policy's header in ``headers=``, a view's or the client's),
+            as one key on pages with different bodies would have the server replay the first page's answer. A later
+            page with a body is held to the same rules, and raises from the iteration.
         """
         body, as_json, call_options = _walk_body(**options)
         # How a body is sent is the walk's: the pager's writer encodes every page's, whatever request the pager returns.
@@ -633,10 +638,15 @@ class AsyncBaseClient:
         return PageWalk(fetch, pages, first, source=self._source, limit=limit)
 
     def _one_key_for_every_page(self, options: PageOptions) -> bool:
-        """Return whether *options* fix one idempotency key for every call they go with."""
+        """Return whether every call made with *options* sends one fixed idempotency key.
+
+        The key is fixed by ``idempotency_key=``, or by the policy's header among those the call sends: its own
+        ``headers=``, the view's and the client's ``HttpOptions(headers=...)``, matched in any case.
+        """
         keys = self._policy.idempotency
-        header = ("Idempotency-Key" if keys is None else keys.header).lower()
-        return "idempotency_key" in options or any(name.lower() == header for name in options.get("headers", {}))
+        header = "Idempotency-Key" if keys is None else keys.header
+        own = httpx2.Headers(self._view.headers_for(options.get("headers")))
+        return "idempotency_key" in options or header in own or header in self._http_client.headers
 
     # A call, end to end.
 
@@ -857,7 +867,8 @@ class AsyncBaseClient:
         # Every TimeoutError raised inside the block is an OSError the exchange has already mapped onto a
         # ClientError, so one that reaches here is the deadline's own.
         try:
-            async with asyncio.timeout(remaining):
+            async with asyncio.timeout(remaining) as timer:
+                prepared.context.put(_DEADLINE_TIMER, timer)
                 yield
         except TimeoutError:
             context = prepared.context
@@ -865,7 +876,7 @@ class AsyncBaseClient:
                 site, unsent = self._site(prepared), ""
             else:
                 site, unsent = self._unsent_site(prepared), f", before attempt {context.attempt} was sent"
-            msg = f"{site.method} {site.url}: deadline exceeded after {context.elapsed():.3g}s{unsent}"
+            msg = f"{site.method} {site.url}: deadline exceeded after {_seconds(context.elapsed())}{unsent}"
             raise ClientTimeoutError(msg, **site.details()) from None
 
     # The exchange: one send under the origin's breaker.
@@ -931,13 +942,16 @@ class AsyncBaseClient:
         charged with:
 
         * **a failure**: a 5xx this request fetched, whether or not the retry policy re-sends it (a 501 is the origin
-          failing to serve the request as surely as a 503), and a network failure or timeout;
+          failing to serve the request as surely as a 503), and a network failure or timeout. The call's deadline
+          cutting off an attempt already handed to the network, before its head or mid-body, is such a timeout: the
+          deadline, not httpx2's own timeout, is what ends a call to an origin that hangs;
         * **nothing**: a 429 (the origin is up and asked us to slow down, which the rate budget handles); a network
           error of our own side's making, or a redirect loop (:data:`_LOCAL_FAILURES`, and an invalid URL); a failure
           on a hop an auth flow made to mint a credential (that is the credential host's failure); and an outcome
           another request's attempt produced (a cache hit, a stored 5xx served from the cache, or a download or failure
           the cache shared from an identical GET, :data:`~headgate.cache._transport.HOST_UNTESTED`), since only the
-          request that fetched tested the origin.
+          request that fetched tested the origin. The caller's task being cancelled, and the deadline passing before
+          the attempt reached the network (in a rate-budget wait, a middleware, a token mint), are nothing too.
         """
         request = prepared.request
         try:
@@ -959,6 +973,10 @@ class AsyncBaseClient:
                 # Its message, and so its traceback, quotes the header value it refused, usually the credential.
                 raise error from None
             raise error from exc
+        except asyncio.CancelledError:
+            if _cut_off_on_the_wire(prepared.context):
+                verdict.mark_failed()
+            raise
 
     def _network_failure(self, prepared: _Prepared, verdict: Verdict, exc: httpx2.HTTPError | OSError) -> ClientError:
         """Charge the network failure *exc* to the origin on *verdict*, and return the ``ClientError`` it becomes."""
@@ -1022,10 +1040,12 @@ class AsyncBaseClient:
         # The one place a reader's RefusedError is caught: it becomes the ClientError carrying the status the wire sent.
         except RefusedError as refused:
             raise refusal_error(refused, resp, site) from refused
+        # Neither error is chained to the reader's: a validation library's error may quote the input it refused (a
+        # token, say), which a traceback or logger.exception would repeat.
         except SHAPE_ERRORS as exc:
             if resp.is_success:
-                raise parse_error(exc, resp, site) from exc
-            raise status_error(resp, site) from exc
+                raise parse_error(exc, resp, site) from None
+            raise status_error(resp, site) from None
 
     def _site(self, prepared: _Prepared) -> CallSite:
         """Return where *prepared*'s call is now, for an error raised about it: the attempt count is read now."""
@@ -1099,6 +1119,24 @@ def _network_failure_charges_origin(exc: Exception) -> bool:
     flow made to mint a credential, or was shared by the cache from another request's attempt.
     """
     return not (isinstance(exc, _LOCAL_FAILURES) or failed_on_auth_hop(exc) or host_untested(exc))
+
+
+def _seconds(seconds: float) -> str:
+    """Return *seconds* as an error message writes them: to the hundredth, without trailing zeros, with an ``s``.
+
+    Never in scientific notation, which ``:g`` falls into from 1000 s on.
+    """
+    return f"{f'{seconds:.2f}'.rstrip('0').rstrip('.')}s"
+
+
+def _cut_off_on_the_wire(context: CallContext) -> bool:
+    """Return whether the call's own deadline fired while its attempt was on the network (see ``_sent``).
+
+    The deadline's timer says whether the cancellation is its own rather than the caller's; the attempt was on the
+    network once the rate budget handed it on.
+    """
+    timer = context.get(_DEADLINE_TIMER)
+    return timer is not None and timer.expired() and context.progress.dispatched
 
 
 def _breaker_gate(breaker: Breaker, verdict: Verdict) -> Callable[[], bool]:

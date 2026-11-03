@@ -187,7 +187,8 @@ class CallContext:
 
         Each phase keeps its own limit when that is shorter; a phase with no limit gets the time left. A call without a
         deadline, or a request without a ``timeout`` extension, is left as it is. Every layer that waits before a send
-        calls it, so the send that follows cannot outlast the call.
+        calls it, so the send that follows cannot outlast the call. httpx2 starts each phase's clock only when that
+        phase begins, so near the deadline it is the call's own deadline timer that ends the send, not these.
         """
         remaining = self.remaining()
         timeout = request.extensions.get("timeout")

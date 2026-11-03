@@ -4,8 +4,8 @@
 """The deadline: one bound on a whole logical call, from the policy, a route, or the call itself.
 
 A network that never answers stands in for every way a call can run long (a hung read, retries, rate-budget waits): the
-deadline cancels whatever is in flight and the call raises ``ClientTimeoutError``. The cancellation is the caller's
-budget running out, not the host failing, so the breaker records nothing.
+deadline cancels whatever is in flight and the call raises ``ClientTimeoutError``. An attempt it cuts off on the
+network is a host that did not answer in time, so the breaker counts it as a timeout.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import pytest
 
 from headgate import ClientTimeoutError, HttpOptions, Rate, Route, TransportPolicy, nothing
 from headgate.retry import NO_RETRY
+from headgate.testing import TestClock
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
 
@@ -51,7 +52,7 @@ def _client(policy: TransportPolicy, delay: float = 3600.0) -> StubClient:
 
 
 async def test_the_policy_deadline_bounds_a_call_that_hangs() -> None:
-    """Raise ``ClientTimeoutError`` naming the request once the policy's deadline passes, and charge no host."""
+    """Raise ``ClientTimeoutError`` naming the request once the policy's deadline passes, and charge the host."""
     client = _client(TransportPolicy(deadline=_SHORT, retry=NO_RETRY))
 
     with pytest.raises(ClientTimeoutError, match="deadline exceeded") as raised:
@@ -60,7 +61,7 @@ async def test_the_policy_deadline_bounds_a_call_that_hangs() -> None:
     error = raised.value
     assert (error.method, error.url, error.attempts) == ("GET", "series", 1)
     assert error.retryable is False
-    assert failures(_HOST) == 0, "the caller's budget ran out; the host said nothing"
+    assert failures(_HOST) == 1, "the host never answered the attempt the deadline cut off"
 
 
 async def test_a_route_deadline_applies_to_its_paths() -> None:
@@ -95,3 +96,42 @@ async def test_a_calls_deadline_must_be_positive(deadline: float) -> None:
     client = _client(TransportPolicy())
     with pytest.raises(ValueError, match="deadline"):
         await client.get("series", expect=nothing, deadline=deadline)
+
+
+class _HourLongNetwork(httpx2.AsyncBaseTransport):
+    """A network that lets *spent* seconds pass on *clock*, then never answers."""
+
+    def __init__(self, clock: TestClock, spent: float) -> None:
+        """Advance *clock* by *spent* on each send."""
+        self._clock = clock
+        self._spent = spent
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        self._clock.advance(self._spent)
+        await asyncio.sleep(3600)
+        raise AssertionError  # pragma: no cover - the deadline cancels the sleep
+
+
+@pytest.mark.parametrize(
+    ("spent", "written"),
+    [
+        pytest.param(1234.0, "1234s", id="long"),
+        pytest.param(2.5, "2.5s", id="fraction"),
+        pytest.param(0.0, "0s", id="none"),
+        pytest.param(1.004, "1s", id="rounded"),
+    ],
+)
+async def test_the_deadline_message_writes_the_elapsed_time_plainly(spent: float, written: str) -> None:
+    """Write the elapsed time to the hundredth, never in scientific notation, without trailing zeros."""
+    with TestClock().install() as clock:
+        client = StubClient(
+            base_url=f"https://{_HOST}",
+            rate=Rate.per_second(1000),
+            policy=TransportPolicy(deadline=_SHORT, retry=NO_RETRY),
+            http=HttpOptions(transport=_HourLongNetwork(clock, spent)),
+        )
+        with pytest.raises(ClientTimeoutError) as raised:
+            await client.get("series", expect=nothing)
+
+    assert str(raised.value).endswith(f"deadline exceeded after {written}")
