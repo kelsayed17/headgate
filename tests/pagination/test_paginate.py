@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, assert_type
+from typing import TYPE_CHECKING, Any, assert_type, cast
 
 import httpx2
 import msgspec
@@ -468,7 +468,7 @@ def test_a_body_no_pager_can_rewrite_is_refused(body: RequestOptions) -> None:
     """Refuse a form, raw or multipart body: a walk's body is ``json=``, or ``body=`` with ``write=``."""
     client = _Api(_by_cursor).client()
     with pytest.raises(ValueError, match="takes no data=, content= or files="):
-        client.paginate("items", expect=decoder(Page), pages=LinkHeader(items=items_of), **body)  # ty: ignore[no-matching-overload]
+        client.paginate("items", expect=decoder(Page), pages=LinkHeader(items=items_of), **cast("dict[str, Any]", body))
 
 
 @pytest.mark.parametrize(

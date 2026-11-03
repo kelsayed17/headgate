@@ -48,7 +48,7 @@ environment.
 
 ### 📜 Built on the standards
 
-17 specifications, most followed by default: `Retry-After`, the IETF `RateLimit` headers, Problem Details (RFC 9457),
+19 specifications, most followed by default: `Retry-After`, the IETF `RateLimit` headers, Problem Details (RFC 9457),
 `Link` pagination (RFC 8288), `Deprecation` and `Sunset`, and `Idempotency-Key` once you turn it on.
 
 ## A client in one screen

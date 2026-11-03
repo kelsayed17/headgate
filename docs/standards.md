@@ -10,7 +10,7 @@ RFCs. headgate reads them so you do not have to, and follows them by default.
 
 <div class="grid cards" markdown>
 
--   :lucide-badge-check:{ .lg .hg-icon } **17 specifications**
+-   :lucide-badge-check:{ .lg .hg-icon } **19 specifications**
 
     ---
 
@@ -53,6 +53,7 @@ RFCs. headgate reads them so you do not have to, and follows them by default.
 | :lucide-clock-alert: [RFC 8470](https://www.rfc-editor.org/rfc/rfc8470) 425 Too Early | the server did not process the request | retried for every method, POST included, since nothing happened |
 | :lucide-git-pull-request-closed: [RFC 9113 §8.7](https://www.rfc-editor.org/rfc/rfc9113#section-8.7) HTTP/2 `REFUSED_STREAM` | the server refused the stream before doing any work | retried for every method, for the same reason |
 | :lucide-corner-down-right: [RFC 9110 §15.4](https://www.rfc-editor.org/rfc/rfc9110#section-15.4) Redirects | 303 becomes GET; 307 and 308 keep the method and body | followed as written, except a 307 or 308 (or a 301 on a method other than POST) that would [re-send a one-shot body](security.md#redirects), any https-to-http hop, and a [token mint's](auth.md#cachedtokenauth) hop to another origin |
+| :lucide-search: [RFC 10008 §2.5](https://www.rfc-editor.org/rfc/rfc10008#section-2.5) QUERY redirects | a 302 keeps a QUERY a QUERY, body and all, where it turns other methods into GET | a 302 on a QUERY counts as re-sending its body, so a one-shot body is [refused](security.md#redirects) there as on a 307 or 308 |
 
 ## Waiting when asked
 
@@ -60,7 +61,7 @@ RFCs. headgate reads them so you do not have to, and follows them by default.
 | --- | --- | --- |
 | :lucide-hourglass: [RFC 9110 §10.2.3](https://www.rfc-editor.org/rfc/rfc9110#section-10.2.3) `Retry-After` | how long to wait before trying again, in seconds or as a date | [waited exactly](retries.md#retry-after) on a 429 or 503, up to a cap; past it the call fails at once and tells you when to come back |
 | :lucide-octagon-pause: [RFC 6585 §4](https://www.rfc-editor.org/rfc/rfc6585#section-4) 429 Too Many Requests | the client is over its rate limit | raised as `RateLimitError`, and [pauses the shared budget](rate-budgets.md#server-feedback) so other calls stop too |
-| :lucide-gauge: [RateLimit headers](https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers/) (IETF draft) | `RateLimit` and `RateLimit-Policy` say how much quota is left and when it returns | an exhausted quota pauses the [rate budget](rate-budgets.md#server-feedback) until it returns; other quota units are skipped |
+| :lucide-gauge: [RateLimit headers](https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers-11/) (IETF draft -11) | `RateLimit` and `RateLimit-Policy` say how much quota is left and when it returns | an exhausted quota pauses the [rate budget](rate-budgets.md#server-feedback) until it returns; other quota units are skipped |
 | :lucide-braces: [RFC 9651](https://www.rfc-editor.org/rfc/rfc9651) Structured Field Values | the syntax the RateLimit headers are written in | parsed with the RFC's own limits; a malformed field is ignored, as the draft asks |
 
 ## Reading responses
@@ -85,6 +86,7 @@ RFCs. headgate reads them so you do not have to, and follows them by default.
 | Standard | What it says | What headgate does |
 | --- | --- | --- |
 | :lucide-network: [RFC 6052](https://www.rfc-editor.org/rfc/rfc6052) NAT64 | `64:ff9b::/96` carries an IPv4 address inside IPv6 | the [SSRF guard](security.md#the-ssrf-guard) judges such an address by the IPv4 address it reaches |
+| :lucide-ban: [RFC 3879](https://www.rfc-editor.org/rfc/rfc3879) IPv6 site-local | `fec0::/10` is deprecated, though some networks still route it | the [SSRF guard](security.md#the-ssrf-guard) refuses it, although Python's `ipaddress` counts it as global |
 | :lucide-code: [PEP 750](https://peps.python.org/pep-0750/) Template strings | Python 3.14's `t"..."` keeps values apart from the template | each value in a [path](security.md#paths-built-from-values) is percent-encoded as exactly one segment |
 
 ## Caching: where headgate chooses differently

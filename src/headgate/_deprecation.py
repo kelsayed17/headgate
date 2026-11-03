@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 __all__ = ["announce_deprecation", "deprecation_of", "parse_deprecation", "parse_http_date"]
 
-#: An RFC 8941 Date: ``@`` and an Integer of at most 15 digits.
+#: An RFC 9651 Date: ``@`` and an Integer of at most 15 digits.
 _SF_DATE: Final = re.compile(r"@(-?[0-9]{1,15})")
 
 #: What parsing a date can raise: a value ``parsedate_to_datetime`` rejects, or a timestamp past ``datetime``'s range.
