@@ -21,6 +21,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- Concurrent GETs that a middleware gives different timeouts no longer share one download. When a shared download
+  times out in a known phase, a waiting GET fetches for itself only if that phase was one the first request's deadline
+  shortened, rather than if any phase was. A timeout of no known phase still hands off when any phase was shortened.
 - The [standards page](https://kelsayed17.github.io/headgate/standards/) now lists the two RFCs headgate follows but
   left out: RFC 10008 (a 302 keeps a QUERY's body, so a one-shot body is refused there) and RFC 3879 (the SSRF guard
   refuses IPv6 site-local addresses). It also names the RateLimit draft revision headgate reads, -11.
