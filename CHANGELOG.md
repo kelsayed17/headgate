@@ -6,6 +6,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-02
+
+What an API client wrote around headgate is now headgate's: a pager over numbered pages, an offset walk that ends at
+an exact total, a base class for signed requests, cache paths matched by pattern, and a public way for a client's tests
+to read back the cache and rate budgets it was built with. Nothing existing changes behavior; this is a minor release
+because it adds to the public API.
+
 ### Added
 
 - `PageNumber(items=, more=, param="page", start=1)`, a pager over numbered pages: page *n* + 1 follows page *n* on
@@ -560,7 +567,8 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/kelsayed17/headgate/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/kelsayed17/headgate/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/kelsayed17/headgate/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/kelsayed17/headgate/compare/v0.7.0...v0.8.0
