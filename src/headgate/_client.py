@@ -103,6 +103,7 @@ from headgate.pagination import PageRequest, WritingPager
 from headgate.pagination._paginated import PageWalk
 from headgate.ratelimit import UNLIMITED
 from headgate.ratelimit._budget import BudgetPausedError
+from headgate.ratelimit._budgets import PathBudgets
 from headgate.retry import NO_RETRY, RetryPolicy
 from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY
 from headgate.streaming._stream import OpenStream
@@ -116,11 +117,12 @@ if TYPE_CHECKING:
     from headgate._responses import RefusalCheck
     from headgate.breaker._breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
+    from headgate.cache import HttpCache
     from headgate.pagination import PageLimit, Pager, Paginated
     from headgate.ratelimit import Rate, RateBudget
     from headgate.streaming import Stream
 
-__all__ = ["AsyncBaseClient", "Method", "RequestOptions"]
+__all__ = ["AsyncBaseClient", "Built", "Method", "RequestOptions", "built_with"]
 
 type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]
 """The HTTP methods a client sends: one verb each, and :meth:`AsyncBaseClient.stream`'s ``method``."""
@@ -254,6 +256,32 @@ class _Prepared:
     report: _Report = field(default_factory=_Report)
 
 
+@dataclass(frozen=True, slots=True)
+class Built:
+    """What a client was built with, for :mod:`headgate.testing` to read back: its cache, its budgets, its pool."""
+
+    cache: HttpCache | None
+    budgets: PathBudgets
+    http: httpx2.AsyncClient
+
+
+#: The key a client keeps its :class:`Built` under, in its ``__dict__``. Not an identifier, so no attribute of a
+#: subclass can collide with it, and a view (a shallow copy) shares it.
+_BUILT = "headgate.built"
+
+
+def built_with(client: AsyncBaseClient) -> Built:
+    """Return what *client* (or the client a view was made from) was built with.
+
+    :raises TypeError: for a client whose ``AsyncBaseClient.__init__`` never ran, so that was built with nothing.
+    """
+    built = vars(client).get(_BUILT)
+    if not isinstance(built, Built):
+        msg = f"{type(client).__name__} was never built: its __init__ must call super().__init__()"
+        raise TypeError(msg)
+    return built
+
+
 class AsyncBaseClient:
     """Async base for HTTP API clients. Configured through ``__init__``, which builds the transport stack once.
 
@@ -331,8 +359,10 @@ class AsyncBaseClient:
         self._view = ROOT_DEFAULTS
         self._owns_pool = True
         credentials = Credentials.of(base_url=base_url, auth=auth, http=http)
-        stack = build_transport_stack(rate, policy, http, self._timing, credentials)
+        budgets = PathBudgets(default=rate, rules=policy.rate_limits, timing=self._timing)
+        stack = build_transport_stack(budgets, policy, http, self._timing, credentials)
         self._http_client = build_http_client(base_url=base_url, credentials=credentials, http=http, transport=stack)
+        vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client)
 
     async def __aenter__(self) -> Self:
         """Return the client; leaving the block closes it (a view's block closes nothing, see :meth:`with_options`)."""

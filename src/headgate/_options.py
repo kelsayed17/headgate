@@ -136,7 +136,8 @@ def _set_phases(timeouts: Timeouts) -> list[tuple[str, float]]:
     return [(name, value) for name in _PHASES if (value := getattr(timeouts, name)) is not None]
 
 
-#: The timeouts of every phase a client leaves unset.
+#: The timeouts of every phase a client leaves unset. ``timeout.over(DEFAULT_TIMEOUTS)`` is what *timeout* resolves to
+#: on a client, every phase set: what a deadline computed from the timeouts reads.
 DEFAULT_TIMEOUTS: Final = Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)
 
 

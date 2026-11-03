@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
     from hishel import AsyncBaseStorage
 
-__all__ = ["HttpCache", "MethodFilter", "Partition", "PathFragmentFilter", "StatusCodeFilter", "filter_policy_of"]
+__all__ = ["HttpCache", "MethodFilter", "Partition", "PathFragmentFilter", "StatusCodeFilter"]
 
 #: The methods ``HttpCache(methods=...)`` may name: those a URL identifies, since the URL is the cache key.
 _URL_KEYED_METHODS: Final = frozenset({"GET", "HEAD"})
@@ -120,20 +120,20 @@ class HttpCache:
         if self.statuses is not None:
             object.__setattr__(self, "statuses", frozenset(self.statuses))
 
+    def filter_policy(self) -> FilterPolicy:
+        """Return the hishel policy this cache stores by: its own ``policy``, or one built from its three fields.
 
-def filter_policy_of(cache: HttpCache) -> FilterPolicy:
-    """Return the hishel policy *cache* stores by: its own ``policy``, or one built from its three fields.
-
-    A field left ``None`` takes its default; an empty one matches nothing.
-    """
-    if cache.policy is not None:
-        return cache.policy
-    methods = {"GET"} if cache.methods is None else cache.methods
-    statuses = {200} if cache.statuses is None else cache.statuses
-    requests: list[BaseFilter[Request]] = [MethodFilter(methods)]
-    if cache.paths is not None:
-        requests.append(PathFragmentFilter(cache.paths))
-    return FilterPolicy(request_filters=requests, response_filters=[StatusCodeFilter(statuses)])
+        A field left ``None`` takes its default; an empty one matches nothing. A test reads it to check what a client's
+        cache keeps (``filter_policy().request_filters``), without building the client's stack.
+        """
+        if self.policy is not None:
+            return self.policy
+        methods = {"GET"} if self.methods is None else self.methods
+        statuses = {200} if self.statuses is None else self.statuses
+        requests: list[BaseFilter[Request]] = [MethodFilter(methods)]
+        if self.paths is not None:
+            requests.append(PathFragmentFilter(self.paths))
+        return FilterPolicy(request_filters=requests, response_filters=[StatusCodeFilter(statuses)])
 
 
 def _check_path(path: str | re.Pattern[str]) -> None:

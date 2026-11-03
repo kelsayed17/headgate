@@ -50,7 +50,6 @@ from headgate._redirects import drop_followed_redirect_body, refuse_unreplayable
 from headgate._user_agent import user_agent
 from headgate.cache._credentials import credential_scope, mark_caller_credentials
 from headgate.cache._transport import ResilientCacheTransport
-from headgate.ratelimit._budgets import PathBudgets
 from headgate.ratelimit._transport import RateLimitTransport
 from headgate.retry._tracking import SendTrackingTransport
 from headgate.retry._transport import RetryTransport
@@ -64,7 +63,7 @@ if TYPE_CHECKING:
 
     from headgate._core import Timing
     from headgate._options import HttpOptions, TransportPolicy
-    from headgate.ratelimit import Rate, RateBudget
+    from headgate.ratelimit._budgets import PathBudgets
 
 __all__ = ["Credentials", "build_http_client", "build_transport_stack"]
 
@@ -123,7 +122,7 @@ def build_http_client(
 
 
 def build_transport_stack(
-    rate: Rate | RateBudget,
+    budgets: PathBudgets,
     policy: TransportPolicy,
     http: HttpOptions,
     timing: Timing,
@@ -131,11 +130,10 @@ def build_transport_stack(
 ) -> httpx2.AsyncBaseTransport:
     """Build the layers under ``httpx2.AsyncClient``, bottom-up: each statement wraps the layer before it.
 
-    The cache partitions its entries by *credentials*' auth, and its guard runs again below the last middleware, so a
-    middleware's declared credentials stay on trusted origins too.
+    The rate-limit layer spends from *budgets*. The cache partitions its entries by *credentials*' auth, and its guard
+    runs again below the last middleware, so a middleware's declared credentials stay on trusted origins too.
     """
     layer = SendTrackingTransport(transport=_network(http))
-    budgets = PathBudgets(default=rate, rules=policy.rate_limits, timing=timing)
     layer = RateLimitTransport(budgets=budgets, transport=layer)
     if (cache := policy.cache) is not None:
         scope = credential_scope(cache, credentials.auth, middleware=http.middleware, headers=http.headers)

@@ -69,6 +69,31 @@ mocked failure is retried exactly as production retries it, without the backoff.
 test open no breaker in the next. Assert on it with `headgate.health.breaker_states(registry)`. A client configured
 with a registry of its own keeps it.
 
+## What a client was built with
+
+A client fixes its options in its `__init__`, so a test of its configuration reads them back. `cache_of(client)` returns
+the `HttpCache` it was built with (or `None`), and its `filter_policy()` the hishel `FilterPolicy` it stores by: the
+`policy=` you gave, or the one built from `methods`, `paths` and `statuses`. `budget_for(client, url)` returns the
+`RateBudget` a request to `url` spends from, the first `RateRule` that matches it or the default; without a `url`, the
+default budget, built from `rate=`.
+
+```python
+from headgate.testing import budget_for, cache_of
+
+
+def test_candles_have_a_budget_of_their_own() -> None:
+    client = ExchangeClient(api_key="test")
+    assert budget_for(client, "products/BTC-USD/candles") is not budget_for(client)
+    assert budget_for(client).rate == Rate.per_second(10)
+
+
+def test_only_the_archives_are_cached(storage) -> None:
+    cache = cache_of(ArchiveClient(cache_storage=storage))
+    assert cache is not None and cache.ttl == 86_400.0
+```
+
+Neither sends anything. A view made with `with_options()` reads back as the client it was made from.
+
 ## Fault injection
 
 `FaultyTransport(schedule=[...], sleep=asyncio.sleep)` answers each send with the next step of its schedule, reports

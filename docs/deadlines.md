@@ -55,7 +55,20 @@ bound the whole body.
 
 `Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)` are the defaults, per phase, in seconds: obtaining a pooled
 connection (`pool`), connecting, writing the request, and waiting for each read. A `Timeouts` sets only the phases it
-names, so `HttpOptions(timeout=Timeouts(read=60.0))` keeps the other three defaults.
+names, so `HttpOptions(timeout=Timeouts(read=60.0))` keeps the other three defaults. The defaults are
+`headgate.DEFAULT_TIMEOUTS`, and `timeout.over(DEFAULT_TIMEOUTS)` is what a `Timeouts` resolves to on a client, every
+phase set. A client computing a deadline from its timeouts reads them there, such as one that leaves every attempt its
+whole connect and read timeout:
+
+```python
+from headgate import DEFAULT_TIMEOUTS, RetryPolicy, Timeouts
+
+SLOW_READ = Timeouts(read=120.0)
+RETRY = RetryPolicy()
+
+phases = SLOW_READ.over(DEFAULT_TIMEOUTS)
+SLOW_READ_DEADLINE = RETRY.attempts * (phases.connect + phases.read) + (RETRY.attempts - 1) * RETRY.backoff.max_wait
+```
 
 The layers stack the same way: a view made with `with_options(timeout=...)` replaces the phases it sets over the
 client's, and a call's `timeout=` the phases it sets over the view's. Every value must be positive.
