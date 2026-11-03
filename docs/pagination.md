@@ -81,18 +81,44 @@ as its 3xx, and `cache_ttl=` is each page's cache lifetime.
 | Strategy | The next page is | Last page |
 | --- | --- | --- |
 | `Cursor(items=, next=, param=)` | the same request with `param` set to the cursor `next(page)` returns | `next` returns `None` or `""`, or a page with no items |
-| `Offset(items=, page_size=, param="offset", start=0)` | the same request with `param` advanced by the items this page held | a page with fewer than `page_size` items |
+| `Offset(items=, page_size=, param="offset", start=0, total=None)` | the same request with `param` advanced by the items this page held | a page with fewer than `page_size` items, or one that reaches `total` |
+| `PageNumber(items=, more=, param="page", start=1)` | the same request with `param` one higher | `more` returns `False`, or a page with no items |
 | `LinkHeader(items=)` | the target of the response's `Link: <...>; rel="next"` (RFC 8288) | no `rel="next"` link, or a page with no items |
 | `NextUrl(items=, next=)` | the URL `next(page)` returns, absolute or relative | `next` returns `None` or `""`, or a page with no items |
 | `BodyCursor(items=, next=, put=)` | the same POST with its body `put(body, cursor)` | as `Cursor` |
-| `BodyOffset(items=, page_size=, offset=, put=)` | the same POST with its body `put(body, offset(body) + items)` | as `Offset` |
+| `BodyOffset(items=, page_size=, offset=, put=, total=None)` | the same POST with its body `put(body, offset(body) + items)` | as `Offset` |
 
-A page with no items ends a `Cursor`, `LinkHeader` or `NextUrl` walk even when it links to another: a link that
+A page with no items ends a `Cursor`, `PageNumber`, `LinkHeader` or `NextUrl` walk even when it links to another: a link that
 advances while returning nothing makes no progress, and following it spends the rate budget for nothing. For an
 endpoint that sends empty pages mid-walk, pass `stop_on_empty=False`.
 
 `Offset` sends only the offset; the page size goes in `params=`, under whatever name the endpoint uses (`limit`,
-`per_page`, `page_size`). A next URL from the wire (`LinkHeader`, `NextUrl`) is resolved against the URL that answered
+`per_page`, `page_size`). Where a page reports how many items the whole walk holds, `total=` reads it, and the walk ends
+once the offset reaches it, instead of asking for the empty page past a last page that happened to be full. A `total`
+that returns `None` (a count the server gives only as "at least", say) leaves the walk to end at a short page:
+
+```python
+def exact_total(page: SearchPage) -> int | None:
+    return page.total.value if page.total.relation == "eq" else None
+
+
+SEARCH_PAGES = Offset(items=hits_of, page_size=100, param="from", total=exact_total)
+```
+
+`PageNumber` asks for page 1, 2, 3 and so on, starting at the page the caller's `params=` name (an int, or a string of
+digits) or at `start` when they name none. `more` reads from a page whether another follows: a page count, a
+`has_more` flag, or a `next` link read only as a yes or no:
+
+```python
+def more(page: FilingsPage) -> bool:
+    return page.next is not None
+
+
+FILING_PAGES = PageNumber(items=results_of, more=more)
+```
+
+Asking for the next number on your own request, rather than following the link, keeps every page on your URL with
+your whole query, where a link the server built may drop a filter, or name another host. A next URL from the wire (`LinkHeader`, `NextUrl`) is resolved against the URL that answered
 and sent as an absolute URL, under the usual rules: credentials go only to [trusted origins](security.md), and the SSRF
 guard vets it when it is on.
 
@@ -179,17 +205,18 @@ import httpx2
 from headgate.pagination import PageRequest
 
 
-class PageNumbers:
-    """Pages addressed by number, ending at the page count the body reports."""
+class HeaderTokens:
+    """Pages linked by a token the response sends in a header, sent back as the query parameter ``token``."""
 
     def first(self, request: PageRequest) -> PageRequest:
-        return request.with_param("page", 1)
+        return request
 
-    def page_items(self, page: NumberedPage) -> list[Item]:
-        return page.items
+    def page_items(self, page: list[Item]) -> list[Item]:
+        return page
 
-    def next_page(self, page: NumberedPage, request: PageRequest, response: httpx2.Response) -> PageRequest | None:
-        return request.with_param("page", page.number + 1) if page.number < page.total_pages else None
+    def next_page(self, page: list[Item], request: PageRequest, response: httpx2.Response) -> PageRequest | None:
+        token = response.headers.get("X-Next-Page-Token")
+        return request.with_param("token", token) if token else None
 ```
 
 A pager walked with `body=` subclasses `WritingPager` instead, which makes every member abstract, so leaving one out

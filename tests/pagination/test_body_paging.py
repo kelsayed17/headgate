@@ -272,6 +272,24 @@ async def test_a_body_offset_walk_stops_at_an_empty_page() -> None:
     assert [body.offset for body in api.bodies(Query)] == [0, 2, 4]
 
 
+async def test_a_body_offset_walk_ends_at_the_total_a_page_reports() -> None:
+    """Stop once the offset reaches the total, so a full last page is the last one posted."""
+    api = _Api(_by_body_offset(total=4))
+    pages = BodyOffset[Page, Item, Query](
+        items=items_of, page_size=2, offset=offset_of, put=at_offset, total=lambda _: 4, write=QUERY
+    )
+    first = Query(kind="a", limit=2)
+    assert [
+        item.id async for item in api.client().paginate("search", body=first, expect=decoder(Page), pages=pages)
+    ] == [
+        0,
+        1,
+        2,
+        3,
+    ]
+    assert [body.offset for body in api.bodies(Query)] == [0, 2]
+
+
 @pytest.mark.parametrize("last", [None, ""], ids=["none", "empty"])
 async def test_a_body_cursor_walk_stops_when_no_cursor_follows(last: str | None) -> None:
     """End the walk at a page whose cursor is ``None`` or ``""``."""

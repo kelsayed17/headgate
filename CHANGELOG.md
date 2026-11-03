@@ -8,6 +8,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `PageNumber(items=, more=, param="page", start=1)`, a pager over numbered pages: page *n* + 1 follows page *n* on
+  the caller's own request while `more(page)` says another follows. The walk starts at the page the caller's
+  `params=` name, and reads a page's `next` link (or count, or flag) only as a yes or no, so every page keeps the
+  caller's URL and query. See [Strategies](docs/pagination.md#strategies).
+- `total=` on `Offset` and `BodyOffset` reads the exact number of items the walk holds from a page, and ends the walk
+  once the offset reaches it, instead of asking for the empty page past a full last page. A `total` of `None` leaves
+  the walk to end at a short page.
 - `Stream.retry` and `EventParser.retry`: the reconnection time the server last set with an SSE `retry:` field, kept
   across events as the WHATWG spec says, including a `retry:` sent in a block of its own. `Event.retry` is unchanged:
   the field in that event's own block.

@@ -73,7 +73,17 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
-from headgate.pagination import BodyCursor, BodyOffset, Cursor, LinkHeader, NextUrl, Offset, PageLimit, Paginated
+from headgate.pagination import (
+    BodyCursor,
+    BodyOffset,
+    Cursor,
+    LinkHeader,
+    NextUrl,
+    Offset,
+    PageLimit,
+    PageNumber,
+    Paginated,
+)
 from headgate.ratelimit import Rate, RateBudget, RateRule
 from headgate.retry import RetryPolicy
 
@@ -108,6 +118,7 @@ __all__ = [
     "Offset",
     "PageLimit",
     "PageLimitError",
+    "PageNumber",
     "PageOptions",
     "Paginated",
     "Problem",
