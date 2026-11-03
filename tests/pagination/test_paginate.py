@@ -26,6 +26,7 @@ from headgate import (
     Offset,
     PageLimit,
     PageLimitError,
+    PageNumber,
     RequestOptions,
     ResponseParseError,
     UpstreamStatusError,
@@ -71,6 +72,11 @@ def cursor_of(page: Page) -> str | None:
 def next_of(page: Page) -> str | None:
     """Return *page*'s next URL."""
     return page.next
+
+
+def has_next(page: Page) -> bool:
+    """Return whether *page* names a next page."""
+    return page.next is not None
 
 
 @dataclass
@@ -175,6 +181,119 @@ def test_offset_resumes_from_start_when_the_request_lacks_its_parameter() -> Non
     pages = Offset(items=items_of, page_size=1, start=3)
     following = pages.next_page(Page([Item(1)]), PageRequest("items"), httpx2.Response(200))
     assert following == PageRequest("items", {"offset": 4})
+
+
+async def test_offset_ends_at_the_total_without_fetching_the_empty_page_past_it() -> None:
+    """Stop once the offset reaches the total a page reports, so a last page that is full is the last fetched."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        offset = int(request.url.params["offset"])
+        return _page(request, [offset, offset + 1], cursor="4")
+
+    api = _Api(answer)
+    pages = Offset(items=items_of, page_size=2, total=lambda page: int(page.cursor or 0))
+    assert [item.id async for item in api.client().paginate("items", expect=decoder(Page), pages=pages)] == [0, 1, 2, 3]
+    assert [url.params["offset"] for url in api.sent] == ["0", "2"]
+
+
+async def test_offset_without_an_exact_total_ends_at_a_short_page() -> None:
+    """Read a total of ``None`` as none stated, leaving the walk to end at a short page."""
+    last = 4
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        offset = int(request.url.params["offset"])
+        return _page(request, [offset, offset + 1] if offset < last else [offset])
+
+    api = _Api(answer)
+    pages = Offset(items=items_of, page_size=2, total=lambda _: None)
+    assert [item.id async for item in api.client().paginate("items", expect=decoder(Page), pages=pages)] == [
+        0,
+        1,
+        2,
+        3,
+        4,
+    ]
+    assert [url.params["offset"] for url in api.sent] == ["0", "2", "4"]
+
+
+def _numbered(last: int, *, host: str = _BASE) -> Callable[[httpx2.Request], httpx2.Response]:
+    """Serve pages 1 to *last*, one item each (its number), each but the last linking to its successor on *host*."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        number = int(request.url.params["page"])
+        following = f"{host}/elsewhere?page={number + 1}" if number < last else None
+        return _page(request, [number] if number <= last else [], next=following)
+
+    return answer
+
+
+async def test_page_numbers_advance_on_the_callers_own_request_while_another_page_follows() -> None:
+    """Ask for page 1, 2, 3 on the caller's URL and query, reading the next link only as a yes or no."""
+    api = _Api(_numbered(3, host="https://elsewhere.test"))
+    pages = PageNumber(items=items_of, more=has_next)
+    paginated = api.client().paginate("items", expect=decoder(Page), pages=pages, params={"q": "x"})
+    items = [item async for item in paginated]
+    assert_type(items, list[Item])
+    assert [item.id for item in items] == [1, 2, 3]
+    assert [str(url) for url in api.sent] == [f"{_BASE}/items?q=x&page={n}" for n in (1, 2, 3)]
+
+
+@pytest.mark.parametrize("own", [2, "2"], ids=["int", "digits"])
+async def test_page_numbers_start_at_the_callers_own_page(own: object) -> None:
+    """Start at the page the caller's ``params=`` name, as an int or a string of digits."""
+    api = _Api(_numbered(3))
+    pages = PageNumber(items=items_of, more=has_next)
+    paginated = api.client().paginate("items", expect=decoder(Page), pages=pages, params={"page": own})
+    assert [item.id async for item in paginated] == [2, 3]
+    assert [url.params["page"] for url in api.sent] == ["2", "3"]
+
+
+async def test_page_numbers_take_their_parameter_and_start() -> None:
+    """Send the number under ``param``, from ``start`` when the caller gives none."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        number = int(request.url.params["p"])
+        return _page(request, [number], next="more" if number < 1 else None)
+
+    api = _Api(answer)
+    pages = PageNumber(items=items_of, more=has_next, param="p", start=0)
+    assert [item.id async for item in api.client().paginate("items", expect=decoder(Page), pages=pages)] == [0, 1]
+    assert [url.params["p"] for url in api.sent] == ["0", "1"]
+
+
+async def test_an_empty_numbered_page_ends_the_walk_unless_told_otherwise() -> None:
+    """End at a page with no items, even when it says another follows; ``stop_on_empty=False`` goes past it."""
+    last = 3
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        number = int(request.url.params["page"])
+        return _page(request, [] if number == 1 else [number], next="more" if number < last else None)
+
+    stopping = _Api(answer)
+    pages = PageNumber(items=items_of, more=has_next)
+    assert [item async for item in stopping.client().paginate("items", expect=decoder(Page), pages=pages)] == []
+    assert len(stopping.sent) == 1
+
+    going = _Api(answer)
+    pages = PageNumber(items=items_of, more=has_next, stop_on_empty=False)
+    assert [item.id async for item in going.client().paginate("items", expect=decoder(Page), pages=pages)] == [2, 3]
+
+
+def test_a_numbered_request_without_its_parameter_is_at_start() -> None:
+    """Treat a request without the page parameter as being at ``start``."""
+    pages = PageNumber(items=items_of, more=has_next, start=5)
+    following = pages.next_page(Page([Item(1)], next="more"), PageRequest("items"), httpx2.Response(200))
+    assert following == PageRequest("items", {"page": 6})
+
+
+@pytest.mark.parametrize("own", ["two", "-1", "²", -1, True, 2.0], ids=str)
+def test_a_page_number_that_is_not_one_is_refused(own: object) -> None:
+    """Refuse a caller's page that is not a whole number >= 0 when the walk is built."""
+    client = _Api(_numbered(3)).client()
+    with pytest.raises(ValueError, match="page must be a page number"):
+        client.paginate(
+            "items", expect=decoder(Page), pages=PageNumber(items=items_of, more=has_next), params={"page": own}
+        )
 
 
 async def test_link_header_pages_are_followed_as_absolute_urls() -> None:
@@ -359,8 +478,17 @@ def test_a_body_no_pager_can_rewrite_is_refused(body: RequestOptions) -> None:
         lambda: Offset(items=items_of, page_size=0),
         lambda: Offset(items=items_of, page_size=1, start=-1),
         lambda: Offset(items=items_of, page_size=1, param=""),
+        lambda: PageNumber(items=items_of, more=has_next, start=-1),
+        lambda: PageNumber(items=items_of, more=has_next, param=""),
     ],
-    ids=["empty-cursor-param", "zero-page-size", "negative-start", "empty-offset-param"],
+    ids=[
+        "empty-cursor-param",
+        "zero-page-size",
+        "negative-start",
+        "empty-offset-param",
+        "negative-page-start",
+        "empty-page-param",
+    ],
 )
 def test_a_strategy_refuses_a_bad_configuration(build: Callable[[], object]) -> None:
     """Refuse a strategy that could not page."""

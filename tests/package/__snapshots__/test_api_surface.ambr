@@ -216,7 +216,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.pagination]
   '''
   module headgate.pagination
-  __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageLimit', 'PageRequest', 'Pager', 'Paginated', 'WritingPager', 'parse_link_header']
+  __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageLimit', 'PageNumber', 'PageRequest', 'Pager', 'Paginated', 'WritingPager', 'parse_link_header']
   class BodyCursor(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
@@ -226,11 +226,12 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class BodyOffset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]', write: 'Writer[B] | None' = None) -> 'None'
+  class BodyOffset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]', total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field offset: Callable[[B], int]
       field put: Callable[[B, int], B]
+      field total: Callable[[P], int | None] | None = None
       field write: Writer[B] | None = None
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
@@ -261,11 +262,12 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Offset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', start: 'int' = 0, write: 'Writer[B] | None' = None) -> 'None'
+  class Offset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', start: 'int' = 0, total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field param: str = 'offset'
       field start: int = 0
+      field total: Callable[[P], int | None] | None = None
       field write: Writer[B] | None = None
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
@@ -273,6 +275,16 @@
   class PageLimit(object)(max_pages: 'int', on_limit: "Literal['raise', 'stop']" = 'raise') -> 'None'
       field max_pages: int
       field on_limit: Literal['raise', 'stop'] = 'raise'
+  class PageNumber(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', more: 'Callable[[P], bool]', param: 'str' = 'page', start: 'int' = 1, write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+      field items: Callable[[P], Sequence[I]]
+      field more: Callable[[P], bool]
+      field param: str = 'page'
+      field start: int = 1
+      field write: Writer[B] | None = None
+      field stop_on_empty: bool = True
+      def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
+      def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
+      def page_items(self, page: 'P') -> 'Sequence[I]'
   class PageRequest(Generic)(url: 'str | Template', params: 'Mapping[str, object] | None' = None, body: 'B | None' = None) -> 'None'
       field url: str | Template
       field params: Mapping[str, object] | None = None
@@ -470,7 +482,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['MAX_MINT_RESPONSE_BYTES', 'AsyncBaseClient', 'AuthError', 'BearerAuth', 'BodyCursor', 'BodyOffset', 'BreakerPolicy', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Codec', 'Cursor', 'DecodeError', 'EncodedBody', 'Expect', 'ForbiddenDestinationError', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'LinkHeader', 'Method', 'Middleware', 'Minted', 'Next', 'NextUrl', 'Offset', 'PageLimit', 'PageLimitError', 'PageOptions', 'Paginated', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'SecurityOptions', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'body_reader', 'decode_with', 'decoder_for', 'encoder_for', 'event_stream', 'json_reader', 'json_writer', 'nothing']
+  __all__ = ['MAX_MINT_RESPONSE_BYTES', 'AsyncBaseClient', 'AuthError', 'BearerAuth', 'BodyCursor', 'BodyOffset', 'BreakerPolicy', 'CachedTokenAuth', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Codec', 'Cursor', 'DecodeError', 'EncodedBody', 'Expect', 'ForbiddenDestinationError', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'LinkHeader', 'Method', 'Middleware', 'Minted', 'Next', 'NextUrl', 'Offset', 'PageLimit', 'PageLimitError', 'PageNumber', 'PageOptions', 'Paginated', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Reader', 'RefusalCheck', 'RefusedError', 'RequestOptions', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'SecurityOptions', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'body_reader', 'decode_with', 'decoder_for', 'encoder_for', 'event_stream', 'json_reader', 'json_writer', 'nothing']
   MAX_MINT_RESPONSE_BYTES = 1048576
   class AsyncBaseClient(object)(*, base_url: 'str', rate: 'Rate | RateBudget' = Rate(requests=1000000, period=1.0), auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryBudget(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=<headgate.breaker._registry.BreakerRegistry object at 0x…>), rate_limits=(), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), timeout=Timeouts(connect=None, read=None, write=None, pool=None), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, refusal_check=None, security=SecurityOptions(trusted_origins=frozenset(), allow_private_hosts=True, resolver=None), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray'), observers=(), middleware=())) -> 'None'
       def aclose(self) -> 'None'
@@ -497,11 +509,12 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class BodyOffset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]', write: 'Writer[B] | None' = None) -> 'None'
+  class BodyOffset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]', total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field offset: Callable[[B], int]
       field put: Callable[[B, int], B]
+      field total: Callable[[P], int | None] | None = None
       field write: Writer[B] | None = None
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
@@ -605,11 +618,12 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Offset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', start: 'int' = 0, write: 'Writer[B] | None' = None) -> 'None'
+  class Offset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', start: 'int' = 0, total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field param: str = 'offset'
       field start: int = 0
+      field total: Callable[[P], int | None] | None = None
       field write: Writer[B] | None = None
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
@@ -618,6 +632,16 @@
       field max_pages: int
       field on_limit: Literal['raise', 'stop'] = 'raise'
   class PageLimitError(ClientError)(message: 'str', *, pages: 'int', **details: 'Unpack[ErrorDetails]') -> 'None'
+  class PageNumber(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', more: 'Callable[[P], bool]', param: 'str' = 'page', start: 'int' = 1, write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+      field items: Callable[[P], Sequence[I]]
+      field more: Callable[[P], bool]
+      field param: str = 'page'
+      field start: int = 1
+      field write: Writer[B] | None = None
+      field stop_on_empty: bool = True
+      def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
+      def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
+      def page_items(self, page: 'P') -> 'Sequence[I]'
   class PageOptions(dict)(no signature)
       closed
       key params: Mapping[str, object] | None (optional)
