@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import pkgutil
 import re
 from pathlib import Path
 
@@ -187,3 +188,30 @@ def test_every_docs_site_link_resolves(page: Path) -> None:
         if not guide.exists() or (match[2] and match[2] not in _anchors(guide)):
             broken.append(match[0])
     assert not broken, f"{page.name}: broken docs-site links {broken}"
+
+
+def _public_names() -> list[str]:
+    """Return every name in the ``__all__`` of headgate and of each of its public modules."""
+    root = importlib.import_module("headgate")
+    public = [f"headgate.{info.name}" for info in pkgutil.iter_modules(root.__path__) if not info.name.startswith("_")]
+    modules = [root, *map(importlib.import_module, public)]
+    return sorted({name for module in modules for name in module.__all__})
+
+
+def test_every_public_name_is_in_the_docs() -> None:
+    """Find every exported name in the README or a guide, so the docs, not only the API snapshot, show it exists."""
+    prose = "\n".join(page.read_text(encoding="utf-8") for page in _CURRENT_PAGES)
+    missing = [name for name in _public_names() if not re.search(rf"\b{re.escape(name)}\b", prose)]
+    assert not missing, f"exported but in no guide or README: {missing}"
+
+
+def test_every_rfc_the_source_cites_is_on_the_standards_page() -> None:
+    """List each RFC a comment or docstring in ``src/`` cites on the standards page, so the page stays complete."""
+    cited = {
+        number
+        for path in (_ROOT / "src").rglob("*.py")
+        for number in re.findall(r"\bRFC ?(\d{3,5})\b", path.read_text(encoding="utf-8"))
+    }
+    standards = (_ROOT / "docs" / "standards.md").read_text(encoding="utf-8")
+    missing = sorted(number for number in cited if not re.search(rf"\b(?:RFC ?|rfc){number}\b", standards))
+    assert not missing, f"cited in src/ but not on docs/standards.md: RFC {missing}"

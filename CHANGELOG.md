@@ -27,6 +27,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - The [standards page](https://kelsayed17.github.io/headgate/standards/) now lists the two RFCs headgate follows but
   left out: RFC 10008 (a 302 keeps a QUERY's body, so a one-shot body is refused there) and RFC 3879 (the SSRF guard
   refuses IPv6 site-local addresses). It also names the RateLimit draft revision headgate reads, -11.
+- Twenty exported names appeared in no guide, among them `RequestOptions`, `PageOptions`, `ViewOptions`, the SSRF
+  guard's `AddressGuard` and `PinnedHTTPTransport`, `RETRY_STATUSES` and `testing.Reply`. Each is now described where
+  it is used, and a test fails when an export, or an RFC the source cites, is missing from the docs.
 - A client-wide header such as `X-Api-Key` was sent to another origin on a cross-origin redirect or an absolute
   next-page link.
 - The HTTP cache served one caller's response to another when a call set its own value for a credential the auth
