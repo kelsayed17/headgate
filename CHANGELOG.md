@@ -6,39 +6,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
-## [0.11.0] - 2026-11-02
-
-What an API client wrote around headgate is now headgate's: a pager over numbered pages, an offset walk that ends at
-an exact total, a base class for signed requests, cache paths matched by pattern, and a public way for a client's tests
-to read back the cache and rate budgets it was built with. Nothing existing changes behavior; this is a minor release
-because it adds to the public API.
-
 ### Added
 
-- `PageNumber(items=, more=, param="page", start=1)`, a pager over numbered pages: page *n* + 1 follows page *n* on
-  the caller's own request while `more(page)` says another follows. The walk starts at the page the caller's
-  `params=` name, and reads a page's `next` link (or count, or flag) only as a yes or no, so every page keeps the
-  caller's URL and query. See [Strategies](docs/pagination.md#strategies).
-- `total=` on `Offset` and `BodyOffset` reads the exact number of items the walk holds from a page, and ends the walk
-  once the offset reaches it, instead of asking for the empty page past a full last page. A `total` of `None` leaves
-  the walk to end at a short page.
-- `SigningAuth`, the base class of an auth that signs every request with a provider's signer (a JWT bound to the
-  method and path, an HMAC or Ed25519 signature over the body). A subclass supplies `sign(request)` and declares what
-  it sets in `signed_headers` or `signed_params`; the base class reads the body first, leaves a request the caller
-  signed alone, signs a 401's request again once (a retry re-sends the first, possibly expired, signature), and
-  reports what it sets to the credential guard and the cache. See [SigningAuth](docs/auth.md#signingauth).
-- `HttpCache(paths=)` and `PathFragmentFilter` take compiled patterns beside whole-segment strings. A pattern is
-  searched for in the URL path, so a cache can keep what segments cannot name, such as a file name's prefix or
-  extension (`re.compile(r"/fut_fin_txt_\d{4}\.zip$")`). A pattern that matches an empty path raises `ValueError`, as a
-  fragment naming no segment does. See [What is stored](docs/caching.md#what-is-stored-and-for-how-long).
-- `headgate.testing.cache_of(client)` and `budget_for(client, url=None)` read back what a client was built with: the
-  `HttpCache` (or `None`), and the `RateBudget` a request to `url` spends from (the default budget without one). A
-  client's tests no longer import `headgate.cache._policy` or `headgate.ratelimit._budgets`, or walk its transport
-  stack. See [What a client was built with](docs/testing.md#what-a-client-was-built-with).
-- `HttpCache.filter_policy()` returns the hishel `FilterPolicy` the cache stores by: its own `policy`, or the one built
-  from `methods`, `paths` and `statuses`.
-- `headgate.DEFAULT_TIMEOUTS`, the timeouts of every phase a client leaves unset, is public, so a deadline computed from
-  a client's timeouts reads the real defaults. See [Timeouts](docs/deadlines.md#timeouts).
 - `Stream.retry` and `EventParser.retry`: the reconnection time the server last set with an SSE `retry:` field, kept
   across events as the WHATWG spec says, including a `retry:` sent in a block of its own. `Event.retry` is unchanged:
   the field in that event's own block.
@@ -77,6 +46,40 @@ because it adds to the public API.
 - A deadline message wrote a long elapsed time in scientific notation (`1.23e+03s`).
 - Every call left its context in a reference cycle (through the retry verdict's judge), so what it allocated was
   freed only at the next garbage collection, raising the memory a stream of calls held at its peak.
+
+## [0.11.0] - 2026-11-02
+
+What an API client wrote around headgate is now headgate's: a pager over numbered pages, an offset walk that ends at
+an exact total, a base class for signed requests, cache paths matched by pattern, and a public way for a client's tests
+to read back the cache and rate budgets it was built with. Nothing existing changes behavior; this is a minor release
+because it adds to the public API.
+
+### Added
+
+- `PageNumber(items=, more=, param="page", start=1)`, a pager over numbered pages: page *n* + 1 follows page *n* on
+  the caller's own request while `more(page)` says another follows. The walk starts at the page the caller's
+  `params=` name, and reads a page's `next` link (or count, or flag) only as a yes or no, so every page keeps the
+  caller's URL and query. See [Strategies](docs/pagination.md#strategies).
+- `total=` on `Offset` and `BodyOffset` reads the exact number of items the walk holds from a page, and ends the walk
+  once the offset reaches it, instead of asking for the empty page past a full last page. A `total` of `None` leaves
+  the walk to end at a short page.
+- `SigningAuth`, the base class of an auth that signs every request with a provider's signer (a JWT bound to the
+  method and path, an HMAC or Ed25519 signature over the body). A subclass supplies `sign(request)` and declares what
+  it sets in `signed_headers` or `signed_params`; the base class reads the body first, leaves a request the caller
+  signed alone, signs a 401's request again once (a retry re-sends the first, possibly expired, signature), and
+  reports what it sets to the credential guard and the cache. See [SigningAuth](docs/auth.md#signingauth).
+- `HttpCache(paths=)` and `PathFragmentFilter` take compiled patterns beside whole-segment strings. A pattern is
+  searched for in the URL path, so a cache can keep what segments cannot name, such as a file name's prefix or
+  extension (`re.compile(r"/fut_fin_txt_\d{4}\.zip$")`). A pattern that matches an empty path raises `ValueError`, as a
+  fragment naming no segment does. See [What is stored](docs/caching.md#what-is-stored-and-for-how-long).
+- `headgate.testing.cache_of(client)` and `budget_for(client, url=None)` read back what a client was built with: the
+  `HttpCache` (or `None`), and the `RateBudget` a request to `url` spends from (the default budget without one). A
+  client's tests no longer import `headgate.cache._policy` or `headgate.ratelimit._budgets`, or walk its transport
+  stack. See [What a client was built with](docs/testing.md#what-a-client-was-built-with).
+- `HttpCache.filter_policy()` returns the hishel `FilterPolicy` the cache stores by: its own `policy`, or the one built
+  from `methods`, `paths` and `statuses`.
+- `headgate.DEFAULT_TIMEOUTS`, the timeouts of every phase a client leaves unset, is public, so a deadline computed from
+  a client's timeouts reads the real defaults. See [Timeouts](docs/deadlines.md#timeouts).
 
 ## [0.10.0] - 2026-11-02
 
