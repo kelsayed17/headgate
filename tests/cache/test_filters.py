@@ -10,6 +10,7 @@ here in the shape hishel hands a filter at runtime.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import httpx2
@@ -39,6 +40,16 @@ def test_path_fragment_filter_matches_any_fragment() -> None:
 
     quote = Request("GET", "https://api.example.test/quotes/AAPL")
     assert f.apply(quote, None) is False
+
+
+def test_path_fragment_filter_searches_for_a_pattern() -> None:
+    """Cache a request whose path contains a match of a pattern, which can name part of a segment; never the query."""
+    f = PathFragmentFilter([re.compile(r"/fut_fin_txt_\d{4}\.zip$"), "releases"])
+
+    assert f.apply(Request("GET", "https://cftc.example.test/files/dea/history/fut_fin_txt_2019.zip"), None) is True
+    assert f.apply(Request("GET", "https://cftc.example.test/v1/releases/dates"), None) is True
+    assert f.apply(Request("GET", "https://cftc.example.test/files/dea/newcot/FinFutWk.txt"), None) is False
+    assert f.apply(Request("GET", "https://cftc.example.test/x?f=/fut_fin_txt_2019.zip"), None) is False
 
 
 def test_method_filter_matches_only_the_allowed_methods() -> None:
@@ -97,6 +108,17 @@ async def test_a_cache_stores_what_its_methods_paths_and_statuses_name(storage: 
     assert (cache.methods, cache.paths, cache.statuses) == (frozenset({"GET", "HEAD"}), ("/series",), {200, 203})
 
 
+async def test_a_cache_stores_the_paths_its_patterns_match(storage: AsyncSqliteStorage) -> None:
+    """Store a path matching a pattern beside the whole-segment fragments, and keep the pattern as given."""
+    archive = re.compile(r"/fut_fin_txt_\d{4}\.zip$")
+    cache = HttpCache(storage=storage, paths=[archive, "series"])
+    policy = filter_policy_of(cache)
+    assert _stores(policy, "GET", "https://api.example.test/history/fut_fin_txt_2019.zip", 200)
+    assert _stores(policy, "GET", "https://api.example.test/v1/series/GDP", 200)
+    assert not _stores(policy, "GET", "https://api.example.test/history/fut_fin_txt_2019.txt", 200)
+    assert cache.paths == (archive, "series")
+
+
 async def test_empty_methods_or_statuses_store_nothing(storage: AsyncSqliteStorage) -> None:
     """Store nothing for ``methods=()`` or ``statuses=()``, as ``paths=()`` does: empty is not the default."""
     for cache in (
@@ -121,12 +143,13 @@ async def test_a_policy_of_your_own_is_used_as_it_is(storage: AsyncSqliteStorage
             r"^policy= decides what is stored, so it cannot be combined with methods=, paths= or statuses=$",
         ),
         (lambda s: HttpCache(storage=s, paths=["/"]), "fragment must name at least one path segment"),
+        (lambda s: HttpCache(storage=s, paths=[re.compile(r"\d*")]), r"must not match an empty path.*'\\\\d\*'"),
         (
             lambda s: HttpCache(storage=s, methods={"GET", "put", "post"}),
             r"^methods= may name only GET and HEAD \(got POST, PUT\): .*FilterPolicy\(use_body_key=True",
         ),
     ],
-    ids=["policy-and-methods", "empty-path", "body-method"],
+    ids=["policy-and-methods", "empty-path", "everything-pattern", "body-method"],
 )
 async def test_a_contradictory_cache_is_refused(
     storage: AsyncSqliteStorage, build: Callable[[AsyncSqliteStorage], HttpCache], message: str
