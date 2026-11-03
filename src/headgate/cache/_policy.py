@@ -29,6 +29,7 @@ from hishel import BaseFilter, FilterPolicy, Request, Response
 from headgate._core import check_fragment, path_has_fragment
 
 if TYPE_CHECKING:
+    import re
     from collections.abc import Iterable
 
     from hishel import AsyncBaseStorage
@@ -70,21 +71,23 @@ class HttpCache:
     entry (:class:`Partition`); entries are per credential unless it says otherwise.
 
     What is stored: a request whose method is in ``methods`` (``GET`` by default; ``GET`` and ``HEAD`` only, since the
-    URL is the key) and whose path holds one of ``paths`` (any path by default; matched as :class:`~headgate.RateRule`
-    matches), answered with a status in ``statuses`` (200 by default). An empty collection matches nothing, so stores
+    URL is the key) and whose path matches one of ``paths`` (any path by default), answered with a status in
+    ``statuses`` (200 by default). A string in ``paths`` is one or more whole segments, matched as
+    :class:`~headgate.RateRule` matches; a compiled pattern is searched for in the path, for what segments cannot say,
+    such as a file name's prefix or extension. An empty collection matches nothing, so stores
     nothing. ``policy`` is the escape hatch: a hishel ``FilterPolicy`` of your own, in place of those three, and the
     only way to cache a POST (``use_body_key=True``).
 
     :raises ValueError: for a ``ttl`` that is not a positive finite number, a method in ``methods`` other than ``GET``
-        and ``HEAD``, a fragment in ``paths`` that names no segment, or a ``policy`` given with any of ``methods``,
-        ``paths`` and ``statuses``.
+        and ``HEAD``, a fragment in ``paths`` that names no segment or a pattern that matches an empty path, or a
+        ``policy`` given with any of ``methods``, ``paths`` and ``statuses``.
     """
 
     storage: AsyncBaseStorage
     ttl: float | None = None
     partition: Partition = Partition.CREDENTIAL
     methods: Iterable[str] | None = None
-    paths: Iterable[str] | None = None
+    paths: Iterable[str | re.Pattern[str]] | None = None
     statuses: Iterable[int] | None = None
     policy: FilterPolicy | None = None
 
@@ -110,9 +113,10 @@ class HttpCache:
                 raise ValueError(msg)
             object.__setattr__(self, "methods", methods)
         if self.paths is not None:
-            for fragment in self.paths:
-                check_fragment(fragment)
-            object.__setattr__(self, "paths", tuple(self.paths))
+            paths = tuple(self.paths)
+            for path in paths:
+                _check_path(path)
+            object.__setattr__(self, "paths", paths)
         if self.statuses is not None:
             object.__setattr__(self, "statuses", frozenset(self.statuses))
 
@@ -132,20 +136,38 @@ def filter_policy_of(cache: HttpCache) -> FilterPolicy:
     return FilterPolicy(request_filters=requests, response_filters=[StatusCodeFilter(statuses)])
 
 
+def _check_path(path: str | re.Pattern[str]) -> None:
+    """Refuse a fragment naming no segment, and a pattern matching an empty path: each would match every path."""
+    if isinstance(path, str):
+        check_fragment(path)
+    elif path.search("") is not None:
+        msg = f"a path pattern must not match an empty path, or it matches every path (got {path.pattern!r})"
+        raise ValueError(msg)
+
+
+def _matches(path: str, rule: str | re.Pattern[str]) -> bool:
+    """Return whether the URL path *path* holds the fragment *rule*, or contains a match of the pattern *rule*."""
+    return path_has_fragment(path, rule) if isinstance(rule, str) else rule.search(path) is not None
+
+
 # Filters. Each decides from the request line or the response status alone, so none needs the body.
 
 
 class PathFragmentFilter(BaseFilter[Request]):
-    """Cache a request whose URL path holds any of *fragments*, each one or more whole segments, as a rule matches."""
+    """Cache a request whose URL path matches any of *fragments*, as :class:`HttpCache`'s ``paths`` match.
 
-    def __init__(self, fragments: Iterable[str]) -> None:
+    A string is one or more whole segments, matched as a rule matches; a compiled pattern is searched for in the path.
+    """
+
+    def __init__(self, fragments: Iterable[str | re.Pattern[str]]) -> None:
         """Match a path holding any of *fragments*.
 
-        :raises ValueError: for a fragment that names no path segment, which would match every path.
+        :raises ValueError: for a fragment that names no path segment, or a pattern that matches an empty path, either
+            of which would match every path.
         """
         self._fragments = tuple(fragments)
         for fragment in self._fragments:
-            check_fragment(fragment)
+            _check_path(fragment)
 
     @override
     def needs_body(self) -> bool:
@@ -154,9 +176,9 @@ class PathFragmentFilter(BaseFilter[Request]):
 
     @override
     def apply(self, item: Request, body: bytes | None) -> bool:
-        """Return whether *item*'s path holds one of the fragments."""
+        """Return whether *item*'s path matches one of the fragments."""
         path = httpx2.URL(item.url).path
-        return any(path_has_fragment(path, fragment) for fragment in self._fragments)
+        return any(_matches(path, fragment) for fragment in self._fragments)
 
 
 class MethodFilter(BaseFilter[Request]):
