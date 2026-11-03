@@ -16,7 +16,8 @@ here is what a client is written with:
 * codecs: :class:`Codec`, and :func:`decoder_for`, :func:`encoder_for` and :func:`decode_with`, which build a reader, a
   writer and a decode on any codec;
 * request bodies: :class:`EncodedBody`, :data:`Writer` and :func:`json_writer`;
-* auth: :class:`BearerAuth`, :class:`StaticHeaderAuth`, :class:`QueryParamAuth`, :class:`CachedTokenAuth`,
+* auth: :class:`BearerAuth`, :class:`StaticHeaderAuth`, :class:`QueryParamAuth`, :class:`SigningAuth`,
+  :class:`CachedTokenAuth`,
   :class:`Minted`, :data:`MAX_MINT_RESPONSE_BYTES`;
 * the policy values a client usually sets: :class:`RetryPolicy`, :class:`BreakerPolicy`, :class:`Rate`,
   :class:`RateBudget`, :class:`RateRule` and :class:`HttpCache`;
@@ -36,6 +37,7 @@ from headgate._auth import (
     CachedTokenAuth,
     Minted,
     QueryParamAuth,
+    SigningAuth,
     StaticHeaderAuth,
 )
 from headgate._client import AsyncBaseClient, Method, PageOptions, RequestOptions
@@ -136,6 +138,7 @@ __all__ = [
     "RetryPolicy",
     "Route",
     "SecurityOptions",
+    "SigningAuth",
     "StaticHeaderAuth",
     "Timeouts",
     "TransportError",

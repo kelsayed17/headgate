@@ -15,6 +15,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `total=` on `Offset` and `BodyOffset` reads the exact number of items the walk holds from a page, and ends the walk
   once the offset reaches it, instead of asking for the empty page past a full last page. A `total` of `None` leaves
   the walk to end at a short page.
+- `SigningAuth`, the base class of an auth that signs every request with a provider's signer (a JWT bound to the
+  method and path, an HMAC or Ed25519 signature over the body). A subclass supplies `sign(request)` and declares what
+  it sets in `signed_headers` or `signed_params`; the base class reads the body first, leaves a request the caller
+  signed alone, signs a 401's request again once (a retry re-sends the first, possibly expired, signature), and
+  reports what it sets to the credential guard and the cache. See [SigningAuth](docs/auth.md#signingauth).
 - `Stream.retry` and `EventParser.retry`: the reconnection time the server last set with an SSE `retry:` field, kept
   across events as the WHATWG spec says, including a `retry:` sent in a block of its own. `Event.retry` is unchanged:
   the field in that event's own block.

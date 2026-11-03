@@ -1,12 +1,13 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Provider-agnostic ``httpx2.Auth`` classes: static headers, query parameters, and a cached minted token.
+"""Provider-agnostic ``httpx2.Auth`` classes: static headers, query parameters, per-request signatures, minted tokens.
 
 ``httpx2.AsyncClient`` runs ``auth.async_auth_flow(request)`` once per logical request, above the transport stack, so a
 re-send by the retry transport repeats the already-signed request. Only a re-send the flow itself yields signs again:
-the single 401 re-mint in :class:`CachedTokenAuth`. An auth that needs a provider's own signer (a JWT signed with a
-vendor key) belongs in that provider's client.
+the single 401 re-sign in :class:`SigningAuth` and re-mint in :class:`CachedTokenAuth`. A provider's own signer (a JWT
+signed with a vendor key, an HMAC over the request) belongs in that provider's client, as a :class:`SigningAuth`
+subclass.
 
 **An explicit ``headers=`` or ``params=`` from the caller wins a clash.** Every class here merges setdefault-style,
 because the flow runs at send time and a plain assignment would override the caller.
@@ -23,9 +24,11 @@ Only the async flow is implemented; the clients are async-only.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import math
 import secrets
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, override
 
@@ -49,6 +52,7 @@ __all__ = [
     "CachedTokenAuth",
     "Minted",
     "QueryParamAuth",
+    "SigningAuth",
     "StaticHeaderAuth",
     "failed_on_auth_hop",
 ]
@@ -239,6 +243,102 @@ class QueryParamAuth(httpx2.Auth):
         if additions:
             request.url = request.url.copy_merge_params(additions)
         yield request
+
+
+class SigningAuth(httpx2.Auth, ABC):
+    """Sign each request with a provider's signer as it is sent, and sign it again once on a 401.
+
+    For a credential that is a signature over the request itself, made fresh for every request: a JWT bound to the
+    method and path, an HMAC or Ed25519 signature over a timestamp and the body. The signer is the subclass's
+    :meth:`sign`; the base class runs the flow around it:
+
+    * **The body is read first**, so a signature may cover it. httpx2 honors ``requires_request_body`` only in its
+      default flows, which this replaces.
+    * **A request the caller signed is left alone**: :meth:`skips` returns ``True`` for one that already carries any
+      of the signed headers or parameters, as an explicit header wins a clash with every auth here. Override it to
+      leave other requests unsigned too, such as a provider's public reads.
+    * **One re-sign on a 401**, never a loop. A re-send by the retry layer repeats the request as it was signed, so by
+      a late attempt a short-lived signature (a timestamp checked to 30 s, a JWT of two minutes) may have expired. The
+      401 that answers it is signed again, at the current time, and sent once more; a second 401 reaches the caller as
+      ``AuthError``. A 401 to a request this flow did not sign, or one sent without its signature (withheld from an
+      origin the client does not trust), is not re-sent.
+
+    **What it stamps is declared.** :attr:`signed_headers` and :attr:`signed_params` name what :meth:`sign` sets, and
+    are what :attr:`credential_headers` and :attr:`credential_params` report, so the client withholds exactly those
+    from an untrusted origin and the cache keeps them out of storage. A subclass that declares neither fails when it is
+    defined. The parameters are registered as secret, so error messages redact them.
+
+    **Its identity is the long-lived key.** :meth:`credential_identity` names the credential the signatures stand for,
+    so a cache keeps one key's responses apart from another's. By default each instance is its own identity (random
+    bytes drawn once); a subclass whose instances should share a cache partition when they hold the same key returns
+    the key's secret material.
+    """
+
+    #: The headers :meth:`sign` sets.
+    signed_headers: ClassVar[frozenset[str]] = frozenset[str]()
+    #: The query parameters :meth:`sign` sets.
+    signed_params: ClassVar[frozenset[str]] = frozenset[str]()
+
+    _identity: bytes | None = None
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a concrete subclass that declares nothing it signs with, and register its parameters as secret."""
+        super().__init_subclass__(**kwargs)
+        register_secret_params(cls.signed_params)
+        if not inspect.isabstract(cls) and not (cls.signed_headers or cls.signed_params):
+            msg = (
+                f"{cls.__name__} must declare the headers or parameters sign() sets, in signed_headers or signed_params"
+            )
+            raise TypeError(msg)
+
+    @property
+    def credential_headers(self) -> frozenset[str]:
+        """The headers :meth:`sign` sets (:attr:`signed_headers`), lower-cased."""
+        return frozenset(name.lower() for name in self.signed_headers)
+
+    @property
+    def credential_params(self) -> frozenset[str]:
+        """The query parameters :meth:`sign` sets (:attr:`signed_params`)."""
+        return self.signed_params
+
+    def credential_identity(self) -> bytes:
+        """Return bytes naming the key this auth signs with: by default, this instance's own, drawn once."""
+        if self._identity is None:
+            self._identity = secrets.token_bytes(32)
+        return self._identity
+
+    @abstractmethod
+    def sign(self, request: httpx2.Request) -> None:
+        """Sign *request* as it stands, at the current time, replacing any signature an earlier call set.
+
+        The body is read (``request.content``). Set only the headers and parameters this class declares.
+        """
+
+    def skips(self, request: httpx2.Request) -> bool:
+        """Return whether *request* is sent unsigned: by default, one already carrying a signed header or parameter."""
+        return self._carries(request)
+
+    def _carries(self, request: httpx2.Request) -> bool:
+        """Return whether *request* carries any of the signed headers or parameters."""
+        params = request.url.params
+        return any(name in request.headers for name in self.signed_headers) or any(
+            name in params for name in self.signed_params
+        )
+
+    @override
+    async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
+        if self.skips(request):
+            yield request
+            return
+        # The 401 path re-sends this request, so a streamed body is buffered before the first send.
+        await request.aread()
+        self.sign(request)
+        response = yield request
+        # A 401 to a request its signature never reached (the credential guard withheld it, or httpx2 dropped it on a
+        # cross-origin redirect) judged no signature, so it is not re-signed.
+        if response.status_code == httpx2.codes.UNAUTHORIZED and self._carries(response.request):
+            self.sign(request)
+            yield request
 
 
 @dataclass(frozen=True, slots=True)
