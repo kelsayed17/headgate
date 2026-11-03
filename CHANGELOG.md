@@ -68,6 +68,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `testing.Respond(retry_after=1e6)` wrote `1e+06`, which no parser reads; it writes plain digits and refuses a
   negative or non-finite value.
 - A deadline message wrote a long elapsed time in scientific notation (`1.23e+03s`).
+- Every call left its context in a reference cycle (through the retry verdict's judge), so what it allocated was
+  freed only at the next garbage collection, raising the memory a stream of calls held at its peak.
 
 ## [0.10.0] - 2026-11-02
 

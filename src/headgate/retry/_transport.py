@@ -61,6 +61,8 @@ from headgate.retry._classify import Attempted, Verdict, classify
 from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, RetryOutcome
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from headgate._core import Clock, SendProgress
     from headgate.retry._policy import Hedge, RetryBudget, RetryPolicy
 
@@ -212,10 +214,19 @@ class _Sequence:
         """Return what classification needs to know about this request and one attempt's *progress*."""
         return Attempted(method=self._method, keyed=self._keyed, progress=progress)
 
-    def _judge(self, result: httpx2.Response | Exception) -> RetryOutcome:
-        """Return this policy's verdict on *result*, another result of the call, as the current attempt produced it."""
-        verdict = classify(result, self._attempted(self._context.progress), self._policy)
-        return RetryOutcome(verdict.retryable, verdict.retry_after, failure=verdict.failure)
+    def _judge(self) -> Callable[[httpx2.Response | Exception], RetryOutcome]:
+        """Return this policy's verdict on another result of the call, as the current attempt produced it.
+
+        The judge holds the attempt's progress, not the context: it rides on the context (``RETRY_OUTCOME``), and one
+        holding the context back would leave every call's objects in a reference cycle, for the garbage collector.
+        """
+        attempted, policy = self._attempted(self._context.progress), self._policy
+
+        def judge(result: httpx2.Response | Exception) -> RetryOutcome:
+            verdict = classify(result, attempted, policy)
+            return RetryOutcome(verdict.retryable, verdict.retry_after, failure=verdict.failure)
+
+        return judge
 
     async def _send(self, request: httpx2.Request, *, hedge: bool = False, paid: bool = False) -> _Attempt:
         """Send *request* once, as a new attempt, and return its classified result with its history line added.
@@ -394,7 +405,7 @@ class _Sequence:
                 verdict = attempt.verdict
                 self._context.put(
                     RETRY_OUTCOME,
-                    RetryOutcome(verdict.retryable, verdict.retry_after, self._judge, failure=verdict.failure),
+                    RetryOutcome(verdict.retryable, verdict.retry_after, self._judge(), failure=verdict.failure),
                 )
                 decision = self._decide(attempt)
                 if decision.delay is None:
