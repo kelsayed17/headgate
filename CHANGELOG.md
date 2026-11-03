@@ -20,6 +20,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   it sets in `signed_headers` or `signed_params`; the base class reads the body first, leaves a request the caller
   signed alone, signs a 401's request again once (a retry re-sends the first, possibly expired, signature), and
   reports what it sets to the credential guard and the cache. See [SigningAuth](docs/auth.md#signingauth).
+- `HttpCache(paths=)` and `PathFragmentFilter` take compiled patterns beside whole-segment strings. A pattern is
+  searched for in the URL path, so a cache can keep what segments cannot name, such as a file name's prefix or
+  extension (`re.compile(r"/fut_fin_txt_\d{4}\.zip$")`). A pattern that matches an empty path raises `ValueError`, as a
+  fragment naming no segment does. See [What is stored](docs/caching.md#what-is-stored-and-for-how-long).
 - `Stream.retry` and `EventParser.retry`: the reconnection time the server last set with an SSE `retry:` field, kept
   across events as the WHATWG spec says, including a `retry:` sent in a block of its own. `Event.retry` is unchanged:
   the field in that event's own block.
