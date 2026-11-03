@@ -18,7 +18,6 @@ import pytest
 from hishel import FilterPolicy, Request, Response
 
 from headgate.cache import HttpCache, MethodFilter, PathFragmentFilter, StatusCodeFilter
-from headgate.cache._policy import filter_policy_of
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -93,7 +92,7 @@ def _stores(policy: FilterPolicy, method: str, url: str, status: int) -> bool:
 
 async def test_a_cache_stores_the_200s_of_every_get_by_default(storage: AsyncSqliteStorage) -> None:
     """Store a GET's 200 on any path, and neither a POST nor a 404, when the cache names nothing."""
-    policy = filter_policy_of(HttpCache(storage=storage))
+    policy = HttpCache(storage=storage).filter_policy()
     assert _stores(policy, "GET", "https://api.example.test/any/path", 200)
     assert not _stores(policy, "POST", "https://api.example.test/any/path", 200)
     assert not _stores(policy, "GET", "https://api.example.test/any/path", 404)
@@ -102,7 +101,7 @@ async def test_a_cache_stores_the_200s_of_every_get_by_default(storage: AsyncSql
 async def test_a_cache_stores_what_its_methods_paths_and_statuses_name(storage: AsyncSqliteStorage) -> None:
     """Store only the methods, path fragments and statuses the cache names."""
     cache = HttpCache(storage=storage, methods={"get", "HEAD"}, paths=["/series"], statuses=[200, 203])
-    policy = filter_policy_of(cache)
+    policy = cache.filter_policy()
     assert _stores(policy, "HEAD", "https://api.example.test/v1/series/GDP", 203)
     assert not _stores(policy, "GET", "https://api.example.test/v1/releases", 200)
     assert (cache.methods, cache.paths, cache.statuses) == (frozenset({"GET", "HEAD"}), ("/series",), {200, 203})
@@ -126,13 +125,13 @@ async def test_empty_methods_or_statuses_store_nothing(storage: AsyncSqliteStora
         HttpCache(storage=storage, statuses=()),
         HttpCache(storage=storage, paths=()),
     ):
-        assert not _stores(filter_policy_of(cache), "GET", "https://api.example.test/any/path", 200)
+        assert not _stores(cache.filter_policy(), "GET", "https://api.example.test/any/path", 200)
 
 
 async def test_a_policy_of_your_own_is_used_as_it_is(storage: AsyncSqliteStorage) -> None:
     """Store by the hishel policy given, in place of the three fields."""
     own = FilterPolicy(request_filters=[MethodFilter({"POST"})])
-    assert filter_policy_of(HttpCache(storage=storage, policy=own)) is own
+    assert HttpCache(storage=storage, policy=own).filter_policy() is own
 
 
 @pytest.mark.parametrize(

@@ -10,8 +10,8 @@ here is what a client is written with:
 
 * the client and its options: :class:`AsyncBaseClient`, :data:`Method`, :class:`RequestOptions`,
   :class:`PageOptions`, :class:`ViewOptions`, :class:`TransportPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`,
-  :class:`Timeouts`, :class:`IdempotencyKeys`, :class:`Route`, :class:`Middleware` and :data:`Next` (what a
-  middleware calls to continue);
+  :class:`Timeouts` and :data:`DEFAULT_TIMEOUTS`, :class:`IdempotencyKeys`, :class:`Route`, :class:`Middleware` and
+  :data:`Next` (what a middleware calls to continue);
 * declared responses: :class:`Expect`, :data:`Reader` and the readers, :data:`RefusalCheck`, :class:`RefusedError`;
 * codecs: :class:`Codec`, and :func:`decoder_for`, :func:`encoder_for` and :func:`decode_with`, which build a reader, a
   writer and a decode on any codec;
@@ -43,7 +43,15 @@ from headgate._auth import (
 from headgate._client import AsyncBaseClient, Method, PageOptions, RequestOptions
 from headgate._codec import Codec, decode_with, decoder_for, encoder_for
 from headgate._middleware import Middleware, Next
-from headgate._options import HttpOptions, IdempotencyKeys, Route, SecurityOptions, Timeouts, TransportPolicy
+from headgate._options import (
+    DEFAULT_TIMEOUTS,
+    HttpOptions,
+    IdempotencyKeys,
+    Route,
+    SecurityOptions,
+    Timeouts,
+    TransportPolicy,
+)
 from headgate._request_body import EncodedBody, Writer, json_writer
 from headgate._responses import (
     Expect,
@@ -90,6 +98,7 @@ from headgate.ratelimit import Rate, RateBudget, RateRule
 from headgate.retry import RetryPolicy
 
 __all__ = [
+    "DEFAULT_TIMEOUTS",
     "MAX_MINT_RESPONSE_BYTES",
     "AsyncBaseClient",
     "AuthError",
