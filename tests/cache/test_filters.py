@@ -111,7 +111,7 @@ async def test_a_cache_stores_the_paths_its_patterns_match(storage: AsyncSqliteS
     """Store a path matching a pattern beside the whole-segment fragments, and keep the pattern as given."""
     archive = re.compile(r"/fut_fin_txt_\d{4}\.zip$")
     cache = HttpCache(storage=storage, paths=[archive, "series"])
-    policy = filter_policy_of(cache)
+    policy = cache.filter_policy()
     assert _stores(policy, "GET", "https://api.example.test/history/fut_fin_txt_2019.zip", 200)
     assert _stores(policy, "GET", "https://api.example.test/v1/series/GDP", 200)
     assert not _stores(policy, "GET", "https://api.example.test/history/fut_fin_txt_2019.txt", 200)
