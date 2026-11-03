@@ -24,8 +24,9 @@ For each request :class:`RetryTransport` runs a sequence of attempts under the c
 
 A retry or hedge spends the retry budget when it is scheduled, and gives it back when it is never sent: the breaker
 opened or the deadline came during the wait, the rate budget could not admit it before the deadline
-(``BudgetBacklogError``, ``BudgetPausedError``, after which the call ends with the failure it has), or the call was
-cancelled during the wait. A send the rate budget refused is withdrawn from the call's attempts, with no history line.
+(``BudgetBacklogError``, ``BudgetPausedError``, after which the call ends with the failure it has), the call was
+cancelled during the wait, or the send was cancelled before the rate budget dispatched it (a hedge that lost while
+queued). A send the rate budget refused is withdrawn from the call's attempts, with no history line.
 
 A hedge is sent as a copy of the request (its own headers and extensions, the same replayable body) on the same call
 context, so concurrent sends share the context's send progress. That is sound because only idempotent methods are
@@ -60,6 +61,8 @@ from headgate.retry._classify import Attempted, Verdict, classify
 from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, RetryOutcome
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from headgate._core import Clock, SendProgress
     from headgate.retry._policy import Hedge, RetryBudget, RetryPolicy
 
@@ -211,10 +214,19 @@ class _Sequence:
         """Return what classification needs to know about this request and one attempt's *progress*."""
         return Attempted(method=self._method, keyed=self._keyed, progress=progress)
 
-    def _judge(self, result: httpx2.Response | Exception) -> RetryOutcome:
-        """Return this policy's verdict on *result*, another result of the call, as the current attempt produced it."""
-        verdict = classify(result, self._attempted(self._context.progress), self._policy)
-        return RetryOutcome(verdict.retryable, verdict.retry_after, failure=verdict.failure)
+    def _judge(self) -> Callable[[httpx2.Response | Exception], RetryOutcome]:
+        """Return this policy's verdict on another result of the call, as the current attempt produced it.
+
+        The judge holds the attempt's progress, not the context: it rides on the context (``RETRY_OUTCOME``), and one
+        holding the context back would leave every call's objects in a reference cycle, for the garbage collector.
+        """
+        attempted, policy = self._attempted(self._context.progress), self._policy
+
+        def judge(result: httpx2.Response | Exception) -> RetryOutcome:
+            verdict = classify(result, attempted, policy)
+            return RetryOutcome(verdict.retryable, verdict.retry_after, failure=verdict.failure)
+
+        return judge
 
     async def _send(self, request: httpx2.Request, *, hedge: bool = False, paid: bool = False) -> _Attempt:
         """Send *request* once, as a new attempt, and return its classified result with its history line added.
@@ -242,8 +254,11 @@ class _Sequence:
                 self._refund()
             raise
         except asyncio.CancelledError:
-            # A losing hedge, or the whole call reaching its deadline: the history still accounts for the send.
+            # A losing hedge, or the whole call reaching its deadline: the history still accounts for the send. One
+            # cancelled while queued in the rate budget never reached the network, so it gives back what it paid.
             context.add_note(f"{prefix}: cancelled after {_rounded(context.clock() - started)}")
+            if paid and not progress.dispatched:
+                self._refund()
             raise
         verdict = classify(result, self._attempted(progress), self._policy)
         context.add_note(f"{prefix}: {_describe(result, verdict)} after {_rounded(context.clock() - started)}")
@@ -262,10 +277,13 @@ class _Sequence:
     async def _hedged(self, hedge: Hedge, *, paid: bool) -> _Attempt:
         """Send the request, adding a hedge each time ``hedge.after`` passes unanswered; return the first answer.
 
-        A retryable failure from one send leaves the others running; once every send has failed, the last failure is
-        returned to the retry loop. Every send that is not returned is cancelled, and its response closed.
+        A retryable failure from one send leaves the others running, parked meanwhile (see :func:`_parked`) so it holds
+        no connection or rate-budget slot another send waits for; once every send has failed, the last failure is
+        returned to the retry loop. A hedge is admitted only when no answer is in hand, and starts at once, so a send
+        cancelled before it reached the network is one its own handler sees. Every send that is not returned is
+        cancelled, and its response closed.
         """
-        sends = [asyncio.create_task(self._send(self._request, paid=paid))]
+        sends = [asyncio.create_task(self._send(self._request, paid=paid), eager_start=True)]
         pending = set(sends)
         timer: asyncio.Task[None] | None = None
         extra = 0
@@ -273,30 +291,34 @@ class _Sequence:
         keep: _Attempt | None = None
         try:
             while True:
-                # Whether an attempt is left is judged when the timer fires (see _admit_hedge): a hedge created just
-                # before has not counted its send yet.
+                # Whether an attempt is left is judged when the timer fires (see _admit_hedge).
                 if timer is None and extra < hedge.max_extra:
                     timer = asyncio.create_task(_waited(self._sleep, hedge.after))
                 waiting: set[asyncio.Task[_Attempt] | asyncio.Task[None]] = {*pending}
                 if timer is not None:
                     waiting.add(timer)
                 done, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+                kept = failed
+                finished = [send for send in sends if send in done]
+                answer, failed = await _first_answer(finished, pending=pending, failed=failed)
+                if answer is not None:
+                    keep = answer
+                    return answer
                 if timer in done:
                     timer = None
                     if self._admit_hedge(hedge.after):
                         extra += 1
-                        task = asyncio.create_task(self._send(_clone(self._request), hedge=True, paid=True))
+                        hedged = self._send(_clone(self._request), hedge=True, paid=True)
+                        task = asyncio.create_task(hedged, eager_start=True)
                         sends.append(task)
                         pending.add(task)
                     else:
                         extra = hedge.max_extra
-                answer, failed = _first_answer([send for send in sends if send in done], pending=pending, failed=failed)
-                if answer is not None:
-                    keep = answer
-                    return answer
                 if not pending and failed is not None:
                     keep = failed
                     return failed
+                if failed is not kept and failed is not None:
+                    failed = await _parked_attempt(failed)
         finally:
             losers: list[asyncio.Task[_Attempt] | asyncio.Task[None]] = [*sends]
             if timer is not None:
@@ -307,7 +329,7 @@ class _Sequence:
         """Return whether a hedge may start now (an attempt left, time left, breaker closed, budget).
 
         Emits ``RetryScheduled`` when it may. The attempts are counted here, when the timer fires, rather than when it
-        starts: a timer starts right after the send before it is created, before that send has counted itself.
+        starts, so every send begun meanwhile counts.
         """
         if self._sent >= self._policy.attempts or self._stop_reason() is not None:
             return False
@@ -383,7 +405,7 @@ class _Sequence:
                 verdict = attempt.verdict
                 self._context.put(
                     RETRY_OUTCOME,
-                    RetryOutcome(verdict.retryable, verdict.retry_after, self._judge, failure=verdict.failure),
+                    RetryOutcome(verdict.retryable, verdict.retry_after, self._judge(), failure=verdict.failure),
                 )
                 decision = self._decide(attempt)
                 if decision.delay is None:
@@ -417,14 +439,14 @@ class _Sequence:
                 self._request.extensions["timeout"] = self._timeout
 
 
-def _first_answer(
+async def _first_answer(
     finished: list[asyncio.Task[_Attempt]], *, pending: set[asyncio.Task[_Attempt]], failed: _Attempt | None
 ) -> tuple[_Attempt | None, _Attempt | None]:
     """Take the *finished* sends out of *pending*; return the first answer among them, and the last failure so far.
 
-    An answer is an attempt that is not a retryable failure. A send the rate budget could not admit before the deadline
-    was never sent, so it is passed over while another send is still running or one has failed; otherwise its
-    ``BudgetBacklogError`` or ``BudgetPausedError`` is raised.
+    An answer is an attempt that is not a retryable failure. A failure a later one replaces is closed. A send the rate
+    budget could not admit before the deadline was never sent, so it is passed over while another send is still running
+    or one has failed; otherwise its ``BudgetBacklogError`` or ``BudgetPausedError`` is raised.
     """
     for task in finished:
         pending.discard(task)
@@ -433,6 +455,8 @@ def _first_answer(
         attempt = task.result()
         if not attempt.retryable_failure:
             return attempt, failed
+        if failed is not None:
+            await _release(failed)
         failed = attempt
     return None, failed
 

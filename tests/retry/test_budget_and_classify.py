@@ -138,7 +138,7 @@ def test_a_status_outside_the_policy_is_an_answer() -> None:
 
 @pytest.mark.parametrize(
     ("status", "header", "retryable"),
-    [(503, "false", False), (409, "true", True), (503, " TRUE ", True)],
+    [(503, "false", False), (409, "true", True), (400, "true", True), (503, " TRUE ", True)],
 )
 def test_x_should_retry_overrides_the_status_rules(status: int, header: str, *, retryable: bool) -> None:
     """Follow the server's ``x-should-retry`` over the status set and the method rule."""
@@ -146,6 +146,14 @@ def test_x_should_retry_overrides_the_status_rules(status: int, header: str, *, 
     verdict = classify(response, _attempted(), RetryPolicy())
 
     assert (verdict.failure, verdict.retryable) == (True, retryable)
+
+
+@pytest.mark.parametrize("status", [201, 302], ids=["created", "redirect"])
+def test_x_should_retry_true_leaves_a_success_or_redirect_an_answer(status: int) -> None:
+    """Return a 2xx or 3xx marked ``x-should-retry: true`` as an answer: the header judges error statuses only."""
+    response = httpx2.Response(status, headers={"x-should-retry": "true"})
+
+    assert classify(response, _attempted(), RetryPolicy()).failure is False
 
 
 def test_x_should_retry_is_ignored_when_the_policy_says_so() -> None:

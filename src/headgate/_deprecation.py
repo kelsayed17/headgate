@@ -10,7 +10,8 @@ observers, once per call, from the final response's head.
 Both formats of ``Deprecation`` are read: RFC 9745's structured-field date (``@1688169599``, seconds since the epoch)
 and the older drafts' ``true`` or HTTP-date. ``Sunset`` is an HTTP-date. A header whose value is neither is ignored, as
 RFC 9745 asks of an invalid one. The ``Link`` targets with ``rel="deprecation"`` and ``rel="sunset"`` are reported
-when either header is, resolved against the request URL and with any credential in them redacted.
+when either header is, resolved against the request URL and with any credential in them redacted; a target that is no
+URL is skipped.
 """
 
 from __future__ import annotations
@@ -20,13 +21,13 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import TYPE_CHECKING, Final
 
+import httpx2
+
 from headgate._core import Deprecated
 from headgate._url import sanitize_url
 from headgate.pagination._link import parse_link_header
 
 if TYPE_CHECKING:
-    import httpx2
-
     from headgate._core import CallContext, CallInfo
 
 __all__ = ["announce_deprecation", "deprecation_of", "parse_deprecation", "parse_http_date"]
@@ -69,12 +70,17 @@ def _link(response: httpx2.Response, rel: str) -> str | None:
     """Return the target of *response*'s first ``Link`` with relation *rel*, resolved and sanitized, or ``None``.
 
     The ``Link`` fields are read as RFC 8288 writes them, by the parser :class:`~headgate.pagination.LinkHeader`
-    follows: a link's ``rel`` holds relation types separated by spaces, compared without regard to case.
+    follows: a link's ``rel`` holds relation types separated by spaces, compared without regard to case. A target the
+    request URL cannot resolve (``<http://[::1>``) is skipped: the header is advisory, so it never fails the call.
     """
     for value in response.headers.get_list("link"):
         for link in parse_link_header(value):
             if rel in link.rels:
-                return sanitize_url(str(response.request.url.join(link.target)))
+                try:
+                    target = response.request.url.join(link.target)
+                except httpx2.InvalidURL:
+                    continue
+                return sanitize_url(str(target))
     return None
 
 

@@ -142,3 +142,23 @@ async def test_a_client_without_observers_reads_no_header() -> None:
     """Skip the parse when nobody listens: the call still succeeds."""
     fake, _ = _headers_call({"Deprecation": "true"})
     assert await client(fake).get("old", expect=as_bytes) == b""
+
+
+@pytest.mark.parametrize(
+    ("links", "expected"),
+    [
+        pytest.param(['<http://[::1>; rel="deprecation"'], None, id="alone"),
+        pytest.param(
+            ['<http://[::1>; rel="deprecation", </d>; rel="deprecation"'], "https://api.example.test/d", id="then"
+        ),
+    ],
+)
+async def test_a_link_that_is_no_url_is_skipped(links: list[str], expected: str | None) -> None:
+    """Skip a link the request's URL cannot resolve: the header is advisory, so the call it came on still succeeds."""
+    headers = httpx2.Headers([("Deprecation", "true"), *(("Link", link) for link in links)])
+    fake = FakeTransport().reply("GET", "/v1/old", httpx2.Response(200, content=b"ok", headers=headers))
+    recorder = Recorder()
+    assert await client(fake, recorder).get("old", expect=as_bytes) == b"ok"
+
+    (event,) = recorder.of(Deprecated)
+    assert (event.deprecated, event.link) == (True, expected)

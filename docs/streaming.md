@@ -55,7 +55,9 @@ that does not declare `text/event-stream` raises `ResponseParseError` at once; a
 
 `stream.last_event_id` is the id the server last set, `None` until it sets one and `""` once it resets it with an
 empty `id`. Pass it as `last_event_id=` when re-opening, and the request carries `Last-Event-ID` (none when it is
-empty) so the server resumes after it.
+empty) so the server resumes after it. `stream.retry` is the reconnection time in milliseconds the server last set,
+`None` until a `retry:` sets one: it holds across blocks, a `retry:` alone included, as a browser keeps it, while an
+event's own `retry` is only the field its block named. Wait that long before re-opening.
 
 For an event stream that is short and bounded, the buffered `event_stream` reader returns every event in a body, parsed
 the same way (see [responses](responses.md#readers)).

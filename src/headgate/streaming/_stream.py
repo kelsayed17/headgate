@@ -72,6 +72,16 @@ class Stream(Protocol):
         """
         ...
 
+    @property
+    def retry(self) -> int | None:
+        """The reconnection time in milliseconds the server last set, as of what :meth:`aiter_events` has read.
+
+        ``None`` before a ``retry:`` sets one. A ``retry:`` alone, in a block without data, sets it too, and it holds
+        until another replaces it, as a browser's ``EventSource`` keeps it; an event's own ``retry`` is only the field
+        its block named. Wait this long before re-opening the stream.
+        """
+        ...
+
     def aiter_bytes(self, chunk_size: int | None = None) -> AsyncIterator[bytes]:
         """Iterate the body as bytes, in chunks as they arrive or of *chunk_size* bytes."""
         ...
@@ -133,6 +143,16 @@ class OpenStream:
         the server resumes after it.
         """
         return None if self._events is None else self._events.last_event_id
+
+    @property
+    def retry(self) -> int | None:
+        """The reconnection time in milliseconds the server last set, as of what :meth:`aiter_events` has read.
+
+        ``None`` before a ``retry:`` sets one. A ``retry:`` alone, in a block without data, sets it too, and it holds
+        until another replaces it, as a browser's ``EventSource`` keeps it; an event's own ``retry`` is only the field
+        its block named. Wait this long before re-opening the stream.
+        """
+        return None if self._events is None else self._events.retry
 
     def aiter_bytes(self, chunk_size: int | None = None) -> AsyncIterator[bytes]:
         """Iterate the body as bytes, in chunks as they arrive or of *chunk_size* bytes."""

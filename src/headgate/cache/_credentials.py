@@ -29,9 +29,12 @@ below hishel for the network:
 The label rides the fragment because a fragment is never sent, and leaves the host, path and query a filter reads
 untouched. The auth's own credential is represented by its identity rather than by the header value it stamps, so a
 re-minted bearer token keeps its entries; a middleware that is a ``CredentialStamper`` too is represented by its
-identity the same way, so a signer whose signature changes on every request still finds its entries. The flip side: a
-call that overrides the auth's own header with ``headers=`` is partitioned by the auth's identity, not by the value it
-sent.
+identity the same way, so a signer whose signature changes on every request still finds its entries. A call that sets
+the auth's own header or parameter itself (``headers=``, ``params=``), which the auth then leaves alone, is labeled by
+the value it sent as well: the client's auth is wrapped by :func:`mark_caller_credentials`, which records on the
+request, before the auth runs, which of its declared names the call set. A header nothing declares and the client does
+not set on all its requests (one call's ``X-Api-Key``) labels nothing: only a response's ``Vary`` tells such requests
+apart.
 
 The key is per process, so credential-partitioned entries in a persistent storage are not found again after a restart,
 nor is an entry whose response varies on a request header (``Vary``); they expire by their TTL like any other.
@@ -42,7 +45,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-from typing import TYPE_CHECKING, Final
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final, override
 
 import httpx2
 
@@ -52,11 +56,18 @@ from headgate.cache._policy import Partition
 from headgate.errors import ClientConfigurationError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import AsyncGenerator, Iterable
 
     from headgate.cache._policy import HttpCache
 
-__all__ = ["ALWAYS_SECRET_HEADERS", "CredentialScope", "credential_scope"]
+__all__ = [
+    "ALWAYS_SECRET_HEADERS",
+    "CALLER_CREDENTIALS",
+    "CallerCredentials",
+    "CredentialScope",
+    "credential_scope",
+    "mark_caller_credentials",
+]
 
 #: Headers that carry a credential whatever set them; never stored. Lower case.
 ALWAYS_SECRET_HEADERS: Final = frozenset({"authorization", "proxy-authorization", "cookie"})
@@ -67,6 +78,63 @@ _PARTITION_KEY: Final = secrets.token_bytes(32)
 
 #: The fragment prefix that marks a partition label in the URL hishel stores.
 _LABEL_PREFIX: Final = "headgate-partition-"
+
+#: The request extension holding the :class:`CallerCredentials` of a request: which of the auth's declared credentials
+#: the call set itself. httpx2 hands a request's extensions to the redirects that follow it.
+CALLER_CREDENTIALS: Final = "headgate.caller_credentials"
+
+
+@dataclass(frozen=True, slots=True)
+class CallerCredentials:
+    """The headers (lower case) and query parameters the auth declares that a call set itself, before the auth ran."""
+
+    headers: frozenset[str]
+    params: frozenset[str]
+
+
+#: What a request that no :func:`mark_caller_credentials` auth ran on set itself, as far as the view knows: nothing.
+_NOTHING_SET: Final = CallerCredentials(frozenset(), frozenset())
+
+
+class _CallerMarking(httpx2.Auth):
+    """Mark each request with the :class:`CallerCredentials` it carries, then run the auth's flow unchanged."""
+
+    def __init__(self, auth: httpx2.Auth, *, headers: frozenset[str], params: frozenset[str]) -> None:
+        """Run *auth*, marking which of *headers* (lower case) and *params* each request carries before it does."""
+        self._auth = auth
+        self._headers = headers
+        self._params = params
+
+    @override
+    async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
+        request.extensions[CALLER_CREDENTIALS] = CallerCredentials(
+            headers=frozenset(name for name in self._headers if name in request.headers),
+            params=frozenset(name for name in self._params if name in request.url.params),
+        )
+        flow = self._auth.async_auth_flow(request)
+        try:
+            sent = await anext(flow)
+            while True:
+                response = yield sent
+                sent = await flow.asend(response)
+        except StopAsyncIteration:
+            return
+        finally:
+            await flow.aclose()
+
+
+def mark_caller_credentials(auth: httpx2.Auth | None) -> httpx2.Auth | None:
+    """Return *auth*, marking on each request which of its declared credentials the call set itself.
+
+    Every auth headgate ships leaves a header or parameter the call set alone, so a call's own ``Authorization`` is
+    sent under a name the cache represents by the auth's identity. The mark (:data:`CALLER_CREDENTIALS`) tells the
+    view to label by the call's value instead. Its flow runs before the request hooks and the transport stack, so it
+    is the only place that sees the request as the call built it. An auth that declares nothing is returned as it is.
+    """
+    if not isinstance(auth, CredentialStamper):
+        return auth
+    headers = frozenset(name.lower() for name in auth.credential_headers)
+    return _CallerMarking(auth, headers=headers, params=auth.credential_params)
 
 
 class CredentialScope:
@@ -126,13 +194,14 @@ class CredentialScope:
         """Return the URL and headers hishel gets for *request*: no credential, and its partition label if any."""
         credentials: list[bytes] = []
         kept_headers: list[tuple[bytes, bytes]] = []
+        caller = request.extensions.get(CALLER_CREDENTIALS, _NOTHING_SET)
         for raw_name, raw_value in request.headers.raw:
             name = raw_name.decode("latin-1").lower()
             if name not in self._dropped_headers:
                 kept_headers.append((raw_name, _digest(b"value", name.encode("latin-1"), raw_value).encode()))
                 if name in self._client_headers:
                     credentials.extend((b"client", name.encode("latin-1"), raw_value))
-            elif name not in self._represented_headers:
+            elif name not in self._represented_headers or name in caller.headers:
                 credentials.extend((b"header", name.encode("latin-1"), raw_value))
         url = request.url
         params = url.params.multi_items()
@@ -141,7 +210,7 @@ class CredentialScope:
         for name, value in params:
             if not (name in self._dropped_params or is_secret_param(name)):
                 kept_params.append((name, value))
-            elif name not in self._represented_params:
+            elif name not in self._represented_params or name in caller.params:
                 secret_params.extend((b"param", name.encode(), value.encode()))
         if url.userinfo:
             credentials.extend((b"userinfo", url.userinfo))

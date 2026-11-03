@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import traceback
 from typing import TYPE_CHECKING
 
 import httpx2
@@ -24,6 +25,7 @@ from headgate._responses import as_bytes
 from headgate.errors import (
     AuthError,
     ClientError,
+    DecodeError,
     RateLimitError,
     ResponseParseError,
     TransportError,
@@ -220,10 +222,36 @@ async def test_a_hand_written_reader_failing_on_a_2xx_is_a_parse_error(body: byt
     """Map what reader code over ``response.json()`` raises on a body of the wrong shape to ``ResponseParseError``."""
     reader = _first_item if raised is IndexError else _json_key
     async with _client(_answering(httpx2.codes.OK, body)) as client:
-        with pytest.raises(ResponseParseError) as caught:
+        with pytest.raises(ResponseParseError):
             await client.get("series", expect=reader)
 
-    assert isinstance(caught.value.__cause__, raised)
+
+def _validate(token: str) -> int:
+    """Refuse *token* as a validation library does, quoting the input value."""
+    raise ValueError(token)
+
+
+def _quoting_reader(resp: httpx2.Response) -> object:
+    """Fail as a codec does: a safe diagnosis, chained to the library's error that quotes the input value."""
+    try:
+        return _validate(resp.headers["x-token"])
+    except ValueError as exc:
+        msg = "token: expected an int"
+        raise DecodeError(msg) from exc
+
+
+@pytest.mark.parametrize("status", [httpx2.codes.OK, httpx2.codes.NOT_FOUND], ids=["2xx", "declared-non-2xx"])
+async def test_a_readers_error_is_not_chained_so_its_quote_of_the_body_stays_out_of_tracebacks(status: int) -> None:
+    """Chain nothing to the error a failed read becomes: the reader's own error may quote a secret it was handed."""
+    expect = Expect(_quoting_reader).on(httpx2.codes.NOT_FOUND, _quoting_reader)
+    answer = httpx2.Response(status, headers={"X-Token": _CANARY})
+    async with _client(lambda _request: answer) as client:
+        with pytest.raises(ClientError) as caught:
+            await client.get("series", expect=expect)
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__
+    assert _CANARY not in "".join(traceback.format_exception(caught.value))
 
 
 async def test_a_parse_error_names_the_status_and_the_request_line() -> None:
@@ -253,7 +281,6 @@ async def test_a_reader_failing_on_a_declared_non_2xx_falls_through_to_the_statu
             await client.get("series", expect=Expect(as_bytes).on(httpx2.codes.NOT_FOUND, _json_key))
 
     assert caught.value.status_code == httpx2.codes.NOT_FOUND
-    assert isinstance(caught.value.__cause__, KeyError)
 
 
 async def test_a_readers_refusal_is_chained_to_the_error_it_becomes() -> None:

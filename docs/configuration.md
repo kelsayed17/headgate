@@ -53,7 +53,7 @@ How requests are sent and responses read.
 | Field | Default | |
 | --- | --- | --- |
 | `transport` | `None` | a custom network transport (a test double, `headgate.curl.AsyncCurlTransport`); the default is an HTTP/2 `httpx2.AsyncHTTPTransport` |
-| `headers` | `{}` | sent on every request; any header the call implies or sets wins a clash (see [precedence](#precedence)) |
+| `headers` | `{}` | sent on every request to `base_url`'s origin and the `trusted_origins`; any other origin gets only `User-Agent` and the `Accept` headers among them ([security](security.md)); any header the call implies or sets wins a clash (see [precedence](#precedence)) |
 | `timeout` | `Timeouts()` | per-phase timeouts; a phase left unset takes its default |
 | `follow_redirects` | `True` | the client's default; a call can override it |
 | `max_redirects` | `5` | the hop limit, auth-flow hops included |

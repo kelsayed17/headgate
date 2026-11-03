@@ -27,7 +27,8 @@ async for item in client.paginate("items", expect=decoder(Page), pages=ITEM_PAGE
 
 Nothing is fetched until iteration starts, no page is kept once the iteration moves past it, stopping early fetches
 nothing more, and iterating again starts again from the first page. A page that leads back to a request already made
-(a cursor or next URL that repeats) raises `ClientError` instead of looping forever.
+(a cursor or next URL that repeats) raises `ClientError` instead of looping forever. A request is remembered by its URL,
+query and, for a POST, the bytes its body is sent as, so two bodies are one page exactly when they are sent alike.
 
 ## Collecting into a list
 

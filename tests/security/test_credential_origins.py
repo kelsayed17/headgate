@@ -285,7 +285,7 @@ async def test_a_mint_hops_redirect_off_its_origin_is_refused(target: str) -> No
 @pytest.mark.parametrize("marker", [None, 1, "https://other.example"], ids=["absent", "not-text", "other-origin"])
 def test_a_chain_marker_trusts_only_its_own_origin(marker: object) -> None:
     """Trust a request off the trusted origins only when its chain marker names exactly its origin."""
-    guard = CredentialGuard(auth=None, base_url=httpx2.URL(BASE), trusted_origins=(), cookie_jar=None)
+    guard = CredentialGuard(auth=None, base_url=httpx2.URL(BASE), http=HttpOptions(), cookie_jar=None)
     extensions = {} if marker is None else {CHAIN_ORIGIN: marker}
     request = httpx2.Request("GET", "https://login.example/x", extensions=extensions)
 
@@ -347,3 +347,59 @@ async def test_a_middlewares_credentials_stay_off_a_mint_hops_token_host() -> No
     assert "Authorization" in mint_hop.headers
     assert _signed(mint_hop) == set()
     assert _signed(call) == {"X-Signature", "sig"}
+
+
+@pytest.mark.parametrize(
+    ("redirects", "path"),
+    [({}, "https://cdn.example/page?cursor=2"), ({f"{BASE}/start": "https://files.example/signed"}, "start")],
+    ids=["absolute-url", "redirect"],
+)
+async def test_a_client_wide_header_is_withheld_from_a_foreign_origin(redirects: dict[str, str], path: str) -> None:
+    """Withhold a header set in ``HttpOptions.headers`` (a static key, often) from another origin, whatever its name."""
+    web = Web(redirects)
+    http = HttpOptions(headers={"X-Api-Key": "client-wide-secret"})
+    async with web.client(auth=StaticHeaderAuth({"X-Auth": "declared"}), http=http) as client:
+        await client.get(path, expect=RESPONSE)
+        await client.get("x", expect=RESPONSE)
+
+    *foreign, home = web.sent
+    assert all("X-Api-Key" not in request.headers for request in foreign if request.url.host != "api.example")
+    assert home.headers["X-Api-Key"] == "client-wide-secret"
+
+
+async def test_a_client_wide_header_reaches_a_trusted_origin() -> None:
+    """Keep a client-wide header on a hop to an origin in ``trusted_origins``."""
+    web = Web({f"{BASE}/start": "https://files.example/signed"})
+    http = HttpOptions(
+        headers={"X-Api-Key": "k"}, security=SecurityOptions(trusted_origins=frozenset({"https://files.example"}))
+    )
+    async with web.client(http=http) as client:
+        await client.get("start", expect=RESPONSE)
+
+    assert all(request.headers["X-Api-Key"] == "k" for request in web.sent)
+
+
+async def test_a_client_wide_negotiation_header_still_reaches_a_foreign_origin() -> None:
+    """Send the client's ``User-Agent`` and its content negotiation everywhere: they name a format, not a caller."""
+    negotiation = {
+        "User-Agent": "acme/1",
+        "Accept": "application/json",
+        "Accept-Language": "fr",
+        "Accept-Encoding": "br",
+    }
+    web = Web()
+    async with web.client(http=HttpOptions(headers=negotiation)) as client:
+        await client.get("https://cdn.example/x", expect=RESPONSE)
+
+    assert {name: web.sent[0].headers[name] for name in negotiation} == negotiation
+
+
+async def test_a_client_wide_header_named_like_the_mint_hops_own_stays_on_the_token_host() -> None:
+    """Keep a mint hop's own header on its token host when the client sets one of that name client-wide."""
+    web = Web()
+    http = HttpOptions(headers={"X-Client-Secret": "client-wide"})
+    async with web.client(auth=_MintingAuth(), http=http) as client:
+        await client.get("data", expect=RESPONSE)
+
+    mint_hop, _ = web.sent
+    assert mint_hop.headers["X-Client-Secret"] == "s3cret"

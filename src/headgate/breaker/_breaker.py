@@ -199,13 +199,14 @@ class CircuitBreaker:
         :class:`Verdict` the fetch marks as it goes, and what the call records on the way out is:
 
         * **a failure**: only when the fetch marked :meth:`Verdict.mark_failed`, which ``AsyncBaseClient`` does for a
-          transport error or timeout and for a 5xx that survived retries. Those are what the wire said about this
-          origin, so the mark counts however the block then exits, raising or not;
+          transport error or timeout (the call's own deadline cutting off a send on the wire included) and for a 5xx
+          that survived retries. Those are what the wire said about this origin, so the mark counts however the block
+          then exits, raising, cancelled or not;
         * **a success**: a clean exit, unless the fetch marked :meth:`Verdict.mark_untested` (a cache hit, which
           reached no network). A success resets the consecutive-failure count;
         * **nothing**: everything else, meaning an exception the fetch did not mark (an auth flow failing to mint a
-          token, a body over the size cap, a 429, a programming error) and a ``BaseException`` such as
-          ``CancelledError`` (the caller gave up). None of those says whether the origin is up.
+          token, a body over the size cap, a 429, a programming error) and an unmarked ``BaseException`` such as the
+          ``CancelledError`` of a caller that gave up. None of those says whether the origin is up.
 
         The default is "nothing" rather than "failure" so that five token mints refused for a configuration reason
         cannot open the breaker for every client on that origin, hiding the real error behind ``circuit breaker
@@ -231,11 +232,8 @@ class CircuitBreaker:
         settle = self._settle_probe if probing else self._settle_call
         try:
             yield verdict
-        except Exception:
-            _notify(on_change, settle(_Outcome.FAILURE if verdict.failed else _Outcome.NOTHING))
-            raise
         except BaseException:
-            _notify(on_change, settle(_Outcome.NOTHING))
+            _notify(on_change, settle(_Outcome.FAILURE if verdict.failed else _Outcome.NOTHING))
             raise
         else:
             _notify(on_change, settle(_clean_exit_outcome(verdict)))

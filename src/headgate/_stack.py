@@ -48,7 +48,7 @@ from headgate._middleware import MiddlewareTransport
 from headgate._options import httpx_timeout
 from headgate._redirects import drop_followed_redirect_body, refuse_unreplayable_redirect
 from headgate._user_agent import user_agent
-from headgate.cache._credentials import credential_scope
+from headgate.cache._credentials import credential_scope, mark_caller_credentials
 from headgate.cache._transport import ResilientCacheTransport
 from headgate.ratelimit._transport import RateLimitTransport
 from headgate.retry._tracking import SendTrackingTransport
@@ -86,15 +86,14 @@ class Credentials:
 
     @classmethod
     def of(cls, *, base_url: str, auth: httpx2.Auth | None, http: HttpOptions) -> Credentials:
-        """Return *auth*, with a guard withholding its and *http*'s middleware's credentials from untrusted origins."""
+        """Return *auth*, with a guard keeping its, the middleware's and client-wide credentials on trusted origins."""
         # httpx2.Cookies() makes the jar httpx2 would make for itself.
         jar = httpx2.Cookies().jar if http.cookies else _refusing_jar()
         guard = CredentialGuard(
             auth=auth,
             base_url=httpx2.URL(base_url),
-            trusted_origins=http.security.trusted_origins,
+            http=http,
             cookie_jar=jar if http.cookies else None,
-            middleware=http.middleware,
         )
         return cls(auth, guard, jar)
 
@@ -107,7 +106,7 @@ def build_http_client(
     base_url = base_url if base_url.endswith("/") else base_url + "/"
     return httpx2.AsyncClient(
         transport=transport,
-        auth=credentials.auth,
+        auth=mark_caller_credentials(credentials.auth),
         base_url=base_url,
         headers=_default_headers(http),
         cookies=credentials.cookie_jar,

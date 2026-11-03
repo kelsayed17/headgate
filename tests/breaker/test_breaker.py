@@ -7,7 +7,7 @@ The seam it is driven through (one ``with breaker.track()`` block per fetch insi
 spanning the body read) is covered end-to-end in ``test_breaker_integration.py``.
 
 The outcome of a block is decided by the ``Verdict`` it marks, not by what escapes it: only a marked raise is a host
-failure, and an unmarked raise or a ``CancelledError`` records nothing. See ``CircuitBreaker.track``.
+failure, cancelled or not, and an unmarked raise or ``CancelledError`` records nothing. See ``CircuitBreaker.track``.
 
 The half-open tests' breaker reads the real ``time.monotonic``, so its cooldown really elapses. No test here checks a
 refusal inside the cooldown, only what the breaker does once it has elapsed, and ``state`` reads open until a probe is
@@ -173,6 +173,21 @@ async def test_a_cancelled_probe_neither_records_nor_holds_the_slot() -> None:
     with cb.track():
         pass
     assert cb.state is BreakerState.CLOSED, "the next caller gets the probe slot"
+
+
+def test_a_marked_failure_counts_when_the_block_is_then_cancelled() -> None:
+    """Count a marked failure however the block exits, a ``CancelledError`` included (a deadline cutting it off)."""
+    cb = _breaker(1)
+
+    def _cancelled_after_the_mark() -> None:
+        with cb.track() as verdict:
+            verdict.mark_failed()
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        _cancelled_after_the_mark()
+
+    assert cb.state is BreakerState.OPEN
 
 
 def test_an_unmarked_exception_records_nothing() -> None:

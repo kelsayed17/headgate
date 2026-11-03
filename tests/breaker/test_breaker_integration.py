@@ -9,6 +9,7 @@ they are driven end-to-end rather than against the breaker object:
 
 * a cancelled request is neither a success nor a failure: the caller gave up, the host said nothing. A
   ``CancelledError`` is what every ``asyncio.wait_for`` around a client call raises;
+* a request the call's own deadline cuts off on the network is a timeout, and counts: an origin that hangs is failing;
 * when the cooldown elapses exactly one request is admitted to test the host, not every request that is waiting;
 * a cancelled probe frees the slot again, or the breaker would refuse everything forever;
 * a failure while reading the body counts, like any other transport failure. The body is read after the response
@@ -31,6 +32,7 @@ from headgate.errors import (
     CircuitOpenError,
     ClientConfigurationError,
     ClientError,
+    ClientTimeoutError,
     ResponseTooLargeError,
     TransportError,
     UpstreamStatusError,
@@ -43,6 +45,8 @@ from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
+
+    from headgate import Next
 
 _HOST = "api.example"
 _URL = f"https://{_HOST}"
@@ -57,6 +61,9 @@ _PAST_COOLDOWN = 0.06
 
 #: How long a caller waits on a hanging request before giving up.
 _CALLER_TIMEOUT = 0.05
+
+#: The deadline of a call whose origin hangs.
+_DEADLINE = 0.05
 
 #: How many callers race for the probe slot once the cooldown elapses.
 _RACERS = 3
@@ -224,6 +231,70 @@ async def test_a_body_read_failure_counts_as_a_failure(breaker: CircuitBreaker) 
         await client.get("x", expect=RESPONSE)
 
     assert breaker.failure_count == 1
+
+
+class _HangingBodyTransport(httpx2.AsyncBaseTransport):
+    """Answer 200 with a body that sends one chunk and then never another."""
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, stream=_HangingBodyStream())
+
+
+class _HangingBodyStream(httpx2.AsyncByteStream):
+    """A body whose sender stalls after the first chunk."""
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"{"
+        await asyncio.sleep(3600)
+
+
+async def _stalling_middleware(request: httpx2.Request, call_next: Next) -> httpx2.Response:
+    """Stall before the send, as a slow signer would: the request never reaches the network."""
+    await asyncio.sleep(3600)
+    return await call_next(request)  # pragma: no cover - the deadline cuts the stall off
+
+
+@pytest.mark.parametrize(
+    "transport",
+    [
+        pytest.param(_ScriptedTransport(hang=True), id="no-head"),
+        pytest.param(_HangingBodyTransport(), id="stalled-body"),
+    ],
+)
+async def test_a_call_its_deadline_cuts_off_on_the_wire_counts_as_a_failure(
+    breaker: CircuitBreaker, transport: httpx2.AsyncBaseTransport
+) -> None:
+    """Count an origin that hangs, as a timeout: the call's deadline, not httpx2's own timeout, is what ends it."""
+    client = StubClient(
+        rate=Rate.per_second(2),
+        base_url=_URL,
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER, deadline=_DEADLINE),
+        http=HttpOptions(transport=transport),
+    )
+
+    with pytest.raises(ClientTimeoutError, match="deadline exceeded"):
+        await client.get("x", expect=RESPONSE)
+
+    assert breaker.failure_count == 1
+
+
+async def test_a_deadline_passing_before_the_send_counts_nothing(breaker: CircuitBreaker) -> None:
+    """Leave the breaker alone when the deadline passes before the send: the origin was never asked."""
+    transport = _ScriptedTransport(200)
+    client = StubClient(
+        rate=Rate.per_second(2),
+        base_url=_URL,
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER, deadline=_DEADLINE),
+        http=HttpOptions(transport=transport, middleware=(_stalling_middleware,)),
+    )
+
+    with pytest.raises(ClientTimeoutError, match="deadline exceeded"):
+        await client.get("x", expect=RESPONSE)
+
+    assert transport.calls == 0
+    assert breaker.failure_count == 0
 
 
 async def test_a_retried_request_counts_one_failure(breaker: CircuitBreaker) -> None:
