@@ -119,14 +119,18 @@ def check_one_body(
 ) -> None:
     """Raise ``ValueError`` for body options httpx2 would silently drop one of.
 
-    ``body=`` and ``content=`` are each the whole body, so they combine with nothing; ``files=`` is a multipart body,
-    which takes form fields from ``data=`` but cannot carry ``json=``.
+    ``body=`` and ``content=`` are each the whole body, so they combine with nothing; ``json=`` and a form's ``data=``
+    are each a whole body too, where httpx2 would send the form alone; ``files=`` is a multipart body, which takes form
+    fields from ``data=`` but cannot carry ``json=``.
     """
     if body is not None and (content is not None or json is not None or data is not None or files is not None):
         msg = "body= is the whole request body, so it cannot be combined with content=, json=, data= or files="
         raise ValueError(msg)
     if content is not None and (json is not None or data is not None or files is not None):
         msg = "content= is the whole request body, so it cannot be combined with json=, data= or files="
+        raise ValueError(msg)
+    if json is not None and data is not None and files is None:
+        msg = "json= and data= are each a whole body, so they cannot be combined: send one or the other"
         raise ValueError(msg)
     if files is not None and json is not None:
         msg = "files= sends a multipart body, which cannot carry json=; pass form fields as data="

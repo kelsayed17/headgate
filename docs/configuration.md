@@ -150,7 +150,7 @@ Every verb, `get`, `post`, `put`, `patch`, `delete` and `head`, has the same sig
 await client.get(
     url,  # a t-string (escaped, and the call's route) or a str (sent as it is)
     expect=reader_or_expect,
-    retry=True,  # False: send once; a RetryPolicy: replace the client's for this call
+    retry=None,  # None: the view's; False: send once; a RetryPolicy: replace the client's; True: undo the view's
     follow_redirects=None,  # None: the client's default
     cache_ttl=None,  # this response's cache lifetime, over HttpCache.ttl
     params={"q": "gdp"},  # a list or tuple value repeats the key

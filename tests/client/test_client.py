@@ -12,7 +12,7 @@ import inspect
 import json
 from contextlib import AbstractAsyncContextManager
 from decimal import Decimal
-from typing import TYPE_CHECKING, TypedDict, override
+from typing import TYPE_CHECKING, Any, TypedDict, cast, override
 
 import httpx2
 import msgspec
@@ -126,6 +126,33 @@ def test_an_option_group_refuses_a_nonsense_value(build: Callable[[], object], m
     """Check that each option group fails where it is written, not at the first request."""
     with pytest.raises(ValueError, match=match):
         build()
+
+
+@pytest.mark.parametrize(
+    ("build", "message"),
+    [
+        (lambda: StubClient(base_url="https://x", rate=cast("Any", 10)), "rate= takes a Rate"),
+        (lambda: TransportPolicy(retry=cast("Any", None)), "retry= takes a RetryPolicy"),
+        (lambda: TransportPolicy(breaker=cast("Any", 3)), "breaker= takes a BreakerPolicy"),
+        (lambda: HttpOptions(timeout=cast("Any", 5.0)), "timeout= takes a Timeouts"),
+    ],
+    ids=["rate", "retry", "breaker", "timeout"],
+)
+def test_a_value_of_the_wrong_kind_is_refused_where_it_is_written(build: Callable[[], object], message: str) -> None:
+    """Refuse a bare number or ``None`` where an option takes a value object, naming the option and what it got."""
+    with pytest.raises(TypeError, match=message):
+        build()
+
+
+async def test_a_calls_timeout_of_the_wrong_kind_is_refused_before_anything_is_sent() -> None:
+    """Refuse ``timeout=5.0`` on a call or a view with a ``TypeError`` naming ``Timeouts``, and send nothing."""
+    fake = FakeTransport().reply("GET", "/x", 200)
+    async with StubClient(base_url="https://a.example", rate=_RATE, http=HttpOptions(transport=fake)) as client:
+        with pytest.raises(TypeError, match="timeout= takes a Timeouts"):
+            await client.get("x", expect=nothing, timeout=cast("Any", 5.0))
+        with pytest.raises(TypeError, match="timeout= takes a Timeouts"):
+            client.with_options(timeout=cast("Any", 5.0))
+    assert not fake.calls
 
 
 def test_init_config_not_exposed_on_self() -> None:

@@ -1,6 +1,6 @@
 # Pagination
 
-`client.paginate(url, *, expect, pages, retry=True, limit=None, body=None, json=None, **options)` follows a paginated
+`client.paginate(url, *, expect, pages, retry=None, limit=None, body=None, json=None, **options)` follows a paginated
 endpoint and returns a `Paginated[P, I]`: `async for` yields the items `I`, and `.pages()` yields the pages `P`. Each
 page is a GET through the whole stack (rate budget, retries, breaker, cache, credential rules), fetched only when the
 iteration reaches it. An endpoint whose query is a request body is walked with POSTs instead, given `body=` or `json=`

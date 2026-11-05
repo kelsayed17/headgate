@@ -141,10 +141,30 @@ def _set_phases(timeouts: Timeouts) -> list[tuple[str, float]]:
 DEFAULT_TIMEOUTS: Final = Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)
 
 
+def check_kind(option: str, value: object, kind: type | tuple[type, ...], wanted: str) -> None:
+    """Refuse a *value* for *option* that is not a *kind*, such as a bare number where a value object goes.
+
+    Such a value would otherwise pass construction and fail at the first request, far from where it was written.
+
+    :raises TypeError: naming the option, what it takes (*wanted*) and the type it got.
+    """
+    if not isinstance(value, kind):
+        msg = f"{option}= takes {wanted} (got {type(value).__name__})"
+        raise TypeError(msg)
+
+
+#: What a ``timeout=`` takes, for :func:`check_kind`'s message.
+_TIMEOUTS_WANTED: Final = "a Timeouts, such as Timeouts(read=5.0)"
+
+
 def httpx_timeout(client: Timeouts, call: Timeouts | None = None) -> httpx2.Timeout:
-    """Return the ``httpx2.Timeout`` for a request: the *call*'s phases over the *client*'s, over the defaults."""
+    """Return the ``httpx2.Timeout`` for a request: the *call*'s phases over the *client*'s, over the defaults.
+
+    :raises TypeError: for a *call* timeout that is not a :class:`Timeouts`.
+    """
     resolved = client.over(DEFAULT_TIMEOUTS)
     if call is not None:
+        check_kind("timeout", call, Timeouts, _TIMEOUTS_WANTED)
         resolved = call.over(resolved)
     return httpx2.Timeout(connect=resolved.connect, read=resolved.read, write=resolved.write, pool=resolved.pool)
 
@@ -155,8 +175,10 @@ def check_timeout_fits(timeout: Timeouts, deadline: float | None) -> None:
     Only the phases *timeout* sets are checked, so a short deadline over the default timeouts stays valid: there the
     deadline cuts each attempt's timeouts, as meant.
 
+    :raises TypeError: for a *timeout* that is not a :class:`Timeouts`.
     :raises ValueError: naming the phase, its timeout and the deadline.
     """
+    check_kind("timeout", timeout, Timeouts, _TIMEOUTS_WANTED)
     if deadline is None:
         return
     for name, limit in _set_phases(timeout):
@@ -245,7 +267,14 @@ class TransportPolicy:
     routes: tuple[Route, ...] = ()
 
     def __post_init__(self) -> None:
-        """Refuse a deadline that is not positive and finite, and freeze the rule and route sequences."""
+        """Refuse a retry or breaker of the wrong kind and a deadline that is not positive and finite; freeze the rules.
+
+        :raises TypeError: for a ``retry`` that is not a :class:`~headgate.RetryPolicy` (``None`` included: retries are
+            turned off with :data:`~headgate.retry.NO_RETRY`), or a ``breaker`` that is neither a
+            :class:`~headgate.BreakerPolicy` nor ``None``.
+        """
+        check_kind("retry", self.retry, RetryPolicy, "a RetryPolicy; turn retries off with headgate.retry.NO_RETRY")
+        check_kind("breaker", self.breaker, (BreakerPolicy, type(None)), "a BreakerPolicy, or None for no breaker")
         check_deadline(self.deadline)
         object.__setattr__(self, "rate_limits", tuple(self.rate_limits))
         object.__setattr__(self, "routes", tuple(self.routes))
@@ -369,6 +398,7 @@ class HttpOptions:
 
     def __post_init__(self) -> None:
         """Validate every option, and freeze and normalize the collections."""
+        check_kind("timeout", self.timeout, Timeouts, _TIMEOUTS_WANTED)
         self._check_transport()
         _check_positive("max_response_bytes", self.max_response_bytes)
         if self.max_redirects < 0:
