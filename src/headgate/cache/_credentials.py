@@ -155,18 +155,17 @@ class CredentialScope:
         stamper: CredentialStamper | None = None,
         *,
         partition: Partition = Partition.CREDENTIAL,
-        carriers: Iterable[object] = (),
+        carriers: Iterable[CredentialCarrier] = (),
         client_headers: Iterable[str] = (),
     ) -> None:
         """Strip what *stamper* and *carriers* declare, and partition by their credentials under the default partition.
 
-        *stamper* is the client's auth, represented by its identity. Each of *carriers* (the client's middleware) that
-        is a :class:`~headgate._core.CredentialCarrier` has what it declares dropped too, represented by its identity
-        when it is a :class:`~headgate._core.CredentialStamper` and by the values otherwise. *client_headers* names the
-        headers the client sets on every request, which label the partition by their values. The names are read once,
-        here.
+        *stamper* is the client's auth, represented by its identity. Each of *carriers* (the client's middleware) has
+        what it declares dropped too, represented by its identity when it is a
+        :class:`~headgate._core.CredentialStamper` and by the values otherwise. *client_headers* names the headers the
+        client sets on every request, which label the partition by their values. The names are read once, here.
         """
-        sources = [carrier for carrier in carriers if isinstance(carrier, CredentialCarrier)]
+        sources = list(carriers)
         if stamper is not None:
             sources.insert(0, stamper)
         identities: list[bytes] = []
@@ -242,7 +241,11 @@ def _digest(*parts: bytes) -> str:
 
 
 def credential_scope(
-    cache: HttpCache, auth: httpx2.Auth | None, *, middleware: Iterable[object] = (), headers: Iterable[str] = ()
+    cache: HttpCache,
+    auth: httpx2.Auth | None,
+    *,
+    middleware: Iterable[CredentialCarrier] = (),
+    headers: Iterable[str] = (),
 ) -> CredentialScope:
     """Return the :class:`CredentialScope` for a client with *cache*, *auth*, *middleware* and client-wide *headers*.
 

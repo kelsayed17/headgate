@@ -602,7 +602,7 @@
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
   type Method = Literal['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']
-  class Middleware(Protocol)(*args, **kwargs)
+  class Middleware(CredentialCarrier, Protocol)(*args, **kwargs)
       def __call__(self, request: 'httpx2.Request', call_next: 'Next') -> 'httpx2.Response'
   class Minted(Generic)(token: 'TokenT', lifetime: 'float') -> 'None'
       field token: TokenT

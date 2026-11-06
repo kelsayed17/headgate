@@ -86,13 +86,19 @@ class _UpstreamObserver:
 _UpstreamObserver.__module__ = "httpx"
 
 
-async def _upstream_hook(request: httpx2.Request, call_next: Callable[[httpx2.Request], object]) -> httpx2.Response:
-    """Stand in for an upstream ``httpx`` event hook passed as middleware."""
-    del request, call_next
-    raise AssertionError
+class _UpstreamHook:
+    """Stands in for an upstream ``httpx`` event hook passed as middleware, declaring what a middleware must."""
+
+    credential_headers: ClassVar = frozenset[str]()
+    credential_params: ClassVar = frozenset[str]()
+
+    async def __call__(self, request: httpx2.Request, call_next: Callable[[httpx2.Request], object]) -> httpx2.Response:
+        """Never run: the options refuse it first."""
+        del request, call_next
+        raise AssertionError
 
 
-_upstream_hook.__module__ = "httpx._client"
+_UpstreamHook.__module__ = "httpx._client"
 
 
 @pytest.mark.parametrize(
@@ -100,7 +106,7 @@ _upstream_hook.__module__ = "httpx._client"
     [
         pytest.param(lambda: HttpOptions(transport=_UpstreamTransport()), "transport", id="transport"),
         pytest.param(lambda: HttpOptions(observers=(_UpstreamObserver(),)), "observers", id="observer"),
-        pytest.param(lambda: HttpOptions(middleware=(_upstream_hook,)), "middleware", id="event-hook"),
+        pytest.param(lambda: HttpOptions(middleware=(_UpstreamHook(),)), "middleware", id="event-hook"),
         pytest.param(lambda: StubClient(base_url=_BASE, rate=_RATE, auth=_UpstreamAuth()), "auth", id="auth"),
     ],
 )

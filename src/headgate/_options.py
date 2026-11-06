@@ -323,6 +323,19 @@ def _check_hooks(name: str, values: Iterable[object]) -> None:
         reject_upstream_httpx(value, what=f"an entry of {name}")
 
 
+def _check_middleware(middleware: Iterable[object]) -> None:
+    """Refuse a middleware that does not declare the credentials it stamps as two frozensets."""
+    for item in middleware:
+        declared = (getattr(item, "credential_headers", None), getattr(item, "credential_params", None))
+        if not all(isinstance(names, frozenset) for names in declared):
+            name = getattr(item, "__qualname__", type(item).__qualname__)
+            msg = (
+                f"middleware {name} must declare credential_headers and credential_params as frozensets of names, "
+                "empty when it stamps none"
+            )
+            raise TypeError(msg)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SecurityOptions:
     """Where a client's requests and credentials may go, passed as ``HttpOptions(security=...)``.
@@ -417,6 +430,7 @@ class HttpOptions:
             raise ValueError(msg)
         _check_hooks("observers", self.observers)
         _check_hooks("middleware", self.middleware)
+        _check_middleware(self.middleware)
         object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
         object.__setattr__(self, "request_id_headers", names)
         object.__setattr__(self, "observers", tuple(self.observers))

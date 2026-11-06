@@ -9,7 +9,7 @@ nothing touches OpenTelemetry's process-global providers.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import httpx2
 import pytest
@@ -270,10 +270,18 @@ async def test_as_middleware_alone_it_propagates_the_callers_context(telemetry: 
 def test_install_adds_it_as_observer_and_outermost_middleware(telemetry: Telemetry) -> None:
     """Append it to the observers and put it first among the middleware."""
 
-    async def other(request: httpx2.Request, call_next: object) -> httpx2.Response:
-        del call_next
-        return httpx2.Response(200, request=request)
+    class Other:
+        """A middleware that answers without sending."""
 
+        credential_headers: ClassVar = frozenset[str]()
+        credential_params: ClassVar = frozenset[str]()
+
+        async def __call__(self, request: httpx2.Request, call_next: object) -> httpx2.Response:
+            """Answer 200."""
+            del call_next
+            return httpx2.Response(200, request=request)
+
+    other = Other()
     http = telemetry.observer.install(HttpOptions(middleware=(other,)))
     assert http.observers == (telemetry.observer,)
     assert http.middleware == (telemetry.observer, other)

@@ -48,7 +48,7 @@ from typing import TYPE_CHECKING, Final
 
 import httpx2
 
-from headgate._core import CredentialCarrier, CredentialStamper, origin_text
+from headgate._core import CredentialStamper, origin_text
 from headgate.errors import ForbiddenDestinationError
 
 if TYPE_CHECKING:
@@ -91,7 +91,7 @@ class CredentialGuard:
         """Trust *base_url*'s origin and *http*'s ``trusted_origins``; withhold *auth*'s credentials and *http*'s.
 
         *http*'s are each header in its ``headers`` but ``User-Agent`` and the content negotiation headers, and what
-        each of its ``middleware`` that is a :class:`~headgate._core.CredentialCarrier` declares. *cookie_jar* is the
+        each of its ``middleware`` declares. *cookie_jar* is the
         jar the client keeps, if any, whose cookies for the hop's origin replace a withheld ``Cookie``.
         """
         headers = set(_ALWAYS_WITHHELD)
@@ -103,9 +103,10 @@ class CredentialGuard:
         self._headers = frozenset(headers)
         self._params = params
         self._cookie_jar = cookie_jar
-        carriers = [item for item in http.middleware if isinstance(item, CredentialCarrier)]
-        self._middleware_headers = frozenset(name.lower() for item in carriers for name in item.credential_headers)
-        self._middleware_params = frozenset(name for item in carriers for name in item.credential_params)
+        self._middleware_headers = frozenset(
+            name.lower() for item in http.middleware for name in item.credential_headers
+        )
+        self._middleware_params = frozenset(name for item in http.middleware for name in item.credential_params)
         trusted = (httpx2.Origin(origin) for origin in http.security.trusted_origins)
         self._trusted = frozenset({base_url.origin, *trusted})
 

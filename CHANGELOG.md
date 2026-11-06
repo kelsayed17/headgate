@@ -14,6 +14,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- A middleware must declare `credential_headers` and `credential_params` (each a `frozenset` of names, empty when it
+  stamps none). `HttpOptions` refuses one that does not, with a `TypeError`, since an undeclared or misspelled
+  declaration sent the credential to every origin. A plain function is no longer a middleware; wrap it in a class with
+  the two declarations.
 - A call's URL is typed `LiteralString | Template | httpx2.URL`. A computed `str`, such as an f-string, no longer
   type-checks, because it skipped escaping: write a t-string for a path built from values, or `httpx2.URL(...)` for a
   URL taken from a response. A `str` is still accepted at runtime.

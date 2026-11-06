@@ -9,13 +9,13 @@ middleware runs once per attempt: a request signer stamps a fresh timestamp and 
 in the order ``HttpOptions(middleware=...)`` lists them, the first outermost; each calls ``call_next`` to continue, or
 returns a response of its own to stop there.
 
-**Credentials a middleware adds stay on trusted origins** when it declares them. The client's credential guard
-(:class:`~headgate.security.CredentialGuard`) runs as a request hook, before the transport stack, so it cannot see what
-a middleware adds; :class:`MiddlewareTransport` runs it again below the last middleware, on every attempt of every hop.
-A middleware that declares the headers and query parameters it stamps (``credential_headers`` and
-``credential_params``, the shape every headgate auth has) has them removed from a hop addressed to any origin other than
-``base_url``'s and ``SecurityOptions.trusted_origins``. One that declares nothing is trusted to check the destination
-itself.
+**Credentials a middleware adds stay on trusted origins**, because every middleware declares them. The client's
+credential guard (:class:`~headgate.security.CredentialGuard`) runs as a request hook, before the transport stack, so it
+cannot see what a middleware adds; :class:`MiddlewareTransport` runs it again below the last middleware, on every
+attempt of every hop.
+A middleware declares the headers and query parameters it stamps (``credential_headers`` and ``credential_params``, the
+shape every headgate auth has, empty when it stamps none), and has them removed from a hop addressed to any origin other
+than ``base_url``'s and ``SecurityOptions.trusted_origins``. ``HttpOptions`` refuses a middleware that declares neither.
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, override
 
 import httpx2
+
+from headgate._core import CredentialCarrier
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -33,12 +35,13 @@ type Next = Callable[[httpx2.Request], Awaitable[httpx2.Response]]
 """Send a request through the rest of the stack, returning its response."""
 
 
-class Middleware(Protocol):
+class Middleware(CredentialCarrier, Protocol):
     """Handle one attempt of a request: change it, then ``await call_next(request)``, or answer it outright.
 
-    A middleware that adds a credential (a signature, a key) declares its names as ``credential_headers`` and
-    ``credential_params`` (frozensets, either empty), so the client withholds them from any untrusted origin, a
-    cross-origin redirect hop included (see the module docstring). Without the declaration they ride every hop.
+    A middleware declares the credentials it adds (a signature, a key) as ``credential_headers`` and
+    ``credential_params``: frozensets of names, empty when it stamps none, as a class attribute or a property. The
+    client withholds them from any untrusted origin, a cross-origin redirect hop included (see the module docstring).
+    ``HttpOptions`` refuses a middleware that does not declare both.
     """
 
     async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:

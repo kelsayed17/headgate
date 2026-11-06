@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import logging
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, ClassVar, override
 
 import httpx2
 import pytest
@@ -621,6 +621,9 @@ async def test_timeout_sharing_uses_only_the_failed_phase(
 
 class _TimeoutOverride:
     """Explicitly set each request's read timeout after the retry layer fitted its deadline."""
+
+    credential_headers: ClassVar = frozenset[str]()
+    credential_params: ClassVar = frozenset[str]()
 
     def __init__(self, *, same: bool) -> None:
         self.calls = 0
