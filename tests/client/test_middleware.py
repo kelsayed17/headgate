@@ -210,6 +210,27 @@ class _HeadersAsSet(_Bare):
     credential_params: ClassVar = frozenset[str]()
 
 
+class _HeadersAsList(_Bare):
+    """A middleware that declares its headers as a ``list``."""
+
+    credential_headers: ClassVar[list[str]] = ["x-sig"]
+    credential_params: ClassVar = frozenset[str]()
+
+
+class _HeadersAsStr(_Bare):
+    """A middleware that declares its headers as one ``str``."""
+
+    credential_headers: ClassVar = "x-sig"
+    credential_params: ClassVar = frozenset[str]()
+
+
+class _HeadersNotNames(_Bare):
+    """A middleware that declares a frozenset of something other than names."""
+
+    credential_headers: ClassVar[frozenset[int]] = frozenset({1})
+    credential_params: ClassVar = frozenset[str]()
+
+
 async def _bare_function(request: httpx2.Request, call_next: Next) -> httpx2.Response:
     """Stand in for a plain function used as middleware."""
     return await call_next(request)
@@ -222,6 +243,9 @@ async def _bare_function(request: httpx2.Request, call_next: Next) -> httpx2.Res
         pytest.param(_Typo(), "_Typo", id="typo"),
         pytest.param(_HeadersOnly(), "_HeadersOnly", id="headers-only"),
         pytest.param(_HeadersAsSet(), "_HeadersAsSet", id="set"),
+        pytest.param(_HeadersAsList(), "_HeadersAsList", id="list"),
+        pytest.param(_HeadersAsStr(), "_HeadersAsStr", id="str"),
+        pytest.param(_HeadersNotNames(), "_HeadersNotNames", id="not-names"),
         pytest.param(_bare_function, "_bare_function", id="function"),
     ],
 )

@@ -38,10 +38,11 @@ type Next = Callable[[httpx2.Request], Awaitable[httpx2.Response]]
 class Middleware(CredentialCarrier, Protocol):
     """Handle one attempt of a request: change it, then ``await call_next(request)``, or answer it outright.
 
-    A middleware declares the credentials it adds (a signature, a key) as ``credential_headers`` and
-    ``credential_params``: frozensets of names, empty when it stamps none, as a class attribute or a property. The
-    client withholds them from any untrusted origin, a cross-origin redirect hop included (see the module docstring).
-    ``HttpOptions`` refuses a middleware that does not declare both.
+    A middleware declares the credentials it adds (a signature, a key) with two members, as class attributes or
+    properties: ``credential_headers: frozenset[str]``, the names of the headers it sets (compared case-insensitively),
+    and ``credential_params: frozenset[str]``, the names of the query parameters it sets. An empty frozenset means it
+    stamps none of that kind. The client withholds them from any untrusted origin, a cross-origin redirect hop included
+    (see the module docstring). ``HttpOptions`` refuses a middleware that does not declare both.
     """
 
     async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:

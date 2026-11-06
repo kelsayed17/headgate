@@ -35,11 +35,11 @@ body, which httpx2 sends again on a 307 or 308).
 
 **A middleware's credentials** follow the same rule. A middleware runs inside the transport stack, after the request
 hooks, so a signer that stamps every attempt would sign a cross-origin redirect hop after the hook had checked it. A
-middleware that declares what it stamps (``credential_headers`` and ``credential_params``, a
-:class:`~headgate._core.CredentialCarrier`) has those names removed from any hop not addressed to ``base_url``'s origin
-or a trusted one: the guard runs a second time below the last middleware, where their output is visible. That pass
-trusts no auth flow's chain origin for them, since the middleware did not choose it. A middleware that declares nothing
-must check the destination itself.
+middleware declares what it stamps (``credential_headers`` and ``credential_params``, a
+:class:`~headgate._core.CredentialCarrier`; ``HttpOptions`` refuses one that does not), and those names are removed
+from any hop not addressed to ``base_url``'s origin or a trusted one: the guard runs a second time below the last
+middleware, where their output is visible. That pass trusts no auth flow's chain origin for them, since the middleware
+did not choose it.
 """
 
 from __future__ import annotations
@@ -91,8 +91,8 @@ class CredentialGuard:
         """Trust *base_url*'s origin and *http*'s ``trusted_origins``; withhold *auth*'s credentials and *http*'s.
 
         *http*'s are each header in its ``headers`` but ``User-Agent`` and the content negotiation headers, and what
-        each of its ``middleware`` declares. *cookie_jar* is the
-        jar the client keeps, if any, whose cookies for the hop's origin replace a withheld ``Cookie``.
+        each of its ``middleware`` declares. *cookie_jar* is the jar the client keeps, if any, whose cookies for the
+        hop's origin replace a withheld ``Cookie``.
         """
         headers = set(_ALWAYS_WITHHELD)
         headers.update({name.lower() for name in http.headers} - _NEVER_CREDENTIALS)

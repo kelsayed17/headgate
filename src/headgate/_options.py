@@ -327,7 +327,7 @@ def _check_middleware(middleware: Iterable[object]) -> None:
     """Refuse a middleware that does not declare the credentials it stamps as two frozensets."""
     for item in middleware:
         declared = (getattr(item, "credential_headers", None), getattr(item, "credential_params", None))
-        if not all(isinstance(names, frozenset) for names in declared):
+        if not all(isinstance(names, frozenset) and all(isinstance(n, str) for n in names) for names in declared):
             name = getattr(item, "__qualname__", type(item).__qualname__)
             msg = (
                 f"middleware {name} must declare credential_headers and credential_params as frozensets of names, "
