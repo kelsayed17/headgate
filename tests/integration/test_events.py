@@ -10,7 +10,7 @@ included, so an observer (the OpenTelemetry one among them) needs nothing but th
 from __future__ import annotations
 
 import contextlib
-from typing import TYPE_CHECKING, get_args
+from typing import TYPE_CHECKING, LiteralString, get_args
 
 import httpx2
 import pytest
@@ -72,7 +72,7 @@ async def test_one_clients_calls_emit_every_event_type(storage: AsyncSqliteStora
     ("path", "error", "status"), [("limited", RateLimitError, 429), ("down", UpstreamStatusError, 503)]
 )
 async def test_call_finished_reports_the_status_a_call_raised_on(
-    path: str, error: type[ClientError], status: int, storage: AsyncSqliteStorage
+    path: LiteralString, error: type[ClientError], status: int, storage: AsyncSqliteStorage
 ) -> None:
     """Report the surviving 429 or 5xx as the finished call's status, beside the error it raised."""
     recorder = Recorder()

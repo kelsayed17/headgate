@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING, Final, override
+from typing import Final, override
 
+import httpx2
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -30,9 +31,6 @@ from headgate._core import origin_of
 from tests.security._web import BASE, Web
 from tests.support.responses import RESPONSE
 from tests.support.tokens import premint
-
-if TYPE_CHECKING:
-    import httpx2
 
 #: The origins a hop may be addressed to.
 _ORIGINS: Final = (
@@ -95,7 +93,9 @@ def test_no_credential_reaches_an_untrusted_origin(kind: str, first: str, chain:
             # A drawn downgrade from https to http ends the chain as a raised 3xx; the hops before it still count.
             with contextlib.suppress(UpstreamStatusError):
                 await client.get(
-                    start if first else "h0", expect=RESPONSE, headers={"Cookie": "c", "Proxy-Authorization": "p"}
+                    httpx2.URL(start if first else "h0"),
+                    expect=RESPONSE,
+                    headers={"Cookie": "c", "Proxy-Authorization": "p"},
                 )
 
     asyncio.run(run())
@@ -121,7 +121,7 @@ def test_the_guard_decision_depends_only_on_the_origin(origin: str, path: str) -
 
     async def run() -> httpx2.Request:
         async with web.client(auth=StaticHeaderAuth({"X-Api-Key": "k"})) as client:
-            await client.get(f"{origin}/{path}", expect=RESPONSE)
+            await client.get(httpx2.URL(f"{origin}/{path}"), expect=RESPONSE)
         return web.sent[0]
 
     sent = asyncio.run(run())

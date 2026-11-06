@@ -260,7 +260,8 @@ class SearchPages(WritingPager[SearchPage, Item, Query]):
 
 A pager speaks `PageRequest`: `paginate` builds the first from its URL, `params=` and body, `first` prepares it once
 (so its refusals raise from `paginate`, and it depends on the request alone), and the pager returns each next.
-`PageRequest(url, params)` is the GET for one page, and `PageRequest(url, params, body=)` the POST. How a body is sent
+`PageRequest(url, params)` is the GET for one page, and `PageRequest(url, params, body=)` the POST. A pager that
+returns a next URL it read from the wire wraps it in `httpx2.URL`; a literal or a t-string is as valid as in a verb. How a body is sent
 is the walk's, not the request's: a writing pager's `write` encodes every page's body, whatever request the pager
 returns. Every page with a body is held to the same rules as the first, so a pager that turns a walk of GETs into
 POSTs halfway raises `ValueError` from the iteration if its body cannot be sent. `with_param(name, value)` returns a

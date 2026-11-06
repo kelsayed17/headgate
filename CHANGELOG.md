@@ -14,6 +14,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- A call's URL is typed `LiteralString | Template | httpx2.URL`. A computed `str`, such as an f-string, no longer
+  type-checks, because it skipped escaping: write a t-string for a path built from values, or `httpx2.URL(...)` for a
+  URL taken from a response. A `str` is still accepted at runtime.
 - headgate requires hishel 2 (`hishel>=2.0.0`). `AsyncSqliteStorage(database_path=...)` is called as before, but
   hishel 2 cannot read a hishel 1 database: it raises on every lookup, so each call degrades to the network and nothing
   is cached. Point it at a new file, or delete the old one, when you upgrade. Its default file name is now

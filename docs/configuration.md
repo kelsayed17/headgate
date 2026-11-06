@@ -148,7 +148,7 @@ Every verb, `get`, `post`, `put`, `patch`, `delete` and `head`, has the same sig
 
 ```python
 await client.get(
-    url,  # a t-string (escaped, and the call's route) or a str (sent as it is)
+    url,  # a literal, a t-string (escaped, and the call's route) or an httpx2.URL (sent as it is)
     expect=reader_or_expect,
     retry=None,  # None: the view's; False: send once; a RetryPolicy: replace the client's; True: undo the view's
     follow_redirects=None,  # None: the client's default

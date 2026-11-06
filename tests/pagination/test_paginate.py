@@ -350,6 +350,19 @@ async def test_next_url_pages_are_followed_from_the_body() -> None:
     assert [url.path for url in api.sent] == ["/a", "/b", "/c"]
 
 
+async def test_a_next_url_from_the_wire_is_sent_verbatim() -> None:
+    """Send a next URL read from a body exactly as the server wrote it, an escaped slash in its query included."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        following = "https://api.test/items?cursor=a%2Fb&x=1" if request.url.path == "/start" else None
+        return _page(request, [1], next=following)
+
+    api = _Api(answer)
+    paginated = api.client().paginate("start", expect=decoder(Page), pages=NextUrl(items=items_of, next=next_of))
+    assert len([item async for item in paginated]) == len(("start", "items"))
+    assert api.sent[1].raw_path == b"/items?cursor=a%2Fb&x=1"
+
+
 async def test_each_page_goes_through_the_stack() -> None:
     """Retry a page that fails transiently, and raise a page that fails for good, after the earlier items."""
     statuses = iter((200, 503, 200, 404))

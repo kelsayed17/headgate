@@ -9,14 +9,14 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol, final
 
+import httpx2
+
 from headgate._failures import loggable_url
 from headgate.errors import ClientError, PageLimitError
 from headgate.pagination._pager import WritingPager
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
-
-    import httpx2
 
     from headgate._request_body import Writer
     from headgate.pagination._pager import Pager, PageRequest
@@ -157,7 +157,7 @@ class PageWalk[P, I, B]:
 
     def _limit_error(self, request: PageRequest[B], fetched: int) -> PageLimitError:
         """Build the error for *request*, the page after the *fetched* pages the budget allowed."""
-        url = loggable_url(request.url) if isinstance(request.url, str) else None
+        url = loggable_url(str(request.url)) if isinstance(request.url, str | httpx2.URL) else None
         where = "" if url is None else f" ({url})"
         msg = (
             f"pagination reached its limit of {fetched} pages with more to come{where}; the result is incomplete. "
@@ -167,7 +167,7 @@ class PageWalk[P, I, B]:
 
     def _loop_error(self, request: PageRequest[B], fetched: int) -> ClientError:
         """Build the error for *request*, which repeats one of the *fetched* pages' requests."""
-        url = loggable_url(request.url) if isinstance(request.url, str) else None
+        url = loggable_url(str(request.url)) if isinstance(request.url, str | httpx2.URL) else None
         where = "" if url is None else f" ({url})"
         msg = f"pagination loop: the page after page {fetched} repeats an earlier page's request{where}"
         return ClientError(msg, source=self._source, method=_method(request), url=url)
