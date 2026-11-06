@@ -104,42 +104,66 @@ bodies itself, so its responses carry no `Content-Encoding`. The SSRF guard vets
 ## Middleware
 
 A middleware sees, and may change, every **attempt** of a request: it runs inside the retry layer, once per send, in
-the order given, the first outermost. It calls `call_next(request)` to continue or returns a response of its own. An
-`httpx2.Auth` flow runs once per call above the retry layer, so a signature that must be fresh on every re-send (a
-timestamp, a nonce) belongs in a middleware:
+the order given, the first outermost. It calls `call_next(request)` to continue or returns a response of its own:
 
 ```python
-import hashlib
-import hmac
-import time
+import uuid
 
 import httpx2
 
 from headgate import Next
 
 
-class HmacSigner:
-    # What it stamps: withheld from any hop to an origin other than base_url's and the trusted ones.
-    credential_headers = frozenset({"X-Signature"})
+class AttemptId:
+    # What it stamps as a credential: none, so nothing is withheld from another origin.
+    credential_headers = frozenset[str]()
     credential_params = frozenset[str]()
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        request.headers["X-Attempt-Id"] = uuid.uuid4().hex
+        return await call_next(request)
+```
+
+A signature that must be fresh on every attempt (a timestamp, a nonce) belongs in a
+[`SigningAuth`](auth.md#signingauth) passed as the client's `auth=`, not in a middleware: it signs each attempt inside
+the retry layer too, after the last middleware, and the class refuses a signer that declares nothing it stamps.
+
+```python
+import hashlib
+import hmac
+import time
+from typing import ClassVar, override
+
+import httpx2
+
+from headgate import SigningAuth
+
+
+class HmacSigner(SigningAuth):
+    # What it stamps: withheld from any hop to an origin other than base_url's and the trusted ones.
+    signed_headers: ClassVar = frozenset({"X-Timestamp", "X-Signature"})
 
     def __init__(self, secret: bytes) -> None:
         self._secret = secret
 
-    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+    @override
+    def sign(self, request: httpx2.Request) -> None:
         stamp = str(int(time.time()))
         payload = b"\n".join((request.method.encode(), request.url.raw_path, stamp.encode(), request.content))
         request.headers["X-Timestamp"] = stamp
         request.headers["X-Signature"] = hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
-        return await call_next(request)
 ```
 
 A middleware runs inside the transport stack, below the [credential guard](security.md#credentials-stay-on-your-origin)
 the client runs as a request hook, so the guard runs again below the last middleware. The headers and query parameters a
 middleware declares in `credential_headers` and `credential_params` are removed there from any hop not addressed to
-`base_url`'s origin or a trusted one, a cross-origin redirect hop included. A middleware that declares nothing has its
-headers sent wherever the request goes, so it must check the destination itself. `request.content` is available for a
-buffered body; a streamed body is not readable there.
+`base_url`'s origin or a trusted one, a cross-origin redirect hop included. Both are required, each a `frozenset` of
+names, empty when the middleware stamps none, as a class attribute or a property; `HttpOptions` raises `TypeError` for a
+middleware that lacks either, and for a plain function. `request.content` is available for a
+buffered body; a streamed body is not readable there. A middleware that replaces the request
+(`call_next(httpx2.Request(...))`) keeps `request.extensions` on the new one, or a `SigningAuth` cannot sign that
+attempt. Even then the signature goes on the replacement, not on the request the client made, so a `SigningAuth`'s one
+re-send on a 401 is lost.
 
 ## Per-call options
 
@@ -148,7 +172,7 @@ Every verb, `get`, `post`, `put`, `patch`, `delete` and `head`, has the same sig
 
 ```python
 await client.get(
-    url,  # a t-string (escaped, and the call's route) or a str (sent as it is)
+    url,  # a literal, a t-string (escaped, and the call's route) or an httpx2.URL (sent as it is)
     expect=reader_or_expect,
     retry=None,  # None: the view's; False: send once; a RetryPolicy: replace the client's; True: undo the view's
     follow_redirects=None,  # None: the client's default

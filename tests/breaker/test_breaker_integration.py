@@ -20,7 +20,7 @@ they are driven end-to-end rather than against the breaker object:
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, ClassVar, override
 
 import httpx2
 import pytest
@@ -250,10 +250,16 @@ class _HangingBodyStream(httpx2.AsyncByteStream):
         await asyncio.sleep(3600)
 
 
-async def _stalling_middleware(request: httpx2.Request, call_next: Next) -> httpx2.Response:
-    """Stall before the send, as a slow signer would: the request never reaches the network."""
-    await asyncio.sleep(3600)
-    return await call_next(request)  # pragma: no cover - the deadline cuts the stall off
+class _StallingMiddleware:
+    """A middleware that stalls before the send, as a slow middleware would: the request never reaches the network."""
+
+    credential_headers: ClassVar = frozenset[str]()
+    credential_params: ClassVar = frozenset[str]()
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        """Stall, then send."""
+        await asyncio.sleep(3600)
+        return await call_next(request)  # pragma: no cover - the deadline cuts the stall off
 
 
 @pytest.mark.parametrize(
@@ -287,7 +293,7 @@ async def test_a_deadline_passing_before_the_send_counts_nothing(breaker: Circui
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER, deadline=_DEADLINE),
-        http=HttpOptions(transport=transport, middleware=(_stalling_middleware,)),
+        http=HttpOptions(transport=transport, middleware=(_StallingMiddleware(),)),
     )
 
     with pytest.raises(ClientTimeoutError, match="deadline exceeded"):

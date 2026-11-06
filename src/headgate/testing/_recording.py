@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from headgate._auth import AUTH_HOP
 from headgate._core import CredentialStamper
@@ -64,6 +64,9 @@ class RecordedRequest(Protocol):
 
 class CassetteFilter:
     """Filters for a vcrpy cassette that keep headgate's credentials and token mints out of it. See the module."""
+
+    credential_headers: ClassVar = frozenset[str]()
+    credential_params: ClassVar = frozenset[str]()
 
     def __init__(
         self, *, auths: Iterable[object] = (), headers: Iterable[str] = (), params: Iterable[str] = ()

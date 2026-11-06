@@ -14,7 +14,7 @@ import copy
 import json
 import pickle
 from types import MappingProxyType
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, ClassVar, override
 
 import httpx2
 import pytest
@@ -291,17 +291,24 @@ async def test_a_parse_error_names_the_status_and_content_type() -> None:
 async def test_notes_a_layer_added_reach_the_error() -> None:
     """Add every note the call's layers recorded to the ``ClientError`` it raises."""
 
-    async def annotate(request: httpx2.Request, call_next: Next) -> httpx2.Response:
-        context = CallContext.find(request)
-        assert context is not None
-        context.add_note(f"attempt {context.attempt}: sent")
-        return await call_next(request)
+    class Annotate:
+        """A middleware that notes each attempt on its call."""
+
+        credential_headers: ClassVar = frozenset[str]()
+        credential_params: ClassVar = frozenset[str]()
+
+        async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+            """Note the attempt, then send."""
+            context = CallContext.find(request)
+            assert context is not None
+            context.add_note(f"attempt {context.attempt}: sent")
+            return await call_next(request)
 
     client = StubClient(
         base_url=_BASE,
         rate=Rate.per_second(1000),
         policy=TransportPolicy(retry=NO_RETRY),
-        http=HttpOptions(transport=Script(404).transport(), middleware=(annotate,)),
+        http=HttpOptions(transport=Script(404).transport(), middleware=(Annotate(),)),
     )
     error = await _raised(client)
 

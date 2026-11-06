@@ -85,7 +85,7 @@ from headgate._options import (
 from headgate._request_body import check_one_body, request_content
 from headgate._responses import Expect, Reader, RefusedError, accepts, nothing
 from headgate._stack import Credentials, build_http_client, build_transport_stack
-from headgate._url import render_path, route_template, sanitize_url
+from headgate._url import CallUrl, render_path, route_template, sanitize_url
 from headgate._view import KEEP, ROOT_DEFAULTS, ViewOptions
 from headgate.breaker import CircuitBreaker
 from headgate.breaker._breaker import BreakerOpenError
@@ -220,7 +220,7 @@ class _Call:
     """One call as a verb received it: what to send, and the per-call overrides."""
 
     method: Method
-    url: str | Template
+    url: CallUrl
     options: RequestOptions
     retry: bool | RetryPolicy | None = None
     follow_redirects: bool | None = None
@@ -313,10 +313,11 @@ class AsyncBaseClient:
     **URLs.** A t-string URL (``t"series/{series_id}"``) is rendered by :func:`headgate._url.render_path`, which
     escapes every interpolation as one path segment and raises ``ValueError`` for a value no segment can hold (as
     :func:`~headgate._url.escape_segment` does): that is a programming error at the call site. Its template is the
-    call's route in events. A ``str`` URL is passed through verbatim, so a paginator can forward an absolute cursor URL
-    from a response body; one httpx2 cannot parse, or a redirect joined past its length limit, raises the root
-    ``ClientError``, since such a URL often comes from the wire rather than the code. Every message names a URL
-    redacted and cut to a few hundred characters.
+    call's route in events. An ``httpx2.URL`` is passed through verbatim, so a paginator can forward an absolute cursor
+    URL from a response body; a literal ``str`` is passed through the same way. A computed ``str``, such as an f-string,
+    does not type-check, because it skipped escaping. A URL httpx2 cannot parse, or a redirect joined past its length
+    limit, raises the root ``ClientError``, since such a URL often comes from the wire rather than the code. Every
+    message names a URL redacted and cut to a few hundred characters.
 
     **Time.** The client takes its clock and sleep from :func:`headgate._core.current_timing` when it is built.
     """
@@ -418,7 +419,7 @@ class AsyncBaseClient:
 
     async def get[T](
         self,
-        url: str | Template,
+        url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
         retry: bool | RetryPolicy | None = None,
@@ -432,7 +433,7 @@ class AsyncBaseClient:
 
     async def delete[T](
         self,
-        url: str | Template,
+        url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
         retry: bool | RetryPolicy | None = None,
@@ -446,7 +447,7 @@ class AsyncBaseClient:
 
     async def post[T](
         self,
-        url: str | Template,
+        url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
         retry: bool | RetryPolicy | None = None,
@@ -460,7 +461,7 @@ class AsyncBaseClient:
 
     async def put[T](
         self,
-        url: str | Template,
+        url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
         retry: bool | RetryPolicy | None = None,
@@ -474,7 +475,7 @@ class AsyncBaseClient:
 
     async def patch[T](
         self,
-        url: str | Template,
+        url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
         retry: bool | RetryPolicy | None = None,
@@ -489,7 +490,7 @@ class AsyncBaseClient:
     @overload
     async def head[T](
         self,
-        url: str | Template,
+        url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
         retry: bool | RetryPolicy | None = None,
@@ -500,7 +501,7 @@ class AsyncBaseClient:
     @overload
     async def head(
         self,
-        url: str | Template,
+        url: CallUrl,
         *,
         retry: bool | RetryPolicy | None = None,
         follow_redirects: bool | None = None,
@@ -509,7 +510,7 @@ class AsyncBaseClient:
     ) -> None: ...
     async def head(
         self,
-        url: str | Template,
+        url: CallUrl,
         *,
         expect: Reader[object] | Expect[object] = nothing,
         retry: bool | RetryPolicy | None = None,
@@ -529,7 +530,7 @@ class AsyncBaseClient:
 
     def stream(
         self,
-        url: str | Template,
+        url: CallUrl,
         *,
         method: Method = "GET",
         retry: bool | RetryPolicy | None = None,
@@ -573,7 +574,7 @@ class AsyncBaseClient:
     @overload
     def paginate[P, I](
         self,
-        url: str | Template,
+        url: CallUrl,
         *,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, None],
@@ -584,7 +585,7 @@ class AsyncBaseClient:
     @overload
     def paginate[P, I, B](
         self,
-        url: str | Template,
+        url: CallUrl,
         *,
         body: B | None,
         expect: Reader[P] | Expect[P],
@@ -596,7 +597,7 @@ class AsyncBaseClient:
     @overload
     def paginate[P, I, B](
         self,
-        url: str | Template,
+        url: CallUrl,
         *,
         json: B | None,
         expect: Reader[P] | Expect[P],
@@ -607,7 +608,7 @@ class AsyncBaseClient:
     ) -> Paginated[P, I]: ...
     def paginate[P, I, B](
         self,
-        url: str | Template,
+        url: CallUrl,
         *,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, B],
@@ -775,7 +776,7 @@ class AsyncBaseClient:
         if isinstance(call.url, Template):
             url, route = render_path(call.url), route_template(call.url)
         else:
-            url, route = call.url, None
+            url, route = str(call.url), None
         log_url = loggable_url(url)
         follow = self._http_client.follow_redirects if call.follow_redirects is None else call.follow_redirects
         # The per-call half of the constructor's check: the client itself never follows with a refusal_check.

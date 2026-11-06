@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import itertools
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, ClassVar, cast, override
 
 import httpx2
 import pytest
@@ -21,11 +21,12 @@ import pytest
 from headgate import HttpOptions, Rate, TransportPolicy, nothing
 from headgate._core import CallContext
 from headgate.retry import RetryPolicy
+from tests.security._web import BASE, Web
 from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
-    from headgate import Next
+    from headgate import Middleware, Next
     from headgate.events import Event
 
 _SECRET = b"shared-secret"
@@ -34,6 +35,9 @@ _ATTEMPTS = 3
 
 class HmacSigner:
     """Sign each attempt: ``X-Signature`` over method, path, timestamp, nonce and body, with a fresh nonce each time."""
+
+    credential_headers: ClassVar = frozenset({"X-Nonce", "X-Timestamp", "X-Signature"})
+    credential_params: ClassVar = frozenset[str]()
 
     def __init__(self, secret: bytes) -> None:
         """Sign with *secret*; nonces and timestamps count up, so each attempt's are new."""
@@ -104,6 +108,9 @@ async def test_every_attempt_is_signed_afresh() -> None:
 class Recorder:
     """A middleware that records the order it ran in and the attempt it saw."""
 
+    credential_headers: ClassVar = frozenset[str]()
+    credential_params: ClassVar = frozenset[str]()
+
     def __init__(self, name: str, log: list[tuple[str, int]]) -> None:
         """Record under *name* into *log*."""
         self._name = name
@@ -126,6 +133,9 @@ async def test_middleware_runs_in_order_once_per_attempt() -> None:
 
 class ShortCircuit:
     """A middleware that answers without sending."""
+
+    credential_headers: ClassVar = frozenset[str]()
+    credential_params: ClassVar = frozenset[str]()
 
     async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
         """Answer 204 without calling the rest of the chain."""
@@ -170,3 +180,108 @@ async def test_the_client_closes_the_network_under_the_middleware(count: int) ->
     await client.aclose()
 
     assert closed == [True]
+
+
+class _Bare:
+    """A middleware that declares nothing."""
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        """Send."""
+        return await call_next(request)
+
+
+class _Typo(_Bare):
+    """A middleware that misspells ``credential_headers``."""
+
+    credential_header: ClassVar = frozenset({"x-sig"})
+    credential_params: ClassVar = frozenset[str]()
+
+
+class _HeadersOnly(_Bare):
+    """A middleware that declares only its headers."""
+
+    credential_headers: ClassVar = frozenset({"x-sig"})
+
+
+class _HeadersAsSet(_Bare):
+    """A middleware that declares its headers as a mutable ``set``."""
+
+    credential_headers: ClassVar[set[str]] = {"x-sig"}
+    credential_params: ClassVar = frozenset[str]()
+
+
+class _HeadersAsList(_Bare):
+    """A middleware that declares its headers as a ``list``."""
+
+    credential_headers: ClassVar[list[str]] = ["x-sig"]
+    credential_params: ClassVar = frozenset[str]()
+
+
+class _HeadersAsStr(_Bare):
+    """A middleware that declares its headers as one ``str``."""
+
+    credential_headers: ClassVar = "x-sig"
+    credential_params: ClassVar = frozenset[str]()
+
+
+class _HeadersNotNames(_Bare):
+    """A middleware that declares a frozenset of something other than names."""
+
+    credential_headers: ClassVar[frozenset[int]] = frozenset({1})
+    credential_params: ClassVar = frozenset[str]()
+
+
+async def _bare_function(request: httpx2.Request, call_next: Next) -> httpx2.Response:
+    """Stand in for a plain function used as middleware."""
+    return await call_next(request)
+
+
+@pytest.mark.parametrize(
+    ("item", "name"),
+    [
+        pytest.param(_Bare(), "_Bare", id="nothing"),
+        pytest.param(_Typo(), "_Typo", id="typo"),
+        pytest.param(_HeadersOnly(), "_HeadersOnly", id="headers-only"),
+        pytest.param(_HeadersAsSet(), "_HeadersAsSet", id="set"),
+        pytest.param(_HeadersAsList(), "_HeadersAsList", id="list"),
+        pytest.param(_HeadersAsStr(), "_HeadersAsStr", id="str"),
+        pytest.param(_HeadersNotNames(), "_HeadersNotNames", id="not-names"),
+        pytest.param(_bare_function, "_bare_function", id="function"),
+    ],
+)
+def test_a_middleware_that_declares_nothing_is_refused(item: object, name: str) -> None:
+    """Refuse a middleware that does not declare both names as frozensets, and name it."""
+    with pytest.raises(TypeError, match="must declare credential_headers and credential_params") as raised:
+        HttpOptions(middleware=(cast("Middleware", item),))
+
+    assert f"middleware {name} must" in str(raised.value)
+
+
+class _PropertySigner:
+    """A signing middleware that declares what it stamps through properties."""
+
+    @property
+    def credential_headers(self) -> frozenset[str]:
+        """Return the header it stamps."""
+        return frozenset({"X-Signature"})
+
+    @property
+    def credential_params(self) -> frozenset[str]:
+        """Return no parameters."""
+        return frozenset[str]()
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        """Stamp the signature, then send."""
+        request.headers["X-Signature"] = "signed"
+        return await call_next(request)
+
+
+async def test_a_middleware_may_declare_through_properties() -> None:
+    """Accept properties as the declaration, and withhold the header they name on a cross-origin hop."""
+    web = Web({f"{BASE}/start": "https://files.example/signed"})
+    async with web.client(http=HttpOptions(middleware=(_PropertySigner(),))) as client:
+        await client.get("start", expect=nothing)
+
+    first, hop = web.sent
+    assert "X-Signature" in first.headers
+    assert "X-Signature" not in hop.headers

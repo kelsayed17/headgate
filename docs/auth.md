@@ -29,13 +29,18 @@ For a provider that signs every request with a long-lived key: a JWT bound to th
 signature over a timestamp and the body. A subclass supplies the signer, `sign(request)`, and declares what it sets;
 the base class gives it:
 
+- **every attempt signed afresh**, inside the retry layer. Each attempt is signed as it leaves the
+  [middleware](configuration.md#middleware) layer: after the last middleware and before the credential guard, the cache
+  and any rate-limit wait. A retry or a hedge carries a signature of its own, so a short-lived one (a timestamp checked
+  to 30 s) does not expire across the backoff. A rate-limit wait can still follow the signature, so a short-lived one
+  can age under a long backlog. The signature is applied before the
+  [credential guard](security.md#credentials-stay-on-your-origin) runs, so a redirect hop to an origin you do not
+  trust goes out without it;
 - **the body, read**, so the signature can cover `request.content`;
 - **a caller's signature left alone.** A request that already carries any of the signed headers or parameters is sent
-  as it is;
-- **one re-sign on a 401**, and never a loop. A retry re-sends the request as it was signed, so a short-lived
-  signature can expire before a late attempt; the 401 that rejects it is signed again, at the current time, and sent
-  once more. A 401 to a request sent without its signature (to an origin the credential guard withheld it from) is
-  not re-sent.
+  as it is, on every attempt;
+- **one re-send on a 401**, signed afresh, and never a loop. A 401 to a request sent without its signature (to an
+  origin the credential guard withheld it from) is not re-sent.
 
 ```python
 import hashlib
@@ -67,7 +72,13 @@ class ExchangeAuth(SigningAuth):
         return self._secret
 ```
 
-- `sign` replaces what an earlier call set, since the re-send after a 401 calls it a second time.
+- `sign` replaces what an earlier call set, since it runs once per attempt, and again on the re-send after a 401. An
+  exception it raises surfaces from inside the retry layer as it was raised: the attempt counts (observers see an
+  `AttemptFinished` with its type as the error), the request is not sent, and it is not retried. An `httpx2.HTTPError`
+  or an `OSError` is the exception: the retry layer takes it for a failed send and judges it as one.
+- A `SigningAuth` signs only when it is the client's own `auth=` under a headgate client. Given to a bare
+  `httpx2.AsyncClient`, or wrapped inside another `httpx2.Auth`, its requests go out unsigned, and a 401 is not
+  re-sent.
 - `signed_headers` and `signed_params` declare what `sign` sets, so the credential guard withholds exactly those from
   an origin you do not trust, and the cache keeps them out of storage. A subclass that declares neither fails when
   it is defined. Signed parameters are registered as secret, so error messages redact them.

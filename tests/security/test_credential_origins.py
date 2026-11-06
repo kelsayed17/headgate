@@ -10,7 +10,7 @@ with. ``Authorization``, ``Proxy-Authorization`` and (without a cookie jar) ``Co
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, override
+from typing import TYPE_CHECKING, ClassVar, LiteralString, override
 
 import httpx2
 import pytest
@@ -354,7 +354,9 @@ async def test_a_middlewares_credentials_stay_off_a_mint_hops_token_host() -> No
     [({}, "https://cdn.example/page?cursor=2"), ({f"{BASE}/start": "https://files.example/signed"}, "start")],
     ids=["absolute-url", "redirect"],
 )
-async def test_a_client_wide_header_is_withheld_from_a_foreign_origin(redirects: dict[str, str], path: str) -> None:
+async def test_a_client_wide_header_is_withheld_from_a_foreign_origin(
+    redirects: dict[str, str], path: LiteralString
+) -> None:
     """Withhold a header set in ``HttpOptions.headers`` (a static key, often) from another origin, whatever its name."""
     web = Web(redirects)
     http = HttpOptions(headers={"X-Api-Key": "client-wide-secret"})

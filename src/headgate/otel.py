@@ -47,7 +47,7 @@ Requires the ``otel`` extra: ``pip install headgate[otel]`` (``opentelemetry-api
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 from urllib.parse import urlsplit
 
 try:
@@ -151,8 +151,12 @@ def _error_type(status: int | None, error: str | None) -> str | None:
 class OpenTelemetryObserver:
     """Report each call as an OpenTelemetry CLIENT span and duration, and propagate its trace context. See the module.
 
-    One instance can serve any number of clients. It keeps the spans of the calls in flight, keyed by call id.
+    One instance can serve any number of clients. It keeps the spans of the calls in flight, keyed by call id. As
+    middleware it stamps trace context, which is no credential, so it declares none.
     """
+
+    credential_headers: ClassVar = frozenset[str]()
+    credential_params: ClassVar = frozenset[str]()
 
     def __init__(
         self,

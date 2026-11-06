@@ -350,6 +350,27 @@ async def test_next_url_pages_are_followed_from_the_body() -> None:
     assert [url.path for url in api.sent] == ["/a", "/b", "/c"]
 
 
+@pytest.mark.parametrize("kind", ["body", "link"])
+async def test_a_next_url_from_the_wire_is_sent_verbatim(kind: str) -> None:
+    """Send a next URL read from a body or a ``Link`` header exactly as the server wrote it, escapes included."""
+    following = "https://api.test/items/a%2Fb?cursor=a%2Fb&x=1"
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path != "/start":
+            return _page(request, [1])
+        if kind == "body":
+            return _page(request, [1], next=following)
+        response = _page(request, [1])
+        response.headers["Link"] = f'<{following}>; rel="next"'
+        return response
+
+    pages = NextUrl(items=items_of, next=next_of) if kind == "body" else LinkHeader(items=items_of)
+    api = _Api(answer)
+    paginated = api.client().paginate("start", expect=decoder(Page), pages=pages)
+    assert len([item async for item in paginated]) == len(("start", "items"))
+    assert api.sent[1].raw_path == b"/items/a%2Fb?cursor=a%2Fb&x=1"
+
+
 async def test_each_page_goes_through_the_stack() -> None:
     """Retry a page that fails transiently, and raise a page that fails for good, after the earlier items."""
     statuses = iter((200, 503, 200, 404))

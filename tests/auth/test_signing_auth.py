@@ -1,10 +1,11 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``SigningAuth``: every request signed as it is sent, a caller's signature left alone, one re-sign on a 401."""
+"""``SigningAuth``: every attempt signed afresh, a caller's signature left alone, one re-send on a 401."""
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import uuid
 from abc import abstractmethod
@@ -13,17 +14,18 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, RetryPolicy, SigningAuth
+from headgate import HttpOptions, Next, RetryPolicy, SigningAuth
 from headgate._core import CredentialStamper
 from headgate._url import is_secret_param
 from headgate.errors import AuthError
 from headgate.ratelimit import UNLIMITED
-from headgate.testing import instant_retries
+from headgate.retry import Hedge
+from headgate.testing import TestClock, instant_retries
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncGenerator, Callable
 
 _BASE = "https://api.example"
 
@@ -126,17 +128,186 @@ async def test_a_401_is_signed_again_once() -> None:
     assert [request.headers["X-Nonce"] for request in sent] == ["1", "2"]
 
 
-async def test_a_retry_that_went_stale_is_accepted_once_signed_again() -> None:
-    """Accept the re-signed request after a retry re-sent the first signature into a 401."""
+async def test_each_attempt_is_signed_afresh() -> None:
+    """Sign a retry again at the current time, so no two attempts carry the same signature."""
     auth = _Signer()
-    answers = iter([httpx2.Response(503), httpx2.Response(httpx2.codes.UNAUTHORIZED), httpx2.Response(200)])
+    answers = iter([httpx2.Response(503), httpx2.Response(200)])
     with instant_retries():
         client, sent = _client(auth, lambda _: next(answers))
     async with client:
         response = await client.get("orders", expect=RESPONSE, retry=RetryPolicy(attempts=2))
 
     assert response.status_code == httpx2.codes.OK
-    assert [request.headers["X-Nonce"] for request in sent] == ["1", "1", "2"]
+    assert [request.headers["X-Nonce"] for request in sent] == ["1", "2"]
+    assert sent[0].headers["X-Signature"] != sent[1].headers["X-Signature"]
+
+
+async def test_a_hedged_attempt_is_signed_afresh() -> None:
+    """Sign a hedge sent beside a slow first attempt on its own, not with the first attempt's signature."""
+    auth = _Signer()
+    sent: list[httpx2.Headers] = []
+    hedge_sent = asyncio.Event()
+
+    async def handle(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request.headers.copy())
+        if len(sent) == 1:
+            await hedge_sent.wait()
+        else:
+            hedge_sent.set()
+        return httpx2.Response(200)
+
+    with TestClock().install():
+        client = StubClient(
+            base_url=_BASE, rate=UNLIMITED, auth=auth, http=HttpOptions(transport=httpx2.MockTransport(handle))
+        )
+    async with client:
+        await client.get("orders", expect=RESPONSE, retry=RetryPolicy(budget=None, hedge=Hedge(after=0.5)))
+
+    assert [headers["X-Nonce"] for headers in sent] == ["1", "2"]
+
+
+async def test_a_cross_origin_hop_carries_no_signature() -> None:
+    """Withhold the signature from a redirect hop to another origin, and send that origin's 401 no second time."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        if request.url.host == "other.test":
+            return httpx2.Response(httpx2.codes.UNAUTHORIZED)
+        return httpx2.Response(httpx2.codes.FOUND, headers={"Location": "https://other.test/x"})
+
+    client, sent = _client(_Signer(), answer)
+    async with client:
+        with pytest.raises(AuthError):
+            await client.get("orders", expect=RESPONSE)
+
+    hops = [request for request in sent if request.url.host == "other.test"]
+    assert len(hops) == 1
+    assert "X-Signature" not in hops[0].headers
+
+
+async def test_a_request_the_caller_signed_is_never_signed() -> None:
+    """Send every attempt of a call that carries its own signature as the caller wrote it."""
+    auth = _Signer()
+    answers = iter([httpx2.Response(503), httpx2.Response(200)])
+    with instant_retries():
+        client, sent = _client(auth, lambda _: next(answers))
+    async with client:
+        await client.get("orders", headers={"X-Signature": "mine"}, expect=RESPONSE, retry=RetryPolicy(attempts=2))
+
+    assert [request.headers["X-Signature"] for request in sent] == ["mine", "mine"]
+    assert auth.signed == 0
+
+
+class _Stamp:
+    """A middleware stamping each attempt's number, which :class:`_StampSigner` covers."""
+
+    credential_headers: ClassVar = frozenset[str]()
+    credential_params: ClassVar = frozenset[str]()
+
+    def __init__(self) -> None:
+        """Count attempts from 1."""
+        self._attempts = itertools.count(1)
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        request.headers["X-Stamp"] = f"a{next(self._attempts)}"
+        return await call_next(request)
+
+
+class _StampSigner(_Signer):
+    """Signs the middleware's ``X-Stamp`` too, so it fails if it signs before the middleware ran."""
+
+    @override
+    def sign(self, request: httpx2.Request) -> None:
+        super().sign(request)
+        request.headers["X-Signature"] += f":{request.headers['X-Stamp']}"
+
+
+async def test_each_attempt_is_signed_once_after_the_last_middleware() -> None:
+    """Sign what the middleware stamped, once per attempt."""
+    auth = _StampSigner()
+    answers = iter([httpx2.Response(503), httpx2.Response(200)])
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request.headers["X-Signature"])
+        return next(answers)
+
+    sent: list[str] = []
+    http = HttpOptions(transport=httpx2.MockTransport(handle), middleware=(_Stamp(),))
+    with instant_retries():
+        client = StubClient(base_url=_BASE, rate=UNLIMITED, auth=auth, http=http)
+    async with client:
+        await client.get("orders", expect=RESPONSE, retry=RetryPolicy(attempts=2))
+
+    assert sent == ["1:GET:/orders::a1", "2:GET:/orders::a2"]
+    assert auth.signed == len(sent)
+
+
+class _Wrapping(httpx2.Auth):
+    """Runs a ``SigningAuth``'s flow inside its own, so the client's auth is not the signer."""
+
+    def __init__(self, auth: SigningAuth) -> None:
+        """Wrap *auth*."""
+        self._auth = auth
+
+    @override
+    async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
+        flow = self._auth.async_auth_flow(request)
+        yield await anext(flow)
+
+
+async def test_a_signer_that_is_not_the_clients_auth_never_signs() -> None:
+    """Send a request marked by a wrapped signer unsigned, middleware or none, so no undeclared signature leaves."""
+    auth = _Signer()
+    sent: list[httpx2.Headers] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request.headers.copy())
+        return httpx2.Response(200)
+
+    http = HttpOptions(transport=httpx2.MockTransport(handle), middleware=(_Stamp(),))
+    client = StubClient(base_url=_BASE, rate=UNLIMITED, auth=_Wrapping(auth), http=http)
+    async with client:
+        await client.get("orders", expect=RESPONSE)
+
+    assert "X-Signature" not in sent[0]
+    assert auth.signed == 0
+
+
+class _Driving(httpx2.Auth):
+    """Drives a ``SigningAuth``'s flow to its end, forwarding each response back, inside its own flow."""
+
+    def __init__(self, auth: SigningAuth) -> None:
+        """Wrap *auth*."""
+        self._auth = auth
+
+    @override
+    async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
+        flow = self._auth.async_auth_flow(request)
+        step = await anext(flow)
+        while True:
+            response = yield step
+            try:
+                step = await flow.asend(response)
+            except StopAsyncIteration:
+                return
+
+
+async def test_a_wrapped_signer_is_not_re_sent_on_a_401() -> None:
+    """Send once, unsigned, a request whose signer is wrapped in another auth, when the server answers 401."""
+    auth = _Signer()
+    sent: list[httpx2.Request] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        return httpx2.Response(httpx2.codes.UNAUTHORIZED)
+
+    http = HttpOptions(transport=httpx2.MockTransport(handle), middleware=(_Stamp(),))
+    client = StubClient(base_url=_BASE, rate=UNLIMITED, auth=_Driving(auth), http=http)
+    async with client:
+        with pytest.raises(AuthError):
+            await client.get("orders", expect=RESPONSE)
+
+    assert len(sent) == 1
+    assert auth.signed == 0
 
 
 async def test_a_401_to_a_request_it_skips_is_not_re_sent() -> None:

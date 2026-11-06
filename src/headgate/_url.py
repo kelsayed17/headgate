@@ -29,14 +29,17 @@ from __future__ import annotations
 
 import re
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, LiteralString
 from urllib.parse import quote, unquote_plus, urlsplit, urlunsplit
+
+import httpx2
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
 __all__ = [
     "SECRET_QUERY_PARAMS",
+    "CallUrl",
     "escape_segment",
     "is_secret_param",
     "redact_secrets",
@@ -45,6 +48,10 @@ __all__ = [
     "route_template",
     "sanitize_url",
 ]
+
+#: What a call takes as its URL: a literal, a t-string (escaped, and the call's route) or an ``httpx2.URL`` (a wire URL,
+#: sent as it is). A computed ``str`` is none of these: it skipped escaping.
+CallUrl = LiteralString | Template | httpx2.URL
 
 #: Query parameter names that carry a credential, compared after :func:`_fold` (case-insensitive, ``_`` and ``-``
 #: ignored).

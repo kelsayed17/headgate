@@ -30,11 +30,11 @@ from headgate.pagination._link import next_link
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
-    from string.templatelib import Template
 
     import httpx2
 
     from headgate._request_body import Writer
+    from headgate._url import CallUrl
 
 __all__ = [
     "BodyCursor",
@@ -61,7 +61,7 @@ class PageRequest[B = None]:
     :class:`WritingPager`).
     """
 
-    url: str | Template
+    url: CallUrl
     params: Mapping[str, object] | None = None
     body: B | None = None
 
@@ -158,7 +158,7 @@ def _reached[P](total: Callable[[P], int | None] | None, page: P, offset: int) -
 
 def _absolute(response: httpx2.Response, target: str) -> PageRequest:
     """Return the request for *target*, resolved against the URL that sent *response*, as an absolute URL."""
-    return PageRequest(str(response.url.join(target)))
+    return PageRequest(response.url.join(target))
 
 
 def _check_get[B](request: PageRequest[B], pager: str) -> None:
