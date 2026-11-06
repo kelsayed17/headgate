@@ -199,12 +199,13 @@ async def test_a_token_response_nested_too_deeply_is_a_parse_error() -> None:
     """Map a mint's ``RecursionError`` (``json.loads`` on a body nested past its stack) to ``ResponseParseError``.
 
     Its own message reports a stack size that varies by machine, so the message says ``nested too deeply`` instead.
+    The mint raises it: how deep a body must be to overflow the parser's stack depends on the platform.
     """
-    deep = b"[" * 100_000 + b"]" * 100_000
+    overflow = RecursionError("maximum recursion depth exceeded while decoding a JSON array from a unicode string")
     with pytest.raises(ResponseParseError) as raised:
-        await _call(_MintsOver(lambda _r: httpx2.Response(httpx2.codes.OK, content=deep)))
+        await _call(_Raises(overflow))
 
-    assert str(raised.value) == "[_MintsOver] unreadable token response: nested too deeply"
+    assert str(raised.value) == "[_Raises] unreadable token response: nested too deeply"
 
 
 async def test_an_unreadable_token_response_from_a_mint_flow_is_a_parse_error() -> None:

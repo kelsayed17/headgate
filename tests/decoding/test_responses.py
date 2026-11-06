@@ -8,13 +8,13 @@ from __future__ import annotations
 import dataclasses
 import traceback
 from collections.abc import MutableMapping
-from typing import Final, Protocol
+from typing import Final, NoReturn, Protocol
 
 import httpx2
 import msgspec
 import pytest
 
-from headgate import HttpOptions, body_reader
+from headgate import HttpOptions, _responses, body_reader
 from headgate._responses import Expect, Reader, as_bytes, as_json, nothing
 from headgate.errors import (
     ClientError,
@@ -154,9 +154,6 @@ def _nested(depth: int, inner: bytes) -> bytes:
     return b"[" * depth + inner + b"]" * depth
 
 
-#: Nesting deep enough for ``json.loads`` and msgspec to overflow their own stack: a ``RecursionError``.
-_PARSER_DEEP: Final = _nested(100_000, b"")
-
 #: Bodies ``as_json`` reads, each with the value it reads: a float and ``null`` (``parse_float``'s finite path), an
 #: escaped surrogate pair, and a clean key over non-string values behind a surrogate escape (every branch of the walk).
 _READ: Final = [
@@ -222,30 +219,48 @@ async def test_json_refuses_a_body_that_is_not_json() -> None:
         assert status.value.status_code == httpx2.codes.NOT_FOUND
 
 
-async def _deep_read(status: int, expect: Reader[object] | Expect[object]) -> ClientError:
-    """Return what a call raises reading :data:`_PARSER_DEEP` on *status* through *expect*."""
-    fake = FakeTransport().reply("GET", "/x", httpx2.Response(status, content=_PARSER_DEEP))
+def _overflow(*_: object) -> NoReturn:
+    """Raise what a parser raises for a body nested past its own stack.
+
+    How deep that is depends on the platform: from Python 3.14, ``json.loads`` recurses until the real C stack runs
+    out, so no body overflows everywhere. The tests raise the error instead of nesting a body to provoke it.
+    """
+    msg = "maximum recursion depth exceeded while decoding a JSON array from a unicode string"
+    raise RecursionError(msg)
+
+
+@pytest.fixture
+def parser_overflows(monkeypatch: pytest.MonkeyPatch) -> bytes:
+    """Make ``as_json``'s ``json.loads`` raise ``RecursionError`` part way through, returning a body that does it."""
+    monkeypatch.setattr(_responses, "_finite", _overflow)
+    return b"[[1.5]]"
+
+
+async def _read_raises(status: int, body: bytes, expect: Reader[object] | Expect[object]) -> ClientError:
+    """Return what a call raises reading *body* on *status* through *expect*."""
+    fake = FakeTransport().reply("GET", "/x", httpx2.Response(status, content=body))
     client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
     with pytest.raises(ClientError) as raised:
         await client.get("x", expect=expect)
     return raised.value
 
 
-def test_json_refuses_nesting_too_deep_for_the_parser() -> None:
-    """Raise ``DecodeError`` for a body nested past ``json.loads``'s own stack, not a raw ``RecursionError``."""
+def test_json_refuses_nesting_too_deep_for_the_parser(parser_overflows: bytes) -> None:
+    """Raise ``DecodeError`` where ``json.loads`` overflows its stack, not a raw ``RecursionError``."""
     with pytest.raises(DecodeError) as raised:
-        as_json(httpx2.Response(200, content=_PARSER_DEEP))
+        as_json(httpx2.Response(200, content=parser_overflows))
     assert str(raised.value) == "not JSON: nested too deeply"
+    assert raised.value.__cause__ is None
     assert raised.value.__suppress_context__
 
 
-async def test_nesting_too_deep_for_the_parser_is_a_shape_error() -> None:
-    """Raise ``ResponseParseError`` on a 2xx, and the status's error on a declared 404, whichever reader parsed it."""
-    for read in (as_json, Reader(lambda r: r.json())):
-        error = await _deep_read(httpx2.codes.OK, read)
+async def test_nesting_too_deep_for_the_parser_is_a_shape_error(parser_overflows: bytes) -> None:
+    """Raise ``ResponseParseError`` on a 2xx, and the status's error on a declared 404, whichever reader overflowed."""
+    for read in (as_json, Reader(_overflow)):
+        error = await _read_raises(httpx2.codes.OK, parser_overflows, read)
         assert isinstance(error, ResponseParseError), error
         assert str(error).endswith("nested too deeply"), error
-    error = await _deep_read(httpx2.codes.NOT_FOUND, Expect(nothing).on(404, Reader(lambda r: r.json())))
+    error = await _read_raises(httpx2.codes.NOT_FOUND, parser_overflows, Expect(nothing).on(404, Reader(_overflow)))
     assert isinstance(error, UpstreamStatusError), error
     assert error.status_code == httpx2.codes.NOT_FOUND
 

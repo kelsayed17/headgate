@@ -318,15 +318,29 @@ def test_a_decode_error_is_bounded_whatever_the_input() -> None:
     assert str(raised.value) == "Invalid enum value"
 
 
+class _Overflows(msgspec.Struct, frozen=True):
+    """A struct whose ``__post_init__`` raises what msgspec raises for a body nested past its own stack.
+
+    How deep that is depends on the platform, so no body overflows everywhere: the error is raised mid-decode instead.
+    """
+
+    x: int
+
+    def __post_init__(self) -> None:
+        """Raise ``RecursionError`` from inside msgspec's decode."""
+        msg = "maximum recursion depth exceeded while deserializing an object"
+        raise RecursionError(msg)
+
+
 async def test_a_body_nested_too_deeply_is_a_parse_error() -> None:
-    """Raise ``ResponseParseError`` for a body nested past msgspec's own stack, not a raw ``RecursionError``."""
-    deep = b"[" * 100_000 + b"]" * 100_000
-    fake = FakeTransport().reply("GET", "/x", httpx2.Response(200, content=deep))
+    """Raise ``ResponseParseError`` where msgspec overflows its stack, not a raw ``RecursionError``."""
+    body = b'[{"x": 1}]'
+    fake = FakeTransport().reply("GET", "/x", httpx2.Response(200, content=body))
     client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
     with pytest.raises(ResponseParseError) as raised:
-        await client.get("x", expect=reader(list[object]))
+        await client.get("x", expect=reader(list[_Overflows]))
     assert str(raised.value).endswith("nested too deeply")
     with pytest.raises(DecodeError) as decoded:
-        decode(deep, list[object])
+        decode(body, list[_Overflows])
     assert str(decoded.value) == "nested too deeply"
     assert decoded.value.__suppress_context__
