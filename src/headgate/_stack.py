@@ -143,8 +143,9 @@ def build_transport_stack(
     if (cache := policy.cache) is not None:
         scope = credential_scope(cache, credentials.auth, middleware=http.middleware, headers=http.headers)
         layer = ResilientCacheTransport(layer, cache, max_body_bytes=http.max_response_bytes, scope=scope)
-    if http.middleware or isinstance(credentials.auth, SigningAuth):
-        layer = MiddlewareTransport(transport=layer, middleware=http.middleware, guard=credentials.guard)
+    signer = credentials.auth if isinstance(credentials.auth, SigningAuth) else None
+    if http.middleware or signer is not None:
+        layer = MiddlewareTransport(transport=layer, middleware=http.middleware, guard=credentials.guard, signer=signer)
     if http.observers:
         layer = AttemptTransport(transport=layer)
     return RetryTransport(transport=layer, policy=policy.retry, sleep=timing.sleep, clock=timing.clock)

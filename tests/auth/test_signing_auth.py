@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``SigningAuth``: every request signed as it is sent, a caller's signature left alone, one re-sign on a 401."""
+"""``SigningAuth``: every attempt signed afresh, a caller's signature left alone, one re-send on a 401."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, RetryPolicy, SigningAuth
+from headgate import HttpOptions, Next, RetryPolicy, SigningAuth
 from headgate._core import CredentialStamper
 from headgate._url import is_secret_param
 from headgate.errors import AuthError
@@ -25,7 +25,7 @@ from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncGenerator, Callable
 
 _BASE = "https://api.example"
 
@@ -194,6 +194,81 @@ async def test_a_request_the_caller_signed_is_never_signed() -> None:
         await client.get("orders", headers={"X-Signature": "mine"}, expect=RESPONSE, retry=RetryPolicy(attempts=2))
 
     assert [request.headers["X-Signature"] for request in sent] == ["mine", "mine"]
+    assert auth.signed == 0
+
+
+class _Stamp:
+    """A middleware stamping each attempt's number, which :class:`_StampSigner` covers."""
+
+    credential_headers: ClassVar = frozenset[str]()
+    credential_params: ClassVar = frozenset[str]()
+
+    def __init__(self) -> None:
+        """Count attempts from 1."""
+        self._attempts = itertools.count(1)
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        request.headers["X-Stamp"] = f"a{next(self._attempts)}"
+        return await call_next(request)
+
+
+class _StampSigner(_Signer):
+    """Signs the middleware's ``X-Stamp`` too, so it fails if it signs before the middleware ran."""
+
+    @override
+    def sign(self, request: httpx2.Request) -> None:
+        super().sign(request)
+        request.headers["X-Signature"] += f":{request.headers['X-Stamp']}"
+
+
+async def test_each_attempt_is_signed_once_after_the_last_middleware() -> None:
+    """Sign what the middleware stamped, once per attempt."""
+    auth = _StampSigner()
+    answers = iter([httpx2.Response(503), httpx2.Response(200)])
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request.headers["X-Signature"])
+        return next(answers)
+
+    sent: list[str] = []
+    http = HttpOptions(transport=httpx2.MockTransport(handle), middleware=(_Stamp(),))
+    with instant_retries():
+        client = StubClient(base_url=_BASE, rate=UNLIMITED, auth=auth, http=http)
+    async with client:
+        await client.get("orders", expect=RESPONSE, retry=RetryPolicy(attempts=2))
+
+    assert sent == ["1:GET:/orders::a1", "2:GET:/orders::a2"]
+    assert auth.signed == len(sent)
+
+
+class _Wrapping(httpx2.Auth):
+    """Runs a ``SigningAuth``'s flow inside its own, so the client's auth is not the signer."""
+
+    def __init__(self, auth: SigningAuth) -> None:
+        """Wrap *auth*."""
+        self._auth = auth
+
+    @override
+    async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
+        flow = self._auth.async_auth_flow(request)
+        yield await anext(flow)
+
+
+async def test_a_signer_that_is_not_the_clients_auth_never_signs() -> None:
+    """Send a request marked by a wrapped signer unsigned, middleware or none, so no undeclared signature leaves."""
+    auth = _Signer()
+    sent: list[httpx2.Headers] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request.headers.copy())
+        return httpx2.Response(200)
+
+    http = HttpOptions(transport=httpx2.MockTransport(handle), middleware=(_Stamp(),))
+    client = StubClient(base_url=_BASE, rate=UNLIMITED, auth=_Wrapping(auth), http=http)
+    async with client:
+        await client.get("orders", expect=RESPONSE)
+
+    assert "X-Signature" not in sent[0]
     assert auth.signed == 0
 
 

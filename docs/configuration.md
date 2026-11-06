@@ -160,7 +160,9 @@ middleware declares in `credential_headers` and `credential_params` are removed 
 `base_url`'s origin or a trusted one, a cross-origin redirect hop included. Both are required, each a `frozenset` of
 names, empty when the middleware stamps none, as a class attribute or a property; `HttpOptions` raises `TypeError` for a
 middleware that lacks either, and for a plain function. `request.content` is available for a
-buffered body; a streamed body is not readable there.
+buffered body; a streamed body is not readable there. A middleware that replaces the request
+(`call_next(httpx2.Request(...))`) keeps `request.extensions` on the new one, or a `SigningAuth` cannot sign that
+attempt.
 
 ## Per-call options
 

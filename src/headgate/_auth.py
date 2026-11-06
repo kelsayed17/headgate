@@ -64,7 +64,8 @@ __all__ = [
 AUTH_HOP = "headgate.auth_hop"
 
 #: The request extension holding the :class:`SigningAuth` that signs the request. Its flow sets it on a request it
-#: signs, and the transport stack calls its :meth:`~SigningAuth.sign` on every attempt, before the credential guard.
+#: signs, and the transport stack calls its :meth:`~SigningAuth.sign` on every attempt, before the credential guard,
+#: when it is the client's own ``auth``.
 #: httpx2 hands a request's extensions to the redirects that follow it, so each hop is signed for its own origin, and
 #: the guard withholds the signature from one it does not trust.
 SIGNER_EXT: Final = "headgate.signer"
@@ -260,10 +261,15 @@ class SigningAuth(httpx2.Auth, ABC):
     :meth:`sign`; the base class runs the flow around it:
 
     * **Every attempt is signed afresh**, inside the retry layer. The flow marks the request with :data:`SIGNER_EXT`,
-      and the client's transport stack calls :meth:`sign` on each attempt, after the last middleware and before the
-      credential guard. A retry or a hedge carries a signature made at its own send time, so a short-lived one (a
-      timestamp checked to 30 s, a JWT of two minutes) does not go stale across the backoff, and a cross-origin
-      redirect hop is signed only to have the guard withhold it.
+      and the client's transport stack calls :meth:`sign` on each attempt as it enters the middleware layer: after the
+      last middleware and before the credential guard, the cache and any rate-limit wait. A retry or a hedge carries a
+      signature of its own, so a short-lived one (a timestamp checked to 30 s, a JWT of two minutes) does not go stale
+      across the backoff, and a cross-origin redirect hop is signed only to have the guard withhold it. It signs only as
+      the client's own ``auth`` under a headgate client: under a bare ``httpx2.AsyncClient``, or wrapped in another
+      ``httpx2.Auth``, its requests go out unsigned and a 401 is not re-sent.
+    * **An exception from** :meth:`sign` **surfaces from inside the retry layer**, as it was raised: the attempt counts
+      (observers see an ``AttemptFinished`` with its type as the error), the request is not sent, and it is not
+      retried. An ``httpx2.HTTPError`` or ``OSError`` is judged as a failed send instead.
     * **The body is read first**, so a signature may cover it. httpx2 honors ``requires_request_body`` only in its
       default flows, which this replaces.
     * **A request the caller signed is left alone**: :meth:`skips` returns ``True`` for one that already carries any

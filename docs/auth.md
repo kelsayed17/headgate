@@ -29,10 +29,12 @@ For a provider that signs every request with a long-lived key: a JWT bound to th
 signature over a timestamp and the body. A subclass supplies the signer, `sign(request)`, and declares what it sets;
 the base class gives it:
 
-- **every attempt signed afresh**, inside the retry layer. A retry or a hedge carries a signature made when it is
-  sent, so a short-lived one (a timestamp checked to 30 s) does not expire across the backoff. The signature is
-  applied before the [credential guard](security.md#credentials-stay-on-your-origin) runs, so a redirect hop to an
-  origin you do not trust goes out without it;
+- **every attempt signed afresh**, inside the retry layer. Each attempt is signed as it enters headgate's transport
+  stack, after the last [middleware](configuration.md#middleware) and before the cache and any rate-limit wait, so a
+  retry or a hedge carries a signature of its own and a short-lived one (a timestamp checked to 30 s) does not expire
+  across the backoff. The signature is applied before the
+  [credential guard](security.md#credentials-stay-on-your-origin) runs, so a redirect hop to an origin you do not
+  trust goes out without it;
 - **the body, read**, so the signature can cover `request.content`;
 - **a caller's signature left alone.** A request that already carries any of the signed headers or parameters is sent
   as it is, on every attempt;
@@ -69,7 +71,13 @@ class ExchangeAuth(SigningAuth):
         return self._secret
 ```
 
-- `sign` replaces what an earlier call set, since it runs once per attempt, and again on the re-send after a 401.
+- `sign` replaces what an earlier call set, since it runs once per attempt, and again on the re-send after a 401. An
+  exception it raises surfaces from inside the retry layer as it was raised: the attempt counts (observers see an
+  `AttemptFinished` with its type as the error), the request is not sent, and it is not retried. An `httpx2.HTTPError`
+  or an `OSError` is the exception: the retry layer takes it for a failed send and judges it as one.
+- A `SigningAuth` signs only when it is the client's own `auth=` under a headgate client. Given to a bare
+  `httpx2.AsyncClient`, or wrapped inside another `httpx2.Auth`, its requests go out unsigned, and a 401 is not
+  re-sent.
 - `signed_headers` and `signed_params` declare what `sign` sets, so the credential guard withholds exactly those from
   an origin you do not trust, and the cache keeps them out of storage. A subclass that declares neither fails when
   it is defined. Signed parameters are registered as secret, so error messages redact them.

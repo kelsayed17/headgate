@@ -61,11 +61,11 @@ def _link(middleware: Middleware, call_next: Next) -> Next:
 
 
 class MiddlewareTransport(httpx2.AsyncBaseTransport):
-    """Run a request through *middleware*, in order, then its signer and *guard*, then the transport below.
+    """Run a request through *middleware*, in order, then the signer and *guard*, then the transport below.
 
-    The signer is the :class:`~headgate.SigningAuth` a request's auth flow set in :data:`~headgate._auth.SIGNER_EXT`,
-    if any; it signs each attempt of that request as the last middleware passes it on. ``aclose`` closes the transport
-    below.
+    The signer is the client's own :class:`~headgate.SigningAuth`, if it has one. It signs each attempt of a request
+    its flow marked (:data:`~headgate._auth.SIGNER_EXT`) as the last middleware passes it on. ``aclose`` closes the
+    transport below.
     """
 
     def __init__(
@@ -74,16 +74,18 @@ class MiddlewareTransport(httpx2.AsyncBaseTransport):
         transport: httpx2.AsyncBaseTransport,
         middleware: tuple[Middleware, ...],
         guard: Callable[[httpx2.Request], Awaitable[None]],
+        signer: SigningAuth | None,
     ) -> None:
-        """Chain *middleware* before the signer, *guard* and *transport*, once, so each attempt only walks the chain.
+        """Chain *middleware* before *signer*, *guard* and *transport*, once, so each attempt only walks the chain.
 
-        *guard* is the client's credential guard, run on what the last middleware passes on, once it is signed.
+        *signer* is the client's auth when it is a ``SigningAuth``: only its marks are signed, since the guard withholds
+        only what the client's auth declares. *guard* is the client's credential guard, run on what the last middleware
+        passes on, once it is signed.
         """
         self._transport = transport
 
         async def guarded(request: httpx2.Request) -> httpx2.Response:
-            signer = request.extensions.get(SIGNER_EXT)
-            if isinstance(signer, SigningAuth):
+            if signer is not None and request.extensions.get(SIGNER_EXT) is signer:
                 # A hedge's copy and a redirect hop are new requests over the body the flow buffered: read it again.
                 await request.aread()
                 signer.sign(request)
