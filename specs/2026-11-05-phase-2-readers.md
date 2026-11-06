@@ -91,7 +91,7 @@ These five cases are not covered by the spec's own examples and are the most lik
   - `tests/cache/test_conditional.py` and `tests/pagination/test_paginate.py`, for Review Focus 3.
 
 **Interfaces:**
-- Produces: `headgate.Reader`, a `@final` generic class: `Reader[T](read: Callable[[httpx2.Response], T], /, *, name: str | None = None)`, with `__call__(self, response: httpx2.Response, /) -> T` and `__repr__`. It uses `__slots__`, and its attributes are private and read-only, so `T` is inferred covariant.
+- Produces: `headgate.Reader`, a `@final` generic class: `Reader[T](read: Callable[[httpx2.Response], T], /, *, name: str | None = None)`, with `__call__(self, response: httpx2.Response, /) -> T` and `__repr__`. It uses `__slots__`, and its function is stored as `self._read: Final = read` (a `Final` instance attribute set in `__init__`), so ty infers `T` covariant. A plain assignment is a mutable attribute, which makes `T` invariant and breaks `Expect.on`'s widening.
 - Produces: `nothing: Reader[None]`, `as_bytes: Reader[bytes]` and `event_stream: Reader[list[httpx2.ServerSentEvent]]`, keeping the names they have today.
 - Produces: every verb, `stream`, `paginate`, `Expect` and `Expect.on` typed `Reader[T] | Expect[T]` (or `Reader[T]`), as today, now over the class.
 
@@ -101,7 +101,7 @@ These five cases are not covered by the spec's own examples and are the most lik
   - `test_a_codec_readers_repr_names_the_type`: `repr(decoder_for(CODEC, list[Order]))` contains `"Order"`. That test moves to `reader_for` in Task 3.
   - `test_stock_readers_are_readers`: `nothing`, `as_bytes` and `event_stream` are `Reader` instances. `repr(nothing) == "Reader(nothing)"`.
   - `test_expect_refuses_a_callable_that_is_not_a_reader`, parametrized over `str`, a class, a plain function and a lambda, given as `Expect(ok)`, as an `answers` value, to `.on(404, ...)` and to `conditional(...)`. Each raises `TypeError` whose message contains `"Reader"` and the type's name.
-  - `test_every_call_refuses_a_non_reader_expect`, parametrized over `get`, `post`, `put`, `patch`, `delete`, `head`, `stream` and `paginate` on a `StubClient` with `expect=str`. Each raises `TypeError` naming `expect=` before anything is sent: the fake transport records no request.
+  - `test_every_call_refuses_a_non_reader_expect`, parametrized over `get`, `post`, `put`, `patch`, `delete`, `head`, `stream` and `paginate` on a `StubClient` with `expect=str`. Each raises `TypeError` naming `expect=` before anything is sent: the fake transport records no request. A verb and `paginate` raise when called, and `stream` when its block is entered.
 - [ ] **Step 2: Write the failing type test** `tests/decoding/test_reader_types.py`:
   - `test_a_non_reader_expect_does_not_type_check`: `c.get("x", expect=str)`, `c.get("x", expect=Order)`, `c.get("x", expect=lambda r: r)` and `Expect(lambda r: r)` each produce an error. The exit code is non-zero, and the output has one `invalid-argument-type` per line (four).
   - `test_a_reader_widens_through_expect_on`: `e: Expect[Order | None] = Expect(ORDER).on(404, nothing)` and `r: Reader[Order | None] = ORDER` type-check with exit code 0 (Review Focus 2).
