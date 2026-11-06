@@ -25,6 +25,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- headgate requires `hishel<2`. hishel 2.0.0 removed `BaseFilter` and `FilterPolicy`, so `import headgate` failed
+  wherever the newest hishel was installed.
 - `post(json=..., data=...)` raises `ValueError`. httpx2 sent the form alone and dropped the JSON without a word.
 - A bare number or `None` where an option takes a value object is refused with a `TypeError` naming the option and
   what it takes: `rate=10` (a `Rate` or `RateBudget`), `TransportPolicy(retry=None)` (turn retries off with
