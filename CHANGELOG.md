@@ -104,6 +104,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - Every call left its context in a reference cycle (through the retry verdict's judge), so what it allocated was
   freed only at the next garbage collection, raising the memory a stream of calls held at its peak.
 
+### Security
+
+- A transport or token-mint error whose message quoted one long word (a redirect to a URL with a 64 KiB port, a token
+  field the mint's parser quoted whole) took time quadratic in the word's length to redact, over twenty seconds on a
+  desktop for the longest URL httpx2 accepts, blocking the event loop on a value the server chose. The `name=value`
+  pattern now makes one full attempt per word, in linear time, and redacts exactly the pairs it did before.
+
 ## [0.11.0] - 2026-11-02
 
 What an API client wrote around headgate is now headgate's: a pager over numbered pages, an offset walk that ends at
