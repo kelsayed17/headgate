@@ -21,10 +21,9 @@ from typing import TYPE_CHECKING, override
 import anysqlite
 import httpx2
 import pytest
-from hishel import AsyncSqliteStorage, FilterPolicy
+from hishel import AsyncSqliteStorage
 
 from headgate import ClientError, HttpCache, HttpOptions, RetryPolicy, TransportPolicy, as_bytes
-from headgate.cache import MethodFilter, StatusCodeFilter
 from headgate.ratelimit import Rate
 from tests.support.clients import StubClient
 
@@ -172,11 +171,7 @@ async def test_repeated_retries_retain_nothing() -> None:
 async def test_repeated_cache_hits_retain_nothing() -> None:
     """Retain nothing per request across thousands of GETs served from the HTTP cache."""
     storage = AsyncSqliteStorage(connection=await anysqlite.connect(":memory:"))
-    policy = FilterPolicy(
-        request_filters=[MethodFilter(frozenset({"GET"}))],
-        response_filters=[StatusCodeFilter(frozenset({httpx2.codes.OK}))],
-    )
-    client = _client(cache=HttpCache(policy=policy, storage=storage, ttl=3600))
+    client = _client(cache=HttpCache(storage=storage, ttl=3600))
     try:
         assert await _growth_per_window(lambda: client.get("series", expect=as_bytes)) < _GROWTH_LIMIT
     finally:

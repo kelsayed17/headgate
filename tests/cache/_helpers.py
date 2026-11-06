@@ -1,25 +1,28 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Policies, storages and network legs shared by the cache suite."""
+"""Cache rules, storages and network legs shared by the cache suite."""
 
 from __future__ import annotations
 
 import dataclasses
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, TypedDict, override
 
 import httpx2
-from hishel import AsyncBaseStorage, AsyncSqliteStorage, Entry, FilterPolicy, Request, Response
+from hishel import AsyncBaseStorage, AsyncSqliteStorage, Entry, Request, Response
 
 from headgate import HttpOptions, TransportPolicy
-from headgate.cache import HttpCache, MethodFilter, PathFragmentFilter, StatusCodeFilter
+from headgate.cache import HttpCache
 from headgate.cache._transport import ResilientCacheTransport, store_accepted
 from headgate.ratelimit import UNLIMITED
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
+    import re
     import uuid
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator, Iterable, Mapping
+
+    from hishel import Headers
 
     from headgate import Rate
     from headgate.cache._credentials import CredentialScope
@@ -31,20 +34,28 @@ GENEROUS_CAP = 1024 * 1024
 NETWORK_BODY = b"from-network"
 
 
-def series_policy() -> FilterPolicy:
-    """Cache the 200s of any path containing ``/series``."""
-    return FilterPolicy(
-        request_filters=[PathFragmentFilter(("/series",))],
-        response_filters=[StatusCodeFilter(frozenset({httpx2.codes.OK}))],
-    )
+class CacheRules(TypedDict, total=False):
+    """What an :class:`HttpCache` keeps: its ``methods``, ``paths`` and ``statuses``, as ``HttpCache(**rules)``."""
+
+    methods: Iterable[str]
+    paths: Iterable[str | re.Pattern[str]]
+    statuses: Iterable[int]
 
 
-def every_get_policy() -> FilterPolicy:
+def series_rules() -> CacheRules:
+    """Cache the 200s of any GET whose path contains ``/series``."""
+    return {"paths": ("/series",)}
+
+
+def every_get_rules() -> CacheRules:
     """Cache the 200s of every GET, so hishel reaches the storage on each one."""
-    return FilterPolicy(
-        request_filters=[MethodFilter(frozenset({"GET"}))],
-        response_filters=[StatusCodeFilter(frozenset({httpx2.codes.OK}))],
-    )
+    return {}
+
+
+def stamped_ttl(extensions: Mapping[str, object]) -> object:
+    """Return the TTL a request's *extensions* carry in hishel's ``caching`` settings, or ``None`` without one."""
+    settings = extensions.get("caching")
+    return settings.get("ttl") if isinstance(settings, dict) else None
 
 
 def stub_client(
@@ -77,15 +88,15 @@ def cache_transport(
     storage: AsyncBaseStorage,
     network: httpx2.AsyncBaseTransport,
     *,
-    policy: FilterPolicy | None = None,
+    rules: CacheRules | None = None,
     cap: int = GENEROUS_CAP,
     scope: CredentialScope | None = None,
 ) -> ResilientCacheTransport:
-    """Build a cache transport over *network*, caching every GET's 200 into *storage* unless *policy* says otherwise.
+    """Build a cache transport over *network*, caching every GET's 200 into *storage* unless *rules* say otherwise.
 
     *scope* views requests as a client with that auth would; without one, as a client with no auth.
     """
-    cache = HttpCache(policy=policy or every_get_policy(), storage=storage)
+    cache = HttpCache(**(rules or every_get_rules()), storage=storage)
     return ResilientCacheTransport(network, cache, max_body_bytes=cap, scope=scope)
 
 
@@ -148,6 +159,7 @@ class FaultyStorage(AsyncBaseStorage):
 
     def __init__(self, inner: AsyncBaseStorage, exc: Exception | None = None, *, failing: str | None = None) -> None:
         """Delegate to *inner*, raising *exc* from the method named *failing*."""
+        super().__init__()
         self.inner = inner
         self.exc = exc
         self._failing = failing
@@ -157,9 +169,11 @@ class FaultyStorage(AsyncBaseStorage):
             raise self.exc
 
     @override
-    async def create_entry(self, request: Request, response: Response, key: str, id_: uuid.UUID | None = None) -> Entry:
+    async def create_entry(
+        self, request: Request, response: Response, key: str, *, ttl: float | None = None, tti: float | None = None
+    ) -> Entry:
         self._maybe_fail("create_entry")
-        return await self.inner.create_entry(request, response, key, id_)
+        return await self.inner.create_entry(request, response, key, ttl=ttl, tti=tti)
 
     @override
     async def get_entries(self, key: str) -> list[Entry]:
@@ -167,19 +181,14 @@ class FaultyStorage(AsyncBaseStorage):
         return await self.inner.get_entries(key)
 
     @override
-    async def update_entry(self, id: uuid.UUID, new_entry: Entry | Callable[[Entry], Entry]) -> Entry | None:
-        self._maybe_fail("update_entry")
-        return await self.inner.update_entry(id, new_entry)
+    async def update_headers(self, id: uuid.UUID, headers: Headers) -> None:
+        self._maybe_fail("update_headers")
+        await self.inner.update_headers(id, headers)
 
     @override
     async def remove_entry(self, id: uuid.UUID) -> None:
         self._maybe_fail("remove_entry")
         await self.inner.remove_entry(id)
-
-    @override
-    async def refresh_entry_ttl(self, id: uuid.UUID) -> None:
-        self._maybe_fail("refresh_entry_ttl")
-        await self.inner.refresh_entry_ttl(id)
 
     @override
     async def close(self) -> None:

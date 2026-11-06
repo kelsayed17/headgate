@@ -26,10 +26,10 @@ from typing import TYPE_CHECKING, override
 import anysqlite
 import httpx2
 import pytest
-from hishel import AsyncSqliteStorage, FilterPolicy
+from hishel import AsyncSqliteStorage
 
 from headgate import HttpOptions, TransportPolicy
-from headgate.cache import HttpCache, PathFragmentFilter, StatusCodeFilter
+from headgate.cache import HttpCache
 from headgate.ratelimit import Rate, RateRule
 from headgate.ratelimit._budget import Pacer, pacer_of
 from headgate.ratelimit._budgets import PathBudgets
@@ -88,14 +88,6 @@ async def sqlite_storage() -> AsyncIterator[AsyncSqliteStorage]:
         await storage.close()
 
 
-def _series_policy() -> FilterPolicy:
-    """Cache 200s for ``/series`` paths only."""
-    return FilterPolicy(
-        request_filters=[PathFragmentFilter(("/series",))],
-        response_filters=[StatusCodeFilter(frozenset({200}))],
-    )
-
-
 @pytest.fixture
 def acquired(monkeypatch: pytest.MonkeyPatch) -> dict[int, int]:
     """Count the turns taken per budget, keyed by ``id``, through ``Pacer.wait``, the spending seam.
@@ -119,7 +111,7 @@ async def test_a_cache_hit_takes_no_token(sqlite_storage: AsyncSqliteStorage, ac
     client = StubClient(
         base_url="https://x",
         rate=Rate.per_second(_INSTANT),
-        policy=TransportPolicy(cache=HttpCache(policy=_series_policy(), storage=sqlite_storage)),
+        policy=TransportPolicy(cache=HttpCache(storage=sqlite_storage, paths=("/series",))),
         http=HttpOptions(transport=base),
     )
 

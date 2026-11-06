@@ -14,13 +14,37 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- headgate requires hishel 2 (`hishel>=2.0.0`). `AsyncSqliteStorage(database_path=...)` is called as before, but
+  hishel 2 cannot read a hishel 1 database: it raises on every lookup, so each call degrades to the network and nothing
+  is cached. Point it at a new file, or delete the old one, when you upgrade. Its default file name is now
+  `hishel_cache_v2.db`. A storage of your own implements hishel 2's `AsyncBaseStorage`
+  (`create_entry(..., ttl=, tti=)`, `get_entries`, `update_headers`, `remove_entry`).
+- The `caching` report hishel puts on a response says `stored: False` on a miss: headgate writes the entry only once
+  the call accepts the response.
+- Identical GETs asking for different `cache_ttl=` no longer share one download, which is stored for one TTL.
+- `HttpCache(statuses=...)` may name only 2xx statuses other than 206, and raises `ValueError` for any other: hishel 2
+  stores no other response. A declared non-2xx answer (`Expect(...).on(404, ...)`) is therefore never cached.
+- hishel 2's own storages log and absorb their faults instead of raising, so `headgate.health.cache_degradations()`
+  counts only faults a storage raises.
 - A header set in `HttpOptions(headers=...)` is withheld from an origin that is neither `base_url`'s nor trusted, as
   the auth's credentials are, since a static key is often configured there. `User-Agent`, `Accept`,
   `Accept-Encoding` and `Accept-Language` are still sent. Add an origin to `trusted_origins` if it needs the rest.
 - `x-should-retry: true` counts only on an error status: a 2xx or 3xx carrying it is the answer, never re-sent.
 
+### Removed
+
+- `HttpCache(policy=...)` and `HttpCache.filter_policy()`, and `headgate.cache.MethodFilter`, `PathFragmentFilter` and
+  `StatusCodeFilter`: hishel 2 removed `FilterPolicy` and `BaseFilter`, which they were built on. Write the same rules
+  as `HttpCache(methods=..., paths=..., statuses=...)`, which headgate now applies itself; read them back with the new
+  `HttpCache.caches_request(method, path)` and `HttpCache.stores_status(status)`. A POST can no longer be cached:
+  `FilterPolicy(use_body_key=True)` was the only way, and hishel 2 has no equivalent.
+
 ### Fixed
 
+- A cached response still honors `Vary`: hishel 2 keys an entry by its URL alone, so headgate matches the headers a
+  response varies on itself. A response with `Vary: *` is no longer stored, since nothing could match it.
+- Under `Partition.SHARED`, a response varying on a header the cache never stores (`Authorization`, a cookie, a
+  declared credential) was served to every other caller, whatever that header said. It is no longer stored.
 - Concurrent GETs that a middleware gives different timeouts no longer share one download. When a shared download
   times out in a known phase, a waiting GET fetches for itself only if that phase was one the first request's deadline
   shortened, rather than if any phase was. A timeout of no known phase still hands off when any phase was shortened.

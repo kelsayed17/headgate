@@ -20,7 +20,7 @@ import httpx2
 import pytest
 
 from headgate.cache import Validator
-from headgate.cache._transport import CACHE_DEGRADED_EXT
+from headgate.cache._transport import CACHE_DEGRADED_EXT, served_from_cache
 from tests.cache._helpers import FaultyStorage, TrackedStream, accept, cache_transport
 
 if TYPE_CHECKING:
@@ -145,7 +145,7 @@ async def test_a_stored_body_past_the_cap_is_still_reported_as_from_the_cache(st
     response = await small.handle_async_request(httpx2.Request("GET", _URL))
 
     assert network.calls == 1
-    assert response.extensions.get("hishel_from_cache") is True
+    assert served_from_cache(response)
     assert await response.aread() == _BODY
 
 

@@ -49,7 +49,7 @@ and threads, because its state is plain numbers under a `threading.Lock` and not
 budget of their own: the first matching rule wins, and a matching request spends from the rule's budget **instead
 of** the client's. A rule's `rate` is a `Rate` (a budget per client) or a shared `RateBudget`. The fragment is one or
 more whole path segments, matched anywhere in the path: `"/exports"` matches `/v2/exports` and
-`/v2/exports/orders.csv`, but not `/v2/exports-archive`. The cache's `PathFragmentFilter` and the policy's `Route`
+`/v2/exports/orders.csv`, but not `/v2/exports-archive`. The cache's `paths` and the policy's `Route`
 match the same way.
 
 ## Server feedback

@@ -362,7 +362,7 @@ async def test_every_page_carries_the_walks_cache_ttl() -> None:
     stamped: list[object] = []
 
     def answer(request: httpx2.Request) -> httpx2.Response:
-        stamped.append(request.extensions.get("hishel_ttl"))
+        stamped.append(request.extensions.get("caching", {}).get("ttl"))
         return _by_cursor(request)
 
     pages = Cursor(items=items_of, next=cursor_of, param="after")

@@ -9,13 +9,13 @@ The budgets here run on a fake clock and sleep, so a pause of minutes costs noth
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import httpx2
 import pytest
-from hishel import AsyncSqliteStorage, FilterPolicy
 
 from headgate import HttpCache, HttpOptions, RateLimitError, TransportPolicy
 from headgate._core import AttemptFinished, CallFinished, RateLimited, Timing
-from headgate.cache import MethodFilter, StatusCodeFilter
 from headgate.cache._transport import CACHE_DEGRADATIONS
 from headgate.ratelimit import Rate, RateBudget
 from headgate.retry import NO_RETRY
@@ -24,6 +24,9 @@ from tests.support.breakers import failures
 from tests.support.clients import StubClient
 from tests.support.events import Recorder
 from tests.support.responses import RESPONSE
+
+if TYPE_CHECKING:
+    from hishel import AsyncSqliteStorage
 
 pytestmark = pytest.mark.transport_policy
 
@@ -125,10 +128,7 @@ async def test_a_pause_past_the_deadline_is_not_mistaken_for_a_cache_fault(stora
     clock = TestClock()
     budget = _budget(clock)
     server = _Server()
-    policy = FilterPolicy(
-        request_filters=[MethodFilter(frozenset({"GET"}))], response_filters=[StatusCodeFilter(frozenset({200}))]
-    )
-    cache = HttpCache(policy=policy, storage=storage)
+    cache = HttpCache(storage=storage)
     client = _client(budget, server, cache=cache)
     with pytest.raises(RateLimitError):
         await client.get("x", expect=RESPONSE)

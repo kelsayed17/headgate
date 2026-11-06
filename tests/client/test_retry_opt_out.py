@@ -22,6 +22,7 @@ from headgate.errors import UpstreamStatusError
 from headgate.ratelimit import Rate
 from headgate.retry import NO_RETRY
 from headgate.retry._policy import RETRY_POLICY
+from tests.cache._helpers import stamped_ttl
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -105,6 +106,6 @@ async def test_retry_false_and_a_cache_ttl_are_both_stamped(httpx2_mock: HTTPXMo
 
     sent = httpx2_mock.get_requests()[0]
     context = CallContext.find(sent)
-    assert sent.extensions["hishel_ttl"] == ttl
+    assert stamped_ttl(sent.extensions) == ttl
     assert context is not None
     assert context.get(RETRY_POLICY) is NO_RETRY

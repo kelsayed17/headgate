@@ -21,17 +21,15 @@ from typing import TYPE_CHECKING, override
 
 import httpx2
 import pytest
-from hishel import FilterPolicy
 
 from headgate import HttpCache, HttpOptions, Timeouts, TransportError, TransportPolicy, UpstreamStatusError
 from headgate._core import CallContext, CallInfo
 from headgate._responses import as_bytes
-from headgate.cache import MethodFilter
-from headgate.cache._transport import CACHE_DEGRADED_EXT, host_untested
+from headgate.cache._transport import CACHE_DEGRADED_EXT, host_untested, stamp_ttl
 from headgate.ratelimit import UNLIMITED
 from headgate.retry import NO_RETRY, RetryPolicy
 from headgate.retry._policy import RETRY_POLICY
-from tests.cache._helpers import FaultyStorage, TrackingNetwork, cache_transport, every_get_policy
+from tests.cache._helpers import CacheRules, FaultyStorage, TrackingNetwork, cache_transport, every_get_rules
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
 
@@ -70,9 +68,9 @@ class _GatedNetwork(httpx2.AsyncBaseTransport):
         return httpx2.Response(self._status, content=self._body, request=request)
 
 
-def _cache_no_get() -> FilterPolicy:
-    """Cache only POSTs, so no GET in a test is stored."""
-    return FilterPolicy(request_filters=[MethodFilter(frozenset({"POST"}))])
+def _cache_no_get() -> CacheRules:
+    """Cache no method at all, so no GET in a test is stored."""
+    return {"methods": ()}
 
 
 async def _get(transport: ResilientCacheTransport, url: str = _URL) -> bytes:
@@ -125,7 +123,7 @@ async def test_a_get_the_policy_does_not_cache_is_shared_too_and_only_while_in_f
     twice.
     """
     network = _GatedNetwork()
-    transport = cache_transport(storage, network, policy=_cache_no_get())
+    transport = cache_transport(storage, network, rules=_cache_no_get())
 
     tasks = [asyncio.create_task(_get(transport)) for _ in range(_CONCURRENT)]
     await _eventually(lambda: network.calls == 1)
@@ -347,9 +345,25 @@ async def test_a_failure_no_request_waited_on_is_not_reported_as_never_retrieved
 async def test_gets_for_one_url_with_different_headers_do_not_share(storage: AsyncSqliteStorage) -> None:
     """A ``Range``, an ``Accept`` or a credential changes what a GET asks for, so it gets its own download."""
     network = _GatedNetwork()
-    transport = cache_transport(storage, network, policy=_cache_no_get())
+    transport = cache_transport(storage, network, rules=_cache_no_get())
 
     requests = [httpx2.Request("GET", _URL, headers={"Range": f"bytes={start}-"}) for start in (0, 100)]
+    tasks = [asyncio.create_task(transport.handle_async_request(request)) for request in requests]
+    await _eventually(lambda: network.calls == len(requests))
+    network.gate.set()
+    await asyncio.gather(*tasks)
+
+    assert network.calls == len(requests)
+
+
+async def test_gets_for_one_url_with_different_cache_lifetimes_do_not_share(storage: AsyncSqliteStorage) -> None:
+    """A GET asking for another ``cache_ttl=`` gets its own download, since the one download is stored for one TTL."""
+    network = _GatedNetwork()
+    transport = cache_transport(storage, network, rules=_cache_no_get())
+
+    requests = [httpx2.Request("GET", _URL) for _ in range(2)]
+    for request, ttl in zip(requests, (5.0, 60.0), strict=True):
+        stamp_ttl(request, ttl)
     tasks = [asyncio.create_task(transport.handle_async_request(request)) for request in requests]
     await _eventually(lambda: network.calls == len(requests))
     network.gate.set()
@@ -446,7 +460,7 @@ async def test_gets_that_differ_in_timeout_or_retry_policy_do_not_share(
 ) -> None:
     """A GET willing to wait longer, or to try more often, must not inherit the failure of one that was not."""
     network = _GatedNetwork()
-    transport = cache_transport(storage, network, policy=_cache_no_get())
+    transport = cache_transport(storage, network, rules=_cache_no_get())
 
     requests = build()
     tasks = [asyncio.create_task(transport.handle_async_request(request)) for request in requests]
@@ -462,9 +476,7 @@ def _sharing_client(network: _GatedNetwork, storage: AsyncSqliteStorage) -> Stub
     return StubClient(
         base_url="https://example.test",
         rate=UNLIMITED,
-        policy=TransportPolicy(
-            retry=RetryPolicy(attempts=1), cache=HttpCache(policy=every_get_policy(), storage=storage)
-        ),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1), cache=HttpCache(**every_get_rules(), storage=storage)),
         http=HttpOptions(transport=network),
     )
 
@@ -507,7 +519,7 @@ async def test_gets_whose_timeouts_the_deadline_cut_still_share(storage: AsyncSq
         base_url="https://example.test",
         rate=UNLIMITED,
         policy=TransportPolicy(
-            deadline=20.0, retry=RetryPolicy(attempts=1), cache=HttpCache(policy=every_get_policy(), storage=storage)
+            deadline=20.0, retry=RetryPolicy(attempts=1), cache=HttpCache(**every_get_rules(), storage=storage)
         ),
         http=HttpOptions(transport=network),
     )
@@ -546,7 +558,7 @@ async def test_a_timeout_the_deadline_cut_short_is_not_shared(
     A timeout of the read timeout both asked for is shared like any other network failure, even without a known phase.
     """
     network = _GatedNetwork(exc=error_type("slow"))
-    transport = cache_transport(storage, network, policy=_cache_no_get())
+    transport = cache_transport(storage, network, rules=_cache_no_get())
 
     first = asyncio.create_task(transport.handle_async_request(_due_in(first_due_in)))
     await _eventually(lambda: network.calls == 1)
@@ -592,7 +604,7 @@ async def test_timeout_sharing_uses_only_the_failed_phase(
     limits = dict.fromkeys(("connect", "read", "write", "pool"), 120.0)
     if not clipped and phase != "unknown":
         limits[phase] = 1.0
-    transport = cache_transport(storage, network, policy=_cache_no_get())
+    transport = cache_transport(storage, network, rules=_cache_no_get())
     requests = [httpx2.Request("GET", _URL, extensions={"timeout": dict(limits)}) for _ in range(_CONCURRENT)]
     for request in requests:
         context = CallContext(CallInfo(method="GET", url=_URL), deadline_after=60.0)
@@ -632,7 +644,7 @@ async def test_middleware_timeout_overrides_define_sharing(storage: AsyncSqliteS
     client = StubClient(
         base_url="https://example.test",
         rate=UNLIMITED,
-        policy=TransportPolicy(retry=NO_RETRY, deadline=60.0, cache=HttpCache(policy=_cache_no_get(), storage=storage)),
+        policy=TransportPolicy(retry=NO_RETRY, deadline=60.0, cache=HttpCache(**_cache_no_get(), storage=storage)),
         http=HttpOptions(
             transport=network,
             timeout=Timeouts(connect=30.0, read=30.0, write=30.0, pool=30.0),
@@ -672,7 +684,7 @@ async def test_middleware_can_change_the_timeout_on_a_later_retry(storage: Async
         base_url="https://example.test",
         rate=UNLIMITED,
         policy=TransportPolicy(
-            retry=RetryPolicy(attempts=2), deadline=60.0, cache=HttpCache(policy=_cache_no_get(), storage=storage)
+            retry=RetryPolicy(attempts=2), deadline=60.0, cache=HttpCache(**_cache_no_get(), storage=storage)
         ),
         http=HttpOptions(
             transport=network,

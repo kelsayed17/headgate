@@ -17,7 +17,7 @@ import pytest
 
 from headgate import HttpCache, QueryParamAuth, StaticHeaderAuth, TransportPolicy, as_bytes
 from headgate.testing import CassetteFilter, FakeTransport
-from tests.cache._helpers import every_get_policy
+from tests.cache._helpers import every_get_rules
 from tests.integration._support import Bearer, client, seeded
 
 if TYPE_CHECKING:
@@ -58,7 +58,7 @@ _HOLDERS: dict[str, _Holding] = {
 
 def _cached(storage: AsyncSqliteStorage) -> TransportPolicy:
     """Return a policy caching every GET into *storage*."""
-    return TransportPolicy(cache=HttpCache(policy=every_get_policy(), storage=storage))
+    return TransportPolicy(cache=HttpCache(**every_get_rules(), storage=storage))
 
 
 @pytest.mark.parametrize("name", sorted(_HOLDERS))
