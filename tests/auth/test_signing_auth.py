@@ -272,6 +272,44 @@ async def test_a_signer_that_is_not_the_clients_auth_never_signs() -> None:
     assert auth.signed == 0
 
 
+class _Driving(httpx2.Auth):
+    """Drives a ``SigningAuth``'s flow to its end, forwarding each response back, inside its own flow."""
+
+    def __init__(self, auth: SigningAuth) -> None:
+        """Wrap *auth*."""
+        self._auth = auth
+
+    @override
+    async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
+        flow = self._auth.async_auth_flow(request)
+        step = await anext(flow)
+        while True:
+            response = yield step
+            try:
+                step = await flow.asend(response)
+            except StopAsyncIteration:
+                return
+
+
+async def test_a_wrapped_signer_is_not_re_sent_on_a_401() -> None:
+    """Send once, unsigned, a request whose signer is wrapped in another auth, when the server answers 401."""
+    auth = _Signer()
+    sent: list[httpx2.Request] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        return httpx2.Response(httpx2.codes.UNAUTHORIZED)
+
+    http = HttpOptions(transport=httpx2.MockTransport(handle), middleware=(_Stamp(),))
+    client = StubClient(base_url=_BASE, rate=UNLIMITED, auth=_Driving(auth), http=http)
+    async with client:
+        with pytest.raises(AuthError):
+            await client.get("orders", expect=RESPONSE)
+
+    assert len(sent) == 1
+    assert auth.signed == 0
+
+
 async def test_a_401_to_a_request_it_skips_is_not_re_sent() -> None:
     """Send a request the subclass skips once, unsigned, whatever it is answered."""
     auth = _PublicReads()

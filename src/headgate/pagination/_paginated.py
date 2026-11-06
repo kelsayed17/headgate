@@ -157,7 +157,7 @@ class PageWalk[P, I, B]:
 
     def _limit_error(self, request: PageRequest[B], fetched: int) -> PageLimitError:
         """Build the error for *request*, the page after the *fetched* pages the budget allowed."""
-        url = loggable_url(str(request.url)) if isinstance(request.url, str | httpx2.URL) else None
+        url = _loggable(request)
         where = "" if url is None else f" ({url})"
         msg = (
             f"pagination reached its limit of {fetched} pages with more to come{where}; the result is incomplete. "
@@ -167,10 +167,15 @@ class PageWalk[P, I, B]:
 
     def _loop_error(self, request: PageRequest[B], fetched: int) -> ClientError:
         """Build the error for *request*, which repeats one of the *fetched* pages' requests."""
-        url = loggable_url(str(request.url)) if isinstance(request.url, str | httpx2.URL) else None
+        url = _loggable(request)
         where = "" if url is None else f" ({url})"
         msg = f"pagination loop: the page after page {fetched} repeats an earlier page's request{where}"
         return ClientError(msg, source=self._source, method=_method(request), url=url)
+
+
+def _loggable[B](request: PageRequest[B]) -> str | None:
+    """Return *request*'s URL as safe to log, or ``None`` for a template, which has no single URL."""
+    return loggable_url(str(request.url)) if isinstance(request.url, str | httpx2.URL) else None
 
 
 def _key[B](request: PageRequest[B], write: Writer[B] | None) -> str:

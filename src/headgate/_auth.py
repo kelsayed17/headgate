@@ -261,7 +261,7 @@ class SigningAuth(httpx2.Auth, ABC):
     :meth:`sign`; the base class runs the flow around it:
 
     * **Every attempt is signed afresh**, inside the retry layer. The flow marks the request with :data:`SIGNER_EXT`,
-      and the client's transport stack calls :meth:`sign` on each attempt as it enters the middleware layer: after the
+      and the client's transport stack calls :meth:`sign` on each attempt as it leaves the middleware layer: after the
       last middleware and before the credential guard, the cache and any rate-limit wait. A retry or a hedge carries a
       signature of its own, so a short-lived one (a timestamp checked to 30 s, a JWT of two minutes) does not go stale
       across the backoff, and a cross-origin redirect hop is signed only to have the guard withhold it. It signs only as

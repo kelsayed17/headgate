@@ -347,7 +347,7 @@ dev = [
     { name = "ruff" },
     { name = "syrupy", specifier = ">=6.1.1" },
     { name = "time-machine" },
-    { name = "ty" },
+    { name = "ty", specifier = ">=0.0.93" },
     { name = "typos", specifier = ">=1.51.1" },
     { name = "vcrpy", specifier = ">=8.3" },
 ]

@@ -16,14 +16,17 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 - `SigningAuth` signs every attempt, inside the retry layer, so a retry or a hedge carries a fresh signature instead of
   repeating the first. It still re-sends once on a 401, now signed afresh. A signature that must change per attempt
-  belongs in `SigningAuth`, not in a middleware.
+  belongs in `SigningAuth`, not in a middleware. A `SigningAuth` given to a bare `httpx2.AsyncClient`, or wrapped in
+  another `httpx2.Auth`, now sends unsigned and does not re-send on a 401. A middleware now sees the request before it
+  is signed, and one that replaces the request must carry `request.extensions` over, or that attempt goes unsigned.
 - A middleware must declare `credential_headers` and `credential_params` (each a `frozenset` of names, empty when it
   stamps none). `HttpOptions` refuses one that does not, with a `TypeError`, since an undeclared or misspelled
   declaration sent the credential to every origin. A plain function is no longer a middleware; wrap it in a class with
   the two declarations.
 - A call's URL is typed `LiteralString | Template | httpx2.URL`. A computed `str`, such as an f-string, no longer
   type-checks, because it skipped escaping: write a t-string for a path built from values, or `httpx2.URL(...)` for a
-  URL taken from a response. A `str` is still accepted at runtime.
+  URL taken from a response. To keep a prefix's structure, nest the prefix as a t-string (`t"{API_PREFIX}/items/{id}"`)
+  or mark it `{prefix:raw}`; a bare `{prefix}` escapes its `/`. A `str` is still accepted at runtime.
 - headgate requires hishel 2 (`hishel>=2.0.0`). `AsyncSqliteStorage(database_path=...)` is called as before, but
   hishel 2 cannot read a hishel 1 database: it raises on every lookup, so each call degrades to the network and nothing
   is cached. Point it at a new file, or delete the old one, when you upgrade. Its default file name is now

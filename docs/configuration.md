@@ -162,7 +162,8 @@ names, empty when the middleware stamps none, as a class attribute or a property
 middleware that lacks either, and for a plain function. `request.content` is available for a
 buffered body; a streamed body is not readable there. A middleware that replaces the request
 (`call_next(httpx2.Request(...))`) keeps `request.extensions` on the new one, or a `SigningAuth` cannot sign that
-attempt.
+attempt. Even then the signature goes on the replacement, not on the request the client made, so a `SigningAuth`'s one
+re-send on a 401 is lost.
 
 ## Per-call options
 

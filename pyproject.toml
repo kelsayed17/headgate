@@ -58,7 +58,7 @@ dev = [
     "httpx2-pytest>=2.0.0",
     "time-machine",
     "ruff",
-    "ty",
+    "ty>=0.0.93",
     "headgate[msgspec,pydantic,curl,otel,cache]",
     "opentelemetry-sdk>=1.45.1",
     "pytest-cov>=7",

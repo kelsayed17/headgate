@@ -251,7 +251,7 @@ class _HangingBodyStream(httpx2.AsyncByteStream):
 
 
 class _StallingMiddleware:
-    """A middleware that stalls before the send, as a slow signer would: the request never reaches the network."""
+    """A middleware that stalls before the send, as a slow middleware would: the request never reaches the network."""
 
     credential_headers: ClassVar = frozenset[str]()
     credential_params: ClassVar = frozenset[str]()

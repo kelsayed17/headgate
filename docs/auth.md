@@ -29,10 +29,11 @@ For a provider that signs every request with a long-lived key: a JWT bound to th
 signature over a timestamp and the body. A subclass supplies the signer, `sign(request)`, and declares what it sets;
 the base class gives it:
 
-- **every attempt signed afresh**, inside the retry layer. Each attempt is signed as it enters headgate's transport
-  stack, after the last [middleware](configuration.md#middleware) and before the cache and any rate-limit wait, so a
-  retry or a hedge carries a signature of its own and a short-lived one (a timestamp checked to 30 s) does not expire
-  across the backoff. The signature is applied before the
+- **every attempt signed afresh**, inside the retry layer. Each attempt is signed as it leaves the
+  [middleware](configuration.md#middleware) layer: after the last middleware and before the credential guard, the cache
+  and any rate-limit wait. A retry or a hedge carries a signature of its own, so a short-lived one (a timestamp checked
+  to 30 s) does not expire across the backoff. A rate-limit wait can still follow the signature, so a short-lived one
+  can age under a long backlog. The signature is applied before the
   [credential guard](security.md#credentials-stay-on-your-origin) runs, so a redirect hop to an origin you do not
   trust goes out without it;
 - **the body, read**, so the signature can cover `request.content`;
