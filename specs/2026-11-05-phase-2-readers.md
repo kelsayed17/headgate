@@ -142,6 +142,7 @@ These five cases are not covered by the spec's own examples and are the most lik
   - remove `json_reader`
   - add `as_json`
   - the module docstring, which today names `json_reader` (its `Reader` wording changed in Task 2).
+- Modify: `src/headgate/_failures.py`: `SHAPE_ERRORS` gains `RecursionError` (see Step 3).
 - Modify: `src/headgate/_request_body.py`: remove `json_writer`. `EncodedBody` defaults its `content_type` to `"application/json"`, which stays.
 - Modify: `src/headgate/msgspec.py` and `src/headgate/pydantic.py`:
   - `decoder` becomes `reader(type_, *, strict=True, allow_empty_body=False, refuse=None)`
