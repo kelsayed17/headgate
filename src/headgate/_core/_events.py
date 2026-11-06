@@ -57,9 +57,9 @@ class CallInfo:
     """What identifies one logical call in every event about it.
 
     ``url`` is the URL the call was given, sanitized and bounded; ``route`` is the t-string template the URL was
-    rendered from (``"series/{series_id}"``), or ``None`` for a ``str`` URL. ``full_url`` is the absolute URL of the
-    request as first built (before any redirect), sanitized: what an observer needs to name the server, as an
-    OpenTelemetry span does. It is ``None`` when the client has no observers.
+    rendered from (``"series/{series_id}"``), or ``None`` for a literal string or an ``httpx2.URL``. ``full_url`` is the
+    absolute URL of the request as first built (before any redirect), sanitized: what an observer needs to name the
+    server, as an OpenTelemetry span does. It is ``None`` when the client has no observers.
     """
 
     method: str

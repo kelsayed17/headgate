@@ -39,9 +39,9 @@ http = HttpOptions(observers=(Metrics(),))
 | `CallFinished` | a call ends, either way | `status_code`, `error` (the exception type's name; not that of a non-`ClientError` a `stream()` block raised itself), `attempts`, `elapsed` |
 
 Every call event is a `CallEvent` and carries `call`, a `CallInfo`: the `method`, the `url` as given (sanitized), the
-`route` (the t-string template, `"series/{series_id}"`, or `None` for a `str` URL), the absolute `full_url` (sanitized),
-and a process-unique `call_id` that groups the events of one call among many concurrent ones. Durations are seconds on
-the client's clock.
+`route` (the t-string template, `"series/{series_id}"`, or `None` for a literal string or an `httpx2.URL`), the
+absolute `full_url` (sanitized), and a process-unique `call_id` that groups the events of one call among many concurrent
+ones. Durations are seconds on the client's clock.
 
 Events carry **sanitized data only**: no header, no body, no credential. They are frozen dataclasses, so an observer can
 queue them for another thread.
