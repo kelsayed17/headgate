@@ -25,7 +25,7 @@
 - A change to the public API updates the snapshot with `uv run python -m pytest tests/package/test_api_surface.py --snapshot-update`, and the diff is reviewed.
 - Every exported name appears in `docs/`, and a test enforces it.
 - American English in code, docs and messages.
-- Each task adds a `CHANGELOG.md` entry under `## [Unreleased]`, in **Changed** or **Removed**, saying what to write instead.
+- Each task adds a `CHANGELOG.md` entry under `## [Unreleased]`'s existing **Added**, **Changed** or **Removed** sections. A change or removal says what to write instead.
 - Docstrings describe what the code does now, in the present tense.
 - The property tests in `tests/retry/test_properties.py` keep their properties and assertions.
 - Out of scope: the top-level trim (phase 8), `body=` and `CallOptions` (phase 3). A name this phase renames stays where it is exported today unless this plan moves it.
@@ -35,9 +35,10 @@
 The spec leaves these to the builder, or does not settle them. Each is the planner's call, made by the maintainer's rule: the cleanest design, even where it breaks things.
 
 - **`Expect` stays not callable.** A callable `Expect` would be a second way to read a response, outside the client's dispatch. Its docstring gives that reason in place of today's ("the union is unambiguous only because of it").
-- **The runtime refuses a non-reader as well as the type checker.** `expect=`, `Expect(ok)`, the values in `Expect(answers=)` and `Expect.on` raise `TypeError` for anything that is not a `Reader` (or, for `expect=`, an `Expect`). `str` and a model class are both callable, so only an `isinstance` check catches them at runtime.
-- **`Reader(read, /, *, name=None)`.** The `repr` is `Reader(<name>)`. With no name given, the name is the function's `__qualname__`, or its `repr` if it has none (a `functools.partial`). `reader_for` names the codec's class and the type expression, so `Expect(...)` prints what it reads. The exact format is up to the implementer.
-- **`JSON` is a `Reader[object]`**, the honest type of `json.loads`. Adding a JSON value alias would add a name.
+- **The runtime refuses a non-reader as well as the type checker.** `expect=`, `Expect(ok)`, the values in `Expect(answers=)` and `Expect.on` raise `TypeError` for anything that is not a `Reader` (or, for `expect=`, an `Expect`). `str` and a model class are both callable, so only an `isinstance` check catches them at runtime. The message reuses the style of `check_kind` (`_options.py`), and names a class as `the class <name>` and anything else by its type, so `expect=str` reads `expect= takes a Reader or an Expect (got the class str)`.
+- **`Reader(read, /, *, name=None)`.** The `repr` is `Reader(<name>)`. With no name given, the name is the function's `__qualname__`, or its `repr` if it has none (a `functools.partial`). Every reader headgate builds is named for what it reads: `body_reader` names itself after `decode`, `reader_for` passes the codec's class and the type expression to `body_reader` through a private keyword, and `conditional`'s, `paginate`'s and the stock readers carry fixed names. The exact formats are up to the implementer.
+- **The ready JSON reader is `as_json`, not the spec's `JSON`.** That name sits beside `as_bytes`, the reader it mirrors, and follows the lowercase spelling of every other stock reader. It also avoids a case-only clash with phase 3's `Json` body class: `JSON` and `Json` both in `headgate` would be easy to swap. The spec's 2.2 and section 8 are amended to match.
+- **`as_json` is a `Reader[object]`**, the honest type of `json.loads`. Adding a JSON value alias would add a name.
 - **`RefusalCheck` becomes `ResponseCheck`**, exported where `RefusalCheck` is today. Phase 8 decides its final home.
 - **`RefusedError` leaves the top level** and lives only in `headgate.errors`, as spec 2.3 says.
 - **`body_reader` keeps `empty: bytes | None`.** It has no codec, so it cannot encode the empty array itself. Its other keyword is renamed `refuse=`, like the other builders.
@@ -48,10 +49,10 @@ The spec leaves these to the builder, or does not settle them. Each is the plann
 
 These five cases are not covered by the spec's own examples and are the most likely to bite users. Each line gets a test in the task named.
 
-1. **Every callable that is not a `Reader`**, given as `expect=` to every verb, `stream`, `paginate`, `Expect(ok)`, an `answers` value, `Expect.on` or `headgate.cache.conditional`, raises `TypeError` naming the option and the type it got. That includes `str`, a model class, a plain function and a lambda. Covered in Task 2.
+1. **Every callable that is not a `Reader`**, given as `expect=` to every verb or `paginate`, or as `Expect(ok)`, an `answers` value, `Expect.on` or `headgate.cache.conditional`, raises `TypeError` naming the option and the type it got. That includes `str`, a model class, a plain function and a lambda. Covered in Task 2.
 2. **Variance:** a `Reader[Order]` type-checks where a `Reader[Order | None]` is expected, so `Expect(ORDER).on(404, nothing)` still widens. ty infers the variance from the class body, so a public attribute typed with `T` would silently make it invariant. Covered in Task 2.
-3. **Readers headgate builds internally** are `Reader`s and still work: `conditional()`'s reader, `paginate`'s page reader (`_paired`), and `stream`'s default `expect=nothing`. Covered in Task 2.
-4. **`JSON` on a bad body**: an empty body, invalid JSON or non-UTF-8 bytes on a 2xx raises `ResponseParseError`, not `json.JSONDecodeError` or `UnicodeDecodeError`. On a declared non-2xx it falls through to the status ladder. Covered in Task 3.
+3. **Readers headgate builds internally** are `Reader`s and still work: `conditional()`'s two readers (`fresh` and `not_modified`), `paginate`'s page reader (`_paired`), and `head`'s default `expect=nothing` in each of its overloads. `stream` takes no `expect=`, and still type-checks that way. Covered in Task 2.
+4. **`as_json` on a bad body**: an empty body, invalid JSON, non-UTF-8 bytes, a BOM, UTF-16, `NaN`, or a number out of range on a 2xx raises `ResponseParseError`, not a `json`, Unicode or overflow error. On a declared non-2xx it falls through to the status ladder. Covered in Task 3.
 5. **The old spellings fail loudly.** `HttpOptions(refusal_check=...)` raises `TypeError` (an unknown keyword). `reader_for(..., refusal_check=...)` does not type-check. Importing `RefusedError`, `json_reader`, `json_writer`, `decoder_for` or `encoder_for` from `headgate` raises `ImportError`. Covered in Tasks 3 and 4.
 
 ---
@@ -60,6 +61,7 @@ These five cases are not covered by the spec's own examples and are the most lik
 
 **Files:**
 - Create: `specs/2026-11-05-phase-2-readers.md` (this plan).
+- The spec's 2.2 and section 8 already name the reader `as_json` (amended with this plan).
 
 **Interfaces:**
 - Produces: the branch `claude/api-redesign-phase-2`, cut from `origin/main`, in its own worktree.
@@ -81,9 +83,9 @@ These five cases are not covered by the spec's own examples and are the most lik
 - Modify: `src/headgate/_client.py`:
   - the two `spec: Expect[...] = expect if isinstance(expect, Expect) else Expect(expect)` lines (around lines 656 and 704) become one helper that raises `TypeError` for a value that is neither
   - `_paired` returns `Reader(...)`
-  - `stream`'s `expect=` checks its value the same way.
-- Modify: `src/headgate/cache/_conditional.py`: `conditional()` checks that its `reader` is a `Reader`, and builds its `fresh` reader as one.
+- Modify: `src/headgate/cache/_conditional.py`: `conditional()` checks that its `reader` is a `Reader`, and builds both `fresh` and `not_modified` as `Reader`s.
 - Modify: every hand-written reader passed as `expect=` or to `Expect`, wrapped in `Reader(...)`. That covers the tests (`tests/support/responses.py`, `tests/cache/_helpers.py`, `tests/client/test_error_messages.py`, `tests/client/test_client.py`, `tests/cache/test_store_on_accept.py`, `tests/integration/test_replayable_body.py`, `tests/security/test_redirect_hardening.py`, `tests/observe/test_accept.py`, `tests/streaming/test_stream.py`), plus `examples/`, `README.md` and `docs/`. Find them with `ty check`, which now rejects each one.
+- Modify: `tests/package/test_api_surface.py`: `_render` prints a `Reader` value as `name: <annotation> = <repr>`, taking the annotation from the module's `__annotations__`, and checks `isinstance(obj, Reader)` before `callable(obj)`. Without that, a `Reader` renders as its `__call__` signature with an unbound `T`, which says nothing about what the reader returns.
 - Modify: `docs/responses.md`, the section that defines a reader: a reader is `Reader(fn)`. Show `repr` in one example, and the decorator form (`@Reader` over a `def`), which needs no extra support since `Reader(fn)` takes the function positionally.
 - Test:
   - `tests/decoding/test_reader.py` (new)
@@ -93,26 +95,27 @@ These five cases are not covered by the spec's own examples and are the most lik
 **Interfaces:**
 - Produces: `headgate.Reader`, a `@final` generic class: `Reader[T](read: Callable[[httpx2.Response], T], /, *, name: str | None = None)`, with `__call__(self, response: httpx2.Response, /) -> T` and `__repr__`. It uses `__slots__`, and its function is stored in a private attribute (`self._read = read`), so ty infers `T` covariant: ty leaves underscore-named attributes out of variance inference. A public attribute typed with `T` makes `T` invariant and breaks `Expect.on`'s widening (checked with ty 0.0.93).
 - Produces: `nothing: Reader[None]`, `as_bytes: Reader[bytes]` and `event_stream: Reader[list[httpx2.ServerSentEvent]]`, keeping the names they have today.
-- Produces: every verb, `stream`, `paginate`, `Expect` and `Expect.on` typed `Reader[T] | Expect[T]` (or `Reader[T]`), as today, now over the class.
+- Produces: every verb, `paginate`, `Expect` and `Expect.on` typed `Reader[T] | Expect[T]` (or `Reader[T]`), as today, now over the class.
 
 - [ ] **Step 1: Write the failing tests** in `tests/decoding/test_reader.py`:
   - `test_a_reader_calls_its_function_with_the_response`: `Reader(lambda r: r.status_code)(httpx2.Response(201))` is `201`.
   - `test_a_readers_repr_names_its_function`: given `def orders(r): ...`, `repr(Reader(orders))` is `"Reader(orders)"`. With `name="rows"` it is `"Reader(rows)"`. `repr(Reader(functools.partial(f, 1)))` does not raise and contains `"partial"`.
   - `test_a_codec_readers_repr_names_the_type`: `repr(decoder_for(CODEC, list[Order]))` contains `"Order"`. That test moves to `reader_for` in Task 3.
   - `test_stock_readers_are_readers`: `nothing`, `as_bytes` and `event_stream` are `Reader` instances. `repr(nothing) == "Reader(nothing)"`.
-  - `test_expect_refuses_a_callable_that_is_not_a_reader`, parametrized over `str`, a class, a plain function and a lambda, given as `Expect(ok)`, as an `answers` value, to `.on(404, ...)` and to `conditional(...)`. Each raises `TypeError` whose message contains `"Reader"` and the type's name.
-  - `test_every_call_refuses_a_non_reader_expect`, parametrized over `get`, `post`, `put`, `patch`, `delete`, `head`, `stream` and `paginate` on a `StubClient` with `expect=str`. Each raises `TypeError` naming `expect=` before anything is sent: the fake transport records no request. A verb and `paginate` raise when called, and `stream` when its block is entered.
+  - `test_expect_refuses_a_callable_that_is_not_a_reader`, parametrized over `str`, a class, a plain function and a lambda, given as `Expect(ok)`, as an `answers` value, to `.on(404, ...)` and to `conditional(...)`. Each raises `TypeError` with the exact message for its value: `... (got the class str)`, `... (got the class Order)`, and `... (got function)` for the function and the lambda. Each option names itself (`ok=`, `answers=`, `on()`, `conditional()`). Spell each value as `cast("Any", value)`, as `tests/client/test_client.py` does, so the ty gate passes without suppression.
+  - `test_every_call_refuses_a_non_reader_expect`, parametrized over `get`, `post`, `put`, `patch`, `delete`, `head` and `paginate` on a `StubClient` with `expect=cast("Any", str)`. Each raises `TypeError` with exactly `expect= takes a Reader or an Expect (got the class str)` when called, before anything is sent: the fake transport records no request.
 - [ ] **Step 2: Write the failing type test** `tests/decoding/test_reader_types.py`:
-  - `test_a_non_reader_expect_does_not_type_check`: `c.get("x", expect=str)`, `c.get("x", expect=Order)`, `c.get("x", expect=lambda r: r)` and `Expect(lambda r: r)` each produce an error. The exit code is non-zero, and the output has one `invalid-argument-type` per line (four).
+  - `test_a_non_reader_expect_does_not_type_check`: `c.get("x", expect=str)`, `c.get("x", expect=Order)`, `c.get("x", expect=lambda r: r)` and `Expect(lambda r: r)` each produce an error. The exit code is non-zero, and the output has one `invalid-argument-type` per line (four). `c.stream("x", expect=as_bytes)` is also an error, since `stream` takes no `expect=`.
   - `test_a_reader_widens_through_expect_on`: `e: Expect[Order | None] = Expect(ORDER).on(404, nothing)` and `r: Reader[Order | None] = ORDER` type-check with exit code 0 (Review Focus 2).
 - [ ] **Step 3:** Run `uv run python -m pytest tests/decoding/test_reader.py tests/decoding/test_reader_types.py -v`. Expected: FAIL. `Reader` cannot be called as a class yet, and no `TypeError` is raised.
 - [ ] **Step 4:** Implement the class and the checks as in **Files**. The runtime check message follows the project's style, for example `expect= takes a Reader or an Expect (got type)`.
 - [ ] **Step 5:** Run `uv run ty check`, and wrap every hand-written reader it reports in `Reader(...)` across tests, examples, `README.md` and `docs/`. Add Review Focus 3 tests:
-  - in `tests/cache/test_conditional.py`, a conditional read returns `Fresh` and then `NotModified`
-  - in `tests/pagination/test_paginate.py`, a two-page walk whose pager reads a header from the response.
-  Both existing tests may already cover this: confirm each fails if `_paired` or `fresh` returns a bare function, and add an assertion if not.
-- [ ] **Step 6:** Run every gate, and update the API snapshot. Expected: all pass. In the snapshot diff, `Reader` changes from a type alias to a class, and `nothing`, `as_bytes` and `event_stream` change from functions to `Reader` values.
-- [ ] **Step 7:** Add the CHANGELOG entry under **Changed**: a reader is now `Reader(fn)`, and `expect=` refuses anything else. Commit: `Make Reader a class, so a wrong expect= fails`.
+  - in `tests/cache/test_conditional.py`, a conditional read returns `Fresh` and then `NotModified`, and `repr` of its `Expect` names both readers
+  - in `tests/pagination/test_paginate.py`, a two-page walk whose pager reads a header from the response
+  - in `tests/client/test_verbs.py`, `head` with no `expect=` returns `None`.
+  Both existing tests may already cover this: confirm each fails if `_paired`, `fresh` or `not_modified` returns a bare function, and add an assertion if not.
+- [ ] **Step 6:** Run every gate, and update the API snapshot. Expected: all pass. In the snapshot diff, `Reader` changes from a type alias to a class, and `nothing`, `as_bytes` and `event_stream` change from functions to lines such as `nothing: Reader[None] = Reader(nothing)`.
+- [ ] **Step 7:** Add the CHANGELOG entry under **Changed**: a reader is now `Reader(fn)` (or `@Reader` over a `def`), and `expect=`, `Expect` and `conditional` refuse anything else. Commit: `Make Reader a class, so a wrong expect= fails`.
 
 ### Task 3: One vocabulary for readers and writers
 
@@ -124,7 +127,7 @@ These five cases are not covered by the spec's own examples and are the most lik
 - Modify: `src/headgate/_responses.py`:
   - `body_reader(decode, /, *, empty=None, refuse=None)`
   - remove `json_reader`
-  - add `JSON`
+  - add `as_json`
   - the module docstring, which today names `json_reader`.
 - Modify: `src/headgate/_request_body.py`: remove `json_writer`. `EncodedBody` defaults its `content_type` to `"application/json"`, which stays.
 - Modify: `src/headgate/msgspec.py` and `src/headgate/pydantic.py`:
@@ -132,7 +135,7 @@ These five cases are not covered by the spec's own examples and are the most lik
   - `encoder` becomes `writer(type_, *, drop_none=False)`
   - the `__all__`, docstrings and the `to_builtins` docstrings that mention `json=` or `data=` keep their wording (phase 3 changes those).
 - Modify: `src/headgate/__init__.py`:
-  - export `reader_for`, `writer_for` and `JSON`
+  - export `reader_for`, `writer_for` and `as_json`
   - drop `decoder_for`, `encoder_for`, `json_reader` and `json_writer`
   - the module docstring.
 - Modify: every use across `tests/`, `examples/`, `README.md` and `docs/`, for example `docs/codecs.md`, `docs/responses.md` and `examples/series_client.py`. Find them with `grep -rnE "decoder_for|encoder_for|json_reader|json_writer|\b(decoder|encoder)\(|refusal_check=" src tests docs examples README.md`. Leave `Codec.decoder`, `Codec.encoder` and `HttpOptions(refusal_check=)`, which Task 4 renames.
@@ -144,25 +147,26 @@ These five cases are not covered by the spec's own examples and are the most lik
   - `reader_for[T](codec: Codec, type_: TypeForm[T], *, allow_empty_body: bool = False, refuse: Callable[[T], RefusedError | None] | None = None) -> Reader[T]`
   - `writer_for[T](codec: Codec, type_: TypeForm[T]) -> Writer[T]`
   - `body_reader[T](decode: Callable[[bytes], T], /, *, empty: bytes | None = None, refuse: Callable[[T], RefusedError | None] | None = None) -> Reader[T]`
-  - `JSON: Final[Reader[object]]`, named `"JSON"`. It reads strict RFC 8259 JSON, as `headgate.msgspec`'s reader does. The body is decoded as UTF-8 and then parsed with `json.loads`. `json.loads` given bytes would also accept UTF-16, UTF-32 and a BOM, and it always accepts `NaN`, `Infinity` and `-Infinity`; msgspec refuses all of them, and so does `JSON`, refusing the constants through `parse_constant`. A body that is not JSON raises `DecodeError` naming the position and never the input, with the library's error not chained.
+  - `JSON: Final[Reader[object]]`, named `"as_json"`. It reads strict RFC 8259 JSON, as `headgate.msgspec`'s reader does. The body is decoded as UTF-8 and then parsed with `json.loads`. `json.loads` given bytes would also accept UTF-16, UTF-32 and a BOM, and it always accepts `NaN`, `Infinity` and `-Infinity`; `json.loads` also turns `1e400` into `inf`, and refuses an integer of over 4300 digits with a bare `ValueError`. msgspec refuses all of these, and so does `as_json`: `parse_constant` refuses the constants, and `parse_float` refuses a value that is not finite. A body that is not JSON raises `DecodeError` naming the position and never the input, with the library's error not chained.
   - `headgate.msgspec.reader`, `headgate.msgspec.writer`, `headgate.pydantic.reader` and `headgate.pydantic.writer`.
 
 - [ ] **Step 1: Write the failing tests:**
   - In `tests/decoding/test_responses.py`:
-    - `test_json_reads_builtins_without_a_codec`: `JSON(httpx2.Response(200, content=b'{"a": [1, null]}'))` is `{"a": [1, None]}`.
-    - `test_json_refuses_a_body_that_is_not_json` (Review Focus 4): through a `StubClient`, each of `b""`, `b"{"`, `b"\xff"`, `b"NaN"`, `b"\xef\xbb\xbf{}"` (a BOM) and `"{}".encode("utf-16")` on a 200 raises `ResponseParseError` whose message holds no byte of the body and whose `__cause__` is `None`. Called directly, `JSON` raises `DecodeError` for each of them. The same bodies on a 404 declared with `Expect(nothing).on(404, JSON)` raise `UpstreamStatusError` with `status_code == 404`.
+    - `test_json_reads_builtins_without_a_codec`: `as_json(httpx2.Response(200, content=b'{"a": [1, null]}'))` is `{"a": [1, None]}`.
+    - `test_json_refuses_a_body_that_is_not_json` (Review Focus 4): through a `StubClient`, each of `b""`, `b"{"`, `b"\xff"`, `b"NaN"`, `b"\xef\xbb\xbf{}"` (a BOM), `"{}".encode("utf-16")`, `b"1e400"` and 5000 `9`s on a 200 raises `ResponseParseError` whose `__cause__` is `None`. Called directly, `as_json` raises `DecodeError` with exactly these messages, in order: `not JSON at line 1, column 1`, `not JSON at line 1, column 2`, `not UTF-8 at byte 0`, `not JSON: NaN, Infinity or a number out of range`, `not JSON at line 1, column 1` (a BOM), `not UTF-8 at byte 0` (UTF-16), and the NaN message for both numbers. The same bodies on a 404 declared with `Expect(nothing).on(404, as_json)` raise `UpstreamStatusError` with `status_code == 404`.
     - `test_a_body_reader_refuses_with_refuse`: rename today's `test_a_body_reader_raises_the_refused_its_check_returns` and pass `refuse=`.
   - In `tests/decoding/test_codecs.py`, rename the `decoder_for` and `encoder_for` tests to `reader_for` and `writer_for`, using `refuse=`.
   - In the msgspec and pydantic tests, rename the `decoder` and `encoder` tests to `reader` and `writer`.
-  - In `tests/decoding/test_reader.py`, `test_the_old_builders_are_gone` (Review Focus 5): each of `json_reader`, `json_writer`, `decoder_for` and `encoder_for` is missing from `headgate`, and `decoder` and `encoder` are missing from `headgate.msgspec` and `headgate.pydantic`, checked with `hasattr`. (`RefusalCheck` and `RefusedError` move in Task 4, which extends this test.)
+  - In `tests/decoding/test_reader.py`, `test_the_old_builders_are_gone` (Review Focus 5): each of `json_reader`, `json_writer`, `decoder_for` and `encoder_for` is missing from `headgate`, and `decoder` and `encoder` are missing from `headgate.msgspec` and `headgate.pydantic`, checked with `hasattr`.
+  - In `tests/decoding/test_reader_types.py`, `test_the_old_reader_keyword_does_not_type_check` (Review Focus 5): `reader_for(CODEC, Order, refusal_check=check)` and `headgate.msgspec.reader(Order, refusal_check=check)` each give one error. (`RefusalCheck` and `RefusedError` move in Task 4, which extends this test.)
 - [ ] **Step 2:** Run `uv run python -m pytest tests/decoding -v`. Expected: FAIL with `ImportError` or `AttributeError` on the new names.
-- [ ] **Step 3:** Implement the renames and `JSON`. Build `JSON` on `body_reader`, with a decode that catches `ValueError` (which `JSONDecodeError` and `UnicodeDecodeError` both are) and raises `DecodeError` from `None`. The message is `not JSON at line L, column C` for a `JSONDecodeError`, `not UTF-8 at byte N` for a `UnicodeDecodeError`, and `not JSON: NaN and Infinity are not JSON values` for a constant. `UnicodeDecodeError`'s own message quotes the byte, so it is never used.
+- [ ] **Step 3:** Implement the renames and `as_json`. Build `as_json` on `body_reader`, with a decode that runs `json.loads(content.decode("utf-8"), parse_constant=..., parse_float=...)` and raises `DecodeError` from `None`. The message is `not JSON at line L, column C` for a `JSONDecodeError` (from its `lineno` and `colno`), and `not UTF-8 at byte N` for a `UnicodeDecodeError` (from its `start`). Any other `ValueError` or `OverflowError`, including the ones `parse_constant` and `parse_float` raise, gets `not JSON: NaN, Infinity or a number out of range`. No library message is used, since `UnicodeDecodeError`'s quotes the byte.
 - [ ] **Step 4:** Update every use found by the grep in **Files**. Rewrite `docs/codecs.md`'s list of builders, and `docs/responses.md`'s paragraph on `json_reader` ("`json_reader(decode, allow_empty_body=True)` is `body_reader(decode, empty=b"[]")`"), which now shows `body_reader` alone.
-- [ ] **Step 5:** Run every gate, and update the API snapshot. Expected: all pass. In the snapshot diff, `json_reader`, `json_writer`, `decoder_for` and `encoder_for` are removed, `JSON`, `reader_for` and `writer_for` are added, and the flavor modules show `reader` and `writer`.
+- [ ] **Step 5:** Run every gate, and update the API snapshot. Expected: all pass. In the snapshot diff, `json_reader`, `json_writer`, `decoder_for` and `encoder_for` are removed, `as_json: Reader[object] = Reader(as_json)`, `reader_for` and `writer_for` are added, and the flavor modules show `reader` and `writer`.
 - [ ] **Step 6:** Add the CHANGELOG entries, each with its replacement:
   - under **Changed**: `decoder_for` → `reader_for`, `encoder_for` → `writer_for`, `msgspec.decoder`/`encoder` → `msgspec.reader`/`writer` (and pydantic's), and `refusal_check=` on a reader → `refuse=`
   - under **Removed**: `json_reader` (use `body_reader(decode, empty=b"[]")`) and `json_writer` (write a function returning `EncodedBody`)
-  - under **Added**: `JSON`.
+  - under **Added**: `as_json`.
   Commit: `Name the reader and writer builders reader_for and writer_for`.
 
 ### Task 4: The response check is `response_check=`, and `RefusedError` lives in `headgate.errors`
@@ -178,7 +182,7 @@ These five cases are not covered by the spec's own examples and are the most lik
   - `__all__`.
 - Modify: `src/headgate/errors.py`: `RefusedError` moves here unchanged. It is still not a `ClientError`, so an `except ClientError` does not catch it. Add it to `__all__` and to the module docstring's tree, as a sibling noted "converted by the client".
 - Modify: `src/headgate/_client.py`:
-  - `self._refusal_check` and `_refusal` become `_response_check`
+  - the attribute `self._refusal_check` becomes `self._response_check`, and the module function `_refusal` becomes `_checked`
   - the per-call message `... has a response_check=, so no call may follow redirects`
   - every docstring that names `refusal_check` (find them with `grep -n refusal_check src/headgate/_client.py`; line numbers drift after Task 2).
 - Modify: imports of `RefusedError` in `src/headgate/_failures.py`, `src/headgate/_codec.py`, `src/headgate/msgspec.py`, `src/headgate/pydantic.py` and `src/headgate/streaming/_stream.py`, and `refusal_check` in that file's docstring.

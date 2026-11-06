@@ -126,8 +126,9 @@ response.
 - Flavor modules mirror them: `headgate.msgspec.reader(T)` / `.writer(T)`, and the same for pydantic.
 - `body_reader(decode, *, empty=None, refuse=None)` stays as the escape hatch, with the empty-body keyword spelled
   the same as the others.
-- `JSON` is a ready reader using the standard library's `json.loads`, so a core-only install can read JSON without
-  learning codecs.
+- `as_json` is a ready reader using the standard library's `json.loads`, so a core-only install can read JSON without
+  learning codecs. It is named beside `as_bytes`, and not `JSON`, which would differ from the `Json` body class (3.3)
+  only in case. (Amended with the phase 2 plan.)
 - Removed: `json_reader` (which, despite its name, hands raw bytes to its function), `json_writer`, `decoder_for`,
   `encoder_for`, flavor `decoder`/`encoder`.
 - `Codec.decoder` and `Codec.encoder` stay: they are byte functions, the codec's own surface.
@@ -327,7 +328,7 @@ class GitHub:
 | The client | `Client`, `RequestOptions`, `CallOptions`, `ViewOptions` |
 | Configuration | `TransportPolicy`, `HttpOptions`, `SecurityOptions`, `Timeouts`, `Route`, `RouteOptions`, `IdempotencyKeys`, `Middleware` |
 | Policy values | `RetryPolicy`, `BreakerPolicy`, `Rate`, `RateBudget`, `HttpCache` |
-| Responses | `Expect`, `Reader`, `Writer`, `Codec`, `reader_for`, `writer_for`, `body_reader`, `JSON`, `as_bytes`, `nothing`, `event_stream` |
+| Responses | `Expect`, `Reader`, `Writer`, `Codec`, `reader_for`, `writer_for`, `body_reader`, `as_json`, `as_bytes`, `nothing`, `event_stream` |
 | Bodies | `Body`, `EncodedBody`, `Json`, `Form`, `Multipart`, `Raw` |
 | Auth | `BearerAuth`, `StaticHeaderAuth`, `QueryParamAuth`, `SigningAuth`, `CachedTokenAuth`, `Minted` |
 | Pages | `Paginated` |
