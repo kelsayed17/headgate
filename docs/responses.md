@@ -12,16 +12,16 @@ response, body already read and capped, because some readers need a header too. 
 
 | Reader | Returns | For |
 | --- | --- | --- |
-| `decoder(Type)` from `headgate.msgspec` or `headgate.pydantic` | the decoded value | a JSON body |
-| `json_reader(decode)` | what `decode(body_bytes)` returns | a JSON decoder of your own |
-| `body_reader(decode)` | what `decode(body_bytes)` returns | a decoder of your own in any format: XLS, fixed-width TXT, CSV |
+| `reader(Type)` from `headgate.msgspec` or `headgate.pydantic` | the decoded value | a JSON body |
+| `body_reader(decode)` | what `decode(body_bytes)` returns | a decoder of your own in any format: JSON, XLS, fixed-width TXT, CSV |
+| `as_json` | the body as builtins, typed `object` | JSON without a codec, on a core-only install |
 | `as_bytes` | the body, undecoded | CSV, ZIP, PDF, a dump another parser reads |
 | `nothing` | `None` | a void write (`DELETE`, a cancel) or a `HEAD` |
 | `event_stream` | each server-sent event (`event`, `data`, `id`, `retry`), in order | a buffered `text/event-stream` body |
 
 A reader that finds the body is not the shape it expected raises: a codec raises `DecodeError`, and the `ValueError`,
-`LookupError` or `TypeError` hand-written code over `response.json()` raises counts the same. On a 2xx the client turns
-it into `ResponseParseError`, naming the status, the request line and the reader's diagnosis. A reader never builds a
+`LookupError` or `TypeError` hand-written code over `response.json()` raises, or nesting too deep to parse, counts the
+same. On a 2xx the client turns it into `ResponseParseError`, naming the status, the request line and the reader's diagnosis. A reader never builds a
 `ClientError` itself: the client does, so the error carries the real status and the client's name.
 
 `body_reader` turns a hand-written bytes decoder, the kind its tests feed fixture files, into a reader. Name each
@@ -37,8 +37,15 @@ ALLOTMENTS: Final = body_reader(decode_allotments)
 STATEMENTS: Final = body_reader(partial(decode_statements, table=Statement))
 ```
 
-It hands `decode` an empty body as it is, unless `empty=` names the bytes to decode instead, and takes the same
-`refusal_check=` as `json_reader`. `json_reader(decode, allow_empty_body=True)` is `body_reader(decode, empty=b"[]")`.
+It hands `decode` an empty body as it is, unless `empty=` names the bytes to decode instead: `body_reader(decode,
+empty=b"[]")` reads an empty body as the empty JSON array. Its `refuse=` runs on the decoded value, as a codec reader's
+does (see [refusals inside a body](#refusals-inside-a-body)).
+
+`as_json` reads JSON into builtins with the standard library's `json.loads`, so a core-only install can read JSON
+without a codec. It is typed `object`, the honest type of `json.loads`: narrow it with `isinstance` or a `match`. It
+reads strict RFC 8259 JSON, as `headgate.msgspec`'s reader does, and refuses a body that is not UTF-8 (a BOM, UTF-16,
+UTF-32), `NaN` and `Infinity`, a number too large for a float, an integer of over 4,300 digits, a string holding a lone
+surrogate, and nesting too deep to parse. Each refusal is a `DecodeError` naming the position, never the input.
 
 `nothing` is a claim about the wire, so declare it only for an endpoint documented to send no body you need. Await
 such a call as a statement.
@@ -63,7 +70,7 @@ repr(location)  # 'Reader(location)'
 
 A reader's `repr` names its function, or the `name=` it was given. `expect=`, `Expect` and `conditional` take only a
 `Reader` (or, for `expect=`, an `Expect`) and raise `TypeError` for anything else, such as a model class (`expect=Order`
-where `expect=decoder(Order)` was meant) or a bare function, which are callable too.
+where `expect=reader(Order)` was meant) or a bare function, which are callable too.
 
 ## Declared non-2xx answers
 
@@ -71,10 +78,10 @@ where `expect=decoder(Order)` was meant) or a bare function, which are callable 
 from http import HTTPStatus
 
 from headgate import Expect, nothing
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 
-SERIES_OR_NONE = Expect(decoder(Series)).on(HTTPStatus.NOT_FOUND, nothing)
-ORDER_OR_REJECTION = Expect(decoder(Order)).on(HTTPStatus.UNPROCESSABLE_ENTITY, decoder(Rejection))
+SERIES_OR_NONE = Expect(reader(Series)).on(HTTPStatus.NOT_FOUND, nothing)
+ORDER_OR_REJECTION = Expect(reader(Order)).on(HTTPStatus.UNPROCESSABLE_ENTITY, reader(Rejection))
 ```
 
 `Expect(ok).on(status, reader)` returns a new `Expect` whose result type widens to `T | E`. Build them once, at module
@@ -116,14 +123,14 @@ comma-separated.
 
 Some providers answer a failure with a 200 and an error envelope. A reader raises `RefusedError` for that, and the
 client turns it into the `ClientError` its `kind` names (`UpstreamStatusError` by default, `AuthError`,
-`RateLimitError`), with the status the wire sent and the provider's `code`. The simplest way is a `decoder`'s `refusal_check`,
-which runs on the decoded value and returns a refusal or `None`:
+`RateLimitError`), with the status the wire sent and the provider's `code`. The simplest way is a reader's `refuse`, which runs on
+the decoded value and returns a refusal or `None`:
 
 ```python
 import msgspec
 
 from headgate import RateLimitError, RefusedError
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 
 
 class Envelope(msgspec.Struct, frozen=True):
@@ -138,7 +145,7 @@ def refusal_in(envelope: Envelope) -> RefusedError | None:
     return None
 
 
-ROWS = decoder(Envelope, refusal_check=refusal_in)
+ROWS = reader(Envelope, refuse=refusal_in)
 ```
 
 Refuse only codes every consumer of the endpoint would read as failure (credentials, quota, a malformed request) and
@@ -157,14 +164,14 @@ The core imports no serialization library. `headgate.msgspec` and `headgate.pyda
 [codecs](codecs.md), and expose the same four shortcuts:
 
 - `decode(content, Type, *, strict=True)`: bytes to a value, raising `DecodeError`;
-- `decoder(Type, *, strict=True, allow_empty_body=False, refusal_check=None)`: a reader built on `decode`;
-- `encoder(Type, *, drop_none=False)`: the mirror of `decoder`, a writer whose `body=WRITER(value)` sends the value
+- `reader(Type, *, strict=True, allow_empty_body=False, refuse=None)`: a reader built on `decode`;
+- `writer(Type, *, drop_none=False)`: the mirror of `reader`, a writer whose `body=WRITER(value)` sends the value
   as JSON (see [request bodies](streaming.md#request-bodies));
 - `to_builtins(value, *, drop_none=False)`: a struct or model (or a list or mapping of them) as builtins for `json=` or
   `data=`, with field renames applied and `drop_none=True` removing `None` fields recursively.
 
-`Type` is any type expression, so one function serves an envelope (`decoder(Page)`), a bare array
-(`decoder(list[Row])`), a map, or a genuine union (`decoder(list[A] | A)`), and the reader is typed exactly that.
+`Type` is any type expression, so one function serves an envelope (`reader(Page)`), a bare array
+(`reader(list[Row])`), a map, or a genuine union (`reader(list[A] | A)`), and the reader is typed exactly that.
 
 Drift detection is strict typing: a field that changes type on the wire fails, because it would otherwise corrupt
 values silently. Unknown fields are ignored, because providers add fields routinely and a field nobody models is a field

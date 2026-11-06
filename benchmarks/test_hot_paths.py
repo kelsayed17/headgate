@@ -51,8 +51,8 @@ class PydanticRow(BaseModel, frozen=True):
 
 _ROWS_BODY = msgspec.json.encode([{"date": f"2026-01-{i % 28 + 1:02d}", "value": i * 0.5} for i in range(_ROWS)])
 _ROWS_RESPONSE = httpx2.Response(httpx2.codes.OK, content=_ROWS_BODY)
-_MSGSPEC_ROWS = msgspec_flavor.decoder(list[MsgspecRow])
-_PYDANTIC_ROWS = pydantic_flavor.decoder(list[PydanticRow])
+_MSGSPEC_ROWS = msgspec_flavor.reader(list[MsgspecRow])
+_PYDANTIC_ROWS = pydantic_flavor.reader(list[PydanticRow])
 
 
 def test_escape_segment(benchmark: BenchmarkFixture) -> None:

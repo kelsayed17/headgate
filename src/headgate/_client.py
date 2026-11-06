@@ -167,7 +167,7 @@ class RequestOptions(_SendOptions, total=False, closed=True):
       to no narrower mapping). Its values are encoded the way httpx2 encodes a mapping: a list or tuple repeats the key
       once per item, and any value that is not a ``str``, number, bool or ``None`` is sent as its ``str()``.
     * ``headers``: added to the client's; a clash is won by the call.
-    * ``body``: an :class:`~headgate.EncodedBody` a codec's ``encoder`` wrote (``body=NEW_ORDER(order)``), sent
+    * ``body``: an :class:`~headgate.EncodedBody` a flavor's ``writer`` wrote (``body=NEW_ORDER(order)``), sent
       with its ``Content-Type`` unless ``headers=`` (the call's or its view's, not the client's defaults) sets one. It
       combines with no other body option.
     * ``json`` / ``data``: a JSON body of builtins (a codec's ``to_builtins`` builds one) or a form body.
@@ -626,11 +626,12 @@ class AsyncBaseClient:
         :meth:`get` (or :meth:`post`).
 
         A walk of POSTs passes its body as :meth:`post` does, as ``json=`` or ``body=``, either ``None`` for no body.
-        ``json=`` is builtins, sent as JSON. ``body=`` is the caller's own value, which the pager's ``write`` (a codec's
-        ``encoder``, see :class:`~headgate.pagination.WritingPager`) encodes for each page: the writer belongs to the
-        endpoint, like the reader and the pager, and a pager that rewrites the body (:class:`~headgate.BodyCursor`,
-        :class:`~headgate.BodyOffset`) needs the value, not its bytes. A page with a body is then a :meth:`post` in
-        every respect: in particular it is re-sent only when that is safe, unless ``retry=`` says otherwise.
+        ``json=`` is builtins, sent as JSON. ``body=`` is the caller's own value, which the pager's ``write`` (a
+        flavor's ``writer``, see :class:`~headgate.pagination.WritingPager`) encodes for each page: the writer belongs
+        to the endpoint, like the reader and the pager, and a pager that rewrites the body
+        (:class:`~headgate.BodyCursor`, :class:`~headgate.BodyOffset`) needs the value, not its bytes. A page with a
+        body is then a :meth:`post` in every respect: in particular it is re-sent only when that is safe, unless
+        ``retry=`` says otherwise.
 
         *limit* is a page budget (:class:`~headgate.PageLimit`): at most ``max_pages`` pages are fetched. When more
         would follow, the walk raises :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or
@@ -1064,9 +1065,10 @@ class AsyncBaseClient:
         A ``RefusedError`` from a reader, or raised or returned by the ``refusal_check``, becomes the ``ClientError``
         its kind names, with the real status. A reader that finds the body is not the shape it expected (a codec's
         ``DecodeError``, or the ``ValueError``, ``LookupError`` or ``TypeError`` hand-written code over
-        ``response.json()`` raises) on a 2xx raises ``ResponseParseError`` naming the status and request line; on a
-        declared non-2xx it falls through to the status ladder, because a declaration covers only the body shape it
-        names. A body whose ``Content-Type`` is not the one ``Expect(accept=...)`` asked for is such a shape error.
+        ``response.json()`` raises, or nesting too deep to parse) on a 2xx raises ``ResponseParseError`` naming the
+        status and request line; on a declared non-2xx it falls through to the status ladder, because a declaration
+        covers only the body shape it names. A body whose ``Content-Type`` is not the one ``Expect(accept=...)`` asked
+        for is such a shape error.
         """
         if (refused := _refusal(self._refusal_check, resp)) is not None:
             raise refusal_error(refused, resp, site) from refused

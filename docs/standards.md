@@ -10,7 +10,7 @@ RFCs. headgate reads them so you do not have to, and follows them by default.
 
 <div class="grid cards" markdown>
 
--   :lucide-badge-check:{ .lg .hg-icon } **19 specifications**
+-   :lucide-badge-check:{ .lg .hg-icon } **20 specifications**
 
     ---
 
@@ -68,6 +68,7 @@ RFCs. headgate reads them so you do not have to, and follows them by default.
 
 | Standard | What it says | What headgate does |
 | --- | --- | --- |
+| :lucide-file-json: [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) JSON | JSON text is UTF-8, its numbers are finite, and its strings are Unicode | [`as_json`](responses.md#readers) refuses a BOM, UTF-16, `NaN`, `Infinity`, a number out of range and a lone surrogate, as `headgate.msgspec` does, naming the position, never the input |
 | :lucide-file-warning: [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) Problem Details | errors as `application/problem+json` with `type`, `title`, `detail` | parsed into [`exc.problem`](errors.md#what-every-error-carries); the message shows its title and detail instead of raw JSON |
 | :lucide-file-type: [RFC 6839](https://www.rfc-editor.org/rfc/rfc6839) Structured syntax suffixes | `application/problem+json` is a kind of JSON | an `Expect(accept="application/json")` [accepts it](responses.md#content-negotiation) |
 | :lucide-refresh-ccw: [RFC 9110 §13.1](https://www.rfc-editor.org/rfc/rfc9110#section-13.1) Conditional requests | `If-None-Match` and `If-Modified-Since` let a server answer 304 Not Modified | [`conditional()`](caching.md#conditional-reads) sends them and returns `Fresh` or `NotModified` |

@@ -17,8 +17,9 @@ _PRELUDE = dedent(
     """
     import msgspec
 
-    from headgate import Expect, Reader, as_bytes, nothing
-    from headgate.msgspec import decoder
+    import headgate.msgspec
+    from headgate import Expect, Reader, RefusedError, as_bytes, nothing, reader_for
+    from headgate.msgspec import CODEC, reader
     from tests.support.clients import StubClient
 
 
@@ -26,7 +27,7 @@ _PRELUDE = dedent(
         id: int
 
 
-    ORDER = decoder(Order)
+    ORDER = reader(Order)
 
 
     async def probe(c: StubClient) -> None:
@@ -86,3 +87,21 @@ async def test_a_reader_widens_through_expect_on(tmp_path: Path) -> None:
     )
 
     assert code == 0, out
+
+
+async def test_the_old_reader_keyword_does_not_type_check(tmp_path: Path) -> None:
+    """Refuse ``refusal_check=`` on ``reader_for`` and a flavor's ``reader``, where it is spelled ``refuse=``."""
+    code, out = await _check(
+        tmp_path,
+        """
+        def check(order: Order) -> RefusedError | None:
+            del order
+            return None
+
+        reader_for(CODEC, Order, refusal_check=check)
+        headgate.msgspec.reader(Order, refusal_check=check)
+        """,
+    )
+
+    assert code != 0, out
+    assert out.count("unknown-argument") == len(("reader_for", "reader")), out

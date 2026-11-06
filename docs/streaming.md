@@ -64,13 +64,13 @@ the same way (see [responses](responses.md#readers)).
 
 ## Request bodies
 
-A verb takes **`body=`**, a value a codec's `encoder` wrote: the mirror of `expect=`, built once at import, so
+A verb takes **`body=`**, a value a flavor's `writer` wrote: the mirror of `expect=`, built once at import, so
 a writer takes only its own type.
 
 ```python
-from headgate.msgspec import encoder
+from headgate.msgspec import writer
 
-NEW_ORDER = encoder(NewOrder)
+NEW_ORDER = writer(NewOrder)
 ...
 await self.post("orders", body=NEW_ORDER(order), expect=ORDER)
 ```

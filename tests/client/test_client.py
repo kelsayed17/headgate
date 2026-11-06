@@ -25,7 +25,7 @@ from headgate._auth import AUTH_HOP, StaticHeaderAuth
 from headgate._client import AsyncBaseClient
 from headgate._responses import Expect, RefusalCheck, RefusedError, as_bytes, nothing
 from headgate.errors import AuthError, RateLimitError, ResponseParseError, TransportError, UpstreamStatusError
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 from headgate.ratelimit import UNLIMITED, Rate
 from headgate.ratelimit._budget import Pacer
 from headgate.retry import Backoff, RetryPolicy
@@ -483,7 +483,7 @@ async def test_an_undeclared_4xx_folds_its_body_into_the_message(httpx2_mock: HT
     )
     client = StubClient(rate=_RATE, base_url="https://api.example")
     with pytest.raises(UpstreamStatusError) as ei:
-        await client.get("x", expect=decoder(_M))
+        await client.get("x", expect=reader(_M))
     assert "insufficient balance to cover this order" in str(ei.value)
 
 
@@ -494,7 +494,7 @@ async def test_an_undeclared_403_folds_its_body_into_the_message(httpx2_mock: HT
     )
     client = StubClient(rate=_RATE, base_url="https://api.example")
     with pytest.raises(AuthError) as ei:
-        await client.get("x", expect=decoder(_M))
+        await client.get("x", expect=reader(_M))
     assert "token expired" in str(ei.value)
 
 
@@ -507,7 +507,7 @@ async def test_4xx_body_snippet_is_bounded_and_single_line(httpx2_mock: HTTPXMoc
     )
     client = StubClient(rate=_RATE, base_url="https://api.example")
     with pytest.raises(UpstreamStatusError) as ei:
-        await client.get("x", expect=decoder(_M))
+        await client.get("x", expect=reader(_M))
     msg = str(ei.value)
     assert "TAIL-MARKER" not in msg
     assert len(msg) < _MESSAGE_BOUND
@@ -519,7 +519,7 @@ async def test_a_blank_error_body_adds_no_snippet(httpx2_mock: HTTPXMock) -> Non
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.BAD_REQUEST, content=b" \n\t ")
     client = StubClient(rate=_RATE, base_url="https://api.example")
     with pytest.raises(UpstreamStatusError) as ei:
-        await client.get("x", expect=decoder(_M))
+        await client.get("x", expect=reader(_M))
     assert str(ei.value).endswith(f"(status={httpx2.codes.BAD_REQUEST})")
 
 
@@ -564,7 +564,7 @@ async def test_auth_param_threaded_to_async_client(httpx2_mock: HTTPXMock) -> No
     assert req.headers["X-A"] == "1"
 
 
-# --- msgspec strictness: decoder(strict=) ---
+# --- msgspec strictness: reader(strict=) ---
 
 _QUOTED_PRICE = "59695.24"
 _OPEN_INTEREST = 837345900
@@ -591,7 +591,7 @@ def _replying(content: bytes) -> StubClient:
 async def test_struct_decode_lax_opt_in_coerces_strings() -> None:
     """Check that ``strict=False`` (an explicit opt-out) coerces a string-quoted number into a number field."""
     client = _replying(b'{"price":"%s"}' % _QUOTED_PRICE.encode())
-    out = await client.get("x", expect=decoder(_Px, strict=False))
+    out = await client.get("x", expect=reader(_Px, strict=False))
     assert out.price == float(_QUOTED_PRICE)
 
 
@@ -599,13 +599,13 @@ async def test_struct_decode_strict_rejects_string_quoted_numbers() -> None:
     """Check that ``strict=True`` makes a string-quoted number a ``ResponseParseError`` instead of coercing it."""
     client = _replying(b'{"price":"%s"}' % _QUOTED_PRICE.encode())
     with pytest.raises(ResponseParseError):
-        await client.get("x", expect=decoder(_Px, strict=True))
+        await client.get("x", expect=reader(_Px, strict=True))
 
 
 async def test_struct_decode_strict_accepts_integer_tokens_for_float_fields() -> None:
     """Check that ``strict=True`` still decodes a JSON integer into a float field: a number is a number."""
     client = _replying(b'{"oi":%d}' % _OPEN_INTEREST)
-    out = await client.get("x", expect=decoder(_Oi, strict=True))
+    out = await client.get("x", expect=reader(_Oi, strict=True))
     assert out.oi == float(_OPEN_INTEREST)
 
 
@@ -667,7 +667,7 @@ async def test_a_host_refusal_is_raised_as_its_kind_with_the_real_status() -> No
         refusal_check=_key_page_refusal,
     )
     with pytest.raises(AuthError) as ei:
-        await client.get("x", expect=decoder(dict[str, str]))
+        await client.get("x", expect=reader(dict[str, str]))
     assert ei.value.status_code == httpx2.codes.FOUND
     assert ei.value.code == "missing_key"
     assert ei.value.source == "StubClient"
@@ -688,9 +688,9 @@ async def test_a_host_check_returning_none_changes_nothing_and_sees_every_respon
         follow_redirects=False,
         refusal_check=refusal,
     )
-    assert await client.get("x", expect=decoder(dict[str, str])) == {"ok": "yes"}
+    assert await client.get("x", expect=reader(dict[str, str])) == {"ok": "yes"}
     with pytest.raises(UpstreamStatusError) as ei:
-        await client.get("x", expect=decoder(dict[str, str]))
+        await client.get("x", expect=reader(dict[str, str]))
     assert ei.value.status_code == httpx2.codes.NOT_FOUND
     assert seen == [httpx2.codes.OK, httpx2.codes.NOT_FOUND]
 
@@ -718,7 +718,7 @@ async def test_the_host_check_runs_before_a_declared_answer() -> None:
         refusal_check=refusal,
     )
     with pytest.raises(AuthError) as ei:
-        await client.post("x", expect=Expect(decoder(_Value)).on(httpx2.codes.BAD_REQUEST, declared_reader))
+        await client.post("x", expect=Expect(reader(_Value)).on(httpx2.codes.BAD_REQUEST, declared_reader))
     assert ei.value.status_code == httpx2.codes.BAD_REQUEST
     assert seen == []
 
@@ -735,7 +735,7 @@ async def test_a_per_call_follow_redirects_on_a_refusing_client_is_refused() -> 
         httpx2.Response(httpx2.codes.OK, content=b"{}"), follow_redirects=False, refusal_check=_key_page_refusal
     )
     with pytest.raises(ValueError, match="follow redirects"):
-        await client.get("x", expect=decoder(dict[str, str]), follow_redirects=True)
+        await client.get("x", expect=reader(dict[str, str]), follow_redirects=True)
 
 
 # --- Declared responses: the pipeline ---
@@ -744,21 +744,21 @@ async def test_a_per_call_follow_redirects_on_a_refusing_client_is_refused() -> 
 async def test_a_declared_non_2xx_reaches_its_reader() -> None:
     """Check that a declared 400 is read by its own reader."""
     client = _serving(httpx2.Response(httpx2.codes.BAD_REQUEST, json={"message": "refused"}))
-    out = await client.post("x", expect=Expect(decoder(_Value)).on(httpx2.codes.BAD_REQUEST, decoder(_Answer)))
+    out = await client.post("x", expect=Expect(reader(_Value)).on(httpx2.codes.BAD_REQUEST, reader(_Answer)))
     assert out == _Answer(message="refused")
 
 
 async def test_an_exact_2xx_declaration_wins_over_the_success_reader() -> None:
     """Check that an exactly declared 204 goes to its reader, not to the success reader."""
     client = _serving(httpx2.Response(httpx2.codes.NO_CONTENT))
-    assert await client.post("x", expect=Expect(decoder(_Value)).on(httpx2.codes.NO_CONTENT, nothing)) is None
+    assert await client.post("x", expect=Expect(reader(_Value)).on(httpx2.codes.NO_CONTENT, nothing)) is None
 
 
 async def test_a_declared_non_2xx_in_an_unrecognized_shape_falls_through_to_the_ladder() -> None:
     """Check that a declared status in a shape its reader does not know raises with its real status."""
     client = _serving(httpx2.Response(httpx2.codes.BAD_REQUEST, content=b"<html>gateway</html>"))
     with pytest.raises(UpstreamStatusError) as ei:
-        await client.post("x", expect=Expect(decoder(_Value)).on(httpx2.codes.BAD_REQUEST, decoder(_Answer)))
+        await client.post("x", expect=Expect(reader(_Value)).on(httpx2.codes.BAD_REQUEST, reader(_Answer)))
     assert ei.value.status_code == httpx2.codes.BAD_REQUEST
     assert type(ei.value) is UpstreamStatusError
 
@@ -767,14 +767,14 @@ async def test_a_2xx_that_does_not_decode_is_a_parse_error() -> None:
     """Check that an undecodable 2xx body is a ``ResponseParseError``."""
     client = _serving(httpx2.Response(httpx2.codes.OK, content=b"not json"))
     with pytest.raises(ResponseParseError):
-        await client.get("x", expect=decoder(_Value))
+        await client.get("x", expect=reader(_Value))
 
 
 async def test_an_undeclared_status_raises_even_beside_a_declared_one() -> None:
     """Check that declaring a 400 does not make a 404 an answer."""
     client = _serving(httpx2.Response(httpx2.codes.NOT_FOUND, json={"message": "gone"}))
     with pytest.raises(UpstreamStatusError) as ei:
-        await client.post("x", expect=Expect(decoder(_Value)).on(httpx2.codes.BAD_REQUEST, decoder(_Answer)))
+        await client.post("x", expect=Expect(reader(_Value)).on(httpx2.codes.BAD_REQUEST, reader(_Answer)))
     assert ei.value.status_code == httpx2.codes.NOT_FOUND
 
 
@@ -792,7 +792,7 @@ async def test_a_refused_reader_becomes_its_kind_with_the_real_status_and_code()
 
     client = _serving(httpx2.Response(httpx2.codes.OK, json={"status": "REQUEST_NOT_PROCESSED"}))
     with pytest.raises(RateLimitError) as ei:
-        await client.get("x", expect=decoder(_Status, refusal_check=check))
+        await client.get("x", expect=reader(_Status, refuse=check))
     assert (ei.value.status_code, ei.value.code, ei.value.source) == (
         httpx2.codes.OK,
         "REQUEST_NOT_PROCESSED",
@@ -811,7 +811,7 @@ async def test_a_refusal_from_a_declared_non_2xx_reader_keeps_that_status() -> N
 
     client = _serving(httpx2.Response(httpx2.codes.CONFLICT, content=b"{}"))
     with pytest.raises(UpstreamStatusError) as ei:
-        await client.post("x", expect=Expect(decoder(_Value)).on(httpx2.codes.CONFLICT, refusing))
+        await client.post("x", expect=Expect(reader(_Value)).on(httpx2.codes.CONFLICT, refusing))
     assert (ei.value.status_code, ei.value.code) == (httpx2.codes.CONFLICT, "E42")
 
 
@@ -847,7 +847,7 @@ async def test_a_declared_403_in_an_unrecognized_shape_raises_auth_error() -> No
     """Check that the fall-through uses the real ladder, so an undecodable declared 403 is still ``AuthError``."""
     client = _serving(httpx2.Response(httpx2.codes.FORBIDDEN, content=b"<html>denied</html>"))
     with pytest.raises(AuthError) as ei:
-        await client.post("x", expect=Expect(decoder(_Value)).on(httpx2.codes.FORBIDDEN, decoder(_Answer)))
+        await client.post("x", expect=Expect(reader(_Value)).on(httpx2.codes.FORBIDDEN, reader(_Answer)))
     assert ei.value.status_code == httpx2.codes.FORBIDDEN
 
 

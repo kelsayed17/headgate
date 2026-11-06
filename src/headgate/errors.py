@@ -11,7 +11,8 @@ re-parenting a class changes that mapping.
 
 :class:`DecodeError` is deliberately not a ``ClientError``. A codec raises it for a body it cannot decode, and the base
 client turns it into ``ResponseParseError`` (a 2xx body) or the status error (a declared non-2xx), as it does the
-``ValueError``, ``LookupError`` or ``TypeError`` a hand-written reader raises for a body of the wrong shape.
+``ValueError``, ``LookupError`` or ``TypeError`` a hand-written reader raises for a body of the wrong shape, or nesting
+too deep to parse.
 
 Every ``ClientError`` pickles, so it can cross a process or a durable-workflow boundary. The default exception reduce,
 ``(cls, self.args)``, re-runs ``__init__``: that fails on a required keyword-only argument (``status_code``) and would

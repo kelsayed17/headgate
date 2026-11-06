@@ -28,7 +28,7 @@ from headgate import msgspec as flavor
 from headgate._client import AsyncBaseClient
 from headgate._responses import as_bytes, nothing
 from headgate.errors import AuthError, UpstreamStatusError
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 from headgate.ratelimit import Rate
 from headgate.retry import RetryPolicy
 from tests.support.responses import RESPONSE
@@ -84,7 +84,7 @@ async def test_get_uses_get_method_and_decodes_model() -> None:
     """Check that ``get`` sends a GET with its params and decodes the body."""
     wire = _Wire(body={"value": _VALUE})
     async with _client(wire) as c:
-        out = await c.get("thing", expect=decoder(_Model), params={"a": "1"})
+        out = await c.get("thing", expect=reader(_Model), params={"a": "1"})
 
     assert wire.last.method == "GET"
     assert str(wire.last.url).endswith("/thing?a=1")
@@ -94,8 +94,8 @@ async def test_get_uses_get_method_and_decodes_model() -> None:
 async def test_get_decodes_struct_and_json_and_the_whole_response() -> None:
     """Check that one ``get`` decodes into a struct, a plain mapping, or hands back the whole response."""
     async with _client(_Wire(body={"value": _VALUE})) as c:
-        assert (await c.get("t", expect=decoder(_Model))).value == _VALUE
-        assert await c.get("t", expect=decoder(dict[str, int])) == {"value": _VALUE}
+        assert (await c.get("t", expect=reader(_Model))).value == _VALUE
+        assert await c.get("t", expect=reader(dict[str, int])) == {"value": _VALUE}
         whole = await c.get("t", expect=RESPONSE)
         assert whole.status_code == httpx2.codes.OK
 
@@ -107,7 +107,7 @@ async def test_each_verb_sends_its_own_method_and_decodes(verb: str, http_method
     """Check that each verb sends its own HTTP method and decodes the reply."""
     wire = _Wire(body={"value": _VALUE})
     async with _client(wire) as c:
-        out = await getattr(c, verb)("thing", expect=decoder(_Model))
+        out = await getattr(c, verb)("thing", expect=reader(_Model))
 
     assert wire.last.method == http_method
     assert out == _Model(value=_VALUE)
@@ -117,7 +117,7 @@ async def test_post_json_body_reaches_content_with_json_content_type() -> None:
     """Check that ``json=`` is serialized compactly by httpx2 and stamped with the JSON content type."""
     wire = _Wire(body={"value": _VALUE})
     async with _client(wire) as c:
-        await c.post("thing", json=flavor.to_builtins(_Body(name="x")), expect=decoder(_Model))
+        await c.post("thing", json=flavor.to_builtins(_Body(name="x")), expect=reader(_Model))
 
     assert b'"name":"x"' in wire.last.content
     assert wire.last.headers.get("content-type") == "application/json"
@@ -130,7 +130,7 @@ class _Order(msgspec.Struct, frozen=True, omit_defaults=True):
     note: str | None = None
 
 
-_NEW_ORDER = flavor.encoder(_Order)
+_NEW_ORDER = flavor.writer(_Order)
 
 
 async def test_body_sends_what_an_encoder_wrote_with_its_content_type() -> None:
@@ -138,7 +138,7 @@ async def test_body_sends_what_an_encoder_wrote_with_its_content_type() -> None:
     assert_type(_NEW_ORDER, Writer[_Order])
     wire = _Wire(body={"value": _VALUE})
     async with _client(wire) as c:
-        await c.post("orders", body=_NEW_ORDER(_Order(sku="A-1")), expect=decoder(_Model))
+        await c.post("orders", body=_NEW_ORDER(_Order(sku="A-1")), expect=reader(_Model))
 
     assert wire.last.content == b'{"SKU":"A-1"}'
     assert wire.last.headers["content-type"] == "application/json"
@@ -211,8 +211,8 @@ def test_drop_none_leaves_out_none_fields_a_struct_would_send() -> None:
         name: str | None = "unchanged"
         size: int | None = None
 
-    assert flavor.encoder(_Patch, drop_none=True)(_Patch(name=None, size=3)).content == b'{"size":3}'
-    assert flavor.encoder(_Patch)(_Patch(name=None, size=3)).content == b'{"name":null,"size":3}'
+    assert flavor.writer(_Patch, drop_none=True)(_Patch(name=None, size=3)).content == b'{"size":3}'
+    assert flavor.writer(_Patch)(_Patch(name=None, size=3)).content == b'{"name":null,"size":3}'
 
 
 async def test_body_combines_with_no_other_body_option() -> None:

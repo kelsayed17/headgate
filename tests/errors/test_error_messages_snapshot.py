@@ -32,7 +32,7 @@ from headgate import (
     RetryPolicy,
     SecurityOptions,
     TransportPolicy,
-    json_reader,
+    body_reader,
     nothing,
 )
 from headgate.breaker import BreakerRegistry
@@ -227,7 +227,7 @@ async def _host_check_refusal() -> None:
 async def _parse_error() -> None:
     """Answer a 2xx the reader cannot parse: ``ResponseParseError`` naming the status and the content type."""
     page = httpx2.Response(200, text="<html>", headers={"content-type": "text/html"})
-    await _get(_client(page), expect=json_reader(json.loads))
+    await _get(_client(page), expect=body_reader(json.loads))
 
 
 async def _too_large() -> None:

@@ -3,7 +3,7 @@
 
 """Unit tests for :mod:`headgate.msgspec`, the strict msgspec codec flavor.
 
-``decoder`` builds a reader that decodes the body strictly (a coerced token is drift) and raises the shared
+``reader`` builds a reader that decodes the body strictly (a coerced token is drift) and raises the shared
 :class:`DecodeError` on any failure. ``to_builtins`` is the encode side, struct to ``json=``-ready builtins, and
 ``drop_none=True`` recursively removes ``None``-valued fields.
 """
@@ -13,12 +13,16 @@ from __future__ import annotations
 import enum
 from typing import TYPE_CHECKING
 
+import httpx2
 import msgspec
 import pytest
 
+from headgate import HttpOptions
 from headgate._failures import MESSAGE_TEXT_LIMIT
-from headgate.errors import DecodeError
-from headgate.msgspec import MsgspecCodec, decode, decoder, to_builtins
+from headgate.errors import DecodeError, ResponseParseError
+from headgate.msgspec import MsgspecCodec, decode, reader, to_builtins
+from headgate.testing import FakeTransport
+from tests.support.clients import StubClient
 from tests.support.responses import response
 
 if TYPE_CHECKING:
@@ -29,29 +33,29 @@ class _Struct(msgspec.Struct, frozen=True):
     x: int
 
 
-# --- decoder(cls) ---
+# --- reader(cls) ---
 
 
 def test_decode_decodes_good_bytes() -> None:
     """Decode a matching body into the struct."""
-    assert decoder(_Struct)(response(b'{"x": 3}')) == _Struct(x=3)
+    assert reader(_Struct)(response(b'{"x": 3}')) == _Struct(x=3)
 
 
 def test_decode_strict_by_default_rejects_coerced_token() -> None:
     """Reject a string where an ``int`` is declared, since strict is the default."""
     with pytest.raises(DecodeError):
-        decoder(_Struct)(response(b'{"x": "3"}'))
+        reader(_Struct)(response(b'{"x": "3"}'))
 
 
 def test_decode_lax_opt_in_coerces_string_to_int() -> None:
     """Coerce a quoted number with ``strict=False``, the opt-out for wires that quote numerics."""
-    assert decoder(_Struct, strict=False)(response(b'{"x": "3"}')) == _Struct(x=3)
+    assert reader(_Struct, strict=False)(response(b'{"x": "3"}')) == _Struct(x=3)
 
 
 def test_decode_raises_decode_error_on_bad_bytes() -> None:
     """Raise ``DecodeError`` for a body that is not JSON."""
     with pytest.raises(DecodeError):
-        decoder(_Struct)(response(b"not json"))
+        reader(_Struct)(response(b"not json"))
 
 
 def test_decode_is_the_bytes_level_primitive() -> None:
@@ -81,83 +85,83 @@ def test_a_codec_built_at_run_time_is_strict_and_keeps_none_by_default() -> None
     assert MsgspecCodec(drop_none=True).encoder(_Noted)(_Noted(x=1)) == b'{"x":1}'
 
 
-# --- decoder(list[cls]): a bare top-level JSON array ---
+# --- reader(list[cls]): a bare top-level JSON array ---
 
 
 def test_decode_list_decodes_array() -> None:
     """Decode a bare array of objects."""
-    assert decoder(list[_Struct])(response(b'[{"x": 1}, {"x": 2}]')) == [_Struct(x=1), _Struct(x=2)]
+    assert reader(list[_Struct])(response(b'[{"x": 1}, {"x": 2}]')) == [_Struct(x=1), _Struct(x=2)]
 
 
 def test_decode_list_empty_array_decodes_to_empty_list() -> None:
     """Decode ``[]`` to an empty list."""
-    assert decoder(list[_Struct])(response(b"[]")) == []
+    assert reader(list[_Struct])(response(b"[]")) == []
 
 
 @pytest.mark.parametrize("body", [b"", b"   ", b"\n", b"  \r\n "])
 def test_decode_list_empty_body_raises_by_default(body: bytes) -> None:
     """Fail on an empty 200 by default: a list endpoint sends at least ``[]``, so no body is corruption."""
     with pytest.raises(DecodeError):
-        decoder(list[_Struct])(response(body))
+        reader(list[_Struct])(response(body))
 
 
 @pytest.mark.parametrize("body", [b"", b"   ", b"\n", b"  \r\n "])
 def test_decode_list_empty_body_allowed_when_opted_in(body: bytes) -> None:
     """Read an empty body as ``[]`` for an endpoint whose no-data answer is a zero-byte 200."""
-    assert decoder(list[_Struct], allow_empty_body=True)(response(body)) == []
+    assert reader(list[_Struct], allow_empty_body=True)(response(body)) == []
 
 
 @pytest.mark.parametrize("allow", [False, True])
 def test_decode_list_truncated_nonempty_body_still_raises(*, allow: bool) -> None:
     """Fail on a truncated non-empty body either way, so transport truncation is never masked as ``[]``."""
     with pytest.raises(DecodeError):
-        decoder(list[_Struct], allow_empty_body=allow)(response(b'[{"x": 1}, {"x":'))
+        reader(list[_Struct], allow_empty_body=allow)(response(b'[{"x": 1}, {"x":'))
 
 
 def test_decode_list_strict_rejects_coerced_element() -> None:
     """Fail the whole decode for one coerced token in one element."""
     with pytest.raises(DecodeError):
-        decoder(list[_Struct], strict=True)(response(b'[{"x": 1}, {"x": "2"}]'))
+        reader(list[_Struct], strict=True)(response(b'[{"x": 1}, {"x": "2"}]'))
 
 
 def test_decode_list_raises_decode_error_on_object_body() -> None:
     """Fail on a top-level object where an array is declared: that is drift, not no-data."""
     with pytest.raises(DecodeError):
-        decoder(list[_Struct])(response(b'{"x": 1}'))
+        reader(list[_Struct])(response(b'{"x": 1}'))
 
 
-# --- decoder(dict[str, cls]): a bare top-level JSON object map ---
+# --- reader(dict[str, cls]): a bare top-level JSON object map ---
 
 
 def test_decode_map_decodes_object() -> None:
     """Decode a bare object map."""
-    result = decoder(dict[str, _Struct])(response(b'{"AAPL": {"x": 1}, "MSFT": {"x": 2}}'))
+    result = reader(dict[str, _Struct])(response(b'{"AAPL": {"x": 1}, "MSFT": {"x": 2}}'))
     assert result == {"AAPL": _Struct(x=1), "MSFT": _Struct(x=2)}
 
 
 def test_decode_map_empty_object_decodes_to_empty_dict() -> None:
     """Decode ``{}`` to an empty dict."""
-    assert decoder(dict[str, _Struct])(response(b"{}")) == {}
+    assert reader(dict[str, _Struct])(response(b"{}")) == {}
 
 
 def test_decode_map_strict_rejects_coerced_value() -> None:
     """Fail the whole decode for one coerced token in one value."""
     with pytest.raises(DecodeError):
-        decoder(dict[str, _Struct], strict=True)(response(b'{"AAPL": {"x": 1}, "MSFT": {"x": "2"}}'))
+        reader(dict[str, _Struct], strict=True)(response(b'{"AAPL": {"x": 1}, "MSFT": {"x": "2"}}'))
 
 
 def test_decode_map_raises_decode_error_on_array_body() -> None:
     """Fail on a top-level array where an object map is declared."""
     with pytest.raises(DecodeError):
-        decoder(dict[str, _Struct])(response(b'[{"x": 1}]'))
+        reader(dict[str, _Struct])(response(b'[{"x": 1}]'))
 
 
-# --- decoder(dict[str, str]) and decoder(list[list[str]]) ---
+# --- reader(dict[str, str]) and reader(list[list[str]]) ---
 
 
 def test_decode_str_map_decodes_string_map() -> None:
     """Decode a bare object of strings."""
-    result = decoder(dict[str, str], strict=True)(response(b'{"AUD": "Australian Dollar", "EUR": "Euro"}'))
+    result = reader(dict[str, str], strict=True)(response(b'{"AUD": "Australian Dollar", "EUR": "Euro"}'))
     assert result == {"AUD": "Australian Dollar", "EUR": "Euro"}
 
 
@@ -165,12 +169,12 @@ def test_decode_str_map_decodes_string_map() -> None:
 def test_decode_str_map_rejects_drift(body: bytes) -> None:
     """Fail on a non-string value, an array body, or a body that is not JSON."""
     with pytest.raises(DecodeError):
-        decoder(dict[str, str], strict=True)(response(body))
+        reader(dict[str, str], strict=True)(response(body))
 
 
 def test_decode_str_matrix_decodes_array_of_arrays() -> None:
     """Decode a bare array of string arrays."""
-    result = decoder(list[list[str]], strict=True)(response(b'[["cell_value", "time"], ["317.6", "2024-01"]]'))
+    result = reader(list[list[str]], strict=True)(response(b'[["cell_value", "time"], ["317.6", "2024-01"]]'))
     assert result == [["cell_value", "time"], ["317.6", "2024-01"]]
 
 
@@ -178,7 +182,7 @@ def test_decode_str_matrix_decodes_array_of_arrays() -> None:
 def test_decode_str_matrix_rejects_drift(body: bytes) -> None:
     """Fail on a number cell, an object body, or a body that is not JSON: every cell is a string."""
     with pytest.raises(DecodeError):
-        decoder(list[list[str]], strict=True)(response(body))
+        reader(list[list[str]], strict=True)(response(body))
 
 
 # --- to_builtins: struct -> json=-ready builtins ---
@@ -312,3 +316,17 @@ def test_a_decode_error_is_bounded_whatever_the_input() -> None:
         decode(b'"' + b"x" * (10 * MESSAGE_TEXT_LIMIT) + b'"', _Side)
 
     assert str(raised.value) == "Invalid enum value"
+
+
+async def test_a_body_nested_too_deeply_is_a_parse_error() -> None:
+    """Raise ``ResponseParseError`` for a body nested past msgspec's own stack, not a raw ``RecursionError``."""
+    deep = b"[" * 100_000 + b"]" * 100_000
+    fake = FakeTransport().reply("GET", "/x", httpx2.Response(200, content=deep))
+    client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
+    with pytest.raises(ResponseParseError) as raised:
+        await client.get("x", expect=reader(list[object]))
+    assert str(raised.value).endswith("nested too deeply")
+    with pytest.raises(DecodeError) as decoded:
+        decode(deep, list[object])
+    assert str(decoded.value) == "not JSON: nested too deeply"
+    assert decoded.value.__suppress_context__

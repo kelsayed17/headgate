@@ -13,24 +13,29 @@ Anything a call did not declare raises through the base client's status ladder. 
 receive an undeclared status. A refusal the provider writes inside a body is raised by the reader as
 :class:`RefusedError`, and the base client turns it into a ``ClientError`` carrying the status the wire sent.
 
-This module is codec-free: it imports neither msgspec nor pydantic. The JSON ``decoder`` a client builds its success
-reader with comes from the flavor module it chose, :mod:`headgate.msgspec` or :mod:`headgate.pydantic`, and both read
-the body as :func:`body_reader` and :func:`json_reader` do.
+This module is codec-free: it imports neither msgspec nor pydantic. The typed JSON ``reader`` a client builds its
+success reader with comes from the flavor module it chose, :mod:`headgate.msgspec` or :mod:`headgate.pydantic`, and both
+read the body as :func:`body_reader` does. :data:`as_json` reads JSON into builtins with the standard library alone.
+
+A reader's shape errors (a :class:`~headgate.errors.DecodeError`, or a ``ValueError``, ``LookupError`` or ``TypeError``
+from code over ``response.json()``, or nesting too deep to parse) become ``ResponseParseError`` on a 2xx.
 """
 
 from __future__ import annotations
 
 import functools
+import json
+import math
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Final, final, override
+from typing import Final, NoReturn, final, override
 
 import httpx2
 
 from headgate._core import check_kind
-from headgate.errors import UpstreamStatusError
+from headgate.errors import DecodeError, UpstreamStatusError
 from headgate.streaming._events import EventParser
 
 __all__ = [
@@ -40,9 +45,9 @@ __all__ = [
     "RefusedError",
     "accepts",
     "as_bytes",
+    "as_json",
     "body_reader",
     "event_stream",
-    "json_reader",
     "nothing",
 ]
 
@@ -53,9 +58,10 @@ class Reader[T]:
 
     A reader receives the whole response (status, headers, body), because it may need what a header declares, such as a
     ``content-type`` choosing between JSON and an event stream. It may raise :class:`~headgate.errors.DecodeError` (the
-    body is not what was declared; a ``ValueError``, ``LookupError`` or ``TypeError`` from code over ``response.json()``
-    counts the same) or :class:`RefusedError` (the provider said no inside the body). It never builds a ``ClientError``
-    itself: the base client does, so the error carries the real status and the client's name.
+    body is not what was declared; a ``ValueError``, ``LookupError`` or ``TypeError`` from code over
+    ``response.json()``, or nesting too deep to parse, counts the same) or :class:`RefusedError` (the provider said no
+    inside the body). It never builds a ``ClientError`` itself: the base client does, so the error carries the real
+    status and the client's name.
 
     It is a class rather than any function of a response so that ``expect=`` refuses what only looks like one: a model
     class, ``str`` and a bare function are all callable, and each is a mistake there.
@@ -117,7 +123,7 @@ class RefusedError(Exception):
     """A provider's refusal, as a reader or a host check saw it.
 
     A reader raises it for a refusal written inside a body (an error envelope, a ``REQUEST_NOT_PROCESSED`` status, a
-    vendor error code); a ``decoder``'s and a client's ``refusal_check`` return one instead. The base client is
+    vendor error code); a reader's ``refuse`` and a client's ``refusal_check`` return one instead. The base client is
     its only catcher, and turns it into ``kind(message, status_code=<the status the wire sent>, code=code, ...)``, so
     a refusal in a 200 body carries 200.
 
@@ -268,7 +274,7 @@ def body_reader[T](
     /,
     *,
     empty: bytes | None = None,
-    refusal_check: Callable[[T], RefusedError | None] | None = None,
+    refuse: Callable[[T], RefusedError | None] | None = None,
 ) -> Reader[T]:
     """Build a reader that decodes the body with *decode*: for a bytes decoder in any format.
 
@@ -281,19 +287,20 @@ def body_reader[T](
     The reader is named after *decode*, so those two print as ``Reader(decode_allotments)`` and
     ``Reader(decode_statements)``.
 
-    A ``ValueError``, ``LookupError``, ``TypeError`` or :class:`~headgate.errors.DecodeError` from *decode* is a body
-    of the wrong shape, which the client raises as :class:`~headgate.errors.ResponseParseError` on a 2xx.
+    A ``ValueError``, ``LookupError``, ``TypeError`` or :class:`~headgate.errors.DecodeError` from *decode*, or nesting
+    too deep to parse, is a body of the wrong shape, which the client raises as
+    :class:`~headgate.errors.ResponseParseError` on a 2xx.
 
     ``empty`` is what *decode* is handed for an empty body (zero bytes or only whitespace), such as the encoding of an
     empty array in the body's format. Left ``None``, an empty body is handed over as it is.
 
-    ``refusal_check`` runs on the decoded value and returns a :class:`RefusedError` for a refusal written inside a 2xx
+    ``refuse`` runs on the decoded value and returns a :class:`RefusedError` for a refusal written inside a 2xx
     body, or ``None``; the reader raises what it returns. Type a check over a small structural ``Protocol`` naming only
     the envelope fields it reads. Have it refuse only codes every consumer of the endpoint would read as failure (auth,
     quota, rate limit, server, a malformed request, any undocumented code) and leave a code about the subject (an
     unknown instrument, a rejected order) in the value for the caller.
     """
-    return _body_reader(decode, empty=empty, refuse=refusal_check, name=_name_of(decode))
+    return _body_reader(decode, empty=empty, refuse=refuse, name=_name_of(decode))
 
 
 def _body_reader[T](
@@ -318,27 +325,6 @@ def _body_reader[T](
     return Reader(_read, name=name)
 
 
-def json_reader[T](
-    decode: Callable[[bytes], T],
-    *,
-    allow_empty_body: bool = False,
-    refusal_check: Callable[[T], RefusedError | None] | None = None,
-) -> Reader[T]:
-    """Build a reader around a JSON bytes-to-value function, for a decoder that is not a :class:`~headgate.Codec`.
-
-    It is :func:`body_reader` with JSON's empty array. :func:`~headgate.decoder_for`, which every codec's ``decoder``
-    builds on, shares this reader's empty-body rule and ``refusal_check`` hook, so they behave identically whichever
-    builds the reader.
-
-    ``allow_empty_body`` reads an empty body (zero bytes or only whitespace) as the empty array ``[]``. It suits only a
-    list-shaped type, for a provider whose no-data answer is a zero-byte 200 or a 204. For every other provider an empty
-    200 is corruption, and decoding it fails.
-
-    ``refusal_check`` is documented on :func:`body_reader`.
-    """
-    return body_reader(decode, empty=b"[]" if allow_empty_body else None, refusal_check=refusal_check)
-
-
 def _as_bytes(resp: httpx2.Response, /) -> bytes:
     return resp.content
 
@@ -348,6 +334,83 @@ def _as_bytes(resp: httpx2.Response, /) -> bytes:
 #: A CSV, TXT, ZIP, PDF or XML dump a parser reads later, or an opaque blob. It never raises. It is named ``as_bytes``
 #: rather than ``body`` because ``body`` is the commonest parameter name in a client and would shadow the import.
 as_bytes: Final[Reader[bytes]] = Reader(_as_bytes, name="as_bytes")
+
+
+#: What a reader says of a body nested too deeply for its parser's own stack, whichever parser it is.
+NESTED_TOO_DEEPLY: Final = "not JSON: nested too deeply"
+
+#: What :data:`as_json` says of ``NaN``, ``Infinity``, a number too large for a float, or an integer too long to read.
+_NOT_A_NUMBER: Final = "not JSON: NaN, Infinity or a number out of range"
+
+#: A JSON escape of a UTF-16 surrogate: only text holding one can decode to a lone surrogate.
+_SURROGATE_ESCAPE: Final = re.compile(r"\\u[dD][89a-fA-F]")
+
+#: A UTF-16 surrogate, which a decoded string holds only from an escape that no pair completed.
+_SURROGATE: Final = re.compile("[\ud800-\udfff]")
+
+
+def _refuse_constant(name: str, /) -> NoReturn:
+    """Refuse ``NaN``, ``Infinity`` and ``-Infinity``, which RFC 8259 leaves out of JSON."""
+    raise ValueError(name)
+
+
+def _finite(text: str, /) -> float:
+    """Read a JSON number with a fraction or exponent, refusing one too large for a float (``1e400`` is ``inf``)."""
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError(text)
+    return value
+
+
+def _holds_a_lone_surrogate(value: object) -> bool:
+    """Return whether any string or key in *value* holds a surrogate, walking an explicit stack, never recursing."""
+    pending = [value]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, str):
+            if _SURROGATE.search(node):
+                return True
+        elif isinstance(node, dict):
+            pending.extend(node.keys())
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
+    return False
+
+
+def _decode_json(content: bytes, /) -> object:
+    """Decode *content* as strict RFC 8259 JSON in UTF-8, raising :class:`DecodeError` that names no input.
+
+    No library error is chained or quoted: ``UnicodeDecodeError``'s message quotes the byte it refused.
+    """
+    try:
+        text = content.decode("utf-8")
+        value = json.loads(text, parse_constant=_refuse_constant, parse_float=_finite)
+    except UnicodeDecodeError as exc:
+        msg = f"not UTF-8 at byte {exc.start}"
+        raise DecodeError(msg) from None
+    except json.JSONDecodeError as exc:
+        msg = f"not JSON at line {exc.lineno}, column {exc.colno}"
+        raise DecodeError(msg) from None
+    except ValueError:
+        raise DecodeError(_NOT_A_NUMBER) from None
+    except RecursionError:
+        raise DecodeError(NESTED_TOO_DEEPLY) from None
+    if _SURROGATE_ESCAPE.search(text) and _holds_a_lone_surrogate(value):
+        msg = "not JSON: a string with a lone surrogate"
+        raise DecodeError(msg) from None
+    return value
+
+
+#: Return the body as JSON read into builtins (``dict``, ``list``, ``str``, ``int``, ``float``, ``bool``, ``None``) by
+#: the standard library's ``json.loads``: JSON without a codec, for a core-only install.
+#:
+#: It is typed ``object``, the honest type of ``json.loads``: narrow it with ``isinstance`` or a ``match``. It reads
+#: strict RFC 8259 JSON, as ``headgate.msgspec``'s reader does: the body must be UTF-8 (no BOM, no UTF-16 or UTF-32),
+#: and ``NaN``, ``Infinity``, a number too large for a float, an integer of over 4300 digits and a string holding a lone
+#: surrogate are refused. Each refusal is a :class:`~headgate.errors.DecodeError` naming the position, never the input,
+#: so a call raises ``ResponseParseError`` on a 2xx.
+as_json: Final[Reader[object]] = _body_reader(_decode_json, empty=None, refuse=None, name="as_json")
 
 
 def _nothing(resp: httpx2.Response, /) -> None:

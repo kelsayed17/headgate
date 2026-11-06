@@ -35,7 +35,7 @@ from headgate import (
     TransportError,
     TransportPolicy,
     UpstreamStatusError,
-    json_reader,
+    body_reader,
     nothing,
 )
 from headgate._core import CallContext
@@ -284,7 +284,7 @@ async def test_a_parse_error_names_the_status_and_content_type() -> None:
     """Record the status and declared content type of a 2xx body its reader could not read."""
     script = Script(httpx2.Response(200, content=b"<html>", headers={"Content-Type": "text/html"}))
     with pytest.raises(ResponseParseError) as raised:
-        await _client(script).get("orders", expect=json_reader(json.loads))
+        await _client(script).get("orders", expect=body_reader(json.loads))
 
     assert (raised.value.status_code, raised.value.content_type) == (200, "text/html")
 
@@ -528,7 +528,7 @@ async def test_a_refusal_and_a_parse_error_carry_the_request_id() -> None:
         with pytest.raises(UpstreamStatusError) as refused:
             await client.get("orders", expect=refuse)
         with pytest.raises(ResponseParseError) as unreadable:
-            await client.get("orders", expect=json_reader(json.loads))
+            await client.get("orders", expect=body_reader(json.loads))
 
     assert (refused.value.request_id, unreadable.value.request_id) == (_REQUEST_ID, _REQUEST_ID)
 

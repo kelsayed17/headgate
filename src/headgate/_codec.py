@@ -5,7 +5,7 @@
 
 The core imports no serialization library. A :class:`Codec` is the one interface between them: how the library reads
 bytes into a type expression and writes a value back, the media type of its bytes, which of its exceptions mean a body
-of the wrong shape, and how to describe one without repeating the input. :func:`decoder_for` and :func:`encoder_for`
+of the wrong shape, and how to describe one without repeating the input. :func:`reader_for` and :func:`writer_for`
 build a reader and a writer on any codec, and :func:`decode_with` decodes bytes that are not a whole response.
 
 ``headgate.msgspec`` and ``headgate.pydantic`` are two codecs. :func:`headgate.testing.check_codec` holds any codec to
@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Protocol
 from headgate._core import type_text
 from headgate._failures import shorten
 from headgate._request_body import EncodedBody
-from headgate._responses import _body_reader
+from headgate._responses import NESTED_TOO_DEEPLY, _body_reader
 from headgate.errors import DecodeError
 
 if TYPE_CHECKING:
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from headgate._request_body import Writer
     from headgate._responses import Reader, RefusedError
 
-__all__ = ["Codec", "decode_with", "decoder_for", "drop_none", "encoder_for"]
+__all__ = ["Codec", "decode_with", "drop_none", "reader_for", "writer_for"]
 
 
 class Codec(Protocol):
@@ -75,7 +75,9 @@ class Codec(Protocol):
 def _translated[T](codec: Codec, decode: Callable[[bytes], T]) -> Callable[[bytes], T]:
     """Return *decode*, raising each of *codec*'s ``errors`` as a :class:`DecodeError` with its bounded description.
 
-    The library's error is not chained: it may quote the input, which a traceback or ``logger.exception`` would repeat.
+    A ``RecursionError``, which a parser such as msgspec raises for a body nested too deeply for its own stack, is a
+    ``DecodeError`` too: ``not JSON: nested too deeply``. The library's error is not chained: it may quote the input,
+    which a traceback or ``logger.exception`` would repeat.
     """
     errors = codec.errors
 
@@ -84,6 +86,8 @@ def _translated[T](codec: Codec, decode: Callable[[bytes], T]) -> Callable[[byte
             return decode(content)
         except errors as exc:
             raise DecodeError(shorten(codec.describe(exc))) from None
+        except RecursionError:
+            raise DecodeError(NESTED_TOO_DEEPLY) from None
 
     return _decode
 
@@ -96,28 +100,28 @@ def decode_with[T](codec: Codec, content: bytes, type_: TypeForm[T]) -> T:
     return _translated(codec, codec.decoder(type_))(content)
 
 
-def decoder_for[T](
+def reader_for[T](
     codec: Codec,
     type_: TypeForm[T],
     *,
     allow_empty_body: bool = False,
-    refusal_check: Callable[[T], RefusedError | None] | None = None,
+    refuse: Callable[[T], RefusedError | None] | None = None,
 ) -> Reader[T]:
     """Build a reader that decodes the body into the type expression *type_* with *codec*.
 
     A body *codec* finds malformed or of another type raises :class:`~headgate.errors.DecodeError`, described by the
     codec. ``allow_empty_body`` reads an empty body as an empty array, as *codec* encodes one, for a list-shaped type
-    whose provider answers "no data" with nothing; ``refusal_check`` runs on the decoded value, as on
+    whose provider answers "no data" with nothing; ``refuse`` runs on the decoded value, as on
     :func:`~headgate.body_reader`. The reader is named after *codec*'s class and *type_*:
     ``Reader(MsgspecCodec list[Order])``.
     """
     empty = codec.encoder(list[object])([]) if allow_empty_body else None
     decode = _translated(codec, codec.decoder(type_))
     name = f"{type(codec).__name__} {type_text(type_)}"
-    return _body_reader(decode, empty=empty, refuse=refusal_check, name=name)
+    return _body_reader(decode, empty=empty, refuse=refuse, name=name)
 
 
-def encoder_for[T](codec: Codec, type_: TypeForm[T]) -> Writer[T]:
+def writer_for[T](codec: Codec, type_: TypeForm[T]) -> Writer[T]:
     """Build a writer that encodes a value of the type expression *type_* with *codec*, sent as its ``media_type``."""
     encode = codec.encoder(type_)
     media_type = codec.media_type

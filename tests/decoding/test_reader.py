@@ -12,7 +12,10 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate import Expect, HttpOptions, Reader, as_bytes, decoder_for, event_stream, nothing
+import headgate
+import headgate.msgspec
+import headgate.pydantic
+from headgate import Expect, HttpOptions, Reader, as_bytes, event_stream, nothing, reader_for
 from headgate.cache import conditional
 from headgate.msgspec import CODEC
 from headgate.testing import FakeTransport
@@ -76,8 +79,17 @@ def test_a_reader_of_a_callable_without_a_name_is_named_by_its_type() -> None:
 
 
 def test_a_codec_readers_repr_names_the_type() -> None:
-    """Name a codec's reader after the type it decodes."""
-    assert "Order" in repr(decoder_for(CODEC, list[Order]))
+    """Name a codec's reader after the codec's class and the type it decodes."""
+    assert repr(reader_for(CODEC, list[Order])) == "Reader(MsgspecCodec list[Order])"
+
+
+def test_the_old_builders_are_gone() -> None:
+    """Export no old builder beside the new: ``reader_for``, ``writer_for`` and a flavor's ``reader`` and ``writer``."""
+    for name in ("json_reader", "json_writer", "decoder_for", "encoder_for"):
+        assert not hasattr(headgate, name), name
+    for flavor in (headgate.msgspec, headgate.pydantic):
+        for name in ("decoder", "encoder"):
+            assert not hasattr(flavor, name), (flavor.__name__, name)
 
 
 def test_stock_readers_are_readers() -> None:

@@ -11,6 +11,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `Stream.retry` and `EventParser.retry`: the reconnection time the server last set with an SSE `retry:` field, kept
   across events as the WHATWG spec says, including a `retry:` sent in a block of its own. `Event.retry` is unchanged:
   the field in that event's own block.
+- `as_json`, a ready reader of JSON into builtins with the standard library's `json.loads`, so a core-only install
+  can read JSON without a codec. It is typed `object`, and reads strict RFC 8259 JSON as `headgate.msgspec`'s reader
+  does: a body that is not UTF-8, `NaN`, `Infinity`, a number out of range and a lone surrogate are each a
+  `DecodeError` naming the position, never the input.
 
 ### Changed
 
@@ -49,10 +53,16 @@ change the public API; such changes are listed under **Changed** and **Removed**
   call's own options win over the view's".
 - A reader is a `Reader`, a class: wrap a function of the response as `Reader(fn)`, or put `@Reader` over its `def`.
   `expect=`, `Expect(ok, answers)`, `Expect.on` and `conditional` raise `TypeError` for anything else, such as a model
-  class (`expect=Order`, where `expect=decoder(Order)` was meant), `str` or a bare function, and a type checker
+  class (`expect=Order`, where `expect=reader(Order)` was meant), `str` or a bare function, and a type checker
   rejects them too. A reader's `repr` names its function. `nothing`, `as_bytes` and `event_stream` are `Reader`
-  values, and `body_reader`, `json_reader` and `decoder_for` return one, so code built on them is unchanged. A refusal
+  values, and `body_reader` and `reader_for` return one, so code built on them is unchanged. A refusal
   of the wrong kind now says what it got: `the class str`, `the type list[Order]`, or the value's type.
+- The reader and writer builders share one vocabulary. Write `reader_for(codec, Type)` for `decoder_for(codec, Type)`,
+  `writer_for(codec, Type)` for `encoder_for(codec, Type)`, and `headgate.msgspec.reader(Type)` and
+  `headgate.msgspec.writer(Type)` for `headgate.msgspec.decoder(Type)` and `headgate.msgspec.encoder(Type)`, and the
+  same for `headgate.pydantic`. A reader's refusal check is spelled `refuse=` where it was `refusal_check=`, on
+  `reader_for`, the flavors' `reader` and `body_reader`. `HttpOptions(refusal_check=)` and `Codec.decoder` and
+  `Codec.encoder` keep their names.
 
 ### Removed
 
@@ -61,8 +71,18 @@ change the public API; such changes are listed under **Changed** and **Removed**
   as `HttpCache(methods=..., paths=..., statuses=...)`, which headgate now applies itself; read them back with the new
   `HttpCache.caches_request(method, path)` and `HttpCache.stores_status(status)`. A POST can no longer be cached:
   `FilterPolicy(use_body_key=True)` was the only way, and hishel 2 has no equivalent.
+- `json_reader`: write `body_reader(decode, empty=b"[]")` for `json_reader(decode, allow_empty_body=True)`, and
+  `body_reader(decode)` for `json_reader(decode)`, or read builtins with the new `as_json`.
+- `json_writer`: write a function returning an `EncodedBody`, whose `content_type` defaults to `application/json`:
+  `lambda value: EncodedBody(encode(value))` for `json_writer(encode)`.
 
 ### Fixed
+
+- A body nested too deeply for its parser (around 100,000 levels for `json.loads` and msgspec) raises
+  `ResponseParseError` on a 2xx, or the status's error on a declared non-2xx, where it raised a raw `RecursionError`,
+  whichever reader read it: a codec's, `as_json`, `body_reader(json.loads)` or a hand-written reader over
+  `response.json()`. A token mint that meets one raises `ResponseParseError` too. The message ends `nested too deeply`
+  (pydantic's names its own recursion limit, as it already did).
 
 - A cached response still honors `Vary`: hishel 2 keys an entry by its URL alone, so headgate matches the headers a
   response varies on itself. A response with `Vary: *` is no longer stored, since nothing could match it.

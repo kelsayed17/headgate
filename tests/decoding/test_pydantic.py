@@ -14,16 +14,20 @@ import sys
 import uuid
 from typing import TYPE_CHECKING, Annotated, Literal
 
+import httpx2
 import msgspec
 import pytest
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, RootModel, ValidationError
 from pydantic_core import PydanticCustomError
 
+from headgate import HttpOptions
 from headgate import msgspec as msgspec_flavor
 from headgate._failures import MESSAGE_TEXT_LIMIT
 from headgate._responses import RefusedError
-from headgate.errors import DecodeError
-from headgate.pydantic import PydanticCodec, _schema_names, decode, decoder, encoder, to_builtins
+from headgate.errors import DecodeError, ResponseParseError
+from headgate.pydantic import PydanticCodec, _schema_names, decode, reader, to_builtins, writer
+from headgate.testing import FakeTransport
+from tests.support.clients import StubClient
 from tests.support.responses import response
 
 if TYPE_CHECKING:
@@ -54,25 +58,25 @@ def _quota_check(env: _Env) -> RefusedError | None:
     return RefusedError("over quota", code="Q") if env.status == "QUOTA" else None
 
 
-def test_decoder_reads_a_body_through_the_response() -> None:
+def test_reader_reads_a_body_through_the_response() -> None:
     """Validate a matching body into the model."""
-    assert decoder(_Model)(response(b'{"x": 3}')) == _Model(x=3)
+    assert reader(_Model)(response(b'{"x": 3}')) == _Model(x=3)
 
 
 def test_string_for_int_raises_decode_error() -> None:
     """Reject a string where an ``int`` is declared, since strict is the default."""
     with pytest.raises(DecodeError):
-        decoder(_Model)(response(b'{"x": "3"}'))
+        reader(_Model)(response(b'{"x": "3"}'))
 
 
 def test_unknown_fields_ignored() -> None:
     """Ignore a field the model does not declare."""
-    assert decoder(_Model)(response(b'{"x": 1, "extra": [1, 2]}')) == _Model(x=1)
+    assert reader(_Model)(response(b'{"x": 1, "extra": [1, 2]}')) == _Model(x=1)
 
 
 def test_lax_opt_in_coerces_a_string_to_an_int() -> None:
     """Coerce a quoted number with ``strict=False``."""
-    assert decoder(_Model, strict=False)(response(b'{"x": "3"}')) == _Model(x=3)
+    assert reader(_Model, strict=False)(response(b'{"x": "3"}')) == _Model(x=3)
 
 
 @pytest.mark.parametrize(
@@ -97,38 +101,38 @@ def test_strictness_matches_the_msgspec_flavor(body: bytes, *, accepted: bool) -
             return False
         return True
 
-    assert outcome(decoder(_Model)) is accepted
-    assert outcome(msgspec_flavor.decoder(_Struct)) is accepted
+    assert outcome(reader(_Model)) is accepted
+    assert outcome(msgspec_flavor.reader(_Struct)) is accepted
 
 
 def test_one_malformed_element_fails_the_whole_list() -> None:
     """Fail the whole body for one malformed element."""
     with pytest.raises(DecodeError):
-        decoder(list[_Model])(response(b'[{"x": 1}, {"x": "x"}]'))
+        reader(list[_Model])(response(b'[{"x": 1}, {"x": "x"}]'))
 
 
 def test_a_union_of_shapes_decodes_either() -> None:
     """Validate either arm of a union of shapes."""
-    read = decoder(list[_Model] | _Model)
+    read = reader(list[_Model] | _Model)
     assert read(response(b"[]")) == []
     assert read(response(b'{"x": 1}')) == _Model(x=1)
 
 
 def test_null_decodes_for_an_optional_type() -> None:
     """Validate ``null`` as ``None`` for an optional type."""
-    assert decoder(_Model | None)(response(b"null")) is None
+    assert reader(_Model | None)(response(b"null")) is None
 
 
 def test_allow_empty_body_reads_zero_bytes_as_the_empty_array() -> None:
     """Read an empty body as ``[]`` only when opted in."""
-    assert decoder(list[_Model], allow_empty_body=True)(response(b"")) == []
+    assert reader(list[_Model], allow_empty_body=True)(response(b"")) == []
     with pytest.raises(DecodeError):
-        decoder(list[_Model])(response(b""))
+        reader(list[_Model])(response(b""))
 
 
 def test_a_check_that_refuses_raises_the_refused_it_returned() -> None:
     """Raise the ``RefusedError`` a check returns, and return the value when it returns ``None``."""
-    read = decoder(_Env, refusal_check=_quota_check)
+    read = reader(_Env, refuse=_quota_check)
     with pytest.raises(RefusedError) as caught:
         read(response(b'{"status": "QUOTA"}'))
     assert caught.value.code == "Q"
@@ -374,16 +378,16 @@ def test_a_validators_own_error_under_a_quoting_type_keeps_its_words(
     assert str(raised.value).endswith(f"<body>: {shown}")
 
 
-def test_the_encoder_applies_aliases_and_can_leave_out_none() -> None:
+def test_the_writer_applies_aliases_and_can_leave_out_none() -> None:
     """Encode by alias as JSON, sending ``None`` as ``null`` unless ``drop_none=True``."""
     order = _Aliased(orderId="a1")
-    written = encoder(_Aliased)(order)
+    written = writer(_Aliased)(order)
     assert (written.content, written.content_type) == (b'{"orderId":"a1","note":null}', "application/json")
-    assert encoder(_Aliased, drop_none=True)(order).content == b'{"orderId":"a1"}'
+    assert writer(_Aliased, drop_none=True)(order).content == b'{"orderId":"a1"}'
 
 
-def test_the_encoder_drops_none_as_to_builtins_and_the_msgspec_encoder_do() -> None:
-    """Drop a ``None`` in a nested ``dict`` too, keeping one in a list, byte for byte as the msgspec encoder does."""
+def test_the_writer_drops_none_as_to_builtins_and_the_msgspec_writer_do() -> None:
+    """Drop a ``None`` in a nested ``dict`` too, keeping one in a list, byte for byte as the msgspec writer does."""
 
     class Row(BaseModel):
         m: dict[str, int | None]
@@ -396,9 +400,9 @@ def test_the_encoder_drops_none_as_to_builtins_and_the_msgspec_encoder_do() -> N
         note: str | None = None
 
     row, struct = Row(m={"x": None, "y": 1}, items=[None, 1]), RowStruct(m={"x": None, "y": 1}, items=[None, 1])
-    written = encoder(Row, drop_none=True)(row).content
+    written = writer(Row, drop_none=True)(row).content
     assert written == b'{"m":{"y":1},"items":[null,1]}'
-    assert written == msgspec_flavor.encoder(RowStruct, drop_none=True)(struct).content
+    assert written == msgspec_flavor.writer(RowStruct, drop_none=True)(struct).content
     assert msgspec.json.decode(written) == to_builtins(row, drop_none=True)
 
 
@@ -418,7 +422,17 @@ def test_a_codec_built_at_run_time_is_strict_and_keeps_none_by_default() -> None
 
 
 @pytest.mark.filterwarnings("error")
-def test_the_encoder_serializes_by_the_declared_type_without_a_warning() -> None:
+def test_the_writer_serializes_by_the_declared_type_without_a_warning() -> None:
     """Serialize by the declared type's adapter: any other one warns, quoting the value, which may be a credential."""
-    assert encoder(_Aliased)(_Aliased(orderId="a1")).content == b'{"orderId":"a1","note":null}'
+    assert writer(_Aliased)(_Aliased(orderId="a1")).content == b'{"orderId":"a1","note":null}'
     assert PydanticCodec().encoder(_Aliased)(_Aliased(orderId="a1")) == b'{"orderId":"a1","note":null}'
+
+
+async def test_a_body_nested_too_deeply_is_a_parse_error() -> None:
+    """Raise ``ResponseParseError`` for a body nested past the parser's limit: pydantic reports it as its own error."""
+    deep = b"[" * 100_000 + b"]" * 100_000
+    fake = FakeTransport().reply("GET", "/x", httpx2.Response(200, content=deep))
+    client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
+    with pytest.raises(ResponseParseError) as raised:
+        await client.get("x", expect=reader(list[object]))
+    assert "recursion limit exceeded" in str(raised.value)

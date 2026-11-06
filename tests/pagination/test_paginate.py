@@ -32,7 +32,7 @@ from headgate import (
     ResponseParseError,
     UpstreamStatusError,
 )
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 from headgate.pagination import PageRequest
 from headgate.ratelimit import Rate
 from tests.support.clients import StubClient
@@ -116,7 +116,7 @@ async def test_cursor_pages_are_followed_and_items_are_typed() -> None:
     api = _Api(_by_cursor)
     paginated = api.client().paginate(
         t"v1/{'items'}",
-        expect=decoder(Page),
+        expect=reader(Page),
         pages=Cursor(items=items_of, next=cursor_of, param="after"),
         params={"kind": "a"},
     )
@@ -144,10 +144,10 @@ async def test_a_walk_does_not_go_through_methods_a_subclass_may_rename() -> Non
     client = api.client()
     vars(client).update(get=endpoint, post=endpoint)
     pages = Cursor(items=items_of, next=cursor_of, param="after")
-    gets = [item.id async for item in client.paginate("items", expect=decoder(Page), pages=pages)]
+    gets = [item.id async for item in client.paginate("items", expect=reader(Page), pages=pages)]
     query: dict[str, object] = {}
     posting = Cursor[Page, Item, dict[str, object]](items=items_of, next=cursor_of, param="after")
-    posts = [item.id async for item in client.paginate("items", json=query, expect=decoder(Page), pages=posting)]
+    posts = [item.id async for item in client.paginate("items", json=query, expect=reader(Page), pages=posting)]
     assert gets == posts == [1, 2, 3, 4]
 
 
@@ -155,7 +155,7 @@ async def test_iteration_is_lazy_and_restarts_from_the_first_page() -> None:
     """Fetch nothing before iteration, only what the iteration reached, and start again on a new iteration."""
     api = _Api(_by_cursor)
     paginated = api.client().paginate(
-        "items", expect=decoder(Page), pages=Cursor(items=items_of, next=cursor_of, param="after")
+        "items", expect=reader(Page), pages=Cursor(items=items_of, next=cursor_of, param="after")
     )
     assert api.sent == []
     async for item in paginated:
@@ -178,7 +178,7 @@ async def test_offset_pages_advance_by_the_items_received_until_a_short_page() -
     api = _Api(answer)
     pages = Offset(items=items_of, page_size=2, start=0)
     items = [
-        item.id async for item in api.client().paginate("items", expect=decoder(Page), pages=pages, params={"limit": 2})
+        item.id async for item in api.client().paginate("items", expect=reader(Page), pages=pages, params={"limit": 2})
     ]
     assert items == [0, 1, 2, 3, 4]
     assert [url.params["offset"] for url in api.sent] == ["0", "2", "4"]
@@ -194,7 +194,7 @@ async def test_offset_stops_at_an_empty_page_and_counts_from_start() -> None:
 
     api = _Api(answer)
     pages = Offset(items=items_of, page_size=1, param="skip", start=10)
-    assert [item.id async for item in api.client().paginate("items", expect=decoder(Page), pages=pages)] == [10, 11]
+    assert [item.id async for item in api.client().paginate("items", expect=reader(Page), pages=pages)] == [10, 11]
     assert [url.params["skip"] for url in api.sent] == ["10", "11", "12"]
 
 
@@ -214,7 +214,7 @@ async def test_offset_ends_at_the_total_without_fetching_the_empty_page_past_it(
 
     api = _Api(answer)
     pages = Offset(items=items_of, page_size=2, total=lambda page: int(page.cursor or 0))
-    assert [item.id async for item in api.client().paginate("items", expect=decoder(Page), pages=pages)] == [0, 1, 2, 3]
+    assert [item.id async for item in api.client().paginate("items", expect=reader(Page), pages=pages)] == [0, 1, 2, 3]
     assert [url.params["offset"] for url in api.sent] == ["0", "2"]
 
 
@@ -228,7 +228,7 @@ async def test_offset_without_an_exact_total_ends_at_a_short_page() -> None:
 
     api = _Api(answer)
     pages = Offset(items=items_of, page_size=2, total=lambda _: None)
-    assert [item.id async for item in api.client().paginate("items", expect=decoder(Page), pages=pages)] == [
+    assert [item.id async for item in api.client().paginate("items", expect=reader(Page), pages=pages)] == [
         0,
         1,
         2,
@@ -253,7 +253,7 @@ async def test_page_numbers_advance_on_the_callers_own_request_while_another_pag
     """Ask for page 1, 2, 3 on the caller's URL and query, reading the next link only as a yes or no."""
     api = _Api(_numbered(3, host="https://elsewhere.test"))
     pages = PageNumber(items=items_of, more=has_next)
-    paginated = api.client().paginate("items", expect=decoder(Page), pages=pages, params={"q": "x"})
+    paginated = api.client().paginate("items", expect=reader(Page), pages=pages, params={"q": "x"})
     items = [item async for item in paginated]
     assert_type(items, list[Item])
     assert [item.id for item in items] == [1, 2, 3]
@@ -265,7 +265,7 @@ async def test_page_numbers_start_at_the_callers_own_page(own: object) -> None:
     """Start at the page the caller's ``params=`` name, as an int or a string of digits."""
     api = _Api(_numbered(3))
     pages = PageNumber(items=items_of, more=has_next)
-    paginated = api.client().paginate("items", expect=decoder(Page), pages=pages, params={"page": own})
+    paginated = api.client().paginate("items", expect=reader(Page), pages=pages, params={"page": own})
     assert [item.id async for item in paginated] == [2, 3]
     assert [url.params["page"] for url in api.sent] == ["2", "3"]
 
@@ -279,7 +279,7 @@ async def test_page_numbers_take_their_parameter_and_start() -> None:
 
     api = _Api(answer)
     pages = PageNumber(items=items_of, more=has_next, param="p", start=0)
-    assert [item.id async for item in api.client().paginate("items", expect=decoder(Page), pages=pages)] == [0, 1]
+    assert [item.id async for item in api.client().paginate("items", expect=reader(Page), pages=pages)] == [0, 1]
     assert [url.params["p"] for url in api.sent] == ["0", "1"]
 
 
@@ -293,12 +293,12 @@ async def test_an_empty_numbered_page_ends_the_walk_unless_told_otherwise() -> N
 
     stopping = _Api(answer)
     pages = PageNumber(items=items_of, more=has_next)
-    assert [item async for item in stopping.client().paginate("items", expect=decoder(Page), pages=pages)] == []
+    assert [item async for item in stopping.client().paginate("items", expect=reader(Page), pages=pages)] == []
     assert len(stopping.sent) == 1
 
     going = _Api(answer)
     pages = PageNumber(items=items_of, more=has_next, stop_on_empty=False)
-    assert [item.id async for item in going.client().paginate("items", expect=decoder(Page), pages=pages)] == [2, 3]
+    assert [item.id async for item in going.client().paginate("items", expect=reader(Page), pages=pages)] == [2, 3]
 
 
 def test_a_numbered_request_without_its_parameter_is_at_start() -> None:
@@ -314,7 +314,7 @@ def test_a_page_number_that_is_not_one_is_refused(own: object) -> None:
     client = _Api(_numbered(3)).client()
     with pytest.raises(ValueError, match="page must be a page number"):
         client.paginate(
-            "items", expect=decoder(Page), pages=PageNumber(items=items_of, more=has_next), params={"page": own}
+            "items", expect=reader(Page), pages=PageNumber(items=items_of, more=has_next), params={"page": own}
         )
 
 
@@ -327,9 +327,7 @@ async def test_link_header_pages_are_followed_as_absolute_urls() -> None:
         return httpx2.Response(200, json={"data": [{"id": page}]}, headers={"link": links[page]}, request=request)
 
     api = _Api(answer)
-    paginated = api.client().paginate(
-        "items", expect=decoder(Page), pages=LinkHeader(items=items_of), params={"q": "x"}
-    )
+    paginated = api.client().paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of), params={"q": "x"})
     assert [item.id async for item in paginated] == [1, 2, 3]
     assert [str(url) for url in api.sent] == [
         f"{_BASE}/items?q=x",
@@ -346,7 +344,7 @@ async def test_next_url_pages_are_followed_from_the_body() -> None:
         return _page(request, [len(request.url.path)], next=following)
 
     api = _Api(answer)
-    paginated = api.client().paginate("a", expect=decoder(Page), pages=NextUrl(items=items_of, next=next_of))
+    paginated = api.client().paginate("a", expect=reader(Page), pages=NextUrl(items=items_of, next=next_of))
     assert len([item async for item in paginated]) == len(("a", "b", "c"))
     assert [url.path for url in api.sent] == ["/a", "/b", "/c"]
 
@@ -367,7 +365,7 @@ async def test_a_next_url_from_the_wire_is_sent_verbatim(kind: str) -> None:
 
     pages = NextUrl(items=items_of, next=next_of) if kind == "body" else LinkHeader(items=items_of)
     api = _Api(answer)
-    paginated = api.client().paginate("start", expect=decoder(Page), pages=pages)
+    paginated = api.client().paginate("start", expect=reader(Page), pages=pages)
     assert len([item async for item in paginated]) == len(("start", "items"))
     assert api.sent[1].raw_path == b"/items/a%2Fb?cursor=a%2Fb&x=1"
 
@@ -386,7 +384,7 @@ async def test_each_page_goes_through_the_stack() -> None:
     paginated = (
         _Api(answer)
         .client()
-        .paginate("items", expect=decoder(Page), pages=Cursor(items=items_of, next=cursor_of, param="after"))
+        .paginate("items", expect=reader(Page), pages=Cursor(items=items_of, next=cursor_of, param="after"))
     )
 
     async def collect(record: Callable[[int], None]) -> None:
@@ -409,7 +407,7 @@ async def test_every_page_carries_the_walks_cache_ttl() -> None:
         return _by_cursor(request)
 
     pages = Cursor(items=items_of, next=cursor_of, param="after")
-    paginated = _Api(answer).client().paginate("items", expect=decoder(Page), pages=pages, cache_ttl=ttl)
+    paginated = _Api(answer).client().paginate("items", expect=reader(Page), pages=pages, cache_ttl=ttl)
     assert len([item async for item in paginated]) == len((1, 2, 3, 4))
     assert stamped == [ttl, ttl, ttl]
 
@@ -425,7 +423,7 @@ async def test_a_walk_that_does_not_follow_redirects_raises_a_pages_redirect() -
     pages = Cursor(items=items_of, next=cursor_of, param="after")
     api = _Api(answer)
     with pytest.raises(UpstreamStatusError) as raised:
-        await api.client().paginate("moved", expect=decoder(Page), pages=pages, follow_redirects=False).collect()
+        await api.client().paginate("moved", expect=reader(Page), pages=pages, follow_redirects=False).collect()
     assert raised.value.status_code == httpx2.codes.FOUND
     assert [url.path for url in api.sent] == ["/moved"]
 
@@ -439,7 +437,7 @@ async def test_every_page_sends_the_expects_headers_and_accept() -> None:
         page = _by_cursor(request)
         return httpx2.Response(200, json=msgspec.json.decode(page.content), request=request)
 
-    expect = Expect(decoder(Page), headers={"X-Api-Version": "2"}, accept="application/json")
+    expect = Expect(reader(Page), headers={"X-Api-Version": "2"}, accept="application/json")
     pages = Cursor(items=items_of, next=cursor_of, param="after")
     assert len(await _Api(answer).client().paginate("items", expect=expect, pages=pages).collect()) == len((1, 2, 3, 4))
     assert [(r.headers["X-Api-Version"], r.headers["Accept"]) for r in sent] == [("2", "application/json")] * 3
@@ -452,7 +450,7 @@ async def test_a_page_of_another_media_type_than_the_expect_accepts_raises() -> 
         page = _by_cursor(request)
         return httpx2.Response(200, content=page.content, headers={"Content-Type": "text/html"}, request=request)
 
-    expect = Expect(decoder(Page), accept="application/json")
+    expect = Expect(reader(Page), accept="application/json")
     paginated = _Api(answer).client().paginate("items", expect=expect, pages=LinkHeader(items=items_of))
     with pytest.raises(ResponseParseError, match="text/html"):
         await paginated.collect()
@@ -464,7 +462,7 @@ async def test_a_declared_answer_is_a_page() -> None:
     def answer(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(404, request=request)
 
-    expect = Expect(decoder(Page)).on(404, Reader(lambda _resp: Page([])))
+    expect = Expect(reader(Page)).on(404, Reader(lambda _resp: Page([])))
     paginated = _Api(answer).client().paginate("items", expect=expect, pages=LinkHeader(items=items_of))
     assert [page async for page in paginated.pages()] == [Page([])]
 
@@ -476,7 +474,7 @@ async def test_a_page_that_leads_back_raises_instead_of_looping() -> None:
         return _page(request, [1], next="/items")
 
     paginated = (
-        _Api(answer).client().paginate("items", expect=decoder(Page), pages=NextUrl(items=items_of, next=next_of))
+        _Api(answer).client().paginate("items", expect=reader(Page), pages=NextUrl(items=items_of, next=next_of))
     )
     with pytest.raises(ClientError, match="pagination loop") as raised:
         _ = [item async for item in paginated]
@@ -495,7 +493,7 @@ async def test_a_repeating_cursor_on_a_template_url_raises() -> None:
         return _page(request, [1], cursor="same")
 
     pages = Cursor(items=items_of, next=cursor_of, param="after")
-    paginated = _Api(answer).client().paginate(t"items/{'x'}", expect=decoder(Page), pages=pages)
+    paginated = _Api(answer).client().paginate(t"items/{'x'}", expect=reader(Page), pages=pages)
     with pytest.raises(ClientError, match="pagination loop") as raised:
         _ = [page async for page in paginated.pages()]
     assert raised.value.url is None
@@ -511,7 +509,7 @@ def test_a_body_no_pager_can_rewrite_is_refused(body: RequestOptions) -> None:
     """Refuse a form, raw or multipart body: a walk's body is ``json=``, or ``body=`` with ``write=``."""
     client = _Api(_by_cursor).client()
     with pytest.raises(ValueError, match="takes no data=, content= or files="):
-        client.paginate("items", expect=decoder(Page), pages=LinkHeader(items=items_of), **cast("dict[str, Any]", body))
+        client.paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of), **cast("dict[str, Any]", body))
 
 
 @pytest.mark.parametrize(
@@ -571,7 +569,7 @@ def test_pagination_terminates_for_any_page_graph(links: list[int | None]) -> No
     """
     graph = _Graph(links)
     client = StubClient(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=graph))
-    paginated = client.paginate("items", expect=decoder(Page), pages=Cursor(items=items_of, next=cursor_of, param="at"))
+    paginated = client.paginate("items", expect=reader(Page), pages=Cursor(items=items_of, next=cursor_of, param="at"))
 
     path = [0]
     while (following := links[path[-1]]) is not None and following not in path:
@@ -647,7 +645,7 @@ _LINKED_IDS = ["cursor", "next-url", "link-header"]
 async def test_a_page_with_no_items_ends_the_walk(strategy: Callable[..., Pager[Page, Item]]) -> None:
     """Stop at a page with no items, though it links to another: a link that advances while returning nothing."""
     api = _Api(_with_an_empty_page)
-    paginated = api.client().paginate("items", expect=decoder(Page), pages=strategy())
+    paginated = api.client().paginate("items", expect=reader(Page), pages=strategy())
 
     assert [item.id async for item in paginated] == [0]
     assert len(api.sent) == len(("the page with an item", "the empty page"))
@@ -657,7 +655,7 @@ async def test_a_page_with_no_items_ends_the_walk(strategy: Callable[..., Pager[
 async def test_an_empty_page_can_be_walked_past(strategy: Callable[..., Pager[Page, Item]]) -> None:
     """Follow the link past an empty page with ``stop_on_empty=False``, for an endpoint that sends them mid-walk."""
     api = _Api(_with_an_empty_page)
-    paginated = api.client().paginate("items", expect=decoder(Page), pages=strategy(stop_on_empty=False))
+    paginated = api.client().paginate("items", expect=reader(Page), pages=strategy(stop_on_empty=False))
 
     assert [item.id async for item in paginated] == [0, _LAST]
     assert len(api.sent) == _LAST + 1
@@ -666,7 +664,7 @@ async def test_an_empty_page_can_be_walked_past(strategy: Callable[..., Pager[Pa
 async def test_a_walk_past_its_page_limit_raises_with_what_it_fetched() -> None:
     """Raise ``PageLimitError`` once the budget is spent with pages to come, after yielding the pages it allowed."""
     api = _Api(_endless)
-    paginated = api.client().paginate("items", expect=decoder(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
+    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
     items = aiter(paginated)
 
     allowed = [(await anext(items)).id for _ in range(_BUDGET)]
@@ -687,7 +685,7 @@ async def test_a_walk_past_its_page_limit_raises_with_what_it_fetched() -> None:
 async def test_a_limit_on_a_template_url_raises_without_naming_it() -> None:
     """Raise past the limit on a templated URL, without naming the URL."""
     client = _Api(_endless).client()
-    paginated = client.paginate(t"items/{'x'}", expect=decoder(Page), pages=_cursor(), limit=PageLimit(1))
+    paginated = client.paginate(t"items/{'x'}", expect=reader(Page), pages=_cursor(), limit=PageLimit(1))
     with pytest.raises(PageLimitError) as raised:
         _ = [page async for page in paginated.pages()]
     assert (raised.value.method, raised.value.url) == ("GET", None)
@@ -701,7 +699,7 @@ async def test_a_walk_can_stop_quietly_at_its_page_limit() -> None:
     """End the walk at the budget with ``on_limit="stop"``, for a caller that wants only the first pages."""
     api = _Api(_endless)
     limit = PageLimit(_BUDGET, on_limit="stop")
-    paginated = api.client().paginate("items", expect=decoder(Page), pages=_cursor(), limit=limit)
+    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), limit=limit)
 
     assert [item.id async for item in paginated] == list(range(_BUDGET))
     assert len(api.sent) == _BUDGET
@@ -714,7 +712,7 @@ async def test_a_walk_that_ends_exactly_at_its_limit_is_complete() -> None:
         .client()
         .paginate(
             "items",
-            expect=decoder(Page),
+            expect=reader(Page),
             pages=Cursor(items=items_of, next=cursor_of, param="after"),
             limit=PageLimit(3),
         )
@@ -741,7 +739,7 @@ async def test_collect_returns_every_item_in_order() -> None:
     """Collect the whole walk into a list, typed by the pager's items."""
     api = _Api(_by_cursor)
     paginated = api.client().paginate(
-        "items", expect=decoder(Page), pages=Cursor(items=items_of, next=cursor_of, param="after")
+        "items", expect=reader(Page), pages=Cursor(items=items_of, next=cursor_of, param="after")
     )
     items = await paginated.collect()
     assert_type(items, list[Item])
@@ -766,7 +764,7 @@ async def test_collect_stops_at_max_items_without_fetching_further(
     """Return at most *max_items* items, fetching no page past the one that filled the list."""
     api = _Api(_by_cursor)
     paginated = api.client().paginate(
-        "items", expect=decoder(Page), pages=Cursor(items=items_of, next=cursor_of, param="after")
+        "items", expect=reader(Page), pages=Cursor(items=items_of, next=cursor_of, param="after")
     )
     assert [item.id for item in await paginated.collect(max_items=max_items)] == ids
     assert len(api.sent) == fetched
@@ -775,7 +773,7 @@ async def test_collect_stops_at_max_items_without_fetching_further(
 async def test_collect_of_no_items_sends_nothing() -> None:
     """Return an empty list for ``max_items=0`` without a request."""
     api = _Api(_endless)
-    paginated = api.client().paginate("items", expect=decoder(Page), pages=_cursor())
+    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor())
     assert await paginated.collect(max_items=0) == []
     assert api.sent == []
 
@@ -783,7 +781,7 @@ async def test_collect_of_no_items_sends_nothing() -> None:
 async def test_collect_within_the_page_limit_raises_nothing() -> None:
     """Return the items when they are all collected before the page budget is spent, though more pages follow."""
     api = _Api(_endless)
-    paginated = api.client().paginate("items", expect=decoder(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
+    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
     assert [item.id for item in await paginated.collect(max_items=_BUDGET)] == list(range(_BUDGET))
     assert len(api.sent) == _BUDGET
 
@@ -791,7 +789,7 @@ async def test_collect_within_the_page_limit_raises_nothing() -> None:
 async def test_collect_past_the_page_limit_raises() -> None:
     """Propagate ``PageLimitError`` when the budget is spent before the walk or *max_items* is done."""
     api = _Api(_endless)
-    paginated = api.client().paginate("items", expect=decoder(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
+    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
     with pytest.raises(PageLimitError):
         await paginated.collect(max_items=_BUDGET + 1)
     assert len(api.sent) == _BUDGET
@@ -801,7 +799,7 @@ async def test_collect_past_the_page_limit_raises() -> None:
 async def test_collect_refuses_a_bad_count(max_items: int) -> None:
     """Refuse a negative count, and a ``bool`` passed as one, before sending anything."""
     api = _Api(_endless)
-    paginated = api.client().paginate("items", expect=decoder(Page), pages=_cursor())
+    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor())
     with pytest.raises(ValueError, match=f"^max_items must be None or >= 0 \\(got {max_items!r}\\)$"):
         await paginated.collect(max_items=max_items)
     assert api.sent == []
