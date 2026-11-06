@@ -27,8 +27,9 @@ from headgate import (
 )
 from headgate.cache import HttpCache, Partition
 from headgate.cache._credentials import CALLER_CREDENTIALS, CallerCredentials, CredentialScope, mark_caller_credentials
+from headgate.cache._transport import served_from_cache
 from headgate.ratelimit import UNLIMITED
-from tests.cache._helpers import series_policy
+from tests.cache._helpers import series_rules
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 from tests.support.tokens import premint
@@ -68,7 +69,7 @@ def _client(echo: _Echo, storage: AsyncSqliteStorage, auth: httpx2.Auth) -> Stub
         base_url="https://x",
         rate=UNLIMITED,
         auth=auth,
-        policy=TransportPolicy(cache=HttpCache(policy=series_policy(), storage=storage)),
+        policy=TransportPolicy(cache=HttpCache(**series_rules(), storage=storage)),
         http=HttpOptions(transport=httpx2.MockTransport(echo)),
     )
 
@@ -101,7 +102,7 @@ async def test_a_calls_own_credential_gets_entries_of_its_own(
     assert [alice.text, bob.text, service.text] == ["alice", "bob", stamped]
     assert echo.sent == ["alice", "bob", stamped]
     assert hit.text == "alice"
-    assert hit.extensions.get("hishel_from_cache") is True
+    assert served_from_cache(hit)
 
 
 def _label(scope: CredentialScope, request: httpx2.Request) -> str | None:

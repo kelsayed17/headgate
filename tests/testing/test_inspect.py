@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 from headgate import DEFAULT_TIMEOUTS, HttpCache, Rate, RateBudget, RateRule, Timeouts, TransportPolicy
-from headgate.cache import MethodFilter, PathFragmentFilter
 from headgate.testing import budget_for, cache_of
 from tests.support.clients import StubClient
 
@@ -22,14 +21,14 @@ _CANDLES = RateRule("candles", Rate.per_second(1))
 
 
 def test_the_cache_a_client_was_built_with_is_read_back(storage: AsyncSqliteStorage) -> None:
-    """Return the client's ``HttpCache``, whose ``filter_policy()`` says what it stores; ``None`` without one."""
+    """Return the client's ``HttpCache``, whose rules say what it stores; ``None`` without one."""
     cache = HttpCache(storage=storage, ttl=60.0, paths=["series"])
     client = StubClient(base_url=_BASE, policy=TransportPolicy(cache=cache))
 
     assert cache_of(client) is cache
     assert cache_of(client.with_options(timeout=Timeouts(read=5.0))) is cache
-    request_filters = cache.filter_policy().request_filters
-    assert [type(f) for f in request_filters] == [MethodFilter, PathFragmentFilter]
+    assert cache.caches_request("GET", "/v1/series/GDP")
+    assert not cache.caches_request("GET", "/v1/other")
     assert cache_of(StubClient(base_url=_BASE)) is None
 
 

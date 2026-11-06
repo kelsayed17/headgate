@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, override
 
 import httpx2
 import pytest
-from hishel import AsyncBaseStorage, AsyncSqliteStorage, BaseFilter, Entry, FilterPolicy, Request, Response
+from hishel import AsyncBaseStorage, AsyncSqliteStorage, Entry, Headers, Request, Response
 
 from headgate import HttpCache, HttpOptions, TransportError
 from headgate.cache._transport import (
@@ -34,9 +34,12 @@ from headgate.cache._transport import (
     CACHE_DEGRADED_EXT,
     HOST_UNTESTED,
     CacheStorageError,
+    ResilientCacheTransport,
     host_untested,
+    served_from_cache,
 )
 from tests.cache._helpers import (
+    GENEROUS_CAP,
     NETWORK_BODY,
     FaultyStorage,
     Network,
@@ -44,7 +47,7 @@ from tests.cache._helpers import (
     TrackingNetwork,
     accept,
     cache_transport,
-    every_get_policy,
+    every_get_rules,
     stub_client,
 )
 from tests.support.breakers import failures
@@ -234,24 +237,31 @@ async def test_a_network_failure_in_the_degraded_fetch_is_raised_and_closes_it(s
     assert network.streams[0].closed
 
 
-async def test_a_bug_inside_hishel_propagates_rather_than_degrading(storage: AsyncSqliteStorage) -> None:
-    """Only a storage fault falls back: an error from a filter is a bug to see, not an outage to hide."""
+class _RequestRuleBug(HttpCache):
+    """A cache whose request rule raises: a bug, not an outage."""
 
-    class _BrokenFilter(BaseFilter[Request]):
-        @override
-        def needs_body(self) -> bool:
-            return False
+    @override
+    def caches_request(self, method: str, path: str) -> bool:
+        msg = "a bug in a cache rule"
+        raise RuntimeError(msg)
 
-        @override
-        def apply(self, item: Request, body: bytes | None) -> bool:
-            msg = "a bug in a filter"
-            raise RuntimeError(msg)
 
+class _StatusRuleBug(HttpCache):
+    """A cache whose status rule raises, which hishel reaches only after the network answered."""
+
+    @override
+    def stores_status(self, status: int) -> bool:
+        msg = "a bug in a cache rule"
+        raise RuntimeError(msg)
+
+
+async def test_a_bug_in_a_cache_rule_propagates_rather_than_degrading(storage: AsyncSqliteStorage) -> None:
+    """Only a storage fault falls back: an error from a rule is a bug to see, not an outage to hide."""
     network = Network()
     degraded_before = CACHE_DEGRADATIONS[_HOST]
-    transport = cache_transport(storage, network, policy=FilterPolicy(request_filters=[_BrokenFilter()]))
+    transport = ResilientCacheTransport(network, _RequestRuleBug(storage=storage), max_body_bytes=GENEROUS_CAP)
 
-    with pytest.raises(RuntimeError, match="a bug in a filter"):
+    with pytest.raises(RuntimeError, match="a bug in a cache rule"):
         await transport.handle_async_request(httpx2.Request("GET", _URL))
 
     assert network.calls == 0
@@ -259,22 +269,11 @@ async def test_a_bug_inside_hishel_propagates_rather_than_degrading(storage: Asy
 
 
 async def test_a_bug_inside_hishel_after_the_send_closes_the_network_response(storage: AsyncSqliteStorage) -> None:
-    """A response filter's bug surfaces as itself, and the network response hishel abandoned with it is closed."""
-
-    class _BrokenFilter(BaseFilter[Response]):
-        @override
-        def needs_body(self) -> bool:
-            return False
-
-        @override
-        def apply(self, item: Response, body: bytes | None) -> bool:
-            msg = "a bug in a filter"
-            raise RuntimeError(msg)
-
+    """A bug while hishel stores surfaces as itself, and the network response hishel abandoned with it is closed."""
     network = TrackingNetwork()
-    transport = cache_transport(storage, network, policy=FilterPolicy(response_filters=[_BrokenFilter()]))
+    transport = ResilientCacheTransport(network, _StatusRuleBug(storage=storage), max_body_bytes=GENEROUS_CAP)
 
-    with pytest.raises(RuntimeError, match="a bug in a filter"):
+    with pytest.raises(RuntimeError, match="a bug in a cache rule"):
         await transport.handle_async_request(httpx2.Request("GET", _URL))
 
     assert len(network.urls) == 1
@@ -299,8 +298,10 @@ class _BodyFaulty(FaultyStorage):
     """Store normally, but hand back an entry whose body faults part-way, as a backend writing per chunk can."""
 
     @override
-    async def create_entry(self, request: Request, response: Response, key: str, id_: uuid.UUID | None = None) -> Entry:
-        entry = await self.inner.create_entry(request, response, key, id_)
+    async def create_entry(
+        self, request: Request, response: Response, key: str, *, ttl: float | None = None, tti: float | None = None
+    ) -> Entry:
+        entry = await self.inner.create_entry(request, response, key, ttl=ttl, tti=tti)
         exc = self.exc
 
         async def _dies() -> AsyncIterator[bytes]:
@@ -309,6 +310,30 @@ class _BodyFaulty(FaultyStorage):
                 raise exc
 
         return dataclasses.replace(entry, response=dataclasses.replace(entry.response, stream=_dies()))
+
+
+class _Bodiless(FaultyStorage):
+    """Serve every stored entry with no body stream at all, which hishel's model allows for an empty body."""
+
+    @override
+    async def get_entries(self, key: str) -> list[Entry]:
+        return [
+            dataclasses.replace(entry, response=dataclasses.replace(entry.response, stream=None))
+            for entry in await self.inner.get_entries(key)
+        ]
+
+
+async def test_a_stored_entry_without_a_body_stream_is_served_empty(storage: AsyncSqliteStorage) -> None:
+    """Serve an entry whose body stream is ``None`` as an empty body, from the cache, not as a storage fault."""
+    network = Network()
+    transport = cache_transport(_Bodiless(storage), network)
+    await accept(await transport.handle_async_request(httpx2.Request("GET", _URL)))
+
+    hit = await transport.handle_async_request(httpx2.Request("GET", _URL))
+
+    assert await hit.aread() == b""
+    assert served_from_cache(hit)
+    assert network.calls == 1
 
 
 class _HitBodyFaulty(FaultyStorage):
@@ -323,8 +348,10 @@ class _HitBodyFaulty(FaultyStorage):
 
         def faulting(entry: Entry) -> Entry:
             async def _dies() -> AsyncIterator[bytes]:
-                assert not isinstance(entry.response.stream, Iterator)
-                async for chunk in entry.response.stream:
+                stream = entry.response.stream
+                assert stream is not None
+                assert not isinstance(stream, Iterator)
+                async for chunk in stream:
                     yield chunk
                     raise exc
 
@@ -434,10 +461,10 @@ async def test_credential_query_params_never_reach_storage(storage: AsyncSqliteS
     class _Recording(FaultyStorage):
         @override
         async def create_entry(
-            self, request: Request, response: Response, key: str, id_: uuid.UUID | None = None
+            self, request: Request, response: Response, key: str, *, ttl: float | None = None, tti: float | None = None
         ) -> Entry:
             stored_urls.append(str(request.url))
-            return await self.inner.create_entry(request, response, key, id_)
+            return await self.inner.create_entry(request, response, key, ttl=ttl, tti=tti)
 
     network = TrackingNetwork()
     transport = cache_transport(_Recording(storage), network)
@@ -468,9 +495,8 @@ async def test_the_network_gets_the_url_exactly_as_sent(storage: AsyncSqliteStor
 
 #: Each guarded storage operation the transport's tests do not otherwise reach, called on an entry id.
 _OPERATIONS: dict[str, Callable[[AsyncBaseStorage, uuid.UUID], Awaitable[object]]] = {
-    "update_entry": lambda store, entry_id: store.update_entry(entry_id, lambda entry: entry),
+    "update_headers": lambda store, entry_id: store.update_headers(entry_id, Headers({})),
     "remove_entry": lambda store, entry_id: store.remove_entry(entry_id),
-    "refresh_entry_ttl": lambda store, entry_id: store.refresh_entry_ttl(entry_id),
 }
 
 
@@ -483,7 +509,7 @@ async def test_every_storage_operation_raises_a_backend_failure_as_a_storage_err
     Its message is the backend error's type alone, since a backend's text may carry its DSN and password.
     """
     fault = StorageTimeoutError("timeout at postgres://admin:hunter2@db")
-    guarded = cache_transport(FaultyStorage(storage, fault, failing=method), Network()).storage
+    guarded = cache_transport(FaultyStorage(storage, fault, failing=method), Network()).config["storage"]
     entry_id = (await storage.create_entry(Request("GET", _URL), Response(httpx2.codes.OK), "key")).id
 
     with pytest.raises(CacheStorageError) as raised:
@@ -498,7 +524,7 @@ async def test_the_guarded_storage_delegates_a_close_to_the_backend(storage: Asy
     backend = FaultyStorage(storage, StorageTimeoutError("closing"), failing="close")
 
     with pytest.raises(StorageTimeoutError):
-        await cache_transport(backend, Network()).storage.close()
+        await cache_transport(backend, Network()).config["storage"].close()
 
 
 def _fails_while_serving(storage: AsyncSqliteStorage) -> _HitBodyFaulty:
@@ -528,13 +554,13 @@ async def test_a_storage_fault_while_an_unheld_body_streams_is_a_value_free_tran
     with a larger cap sharing the storage.
     """
     network = TrackingNetwork((b"x" * 10,) * 10)
-    storer = stub_client(transport=network, cache=HttpCache(policy=every_get_policy(), storage=storage))
+    storer = stub_client(transport=network, cache=HttpCache(**every_get_rules(), storage=storage))
     async with storer.stream("big") as stream:
         await _Received().drain(stream.aiter_bytes())
     await storer.aclose()
     client = stub_client(
         transport=network,
-        cache=HttpCache(policy=every_get_policy(), storage=_fails_while_serving(storage)),
+        cache=HttpCache(**every_get_rules(), storage=_fails_while_serving(storage)),
         http=HttpOptions(max_response_bytes=15),
     )
     received = _Received()

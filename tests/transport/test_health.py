@@ -15,12 +15,12 @@ from typing import TYPE_CHECKING, override
 import anysqlite
 import httpx2
 import pytest
-from hishel import AsyncSqliteStorage, Entry, FilterPolicy
+from hishel import AsyncSqliteStorage, Entry
 
 from headgate._core import OBSERVER_FAILURES
 from headgate.breaker import BreakerRegistry, BreakerState
 from headgate.breaker._registry import DEFAULT_REGISTRY
-from headgate.cache import HttpCache, MethodFilter, StatusCodeFilter
+from headgate.cache import HttpCache
 from headgate.cache._transport import CACHE_DEGRADATIONS, CACHE_DEGRADED_EXT, ResilientCacheTransport
 from headgate.health import breaker_states, cache_degradations, observer_failures
 
@@ -126,13 +126,7 @@ class _Network(httpx2.AsyncBaseTransport):
 async def test_a_cache_fault_counts_one_degradation_for_its_host() -> None:
     """Count one degradation per request that found the cache broken, keyed by host."""
     storage = _LookupFails(connection=await anysqlite.connect(":memory:"))
-    policy = FilterPolicy(
-        request_filters=[MethodFilter(frozenset({"GET"}))],
-        response_filters=[StatusCodeFilter(frozenset({200}))],
-    )
-    transport = ResilientCacheTransport(
-        _Network(), HttpCache(policy=policy, storage=storage), max_body_bytes=1024 * 1024
-    )
+    transport = ResilientCacheTransport(_Network(), HttpCache(storage=storage), max_body_bytes=1024 * 1024)
 
     try:
         for _ in range(_REQUESTS):

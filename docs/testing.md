@@ -72,8 +72,8 @@ with a registry of its own keeps it.
 ## What a client was built with
 
 A client fixes its options in its `__init__`, so a test of its configuration reads them back. `cache_of(client)` returns
-the `HttpCache` it was built with (or `None`), and its `filter_policy()` the hishel `FilterPolicy` it stores by: the
-`policy=` you gave, or the one built from `methods`, `paths` and `statuses`. `budget_for(client, url)` returns the
+the `HttpCache` it was built with (or `None`), whose `caches_request(method, path)` and `stores_status(status)` say
+what it stores, from its `methods`, `paths` and `statuses`. `budget_for(client, url)` returns the
 `RateBudget` a request to `url` spends from, the first `RateRule` that matches it or the default; without a `url`, the
 default budget, built from `rate=`.
 

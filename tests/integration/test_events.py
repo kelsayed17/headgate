@@ -27,7 +27,7 @@ from headgate import (
 )
 from headgate.events import CallFinished, Event
 from headgate.testing import FakeTransport, isolated_breakers
-from tests.cache._helpers import every_get_policy
+from tests.cache._helpers import every_get_rules
 from tests.integration._support import client
 from tests.support.events import Recorder
 
@@ -50,7 +50,7 @@ def _every_layer(storage: AsyncSqliteStorage, recorder: Recorder) -> StubClient:
         .reply("GET", "/v1/down", 503)
     )
     policy = TransportPolicy(
-        cache=HttpCache(policy=every_get_policy(), storage=storage), breaker=BreakerPolicy(failure_threshold=1)
+        cache=HttpCache(**every_get_rules(), storage=storage), breaker=BreakerPolicy(failure_threshold=1)
     )
     with isolated_breakers():
         return client(fake, policy=policy, http=HttpOptions(observers=(recorder,)))

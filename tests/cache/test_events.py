@@ -12,10 +12,11 @@ import httpx2
 
 from headgate import HttpOptions, TransportError, TransportPolicy
 from headgate.cache import HttpCache
+from headgate.cache._transport import served_from_cache
 from headgate.events import CacheOutcome, CacheResult, Event
 from headgate.ratelimit import UNLIMITED
 from headgate.retry import NO_RETRY
-from tests.cache._helpers import FaultyStorage, Network, every_get_policy
+from tests.cache._helpers import FaultyStorage, Network, every_get_rules
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
@@ -64,7 +65,7 @@ def _client(network: httpx2.AsyncBaseTransport, storage: AsyncBaseStorage, recor
     return StubClient(
         base_url="https://x",
         rate=UNLIMITED,
-        policy=TransportPolicy(retry=NO_RETRY, cache=HttpCache(policy=every_get_policy(), storage=storage)),
+        policy=TransportPolicy(retry=NO_RETRY, cache=HttpCache(**every_get_rules(), storage=storage)),
         http=HttpOptions(transport=network, observers=(recorder,)),
     )
 
@@ -133,14 +134,14 @@ async def test_a_client_without_observers_emits_nothing(storage: AsyncSqliteStor
     client = StubClient(
         base_url="https://x",
         rate=UNLIMITED,
-        policy=TransportPolicy(cache=HttpCache(policy=every_get_policy(), storage=storage)),
+        policy=TransportPolicy(cache=HttpCache(**every_get_rules(), storage=storage)),
         http=HttpOptions(transport=network),
     )
 
     await client.get(_URL, expect=RESPONSE)
     hit = await client.get(_URL, expect=RESPONSE)
 
-    assert hit.extensions.get("hishel_from_cache") is True
+    assert served_from_cache(hit)
     assert network.calls == 1
 
 

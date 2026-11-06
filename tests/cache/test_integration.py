@@ -3,9 +3,9 @@
 
 """``AsyncBaseClient``'s cache: when it is engaged, hit and miss behavior, TTL threading, and a shared storage.
 
-The cache is opt-in per client (``cache=HttpCache(policy=, storage=, ttl=)``). A client with no ``cache`` never
-caches. The ``HttpCache``'s ``ttl`` is stamped on every request as the ``hishel_ttl`` extension by the cache transport
-(the ``FilterPolicy``, not the TTL, decides what is stored), and a per-call ``cache_ttl=`` wins over it. Everything
+The cache is opt-in per client (``cache=HttpCache(storage=, ttl=)``). A client with no ``cache`` never
+caches. The ``HttpCache``'s ``ttl`` is stamped on every request in hishel's ``caching`` extension by the cache transport
+(the cache's rules, not the TTL, decide what is stored), and a per-call ``cache_ttl=`` wins over it. Everything
 here is observed from the network leg, not the stack's internals.
 """
 
@@ -22,8 +22,9 @@ import time_machine
 
 from headgate._client import AsyncBaseClient
 from headgate.cache import HttpCache
+from headgate.cache._transport import served_from_cache
 from headgate.ratelimit import Rate
-from tests.cache._helpers import CloseCountingStorage, series_policy, stub_client
+from tests.cache._helpers import CloseCountingStorage, series_rules, stamped_ttl, stub_client
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -67,7 +68,7 @@ async def test_a_client_without_a_cache_never_caches() -> None:
     assert base.count == 2 * _REPEATS
 
 
-# Hit and miss behavior and hishel_ttl threading, over real SQLite storage.
+# Hit and miss behavior and TTL threading, over real SQLite storage.
 
 
 async def test_cache_hit_second_call_no_network(storage: AsyncSqliteStorage) -> None:
@@ -75,16 +76,16 @@ async def test_cache_hit_second_call_no_network(storage: AsyncSqliteStorage) -> 
     base = _CountingTransport()
     client = stub_client(
         transport=base,
-        cache=HttpCache(policy=series_policy(), storage=storage),
+        cache=HttpCache(**series_rules(), storage=storage),
     )
 
     r1 = await client.get("/series?id=A", expect=RESPONSE)
     assert base.count == 1
-    assert r1.extensions.get("hishel_from_cache") is not True
+    assert not served_from_cache(r1)
 
     r2 = await client.get("/series?id=A", expect=RESPONSE)
     assert base.count == 1
-    assert r2.extensions.get("hishel_from_cache") is True
+    assert served_from_cache(r2)
 
 
 async def test_cache_miss_distinct_url_refetches(storage: AsyncSqliteStorage) -> None:
@@ -92,7 +93,7 @@ async def test_cache_miss_distinct_url_refetches(storage: AsyncSqliteStorage) ->
     base = _CountingTransport()
     client = stub_client(
         transport=base,
-        cache=HttpCache(policy=series_policy(), storage=storage),
+        cache=HttpCache(**series_rules(), storage=storage),
     )
 
     urls = ("/series?id=A", "/series?id=B")
@@ -103,27 +104,27 @@ async def test_cache_miss_distinct_url_refetches(storage: AsyncSqliteStorage) ->
 
 
 async def test_the_client_ttl_is_threaded_and_a_per_call_cache_ttl_wins(storage: AsyncSqliteStorage) -> None:
-    """A client whose ``HttpCache`` has a ``ttl`` stamps it as ``hishel_ttl`` on every request.
+    """A client whose ``HttpCache`` has a ``ttl`` stamps it in hishel's ``caching`` extension on every request.
 
-    The ``FilterPolicy``, not the TTL, decides what is stored, and a per-call ``cache_ttl=`` wins over the client's.
+    The cache's rules, not the TTL, decide what is stored, and a per-call ``cache_ttl=`` wins over the client's.
     """
     base = _CountingTransport()
     client = stub_client(
         transport=base,
-        cache=HttpCache(policy=series_policy(), storage=storage, ttl=_CLIENT_TTL),
+        cache=HttpCache(**series_rules(), storage=storage, ttl=_CLIENT_TTL),
     )
     # Read off the network transport, so this checks what the wire sees however the client drives httpx2.
     captured = base.extensions
 
     await client.get("/series?id=A", expect=RESPONSE)
-    assert captured[-1].get("hishel_ttl") == _CLIENT_TTL
+    assert stamped_ttl(captured[-1]) == _CLIENT_TTL
 
     # An unmatched path still carries the TTL: the FilterPolicy, not a missing TTL, leaves it uncached.
     await client.get("/other/path", expect=RESPONSE)
-    assert captured[-1].get("hishel_ttl") == _CLIENT_TTL
+    assert stamped_ttl(captured[-1]) == _CLIENT_TTL
 
     await client.get("/series?id=C", expect=RESPONSE, cache_ttl=_CALL_TTL)
-    assert captured[-1].get("hishel_ttl") == _CALL_TTL
+    assert stamped_ttl(captured[-1]) == _CALL_TTL
 
 
 async def _network_hits_for_two_gets(
@@ -132,13 +133,13 @@ async def _network_hits_for_two_gets(
     """Count how many of two GETs of one cacheable URL, *gap* seconds apart, reached the network.
 
     The clock hishel reads (``time.time``) is frozen and then shifted by *gap*, so no test sleeps. hishel's storage
-    applies the TTL, comparing an entry's ``created_at`` plus the ``hishel_ttl`` its stored request carried with that
-    clock, so a TTL hidden from hishel (but still delivered to the network transport) would expire nothing.
+    applies the TTL, comparing when it stored an entry plus the TTL it was stored with against that clock, so a TTL
+    hidden from hishel (but still delivered to the network transport) would expire nothing.
     """
     base = _CountingTransport()
     client = stub_client(
         transport=base,
-        cache=HttpCache(policy=series_policy(), storage=storage, ttl=client_ttl),
+        cache=HttpCache(**series_rules(), storage=storage, ttl=client_ttl),
     )
     with time_machine.travel(datetime.now(UTC), tick=False) as clock:
         await client.get("/series?id=A", expect=RESPONSE, cache_ttl=call_ttl)
@@ -164,7 +165,7 @@ async def test_a_long_client_ttl_keeps_the_entry(storage: AsyncSqliteStorage) ->
 async def test_a_per_call_cache_ttl_beats_the_client_ttl_inside_hishel(storage: AsyncSqliteStorage) -> None:
     """The per-call TTL wins where it matters, in the cache's expiry and not only on the request at the wire.
 
-    It is on both calls because hishel judges an entry by the TTL its stored request carried: the first call's.
+    It is on both calls because hishel judges an entry by the TTL it was stored with: the first call's.
     """
     hits = await _network_hits_for_two_gets(storage, client_ttl=_CLIENT_TTL, call_ttl=_SHORT_TTL, gap=_GAP)
 
@@ -185,13 +186,13 @@ def test_every_http_verb_takes_a_cache_ttl(verb: str) -> None:
 
 @pytest.mark.parametrize("verb", _VERBS)
 async def test_every_verb_forwards_a_per_call_cache_ttl(verb: str) -> None:
-    """``cache_ttl=`` reaches the request the network sees (as ``hishel_ttl``) from every verb."""
+    """``cache_ttl=`` reaches the request the network sees (in hishel's ``caching`` extension) from every verb."""
     base = _CountingTransport()
     client = stub_client(transport=base)
 
     await getattr(client, verb)("/thing", expect=RESPONSE, cache_ttl=_CALL_TTL)
 
-    assert base.extensions[-1].get("hishel_ttl") == _CALL_TTL
+    assert stamped_ttl(base.extensions[-1]) == _CALL_TTL
 
 
 # A shared storage serves every client on it, and outlives them.
@@ -210,7 +211,7 @@ async def test_clients_share_one_storage_and_closing_them_never_closes_it() -> N
             stub_client(
                 rate=Rate.per_second(2),
                 transport=network,
-                cache=HttpCache(policy=series_policy(), storage=shared),
+                cache=HttpCache(**series_rules(), storage=shared),
             )
             for _ in range(_SHARING_CLIENTS)
         ]

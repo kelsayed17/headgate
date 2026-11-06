@@ -325,7 +325,7 @@ class _RefusingAuth(httpx2.Auth):
 
 
 class _CachedHitTransport(httpx2.AsyncBaseTransport):
-    """Serve what a cache hit looks like to the client: a 200 carrying hishel's from-cache marker."""
+    """Serve what a cache hit looks like to the client: a 200 carrying hishel's from-cache report."""
 
     def __init__(self) -> None:
         """Start with no calls served."""
@@ -334,7 +334,9 @@ class _CachedHitTransport(httpx2.AsyncBaseTransport):
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         self.calls += 1
-        return httpx2.Response(200, content=b"{}", extensions={"hishel_from_cache": True})
+        return httpx2.Response(
+            200, content=b"{}", extensions={"caching": {"from_cache": True, "revalidated": False, "stored": False}}
+        )
 
 
 async def test_an_auth_flow_failure_does_not_open_the_breaker_for_the_host(breaker: CircuitBreaker) -> None:

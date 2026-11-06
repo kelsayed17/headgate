@@ -11,8 +11,8 @@ below hishel for the network:
   every header and query parameter the client's auth (:class:`~headgate._core.CredentialStamper`) or middleware
   (:class:`~headgate._core.CredentialCarrier`) declares, every query parameter :func:`~headgate._url.is_secret_param`
   names, and the URL's userinfo. Every header it keeps carries a keyed digest in place of its value, so a credential in
-  a header nothing declares (an undeclared auth's, a client-wide or a per-call one) is not stored either, while
-  hishel's ``Vary`` matching, which compares a stored value with a new one, still works.
+  a header nothing declares (an undeclared auth's, a client-wide or a per-call one) is not stored either, while the
+  cache layer's ``Vary`` matching, which compares a stored value with a new one, still works.
 * **What was dropped decides the partition.** Under :attr:`Partition.CREDENTIAL <headgate.cache.Partition.CREDENTIAL>`
   the view's URL carries a partition label in its fragment: an HMAC-SHA256, under a key drawn at random once per
   process, of the auth's class and :meth:`~headgate._core.CredentialStamper.credential_identity`, of the value of every

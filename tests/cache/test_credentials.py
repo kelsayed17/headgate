@@ -28,8 +28,9 @@ from headgate import ClientConfigurationError, HttpOptions, StaticHeaderAuth, Tr
 from headgate._core import CredentialStamper
 from headgate.cache import HttpCache, Partition
 from headgate.cache._credentials import CredentialScope, credential_scope
+from headgate.cache._transport import served_from_cache
 from headgate.ratelimit import UNLIMITED
-from tests.cache._helpers import accept, cache_transport, series_policy
+from tests.cache._helpers import accept, cache_transport, series_rules
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
@@ -125,7 +126,7 @@ def _client(
         base_url="https://x",
         rate=UNLIMITED,
         auth=auth,
-        policy=TransportPolicy(cache=HttpCache(policy=series_policy(), storage=storage, partition=partition)),
+        policy=TransportPolicy(cache=HttpCache(**series_rules(), storage=storage, partition=partition)),
         http=dataclasses.replace(http or HttpOptions(), transport=network),
     )
 
@@ -178,13 +179,13 @@ async def test_two_credentials_on_one_storage_never_see_each_others_entries(stor
     await alice.get(_URL, expect=RESPONSE)
     bob_first = await bob.get(_URL, expect=RESPONSE)
     assert len(network.sent) == len(("alice", "bob")), "bob missed alice's entry"
-    assert bob_first.extensions.get("hishel_from_cache") is not True
+    assert not served_from_cache(bob_first)
 
     alice_again = await alice.get(_URL, expect=RESPONSE)
     bob_again = await bob.get(_URL, expect=RESPONSE)
     assert len(network.sent) == len(("alice", "bob")), "each hit its own entry"
-    assert alice_again.extensions.get("hishel_from_cache") is True
-    assert bob_again.extensions.get("hishel_from_cache") is True
+    assert served_from_cache(alice_again)
+    assert served_from_cache(bob_again)
 
 
 async def test_one_credential_shares_its_entries_between_clients(storage: AsyncSqliteStorage) -> None:
@@ -195,7 +196,7 @@ async def test_one_credential_shares_its_entries_between_clients(storage: AsyncS
     hit = await _client(network, storage, _KeyAuth("alice", signature="second")).get(_URL, expect=RESPONSE)
 
     assert len(network.sent) == 1
-    assert hit.extensions.get("hishel_from_cache") is True
+    assert served_from_cache(hit)
 
 
 async def test_an_undeclared_credential_partitions_too(storage: AsyncSqliteStorage) -> None:
@@ -219,7 +220,7 @@ async def test_a_shared_partition_serves_every_credential(storage: AsyncSqliteSt
     hit = await _client(network, storage, _KeyAuth("bob"), partition=Partition.SHARED).get(_URL, expect=RESPONSE)
 
     assert len(network.sent) == 1
-    assert hit.extensions.get("hishel_from_cache") is True
+    assert served_from_cache(hit)
 
 
 async def test_an_anonymous_client_and_a_shared_one_share_a_namespace(storage: AsyncSqliteStorage) -> None:
@@ -229,7 +230,7 @@ async def test_an_anonymous_client_and_a_shared_one_share_a_namespace(storage: A
 
     hit = await _client(network, storage, _KeyAuth("bob"), partition=Partition.SHARED).get(_URL, expect=RESPONSE)
 
-    assert hit.extensions.get("hishel_from_cache") is True
+    assert served_from_cache(hit)
 
 
 async def test_a_middlewares_declared_credential_partitions_and_is_never_stored(
@@ -245,7 +246,7 @@ async def test_a_middlewares_declared_credential_partitions_and_is_never_stored(
     hit = await alice.get(_URL, expect=RESPONSE)
 
     assert len(network.sent) == len(("alice", "bob")), "bob missed alice's entry"
-    assert hit.extensions.get("hishel_from_cache") is True
+    assert served_from_cache(hit)
     stored = await _stored_bytes(connection)
     assert b"middleware-key" not in stored
 
@@ -263,7 +264,7 @@ async def test_a_client_wide_header_partitions_and_is_never_stored(
     hit = await alice.get(_URL, expect=RESPONSE)
 
     assert len(network.sent) == len(("alice", "bob")), "bob missed alice's entry"
-    assert hit.extensions.get("hishel_from_cache") is True
+    assert served_from_cache(hit)
     assert b"client-key" not in await _stored_bytes(connection)
 
 
@@ -278,7 +279,7 @@ async def test_a_shared_partition_stores_no_header_value_as_sent(
     await client.get(_URL, expect=RESPONSE, headers={"X-Call": "per-call-1"})
     hit = await client.get(_URL, expect=RESPONSE, headers={"X-Call": "per-call-1"})
 
-    assert hit.extensions.get("hishel_from_cache") is True
+    assert served_from_cache(hit)
     stored = await _stored_bytes(connection)
     assert all(value not in stored for value in (b"opaque-secret", b"static-1", b"per-call-1"))
 
@@ -300,7 +301,41 @@ async def test_a_header_a_response_varies_on_still_tells_entries_apart(storage: 
 
     assert sent == ["en", "fr"]
     assert (answer_fr.text, hit_en.text) == ("fr", "en")
-    assert hit_en.extensions.get("hishel_from_cache") is True
+    assert served_from_cache(hit_en)
+
+
+async def test_a_shared_entry_never_answers_another_credential_it_varies_on(storage: AsyncSqliteStorage) -> None:
+    """Fetch Bob's own answer when Alice's varied on ``Authorization`` under a shared partition.
+
+    A shared view drops ``Authorization``, so it cannot tell the two apart: such an entry is never stored.
+    """
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            httpx2.codes.OK, headers={"Vary": "Authorization"}, text=request.headers["Authorization"]
+        )
+
+    client = _client(httpx2.MockTransport(answer), storage, None, partition=Partition.SHARED)
+    alice = await client.get(_URL, expect=RESPONSE, headers={"Authorization": "Bearer alice"})
+    bob = await client.get(_URL, expect=RESPONSE, headers={"Authorization": "Bearer bob"})
+
+    assert (alice.text, bob.text) == ("Bearer alice", "Bearer bob")
+    assert not served_from_cache(bob)
+
+
+async def test_a_response_that_varies_on_everything_is_never_a_hit(storage: AsyncSqliteStorage) -> None:
+    """Send again for a response stored with ``Vary: *``, which RFC 9111 says no request matches."""
+    sent: list[httpx2.Request] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        return httpx2.Response(httpx2.codes.OK, headers={"Vary": "*"}, text="any")
+
+    client = _client(httpx2.MockTransport(answer), storage, None, partition=Partition.SHARED)
+    for _ in range(2):
+        assert not served_from_cache(await client.get(_URL, expect=RESPONSE))
+
+    assert len(sent) == len(("first", "second"))
 
 
 # Refusing what cannot be partitioned.
@@ -325,7 +360,7 @@ async def test_an_auth_that_declares_nothing_may_share_explicitly(storage: Async
 
 def test_a_built_in_auth_gets_a_credential_partition(storage: AsyncSqliteStorage) -> None:
     """``StaticHeaderAuth`` declares its credentials, so a credential-partitioned cache accepts it."""
-    cache = HttpCache(policy=series_policy(), storage=storage)
+    cache = HttpCache(**series_rules(), storage=storage)
 
     assert isinstance(credential_scope(cache, StaticHeaderAuth({"X-Api-Key": "k"})), CredentialScope)
 
@@ -375,7 +410,7 @@ async def _store_and_inspect(secrets: _Secrets) -> tuple[int, bytes]:
     connection = await anysqlite.connect(":memory:")
     storage = AsyncSqliteStorage(connection=connection)
     network = _Recorder()
-    transport = cache_transport(storage, network, policy=series_policy(), scope=CredentialScope(_KeyAuth(key)))
+    transport = cache_transport(storage, network, rules=series_rules(), scope=CredentialScope(_KeyAuth(key)))
     try:
         for _ in range(2):
             request = httpx2.Request(
@@ -413,7 +448,7 @@ async def test_a_set_cookie_is_handed_to_the_caller_and_never_stored() -> None:
     connection = await anysqlite.connect(":memory:")
     storage = AsyncSqliteStorage(connection=connection)
     network = _SetsCookie()
-    transport = cache_transport(storage, network, policy=series_policy())
+    transport = cache_transport(storage, network, rules=series_rules())
     try:
         fetched = await transport.handle_async_request(httpx2.Request("GET", _URL))
         await accept(fetched)
@@ -426,7 +461,7 @@ async def test_a_set_cookie_is_handed_to_the_caller_and_never_stored() -> None:
     assert network.sent == 1, "the second request hit the stored entry"
     assert fetched.headers.get_list("set-cookie") == [f"session={_SESSION}; Secure", "theme=dark"]
     assert (fetched.headers["x-kept"], hit.headers["x-kept"]) == ("1", "1")
-    assert hit.extensions.get("hishel_from_cache") is True
+    assert served_from_cache(hit)
     assert "set-cookie" not in hit.headers
     assert b"body" in stored
     assert _SESSION.encode() not in stored
@@ -604,4 +639,4 @@ def test_a_label_is_a_keyed_hash_not_the_credential() -> None:
 def test_a_cache_refuses_a_ttl_no_entry_could_live_by(ttl: float, storage: AsyncSqliteStorage) -> None:
     """``HttpCache`` refuses a TTL that is not a positive finite number of seconds."""
     with pytest.raises(ValueError, match="ttl must be a positive finite number"):
-        HttpCache(policy=series_policy(), storage=storage, ttl=ttl)
+        HttpCache(**series_rules(), storage=storage, ttl=ttl)

@@ -9,7 +9,7 @@ returns :class:`Fresh` with the new value and its validator, or :class:`NotModif
 which case the caller keeps what it has. Nothing is stored by headgate: the representation and its validator are the
 caller's.
 
-This is independent of :class:`~headgate.cache.HttpCache`. A ``FilterPolicy`` cache is TTL-only and never revalidates,
+This is independent of :class:`~headgate.cache.HttpCache`. The cache is TTL-only and never revalidates,
 so a conditional call it can answer from storage comes back :class:`Fresh` with the stored body, without asking the
 origin; only a miss reaches the origin with the validator.
 """

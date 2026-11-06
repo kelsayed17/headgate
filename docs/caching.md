@@ -22,8 +22,7 @@ policy = TransportPolicy(cache=cache)
 
 ## What is stored, and for how long
 
-`HttpCache(*, storage, ttl=None, partition=Partition.CREDENTIAL, methods=None, paths=None, statuses=None,
-policy=None)`:
+`HttpCache(*, storage, ttl=None, partition=Partition.CREDENTIAL, methods=None, paths=None, statuses=None)`:
 
 - **What is stored**: a request whose method is in `methods` (`{"GET"}` by default) and whose path matches one of
   `paths` (every path by default), answered with a status in `statuses` (`{200}` by default). It is stored **even past a `no-store`**, which is the point for a provider that sends no cache
@@ -34,16 +33,23 @@ policy=None)`:
   `paths=[re.compile(r"/fut_fin_txt_\d{4}\.zip$")]`. Neither looks at the query string. A fragment that names no
   segment, or a pattern that matches an empty path, would match every path, and raises `ValueError`.
 - **`methods` names `GET` and `HEAD` only.** An entry is keyed by its URL, so two POSTs with different bodies would
-  share one; any other method raises `ValueError`.
-- **`policy`** replaces those three with a hishel `FilterPolicy` of your own, built from `headgate.cache`'s
-  `MethodFilter`, `PathFragmentFilter` and `StatusCodeFilter` or your own filters; it cannot be combined with them.
-  It is the only way to cache a read-only POST: `FilterPolicy(use_body_key=True, ...)` keys it by its body too.
-- **Stored on accept.** A response the policy allows is written to storage only once the call's `expect=` reader has
+  share one; any other method raises `ValueError`. A POST is never cached.
+- **`statuses` names 2xx statuses other than 206 only.** hishel stores no other response, and a 206 holds part of a
+  body; any other status raises `ValueError`, rather than being accepted and never stored.
+- **`caches_request(method, path)` and `stores_status(status)`** say what the three decide. A request they do not
+  name is sent straight past hishel: never looked up, never stored.
+- **`Vary` is honored.** An entry answers only a request whose headers named in the response's `Vary` match the ones
+  it was stored with, compared as keyed digests (see below). A response that could never be matched is not stored:
+  one with `Vary: *`, and, under `Partition.SHARED`, one varying on a header the cache never stores (`Authorization`,
+  a cookie, a declared credential) that the request sent. Under the default credential partition such a header's
+  value already keeps entries apart, so those responses are stored.
+- **Stored on accept.** A response the rules allow is written to storage only once the call's `expect=` reader has
   accepted it. A call whose reader raises stores nothing, so the cache never serves an answer the client refused:
   a refusal inside a 200 that a reader's `refusal_check` catches, an undecodable body, an undeclared status. A
-  declared non-2xx (`Expect(...).on(404, ...)`) is stored when the filters allow its status. A `stream()` has no
-  reader, so passing its head checks accepts it. A write that fails then is counted as a degradation; the call keeps
-  its answer.
+  declared non-2xx (`Expect(...).on(404, ...)`) is never stored, since `statuses` names 2xx only. A `stream()` has no
+  reader, so passing its head checks accepts it. A write that fails then never fails the call, which keeps its answer;
+  it is counted as a degradation when the storage raises it (see [storage faults](#storage-faults)). Until then,
+  hishel's `caching` report on the response says `stored: False`.
 - **`ttl`** is the client's default lifetime in seconds; a call's `cache_ttl=` overrides it.
 - **TTL, not revalidation.** An entry is served until its lifetime ends and is never revalidated with the origin. For
   revalidation, use [conditional reads](#conditional-reads).
@@ -91,7 +97,7 @@ it.
 
 hishel has no request coalescing, so an identical GET arriving while the first is still being fetched would miss too.
 headgate makes it wait and gives it a copy of the first one's response (a hit, a miss or a degraded fetch). Identical
-means the same URL, every header, the same timeouts and the same retry policy; the timeouts compared are the ones the
+means the same URL, every header, the same timeouts, the same retry policy and the same cache lifetime; the timeouts compared are the ones the
 call asked for, including value-changing middleware overrides, not the ones its deadline cut, so calls with different
 time left can still share. A timeout in a known phase is not passed on only when the first request's deadline shortened
 that phase: each waiting request then fetches its own. If a timeout does not identify its phase, any deadline-shortened
@@ -106,6 +112,11 @@ A storage that fails (a full disk, an unreachable Redis) never fails a call that
 is redone on the network, reported as a `CacheResult` event with outcome `degraded`, and counted in
 `headgate.health.cache_degradations()`. Nothing a caller can see repeats the backend's message, which can carry a DSN
 and its password; only the exception's type is named. Anything else raised inside hishel is a bug and propagates.
+
+hishel 2's own storages (`AsyncSqliteStorage`, `AsyncRedisStorage`) catch most of their faults themselves: a failed read
+is a miss and a failed write leaves the response uncached, each logged through the `hishel` logger with its traceback.
+Those never reach headgate, so `cache_degradations()` counts only a fault a storage raises, such as one of your own
+storage's. Route or silence the `hishel` logger if a backend's message must not reach your logs.
 
 The storage is never closed by a client: one storage may serve many clients, so whoever created it closes it.
 
@@ -136,5 +147,5 @@ async def refresh(client: CatalogClient, held: Series, validator: Validator | No
 ```
 
 Without a validator (the first read) no precondition is sent and the result is always `Fresh`. A precondition the call
-sets in `headers=` wins. Behind a `FilterPolicy` cache, a conditional call the cache can answer comes back `Fresh` with
+sets in `headers=` wins. Behind an `HttpCache`, a conditional call the cache can answer comes back `Fresh` with
 the stored body, without asking the origin.
