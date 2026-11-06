@@ -222,6 +222,16 @@ async def test_body_combines_with_no_other_body_option() -> None:
             await c.post("orders", body=_NEW_ORDER(_Order(sku="A-1")), json={}, expect=nothing)
 
 
+async def test_json_combines_with_no_form_body() -> None:
+    """Refuse ``json=`` beside ``data=``: httpx2 would send the form and drop the JSON without a word."""
+    wire = _Wire()
+    async with _client(wire) as c:
+        with pytest.raises(ValueError, match="json= and data= are each a whole body"):
+            await c.post("orders", json={"a": 1}, data={"b": "2"}, expect=nothing)
+
+    assert not wire.sent
+
+
 async def test_head_maps_to_head_method() -> None:
     """Check that ``head`` sends a HEAD."""
     wire = _Wire()

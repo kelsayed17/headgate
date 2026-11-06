@@ -129,6 +129,27 @@ async def test_cursor_pages_are_followed_and_items_are_typed() -> None:
     ]
 
 
+async def test_a_walk_does_not_go_through_methods_a_subclass_may_rename() -> None:
+    """Fetch pages through the base client's own verbs, so an SDK whose ``get`` or ``post`` is an endpoint still pages.
+
+    The shadowing is done on the instance, as a subclass's ``async def get(self, order_id)`` would on the class.
+    """
+
+    async def endpoint(*args: object, **kwargs: object) -> None:
+        """Stand for an endpoint method that takes none of a verb's keywords."""
+        raise AssertionError((args, kwargs))
+
+    api = _Api(_by_cursor)
+    client = api.client()
+    vars(client).update(get=endpoint, post=endpoint)
+    pages = Cursor(items=items_of, next=cursor_of, param="after")
+    gets = [item.id async for item in client.paginate("items", expect=decoder(Page), pages=pages)]
+    query: dict[str, object] = {}
+    posting = Cursor[Page, Item, dict[str, object]](items=items_of, next=cursor_of, param="after")
+    posts = [item.id async for item in client.paginate("items", json=query, expect=decoder(Page), pages=posting)]
+    assert gets == posts == [1, 2, 3, 4]
+
+
 async def test_iteration_is_lazy_and_restarts_from_the_first_page() -> None:
     """Fetch nothing before iteration, only what the iteration reached, and start again on a new iteration."""
     api = _Api(_by_cursor)

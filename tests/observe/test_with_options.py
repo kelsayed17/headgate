@@ -171,6 +171,22 @@ async def test_retry_true_restores_the_clients_policy() -> None:
     assert len(fake.calls) == len(("503", "200"))
 
 
+async def test_a_calls_retry_true_undoes_its_views_retry_false() -> None:
+    """Re-send a call that says ``retry=True`` on a view that says ``retry=False``: the call's own option wins."""
+    fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
+    await client(fake).with_options(retry=False).get("x", expect=nothing, retry=True)
+    assert len(fake.calls) == len(("503", "200"))
+
+
+async def test_a_calls_retry_true_keeps_its_routes_policy() -> None:
+    """Keep a route's policy under ``retry=True``, which restores the client's configuration, routes included."""
+    fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
+    policy = TransportPolicy(routes=(Route("/x", retry=NO_RETRY),))
+    with pytest.raises(UpstreamStatusError):
+        await client(fake, policy=policy).with_options(retry=False).get("x", expect=nothing, retry=True)
+    assert len(fake.calls) == 1
+
+
 async def test_a_view_cannot_retry_a_client_built_with_its_policy_off() -> None:
     """Keep sending once on a client built under ``policy_disabled``, whatever the view asks."""
     fake = FakeTransport().reply("GET", "/v1/x", 503, 200)

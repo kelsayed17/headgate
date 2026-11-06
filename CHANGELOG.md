@@ -30,6 +30,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   the auth's credentials are, since a static key is often configured there. `User-Agent`, `Accept`,
   `Accept-Encoding` and `Accept-Language` are still sent. Add an origin to `trusted_origins` if it needs the rest.
 - `x-should-retry: true` counts only on an error status: a 2xx or 3xx carrying it is the answer, never re-sent.
+- A verb's `retry=` now defaults to `None`, meaning the view's setting. `retry=True` says what it reads as: undo the
+  view's, so a call made on `with_options(retry=False)` with `retry=True` is retried under its route's policy or the
+  client's. Before, `True` was also the default, so it could not override the view's `retry=False`, contrary to "a
+  call's own options win over the view's".
 
 ### Removed
 
@@ -45,6 +49,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
   response varies on itself. A response with `Vary: *` is no longer stored, since nothing could match it.
 - Under `Partition.SHARED`, a response varying on a header the cache never stores (`Authorization`, a cookie, a
   declared credential) was served to every other caller, whatever that header said. It is no longer stored.
+- `post(json=..., data=...)` raises `ValueError`. httpx2 sent the form alone and dropped the JSON without a word.
+- A bare number or `None` where an option takes a value object is refused with a `TypeError` naming the option and
+  what it takes: `rate=10` (a `Rate` or `RateBudget`), `TransportPolicy(retry=None)` (turn retries off with
+  `NO_RETRY`), `TransportPolicy(breaker=3)`, and `timeout=5.0` on `HttpOptions`, `with_options` or a call. Each passed
+  construction and failed at the first request with an `AttributeError`.
+- `paginate` fetches its pages through `AsyncBaseClient`'s own `get` and `post`, so a subclass whose endpoint method
+  is named `get` or `post` can still paginate. Before, every walk raised a `TypeError` from the subclass's method.
 - Concurrent GETs that a middleware gives different timeouts no longer share one download. When a shared download
   times out in a known phase, a waiting GET fetches for itself only if that phase was one the first request's deadline
   shortened, rather than if any phase was. A timeout of no known phase still hands off when any phase was shortened.

@@ -76,6 +76,7 @@ from headgate._options import (
     Timeouts,
     TransportPolicy,
     check_deadline,
+    check_kind,
     check_timeout_fits,
     httpx_timeout,
     match_route,
@@ -101,7 +102,7 @@ from headgate.errors import (
 )
 from headgate.pagination import PageRequest, WritingPager
 from headgate.pagination._paginated import PageWalk
-from headgate.ratelimit import UNLIMITED
+from headgate.ratelimit import UNLIMITED, Rate, RateBudget
 from headgate.ratelimit._budget import BudgetPausedError
 from headgate.ratelimit._budgets import PathBudgets
 from headgate.retry import NO_RETRY, RetryPolicy
@@ -119,7 +120,6 @@ if TYPE_CHECKING:
     from headgate.breaker._registry import Breaker
     from headgate.cache import HttpCache
     from headgate.pagination import PageLimit, Pager, Paginated
-    from headgate.ratelimit import Rate, RateBudget
     from headgate.streaming import Stream
 
 __all__ = ["AsyncBaseClient", "Built", "Method", "RequestOptions", "built_with"]
@@ -222,7 +222,7 @@ class _Call:
     method: Method
     url: str | Template
     options: RequestOptions
-    retry: bool | RetryPolicy = True
+    retry: bool | RetryPolicy | None = None
     follow_redirects: bool | None = None
     cache_ttl: float | None = None
 
@@ -305,9 +305,10 @@ class AsyncBaseClient:
 
     **Per-call overrides.** ``retry=False`` sends once and never re-sends (a POST or PATCH is already re-sent only
     when that is safe, see :class:`~headgate.RetryPolicy`); ``retry=RetryPolicy(...)`` replaces the client's policy for
-    the call. ``follow_redirects=False`` makes a redirect raise as its 3xx. ``cache_ttl=`` sets this request's cache
-    lifetime. ``timeout=``, ``deadline=`` and ``idempotency_key=`` ride :class:`RequestOptions`. :meth:`with_options`
-    makes a view whose calls take other defaults for headers, timeouts, deadline and retry.
+    the call; ``retry=True`` undoes a view's ``retry=``, leaving the call to its route's policy or the client's. Left
+    out, the call takes the view's. ``follow_redirects=False`` makes a redirect raise as its 3xx. ``cache_ttl=`` sets
+    this request's cache lifetime. ``timeout=``, ``deadline=`` and ``idempotency_key=`` ride :class:`RequestOptions`.
+    :meth:`with_options` makes a view whose calls take other defaults for headers, timeouts, deadline and retry.
 
     **URLs.** A t-string URL (``t"series/{series_id}"``) is rendered by :func:`headgate._url.render_path`, which
     escapes every interpolation as one path segment and raises ``ValueError`` for a value no segment can hold (as
@@ -341,11 +342,13 @@ class AsyncBaseClient:
         per-route overrides (:class:`~headgate.TransportPolicy`); *http* the network transport, headers, timeouts,
         redirects, the body cap, cookies, observers and middleware (:class:`~headgate.HttpOptions`).
 
-        :raises TypeError: for an upstream ``httpx`` *auth*.
+        :raises TypeError: for an upstream ``httpx`` *auth*, and for a *rate* that is neither a ``Rate`` nor a
+            ``RateBudget``, such as a bare number.
         :raises ClientConfigurationError: for a cache partitioned by credential with an *auth* that does not declare
             its credentials (see :class:`~headgate.cache.Partition`).
         """
         reject_upstream_httpx(auth, what="auth")
+        check_kind("rate", rate, (Rate, RateBudget), "a Rate, such as Rate.per_second(10), or a RateBudget")
         self._policy_off = policy_is_disabled()
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
         self._source = type(self).__name__
@@ -418,7 +421,7 @@ class AsyncBaseClient:
         url: str | Template,
         *,
         expect: Reader[T] | Expect[T],
-        retry: bool | RetryPolicy = True,
+        retry: bool | RetryPolicy | None = None,
         follow_redirects: bool | None = None,
         cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
@@ -432,7 +435,7 @@ class AsyncBaseClient:
         url: str | Template,
         *,
         expect: Reader[T] | Expect[T],
-        retry: bool | RetryPolicy = True,
+        retry: bool | RetryPolicy | None = None,
         follow_redirects: bool | None = None,
         cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
@@ -446,7 +449,7 @@ class AsyncBaseClient:
         url: str | Template,
         *,
         expect: Reader[T] | Expect[T],
-        retry: bool | RetryPolicy = True,
+        retry: bool | RetryPolicy | None = None,
         follow_redirects: bool | None = None,
         cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
@@ -460,7 +463,7 @@ class AsyncBaseClient:
         url: str | Template,
         *,
         expect: Reader[T] | Expect[T],
-        retry: bool | RetryPolicy = True,
+        retry: bool | RetryPolicy | None = None,
         follow_redirects: bool | None = None,
         cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
@@ -474,7 +477,7 @@ class AsyncBaseClient:
         url: str | Template,
         *,
         expect: Reader[T] | Expect[T],
-        retry: bool | RetryPolicy = True,
+        retry: bool | RetryPolicy | None = None,
         follow_redirects: bool | None = None,
         cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
@@ -489,7 +492,7 @@ class AsyncBaseClient:
         url: str | Template,
         *,
         expect: Reader[T] | Expect[T],
-        retry: bool | RetryPolicy = True,
+        retry: bool | RetryPolicy | None = None,
         follow_redirects: bool | None = None,
         cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
@@ -499,7 +502,7 @@ class AsyncBaseClient:
         self,
         url: str | Template,
         *,
-        retry: bool | RetryPolicy = True,
+        retry: bool | RetryPolicy | None = None,
         follow_redirects: bool | None = None,
         cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
@@ -509,7 +512,7 @@ class AsyncBaseClient:
         url: str | Template,
         *,
         expect: Reader[object] | Expect[object] = nothing,
-        retry: bool | RetryPolicy = True,
+        retry: bool | RetryPolicy | None = None,
         follow_redirects: bool | None = None,
         cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
@@ -529,7 +532,7 @@ class AsyncBaseClient:
         url: str | Template,
         *,
         method: Method = "GET",
-        retry: bool | RetryPolicy = True,
+        retry: bool | RetryPolicy | None = None,
         follow_redirects: bool | None = None,
         last_event_id: str | None = None,
         **options: Unpack[RequestOptions],
@@ -574,7 +577,7 @@ class AsyncBaseClient:
         *,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, None],
-        retry: bool | RetryPolicy = True,
+        retry: bool | RetryPolicy | None = None,
         limit: PageLimit | None = None,
         **options: Unpack[PageOptions],
     ) -> Paginated[P, I]: ...
@@ -586,7 +589,7 @@ class AsyncBaseClient:
         body: B | None,
         expect: Reader[P] | Expect[P],
         pages: WritingPager[P, I, B],
-        retry: bool | RetryPolicy = True,
+        retry: bool | RetryPolicy | None = None,
         limit: PageLimit | None = None,
         **options: Unpack[PageOptions],
     ) -> Paginated[P, I]: ...
@@ -598,7 +601,7 @@ class AsyncBaseClient:
         json: B | None,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, B],
-        retry: bool | RetryPolicy = True,
+        retry: bool | RetryPolicy | None = None,
         limit: PageLimit | None = None,
         **options: Unpack[PageOptions],
     ) -> Paginated[P, I]: ...
@@ -608,7 +611,7 @@ class AsyncBaseClient:
         *,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, B],
-        retry: bool | RetryPolicy = True,
+        retry: bool | RetryPolicy | None = None,
         limit: PageLimit | None = None,
         **options: Unpack[_WalkOptions[B]],
     ) -> Paginated[P, I]:
@@ -656,14 +659,19 @@ class AsyncBaseClient:
         async def fetch(request: PageRequest[B]) -> tuple[P, httpx2.Response]:
             page_options = call_options.copy()
             page_options["params"] = request.params
-            # A page's follow_redirects and cache_ttl land on the verb's own parameters of those names.
+            # A page's follow_redirects and cache_ttl land on the verb's own parameters of those names. The verbs are
+            # the base class's, since a subclass may name an endpoint method get or post.
             if request.body is None:
-                return await self.get(request.url, expect=paired, retry=retry, **page_options)
+                return await AsyncBaseClient.get(self, request.url, expect=paired, retry=retry, **page_options)
             if refusal is not None:
                 raise ValueError(refusal)
             if write is None:
-                return await self.post(request.url, expect=paired, retry=retry, json=request.body, **page_options)
-            return await self.post(request.url, expect=paired, retry=retry, body=write(request.body), **page_options)
+                return await AsyncBaseClient.post(
+                    self, request.url, expect=paired, retry=retry, json=request.body, **page_options
+                )
+            return await AsyncBaseClient.post(
+                self, request.url, expect=paired, retry=retry, body=write(request.body), **page_options
+            )
 
         return PageWalk(fetch, pages, first, source=self._source, limit=limit)
 
@@ -831,12 +839,15 @@ class AsyncBaseClient:
         return self._policy.deadline
 
     def _retry_of(self, call: _Call, route: Route | None) -> RetryPolicy | None:
-        """Return *call*'s own retry policy when it overrides the client's: per call, view or route; else ``None``."""
+        """Return *call*'s own retry policy when it overrides the client's: per call, view or route; else ``None``.
+
+        A call's ``retry=True`` skips the view's, so a route's policy, or else the client's, applies.
+        """
         if self._policy_off or call.retry is False:
             return NO_RETRY
         if isinstance(call.retry, RetryPolicy):
             return call.retry
-        if self._view.retry is not None:
+        if call.retry is None and self._view.retry is not None:
             return self._view.retry
         return None if route is None else route.retry
 
