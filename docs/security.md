@@ -65,14 +65,15 @@ mint hop's redirect to any other origin is refused before it is sent, as `Forbid
 followed unsigned: the hop's own headers and form body (a client secret) are credentials the guard cannot tell apart,
 and httpx2 sends the body again on a 307 or 308.
 
-A [middleware](configuration.md#middleware) that stamps a credential (a request signer) declares it the same way, with
-`credential_headers` and `credential_params`. A middleware runs inside the transport stack, after the request hook, so
+Every [middleware](configuration.md#middleware) declares the credentials it stamps (a request signer's signature) the
+same way, with `credential_headers` and `credential_params`, each empty when it stamps none; `HttpOptions` refuses one
+that does not. A middleware runs inside the transport stack, after the request hook, so
 the guard runs a second time below the last middleware, on every attempt of every hop, and removes what it declares
 from any hop not addressed to `base_url`'s origin or a trusted one. An auth flow's token host is not trusted for a
 middleware's credentials: the middleware did not choose it.
 
-A third-party `httpx2.Auth` that is not a `CredentialStamper`, or a middleware that declares nothing, and puts its
-credential in another header or in the query is not covered; declare the names to have them withheld. A cache refuses
+A third-party `httpx2.Auth` that is not a `CredentialStamper` and puts its credential in another header or in the query
+is not covered; declare the names to have them withheld. A cache refuses
 such an auth unless told the data is public (see [caching](caching.md#partitions)).
 
 ## Redirects
