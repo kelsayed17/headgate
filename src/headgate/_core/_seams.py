@@ -5,8 +5,7 @@
 
 * :class:`CredentialStamper`: what an auth declares about the credentials it puts on a request. The credential guard
   uses it to keep them on trusted origins; the cache uses it to partition entries by credential and to keep
-  credentials out of storage. Its first two members, :class:`CredentialCarrier`, are what a signing middleware
-  declares, for the guard alone.
+  credentials out of storage. Its first two members, :class:`CredentialCarrier`, are what every middleware declares.
 * :data:`BREAKER_GATE`: set by the client on every call, read by the retry layer, so a retry sequence stops as soon as
   the origin's breaker opens without the retry layer knowing about breakers.
 * :class:`BudgetBacklogError` and :class:`BudgetPausedError`: raised by the rate budget for an attempt whose turn, or
@@ -27,7 +26,7 @@ __all__ = ["BREAKER_GATE", "BudgetBacklogError", "BudgetPausedError", "Credentia
 
 @runtime_checkable
 class CredentialCarrier(Protocol):
-    """Something that declares the credentials it puts on a request: an auth, or a signing middleware."""
+    """Something that declares the credentials it puts on a request: an auth, or a middleware."""
 
     @property
     def credential_headers(self) -> frozenset[str]:

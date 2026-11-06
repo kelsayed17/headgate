@@ -66,11 +66,12 @@ process, of the auth's class and `credential_identity()`, of any other credentia
 it is, since a static key is often configured there. A call that sends the auth's own header or parameter itself
 (`headers={"Authorization": ...}` beside a `BearerAuth`), which the auth then leaves alone, is partitioned by the value
 it sent too. A key a call sends in a header nothing declares and the client does not set (one call's `X-Api-Key`) is
-not part of the partition: declare it in an auth, or have the response name it in `Vary`. A middleware whose signature changes on every request implements
-`credential_identity()` too, and is then partitioned by that, as an auth is. Labels can be neither reversed nor
-compared across processes, so credential-partitioned entries in a persistent storage are not found again after a
-restart; they expire by their TTL. That holds for a client-wide header that is no credential too (`Accept-Language`,
-say): only a request with no credential and no client-wide header is unpartitioned, and found again after a restart.
+not part of the partition: declare it in an auth, or have the response name it in `Vary`. A middleware whose
+credential changes on every request implements `credential_identity()` too, and is then partitioned by that, as an
+auth is. Labels can be neither reversed nor compared across processes, so credential-partitioned entries in a
+persistent storage are not found again after a restart; they expire by their TTL. That holds for a client-wide header
+that is no credential too (`Accept-Language`, say): only a request with no credential and no client-wide header is
+unpartitioned, and found again after a restart.
 
 A `CachedTokenAuth` partitions by the long-lived credential, not the short-lived token, so a refresh keeps its entries.
 By default each instance is its own identity; override `credential_identity()` to return the credential's secret

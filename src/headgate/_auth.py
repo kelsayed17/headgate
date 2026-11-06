@@ -4,10 +4,10 @@
 """Provider-agnostic ``httpx2.Auth`` classes: static headers, query parameters, per-request signatures, minted tokens.
 
 ``httpx2.AsyncClient`` runs ``auth.async_auth_flow(request)`` once per logical request, above the transport stack, so a
-re-send by the retry transport repeats the already-signed request. Only a re-send the flow itself yields signs again:
-the single 401 re-sign in :class:`SigningAuth` and re-mint in :class:`CachedTokenAuth`. A provider's own signer (a JWT
-signed with a vendor key, an HMAC over the request) belongs in that provider's client, as a :class:`SigningAuth`
-subclass.
+re-send by the retry transport repeats the credential the flow stamped. :class:`SigningAuth` is the exception: its flow
+only marks the request (:data:`SIGNER_EXT`), and the transport stack signs every attempt inside the retry layer, so a
+retry or a hedge carries a fresh signature. A provider's own signer (a JWT signed with a vendor key, an HMAC over the
+request) belongs in that provider's client, as a :class:`SigningAuth` subclass.
 
 **An explicit ``headers=`` or ``params=`` from the caller wins a clash.** Every class here merges setdefault-style,
 because the flow runs at send time and a plain assignment would override the caller.
@@ -30,7 +30,7 @@ import secrets
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, override
+from typing import TYPE_CHECKING, ClassVar, Final, override
 
 import httpx2
 
@@ -48,6 +48,7 @@ __all__ = [
     "AUTH_HOP",
     "FRESH_TOKEN_S",
     "MAX_MINT_RESPONSE_BYTES",
+    "SIGNER_EXT",
     "BearerAuth",
     "CachedTokenAuth",
     "Minted",
@@ -61,6 +62,12 @@ __all__ = [
 #: request. :class:`CachedTokenAuth` sets it on every request its :meth:`~CachedTokenAuth.mint_flow` yields. A fixture
 #: recorder can read it to skip the hop, which is not the endpoint's answer.
 AUTH_HOP = "headgate.auth_hop"
+
+#: The request extension holding the :class:`SigningAuth` that signs the request. Its flow sets it on a request it
+#: signs, and the transport stack calls its :meth:`~SigningAuth.sign` on every attempt, before the credential guard.
+#: httpx2 hands a request's extensions to the redirects that follow it, so each hop is signed for its own origin, and
+#: the guard withholds the signature from one it does not trust.
+SIGNER_EXT: Final = "headgate.signer"
 
 #: The most of a mint flow's hop response that is read, in decompressed bytes. A token response is a few hundred bytes,
 #: and a cookie-plus-crumb page a few dozen KiB; past this the hop is refused as ``ResponseTooLargeError``.
@@ -246,20 +253,24 @@ class QueryParamAuth(httpx2.Auth):
 
 
 class SigningAuth(httpx2.Auth, ABC):
-    """Sign each request with a provider's signer as it is sent, and sign it again once on a 401.
+    """Sign every attempt of a request with a provider's signer, and send it once more on a 401.
 
     For a credential that is a signature over the request itself, made fresh for every request: a JWT bound to the
     method and path, an HMAC or Ed25519 signature over a timestamp and the body. The signer is the subclass's
     :meth:`sign`; the base class runs the flow around it:
 
+    * **Every attempt is signed afresh**, inside the retry layer. The flow marks the request with :data:`SIGNER_EXT`,
+      and the client's transport stack calls :meth:`sign` on each attempt, after the last middleware and before the
+      credential guard. A retry or a hedge carries a signature made at its own send time, so a short-lived one (a
+      timestamp checked to 30 s, a JWT of two minutes) does not go stale across the backoff, and a cross-origin
+      redirect hop is signed only to have the guard withhold it.
     * **The body is read first**, so a signature may cover it. httpx2 honors ``requires_request_body`` only in its
       default flows, which this replaces.
     * **A request the caller signed is left alone**: :meth:`skips` returns ``True`` for one that already carries any
       of the signed headers or parameters, as an explicit header wins a clash with every auth here. Override it to
-      leave other requests unsigned too, such as a provider's public reads.
-    * **One re-sign on a 401**, never a loop. A re-send by the retry layer repeats the request as it was signed, so by
-      a late attempt a short-lived signature (a timestamp checked to 30 s, a JWT of two minutes) may have expired. The
-      401 that answers it is signed again, at the current time, and sent once more; a second 401 reaches the caller as
+      leave other requests unsigned too, such as a provider's public reads. It is decided once per call, in the flow,
+      so no attempt of a skipped request is signed.
+    * **One re-send on a 401**, never a loop, signed afresh like every attempt; a second 401 reaches the caller as
       ``AuthError``. A 401 to a request this flow did not sign, or one sent without its signature (withheld from an
       origin the client does not trust), is not re-sent.
 
@@ -309,9 +320,10 @@ class SigningAuth(httpx2.Auth, ABC):
 
     @abstractmethod
     def sign(self, request: httpx2.Request) -> None:
-        """Sign *request* as it stands, at the current time, replacing any signature an earlier call set.
+        """Sign *request* as it stands, at the current time, replacing any signature an earlier attempt set.
 
-        The body is read (``request.content``). Set only the headers and parameters this class declares.
+        It runs once per attempt, so it may run several times on one request. The body is read (``request.content``).
+        Set only the headers and parameters this class declares.
         """
 
     def skips(self, request: httpx2.Request) -> bool:
@@ -330,14 +342,14 @@ class SigningAuth(httpx2.Auth, ABC):
         if self.skips(request):
             yield request
             return
-        # The 401 path re-sends this request, so a streamed body is buffered before the first send.
+        # The retry layer and the 401 path re-send this request, so a streamed body is buffered before the first send.
         await request.aread()
-        self.sign(request)
+        # The transport stack signs each attempt (see SIGNER_EXT); the flow only says who signs.
+        request.extensions[SIGNER_EXT] = self
         response = yield request
-        # A 401 to a request its signature never reached (the credential guard withheld it, or httpx2 dropped it on a
-        # cross-origin redirect) judged no signature, so it is not re-signed.
+        # A 401 to a request its signature never reached (the credential guard withheld it) judged no signature, so it
+        # is not re-sent.
         if response.status_code == httpx2.codes.UNAUTHORIZED and self._carries(response.request):
-            self.sign(request)
             yield request
 
 

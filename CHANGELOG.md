@@ -14,6 +14,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- `SigningAuth` signs every attempt, inside the retry layer, so a retry or a hedge carries a fresh signature instead of
+  repeating the first. It still re-sends once on a 401, now signed afresh. A signature that must change per attempt
+  belongs in `SigningAuth`, not in a middleware.
 - A middleware must declare `credential_headers` and `credential_params` (each a `frozenset` of names, empty when it
   stamps none). `HttpOptions` refuses one that does not, with a `TypeError`, since an undeclared or misspelled
   declaration sent the credential to every origin. A plain function is no longer a middleware; wrap it in a class with

@@ -33,13 +33,14 @@ as :class:`~headgate.errors.ForbiddenDestinationError` before it is sent, rather
 credentials are not only what the guard knows to remove (a client secret in a header of the flow's own, or in the form
 body, which httpx2 sends again on a 307 or 308).
 
-**A middleware's credentials** follow the same rule. A middleware runs inside the transport stack, after the request
-hooks, so a signer that stamps every attempt would sign a cross-origin redirect hop after the hook had checked it. A
-middleware declares what it stamps (``credential_headers`` and ``credential_params``, a
-:class:`~headgate._core.CredentialCarrier`; ``HttpOptions`` refuses one that does not), and those names are removed
-from any hop not addressed to ``base_url``'s origin or a trusted one: the guard runs a second time below the last
-middleware, where their output is visible. That pass trusts no auth flow's chain origin for them, since the middleware
-did not choose it.
+**A middleware's credentials**, and a :class:`~headgate.SigningAuth`'s signature, follow the same rule. Both are
+stamped inside the transport stack, once per attempt, after the request hooks, so they would reach a cross-origin
+redirect hop after the hook had checked it. The signature is one of the auth's declared credentials; a middleware
+declares what it stamps (``credential_headers`` and ``credential_params``, a :class:`~headgate._core.CredentialCarrier`;
+``HttpOptions`` refuses one that does not), and those names are removed from any hop not addressed to ``base_url``'s
+origin or a trusted one: the guard runs a second time below the last middleware and the signature, where their output
+is visible. That pass trusts no auth flow's chain origin for a middleware's credentials, since the middleware did not
+choose it.
 """
 
 from __future__ import annotations
@@ -75,7 +76,8 @@ class CredentialGuard:
     """A request hook removing credentials from any hop addressed to an origin that is not trusted.
 
     What the auth and the middleware stamp is read once, when the guard is built. The client runs it as a request
-    hook and, when it has middleware, again below the last one (see the module docstring).
+    hook and, when it has middleware or a ``SigningAuth``, again below the last middleware and the signature (see the
+    module docstring).
     """
 
     __slots__ = ("_cookie_jar", "_headers", "_middleware_headers", "_middleware_params", "_params", "_trusted")

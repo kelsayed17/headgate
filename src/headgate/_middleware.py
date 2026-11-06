@@ -4,15 +4,15 @@
 """Per-attempt middleware: caller code that sees, and may change, every request each time it is sent.
 
 :class:`MiddlewareTransport` sits inside the retry layer and above the cache (see :mod:`headgate._stack`), so a
-middleware runs once per attempt: a request signer stamps a fresh timestamp and nonce on every re-send, where an
-``httpx2.Auth`` flow, which runs once per call above the retry layer, would repeat the first signature. Middleware run
-in the order ``HttpOptions(middleware=...)`` lists them, the first outermost; each calls ``call_next`` to continue, or
-returns a response of its own to stop there.
+middleware runs once per attempt. Middleware run in the order ``HttpOptions(middleware=...)`` lists them, the first
+outermost; each calls ``call_next`` to continue, or returns a response of its own to stop there. A signature that must
+be fresh on every attempt belongs in a :class:`~headgate.SigningAuth`, not a middleware: the same transport signs each
+attempt with it, after the last middleware and before the credential guard (see :data:`~headgate._auth.SIGNER_EXT`).
 
 **Credentials a middleware adds stay on trusted origins**, because every middleware declares them. The client's
 credential guard (:class:`~headgate.security.CredentialGuard`) runs as a request hook, before the transport stack, so it
-cannot see what a middleware adds; :class:`MiddlewareTransport` runs it again below the last middleware, on every
-attempt of every hop.
+cannot see what a middleware adds or what a ``SigningAuth`` signs per attempt; :class:`MiddlewareTransport` runs it
+again below the last middleware and the signature, on every attempt of every hop.
 A middleware declares the headers and query parameters it stamps (``credential_headers`` and ``credential_params``, the
 shape every headgate auth has, empty when it stamps none), and has them removed from a hop addressed to any origin other
 than ``base_url``'s and ``SecurityOptions.trusted_origins``. ``HttpOptions`` refuses a middleware that declares neither.
@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Protocol, override
 
 import httpx2
 
+from headgate._auth import SIGNER_EXT, SigningAuth
 from headgate._core import CredentialCarrier
 
 if TYPE_CHECKING:
@@ -60,7 +61,12 @@ def _link(middleware: Middleware, call_next: Next) -> Next:
 
 
 class MiddlewareTransport(httpx2.AsyncBaseTransport):
-    """Run a request through *middleware*, in order, then *guard*, then the transport below; close it on ``aclose``."""
+    """Run a request through *middleware*, in order, then its signer and *guard*, then the transport below.
+
+    The signer is the :class:`~headgate.SigningAuth` a request's auth flow set in :data:`~headgate._auth.SIGNER_EXT`,
+    if any; it signs each attempt of that request as the last middleware passes it on. ``aclose`` closes the transport
+    below.
+    """
 
     def __init__(
         self,
@@ -69,13 +75,18 @@ class MiddlewareTransport(httpx2.AsyncBaseTransport):
         middleware: tuple[Middleware, ...],
         guard: Callable[[httpx2.Request], Awaitable[None]],
     ) -> None:
-        """Chain *middleware* in front of *guard* and *transport*, once, so each attempt only walks the chain.
+        """Chain *middleware* before the signer, *guard* and *transport*, once, so each attempt only walks the chain.
 
-        *guard* is the client's credential guard, run on what the last middleware passes on.
+        *guard* is the client's credential guard, run on what the last middleware passes on, once it is signed.
         """
         self._transport = transport
 
         async def guarded(request: httpx2.Request) -> httpx2.Response:
+            signer = request.extensions.get(SIGNER_EXT)
+            if isinstance(signer, SigningAuth):
+                # A hedge's copy and a redirect hop are new requests over the body the flow buffered: read it again.
+                await request.aread()
+                signer.sign(request)
             await guard(request)
             return await transport.handle_async_request(request)
 

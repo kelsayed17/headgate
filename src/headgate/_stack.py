@@ -8,7 +8,8 @@
 
     RetryTransport(                  # re-sends per the RetryPolicy; begins each attempt on the call's context
       AttemptTransport(              # AttemptFinished per send (only with observers)
-        MiddlewareTransport(         # HttpOptions.middleware, once per attempt, then the credential guard again
+        MiddlewareTransport(         # HttpOptions.middleware and a SigningAuth's signature, once per attempt, then
+                                     # the credential guard again
           ResilientCacheTransport(   # opt-in response cache; a hit stops here
             RateLimitTransport(      # the rate budget: every network send takes its turn and feeds back
               SendTrackingTransport( # records whether each send connected and how many request bytes it wrote
@@ -18,10 +19,11 @@
 its place there, wrapping the layer below it.
 
 Above the stack, ``httpx2.AsyncClient`` runs the auth flow and the hooks, once per logical call and once per hop of a
-redirect or an auth flow:
+redirect or an auth flow. A :class:`~headgate.SigningAuth` flow only marks the request: the middleware layer signs each
+attempt.
 
 * request hooks: the credential guard (:class:`~headgate.security.CredentialGuard`, which also runs below the last
-  middleware, where what a middleware stamps is visible), then, over a custom network
+  middleware and the signature, where what they stamp is visible), then, over a custom network
   transport with ``SecurityOptions(allow_private_hosts=False)``, the SSRF guard's vetting
   (:func:`~headgate.security.address_hook`); the default transport pins vetted addresses itself
   (:class:`~headgate.security.PinnedHTTPTransport`);
@@ -44,6 +46,7 @@ from typing import TYPE_CHECKING
 import httpx2
 
 from headgate._attempts import AttemptTransport
+from headgate._auth import SigningAuth
 from headgate._middleware import MiddlewareTransport
 from headgate._options import httpx_timeout
 from headgate._redirects import drop_followed_redirect_body, refuse_unreplayable_redirect
@@ -75,7 +78,8 @@ _RESPONSE_HOOKS = (refuse_https_downgrade, refuse_unreplayable_redirect, drop_fo
 class Credentials:
     """A client's credentials as its stack sees them: the auth, the guard that keeps them on trusted origins, the jar.
 
-    The same guard runs as the first request hook and below the last middleware (see :func:`build_transport_stack`).
+    The same guard runs as the first request hook and below the last middleware and a ``SigningAuth``'s signature
+    (see :func:`build_transport_stack`).
     The jar is the client's: one that stores nothing unless ``HttpOptions(cookies=True)``, and the guard sends an
     untrusted origin only that jar's cookies for it.
     """
@@ -130,15 +134,16 @@ def build_transport_stack(
 ) -> httpx2.AsyncBaseTransport:
     """Build the layers under ``httpx2.AsyncClient``, bottom-up: each statement wraps the layer before it.
 
-    The rate-limit layer spends from *budgets*. The cache partitions its entries by *credentials*' auth, and its guard
-    runs again below the last middleware, so a middleware's declared credentials stay on trusted origins too.
+    The rate-limit layer spends from *budgets*. The cache partitions its entries by *credentials*' auth. The middleware
+    layer is built for middleware or a ``SigningAuth``, which signs each attempt there; its guard runs again below the
+    last middleware and the signature, so what they stamp stays on trusted origins too.
     """
     layer = SendTrackingTransport(transport=_network(http))
     layer = RateLimitTransport(budgets=budgets, transport=layer)
     if (cache := policy.cache) is not None:
         scope = credential_scope(cache, credentials.auth, middleware=http.middleware, headers=http.headers)
         layer = ResilientCacheTransport(layer, cache, max_body_bytes=http.max_response_bytes, scope=scope)
-    if http.middleware:
+    if http.middleware or isinstance(credentials.auth, SigningAuth):
         layer = MiddlewareTransport(transport=layer, middleware=http.middleware, guard=credentials.guard)
     if http.observers:
         layer = AttemptTransport(transport=layer)
