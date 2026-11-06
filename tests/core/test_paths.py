@@ -5,13 +5,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 from headgate import RateRule, Route
 from headgate._core import check_fragment, path_has_fragment
-from headgate.cache import PathFragmentFilter
+from headgate.cache import HttpCache
 from headgate.ratelimit import Rate
 
 if TYPE_CHECKING:
@@ -54,7 +54,7 @@ def test_a_fragment_does_not_match_part_of_a_segment(path: str, fragment: str) -
         lambda: check_fragment("//"),
         lambda: RateRule("", Rate.per_second(1)),
         lambda: Route("/"),
-        lambda: PathFragmentFilter(("/orders", "")),
+        lambda: HttpCache(storage=cast("Any", None), paths=("/orders", "")),
     ],
     ids=["check", "rate-rule", "route", "cache-filter"],
 )

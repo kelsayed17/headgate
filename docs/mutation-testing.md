@@ -62,7 +62,7 @@ few families:
 - **header-name case**: httpx2 headers are case-insensitive, so `headers.get("ETag")` and `headers.get("etag")` read
   the same field;
 - **codec, distribution and method names**: `"ascii"`/`"ASCII"`, `"latin-1"`/`"LATIN-1"`, `"utf-8"`/`"UTF-8"`,
-  `metadata.version("HEADGATE")` and `MethodFilter({"get"})` (names are normalized);
+  `metadata.version("HEADGATE")` and `HttpCache(methods={"get"})` (names are normalized);
 - **falsy stand-ins**: `None` for `False` or `""` where the value is only tested for truth;
 - **defaults spelt out**: an argument equal to the callee's default (`to_bytes(8, "big")`, `zip(..., strict=False)`,
   `secrets.token_bytes(32)`, `copy_with(userinfo=None)`, which clears userinfo exactly as `b""` does);
@@ -164,14 +164,11 @@ few families:
 | `headgate.cache._transport` | `_guarded_chunks #3` | the message never surfaces: the error becomes `CacheStorageError("TypeError")` and the transport falls back |
 | `headgate.cache._transport` | `_guarded_chunks #4` | the message never surfaces: the error becomes `CacheStorageError("TypeError")` and the transport falls back |
 | `headgate.cache._transport` | `_Store.__init__ #5` | `_written` is only tested for truth |
-| `headgate.cache._transport` | `_Store.__call__ #14` | the id is random either way: hishel asks for none, so the deferred entry's is a fresh UUID, as the storage draws without one, and nothing reads it |
-| `headgate.cache._transport` | `_Store.__call__ #18` | the id is random either way: hishel asks for none, so the deferred entry's is a fresh UUID, as the storage draws without one, and nothing reads it |
 | `headgate.cache._transport` | `ResilientCacheTransport._fetch #13` | `copy_with(userinfo=None)` clears userinfo exactly as `b""` |
 | `headgate.cache._transport` | `ResilientCacheTransport._fetch #24` | httpx2's `aiter_raw` closes the response on every exit, so the explicit close finds nothing open |
 | `headgate.cache._transport` | `ResilientCacheTransport._fetch_cached #17` | header-name case |
 | `headgate.cache._transport` | `ResilientCacheTransport._fetch_cached #27` | once hishel returns, only reading its response can raise, and httpx2's `aiter_raw` closes the response on every exit |
 | `headgate.cache._transport` | `ResilientCacheTransport._fetch_cached #28` | once hishel returns, only reading its response can raise, and httpx2's `aiter_raw` closes the response on every exit |
-| `headgate.cache._policy` | `filter_policy_of #6` | `MethodFilter` upper-cases the methods it is given |
 | `headgate.cache._conditional` | `Validator.of #4` | header-name case |
 | `headgate.cache._conditional` | `Validator.of #5` | header-name case |
 | `headgate.cache._conditional` | `Validator.of #9` | header-name case |

@@ -3,7 +3,7 @@
 
 """The opt-in HTTP response cache, and conditional reads.
 
-A client caches when its ``TransportPolicy(cache=HttpCache(policy=..., storage=..., ttl=...))`` says so. The cache sits
+A client caches when its ``TransportPolicy(cache=HttpCache(storage=..., ttl=...))`` says so. The cache sits
 below retry and above the rate budget, so a hit spends no rate token and is not charged to the circuit breaker; a
 storage fault degrades to the network instead of failing the call.
 
@@ -14,22 +14,19 @@ storage fault degrades to the network instead of failing the call.
   parameter the auth declares, every well-known secret query parameter and the URL's userinfo are removed from what is
   stored, and restored, unchanged, for the network. A response's ``Set-Cookie`` is never stored either; the request
   that fetched it still receives it.
-* **TTL, not revalidation.** A ``FilterPolicy`` cache serves an entry until its TTL ends and never revalidates it.
+* **TTL, not revalidation.** The cache serves an entry until its TTL ends and never revalidates it.
   :func:`conditional` is the caller-driven alternative: it sends the caller's :class:`Validator` and reads a 304 as
   :class:`NotModified`.
 """
 
 from headgate.cache._conditional import Fresh, NotModified, Validator, conditional
-from headgate.cache._policy import HttpCache, MethodFilter, Partition, PathFragmentFilter, StatusCodeFilter
+from headgate.cache._policy import HttpCache, Partition
 
 __all__ = [
     "Fresh",
     "HttpCache",
-    "MethodFilter",
     "NotModified",
     "Partition",
-    "PathFragmentFilter",
-    "StatusCodeFilter",
     "Validator",
     "conditional",
 ]

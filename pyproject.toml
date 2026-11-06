@@ -29,8 +29,7 @@ classifiers = [
 ]
 dependencies = [
     "httpx2[http2]>=2.16.0",
-    # hishel 2 removed BaseFilter and FilterPolicy, which the cache layer builds on.
-    "hishel>=1.4.0,<2",
+    "hishel>=2.0.0",
     # TypeForm (PEP 747) is imported only for type checking; type checkers of client code need it to resolve it.
     "typing-extensions>=4.15",
 ]
@@ -41,7 +40,7 @@ pydantic = ["pydantic>=2.14.1"]
 curl = ["curl_cffi>=0.16.3"]
 otel = ["opentelemetry-api>=1.45.1"]
 # hishel's own extra for its async storages: AsyncSqliteStorage imports anysqlite.
-cache = ["hishel[async]>=1.4.0,<2"]
+cache = ["hishel[async]>=2.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/kelsayed17/headgate"

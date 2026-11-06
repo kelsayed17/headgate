@@ -3,9 +3,8 @@
 
 """A client's budgets, and the choice of budget by URL path.
 
-The budget is chosen by URL path rather than by a request extension: hishel's cache transport rebuilds the request
-before handing it down and forwards only its own ``hishel_*`` keys, so a budget chosen through an extension would be
-invisible below the cache. The URL survives.
+The budget is chosen by URL path, which every layer sees as the caller built it: the cache layer hands hishel a view
+of the request and puts its URL back below hishel, so the path a budget is chosen by is the one the network gets.
 """
 
 from __future__ import annotations

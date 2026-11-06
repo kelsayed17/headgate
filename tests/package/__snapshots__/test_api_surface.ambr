@@ -29,33 +29,24 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.cache]
   '''
   module headgate.cache
-  __all__ = ['Fresh', 'HttpCache', 'MethodFilter', 'NotModified', 'Partition', 'PathFragmentFilter', 'StatusCodeFilter', 'Validator', 'conditional']
+  __all__ = ['Fresh', 'HttpCache', 'NotModified', 'Partition', 'Validator', 'conditional']
   class Fresh(Generic)(value: 'T', validator: 'Validator') -> 'None'
       field value: T
       field validator: Validator
-  class HttpCache(object)(*, storage: 'AsyncBaseStorage', ttl: 'float | None' = None, partition: 'Partition' = <Partition.CREDENTIAL: 'credential'>, methods: 'Iterable[str] | None' = None, paths: 'Iterable[str | re.Pattern[str]] | None' = None, statuses: 'Iterable[int] | None' = None, policy: 'FilterPolicy | None' = None) -> 'None'
+  class HttpCache(object)(*, storage: 'AsyncBaseStorage', ttl: 'float | None' = None, partition: 'Partition' = <Partition.CREDENTIAL: 'credential'>, methods: 'Iterable[str] | None' = None, paths: 'Iterable[str | re.Pattern[str]] | None' = None, statuses: 'Iterable[int] | None' = None) -> 'None'
       field storage: AsyncBaseStorage
       field ttl: float | None = None
       field partition: Partition = <Partition.CREDENTIAL: 'credential'>
       field methods: Iterable[str] | None = None
       field paths: Iterable[str | re.Pattern[str]] | None = None
       field statuses: Iterable[int] | None = None
-      field policy: FilterPolicy | None = None
-      def filter_policy(self) -> 'FilterPolicy'
-  class MethodFilter(BaseFilter)(methods: 'Iterable[str]') -> 'None'
-      def apply(self, item: 'Request', body: 'bytes | None') -> 'bool'
-      def needs_body(self) -> 'bool'
+      def caches_request(self, method: 'str', path: 'str') -> 'bool'
+      def stores_status(self, status: 'int') -> 'bool'
   class NotModified(object)(validator: 'Validator') -> 'None'
       field validator: Validator
   class Partition(Enum)(*values)
       CREDENTIAL = 'credential'
       SHARED = 'shared'
-  class PathFragmentFilter(BaseFilter)(fragments: 'Iterable[str | re.Pattern[str]]') -> 'None'
-      def apply(self, item: 'Request', body: 'bytes | None') -> 'bool'
-      def needs_body(self) -> 'bool'
-  class StatusCodeFilter(BaseFilter)(codes: 'Iterable[int]') -> 'None'
-      def apply(self, item: 'Response', body: 'bytes | None') -> 'bool'
-      def needs_body(self) -> 'bool'
   class Validator(object)(*, etag: 'str | None' = None, last_modified: 'str | None' = None) -> 'None'
       field etag: str | None = None
       field last_modified: str | None = None
@@ -575,15 +566,15 @@
       field accept: str | None = None
       def on(self, status: 'int', read: 'Reader[E]') -> 'Expect[T | E]'
   class ForbiddenDestinationError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  class HttpCache(object)(*, storage: 'AsyncBaseStorage', ttl: 'float | None' = None, partition: 'Partition' = <Partition.CREDENTIAL: 'credential'>, methods: 'Iterable[str] | None' = None, paths: 'Iterable[str | re.Pattern[str]] | None' = None, statuses: 'Iterable[int] | None' = None, policy: 'FilterPolicy | None' = None) -> 'None'
+  class HttpCache(object)(*, storage: 'AsyncBaseStorage', ttl: 'float | None' = None, partition: 'Partition' = <Partition.CREDENTIAL: 'credential'>, methods: 'Iterable[str] | None' = None, paths: 'Iterable[str | re.Pattern[str]] | None' = None, statuses: 'Iterable[int] | None' = None) -> 'None'
       field storage: AsyncBaseStorage
       field ttl: float | None = None
       field partition: Partition = <Partition.CREDENTIAL: 'credential'>
       field methods: Iterable[str] | None = None
       field paths: Iterable[str | re.Pattern[str]] | None = None
       field statuses: Iterable[int] | None = None
-      field policy: FilterPolicy | None = None
-      def filter_policy(self) -> 'FilterPolicy'
+      def caches_request(self, method: 'str', path: 'str') -> 'bool'
+      def stores_status(self, status: 'int') -> 'bool'
   class HttpOptions(object)(*, transport: 'httpx2.AsyncBaseTransport | None' = None, headers: 'Mapping[str, str]' = <factory>, timeout: 'Timeouts' = <factory>, follow_redirects: 'bool' = True, max_redirects: 'int' = 5, max_response_bytes: 'int' = 33554432, refusal_check: 'RefusalCheck | None' = None, security: 'SecurityOptions' = <factory>, ssl_context: 'ssl.SSLContext | None' = None, limits: 'httpx2.Limits' = <factory>, proxy: 'str | None' = None, user_agent: 'str | None' = None, cookies: 'bool' = False, request_id_headers: 'tuple[str, ...]' = ('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray'), observers: 'tuple[Observer, ...]' = (), middleware: 'tuple[Middleware, ...]' = ()) -> 'None'
       field transport: httpx2.AsyncBaseTransport | None = None
       field headers: Mapping[str, str] = <factory>

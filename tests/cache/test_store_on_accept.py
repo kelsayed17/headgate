@@ -14,16 +14,14 @@ from typing import TYPE_CHECKING, override
 
 import httpx2
 import pytest
-from hishel import FilterPolicy
 
-from headgate import Expect, HttpCache, RefusedError, as_bytes
-from headgate.cache import MethodFilter, StatusCodeFilter
+from headgate import HttpCache, RefusedError, as_bytes
+from headgate.cache import Partition
+from headgate.cache._transport import ResilientCacheTransport
 from headgate.errors import ClientError
-from tests.cache._helpers import FaultyStorage, accept, cache_transport, every_get_policy, stub_client
+from tests.cache._helpers import GENEROUS_CAP, FaultyStorage, accept, cache_transport, every_get_rules, stub_client
 
 if TYPE_CHECKING:
-    import uuid
-
     from hishel import AsyncSqliteStorage, Entry, Request, Response
 
     from headgate import Reader
@@ -66,7 +64,7 @@ def _numeric(resp: httpx2.Response, /) -> int:
 async def test_a_response_the_reader_refuses_is_never_stored(read: Reader[object], storage: AsyncSqliteStorage) -> None:
     """Refuse the first response, then ask the provider again, and store the answer the reader accepts."""
     network = _Provider()
-    client = stub_client(transport=network, cache=HttpCache(policy=every_get_policy(), storage=storage, ttl=3600))
+    client = stub_client(transport=network, cache=HttpCache(**every_get_rules(), storage=storage, ttl=3600))
     try:
         with pytest.raises(ClientError):
             await client.get("reading", expect=read)
@@ -79,28 +77,25 @@ async def test_a_response_the_reader_refuses_is_never_stored(read: Reader[object
     assert network.sent == len(("the refused one", "the accepted one")), "the third call was a hit"
 
 
-async def test_a_declared_answer_the_filters_allow_is_stored(storage: AsyncSqliteStorage) -> None:
-    """Store a non-2xx the call declared and read, when the policy's filters allow its status."""
-    network = _Provider(b"gone", status=httpx2.codes.NOT_FOUND)
-    policy = FilterPolicy(
-        request_filters=[MethodFilter(frozenset({"GET"}))],
-        response_filters=[StatusCodeFilter(frozenset({httpx2.codes.NOT_FOUND}))],
-    )
-    expect = Expect(as_bytes).on(httpx2.codes.NOT_FOUND, as_bytes)
-    client = stub_client(transport=network, cache=HttpCache(policy=policy, storage=storage))
+@pytest.mark.parametrize(("statuses", "second"), [({203}, b"partial"), ({200}, _ANSWER)], ids=["named", "not-named"])
+async def test_only_a_status_the_cache_names_is_stored(
+    storage: AsyncSqliteStorage, statuses: set[int], second: bytes
+) -> None:
+    """Store a 203 the cache's ``statuses`` names, and send again for one it does not, though hishel would store it."""
+    network = _Provider(b"partial", status=httpx2.codes.NON_AUTHORITATIVE_INFORMATION)
+    client = stub_client(transport=network, cache=HttpCache(storage=storage, statuses=statuses))
     try:
-        answers = [await client.get("reading", expect=expect) for _ in range(2)]
+        answers = [await client.get("reading", expect=as_bytes) for _ in range(2)]
     finally:
         await client.aclose()
 
-    assert answers == [b"gone", b"gone"]
-    assert network.sent == 1
+    assert answers == [b"partial", second], "the second call was a hit only when the 203 was stored"
 
 
 async def test_a_stream_is_stored_once_its_head_is_accepted(storage: AsyncSqliteStorage) -> None:
     """Store a stream's response when it opens: a stream has no reader, so passing the head checks accepts it."""
     network = _Provider(_ANSWER)
-    client = stub_client(transport=network, cache=HttpCache(policy=every_get_policy(), storage=storage))
+    client = stub_client(transport=network, cache=HttpCache(**every_get_rules(), storage=storage))
     try:
         async with client.stream("reading") as stream:
             assert [chunk async for chunk in stream.aiter_bytes()] == [_ANSWER]
@@ -117,9 +112,11 @@ class _CountingStorage(FaultyStorage):
     created = 0
 
     @override
-    async def create_entry(self, request: Request, response: Response, key: str, id_: uuid.UUID | None = None) -> Entry:
+    async def create_entry(
+        self, request: Request, response: Response, key: str, *, ttl: float | None = None, tti: float | None = None
+    ) -> Entry:
         self.created += 1
-        return await super().create_entry(request, response, key, id_)
+        return await super().create_entry(request, response, key, ttl=ttl, tti=tti)
 
 
 async def test_a_response_accepted_twice_is_stored_once(storage: AsyncSqliteStorage) -> None:
@@ -133,6 +130,56 @@ async def test_a_response_accepted_twice_is_stored_once(storage: AsyncSqliteStor
     await accept(response)
 
     assert counting.created == 1
+
+
+class _Varying(httpx2.AsyncBaseTransport):
+    """Answer every request with a 200 whose ``Vary`` is *vary*."""
+
+    def __init__(self, vary: str) -> None:
+        """Answer with ``Vary: <vary>``."""
+        self._vary = vary
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(httpx2.codes.OK, headers={"Vary": self._vary}, content=_ANSWER)
+
+
+@pytest.mark.parametrize(
+    ("vary", "partition", "sent", "created"),
+    [
+        ("*", Partition.CREDENTIAL, {}, 0),
+        ("Accept, Authorization", Partition.SHARED, {"Authorization": "Bearer alice"}, 0),
+        ("Accept, Authorization", Partition.CREDENTIAL, {"Authorization": "Bearer alice"}, 1),
+        ("Accept, Authorization", Partition.SHARED, {}, 1),
+        ("Accept-Language", Partition.SHARED, {"Accept-Language": "en"}, 1),
+    ],
+    ids=["star", "shared-dropped", "credential-dropped", "shared-absent", "shared-kept"],
+)
+async def test_a_variant_no_later_request_could_be_matched_to_is_never_stored(
+    storage: AsyncSqliteStorage, vary: str, partition: Partition, sent: dict[str, str], created: int
+) -> None:
+    """Write nothing for ``Vary: *``, or for a shared entry varying on a header the view drops, such as a credential.
+
+    Under a credential partition the dropped header's value is in the partition label, so each value has its own
+    entries; a header the request did not send, or one the view keeps as a digest, is matched as usual.
+    """
+    counting = _CountingStorage(storage)
+    cache = HttpCache(storage=counting, partition=partition)
+    transport = ResilientCacheTransport(_Varying(vary), cache, max_body_bytes=GENEROUS_CAP)
+
+    await accept(await transport.handle_async_request(httpx2.Request("GET", "https://x/reading", headers=sent)))
+
+    assert counting.created == created
+
+
+async def test_a_miss_reports_itself_not_yet_stored(storage: AsyncSqliteStorage) -> None:
+    """Report ``stored`` false on a miss, which is written only once its call accepts it, whatever hishel said."""
+    response = await cache_transport(storage, _Provider(_ANSWER)).handle_async_request(
+        httpx2.Request("GET", "https://x/reading")
+    )
+    await response.aread()
+
+    assert response.extensions["caching"] == {"from_cache": False, "revalidated": False, "stored": False}
 
 
 async def test_a_response_never_accepted_is_never_stored(storage: AsyncSqliteStorage) -> None:

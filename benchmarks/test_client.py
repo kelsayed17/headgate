@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, override
 
 import httpx2
 import msgspec
-from hishel import AsyncBaseStorage, Entry, EntryMeta, FilterPolicy, Request, Response
+from hishel import AsyncBaseStorage, Entry, Headers, Request, Response
 
 from headgate import (
     AsyncBaseClient,
@@ -34,7 +34,6 @@ from headgate import (
 )
 from headgate import msgspec as msgspec_flavor
 from headgate._core import Timing, timing_override
-from headgate.cache import MethodFilter, StatusCodeFilter
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -81,20 +80,17 @@ class _MemoryStorage(AsyncBaseStorage):
 
     def __init__(self) -> None:
         """Start empty."""
+        super().__init__()
         self._entries: dict[str, list[tuple[Entry, bytes]]] = {}
 
     @override
-    async def create_entry(self, request: Request, response: Response, key: str, id_: uuid.UUID | None = None) -> Entry:
-        entry = Entry(
-            id=uuid.uuid4() if id_ is None else id_,
-            request=request,
-            meta=EntryMeta(),
-            response=response,
-            cache_key=key.encode(),
-        )
+    async def create_entry(
+        self, request: Request, response: Response, key: str, *, ttl: float | None = None, tti: float | None = None
+    ) -> Entry:
+        entry = Entry(id=uuid.uuid4(), request=request, response=response)
         stream = response.stream
-        if isinstance(stream, Iterator):
-            msg = "an async storage was handed a synchronous body"
+        if stream is None or isinstance(stream, Iterator):
+            msg = "an async storage was handed no body, or a synchronous one"
             raise TypeError(msg)
 
         async def stored() -> AsyncIterator[bytes]:
@@ -114,7 +110,7 @@ class _MemoryStorage(AsyncBaseStorage):
         ]
 
     @override
-    async def update_entry(self, id: uuid.UUID, new_entry: Entry | Callable[[Entry], Entry]) -> Entry | None:
+    async def update_headers(self, id: uuid.UUID, headers: Headers) -> None:
         msg = "a cache hit never updates an entry"
         raise NotImplementedError(msg)
 
@@ -206,11 +202,7 @@ def test_get_retried_once(run_batch: Callable[[Operation], None]) -> None:
 def test_get_cache_hit(runner: asyncio.Runner, run_batch: Callable[[Operation], None]) -> None:
     """Measure a GET served from the HTTP cache, from a dict-backed storage (see :class:`_MemoryStorage`)."""
     storage = _MemoryStorage()
-    policy = FilterPolicy(
-        request_filters=[MethodFilter(frozenset({"GET"}))],
-        response_filters=[StatusCodeFilter(frozenset({_OK}))],
-    )
-    client = _client(cache=HttpCache(policy=policy, storage=storage, ttl=3600))
+    client = _client(cache=HttpCache(storage=storage, ttl=3600))
     try:
         run_batch(lambda: client.get("series", expect=_SERIES))
     finally:

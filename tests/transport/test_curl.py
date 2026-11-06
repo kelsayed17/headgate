@@ -27,6 +27,7 @@ from hishel.httpx2 import AsyncCacheTransport
 
 import headgate.curl
 from headgate import AsyncBaseClient, HttpOptions, Rate, _curl, nothing
+from headgate.cache._transport import served_from_cache
 from headgate.curl import AsyncCurlTransport
 
 if TYPE_CHECKING:
@@ -253,7 +254,7 @@ async def test_a_cached_encoded_response_replays_without_a_decoding_error(sessio
     finally:
         await storage.close()
         await connection.close()
-    assert second.extensions["hishel_from_cache"] is True
+    assert served_from_cache(second)
     assert first.content == second.content == _PLAIN
     assert len(session.calls) == 1
 

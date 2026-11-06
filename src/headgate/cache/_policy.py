@@ -1,19 +1,19 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""What a client's cache keeps, where, for how long, and whose it is: :class:`HttpCache` and its filters.
+"""What a client's cache keeps, where, for how long, and whose it is: :class:`HttpCache`.
 
-hishel ships no concrete filters; :class:`hishel.BaseFilter` is its extension point. :class:`PathFragmentFilter`,
-:class:`MethodFilter` and :class:`StatusCodeFilter` compose into a :class:`hishel.FilterPolicy`, which **stores whenever
-a request filter matches and an allowed status comes back, even past an RFC 9111** ``no-store``. That is the point for
-a provider that sends ``no-store`` or no cache headers at all, where hishel's RFC 9111 policy would cache nothing. Store
-only the 200s (a :class:`StatusCodeFilter`) so an error body never poisons the cache. Filters run inside hishel and see
-the URL with its credentials removed (see :mod:`headgate.cache._credentials`), so no other layer evaluates a rule.
-:class:`HttpCache`'s ``methods`` names only GET and HEAD, which a URL keys; a read-only POST is cached only through a
-``policy`` of your own with hishel's ``FilterPolicy.use_body_key``, which keys it by its body too.
+hishel 2 caches every successful GET and HEAD it is handed, whatever the response's cache headers say. headgate
+decides before and after it: a request whose method or path :class:`HttpCache` does not name never reaches hishel
+(:meth:`HttpCache.caches_request`), and a response whose status it does not name is never stored
+(:meth:`HttpCache.stores_status`). So a cache **stores whenever the request matches and an allowed status comes back,
+even past an RFC 9111** ``no-store``. That is the point for a provider that sends ``no-store`` or no cache headers at
+all, where an RFC 9111 cache would keep nothing. Store only the 200s (the default) so an error body never poisons the
+cache. The rules read only the method and the URL path, never a credential. ``methods`` names only GET and HEAD,
+which a URL keys: a POST is never cached.
 
-A ``FilterPolicy`` cache is TTL-only: an entry is served until its lifetime ends and is never revalidated with the
-origin. A caller that wants revalidation sends its own validator with :func:`headgate.cache.conditional`.
+The cache is TTL-only: an entry is served until its lifetime ends and is never revalidated with the origin. A caller
+that wants revalidation sends its own validator with :func:`headgate.cache.conditional`.
 """
 
 from __future__ import annotations
@@ -21,10 +21,9 @@ from __future__ import annotations
 import enum
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, override
+from typing import TYPE_CHECKING, Final
 
 import httpx2
-from hishel import BaseFilter, FilterPolicy, Request, Response
 
 from headgate._core import check_fragment, path_has_fragment
 
@@ -34,10 +33,14 @@ if TYPE_CHECKING:
 
     from hishel import AsyncBaseStorage
 
-__all__ = ["HttpCache", "MethodFilter", "Partition", "PathFragmentFilter", "StatusCodeFilter"]
+__all__ = ["HttpCache", "Partition"]
 
 #: The methods ``HttpCache(methods=...)`` may name: those a URL identifies, since the URL is the cache key.
 _URL_KEYED_METHODS: Final = frozenset({"GET", "HEAD"})
+
+#: What ``methods`` and ``statuses`` mean when left ``None``.
+_DEFAULT_METHODS: Final = frozenset({"GET"})
+_DEFAULT_STATUSES: Final = frozenset({200})
 
 
 class Partition(enum.Enum):
@@ -75,12 +78,11 @@ class HttpCache:
     ``statuses`` (200 by default). A string in ``paths`` is one or more whole segments, matched as
     :class:`~headgate.RateRule` matches; a compiled pattern is searched for in the path, for what segments cannot say,
     such as a file name's prefix or extension. An empty collection matches nothing, so stores
-    nothing. ``policy`` is the escape hatch: a hishel ``FilterPolicy`` of your own, in place of those three, and the
-    only way to cache a POST (``use_body_key=True``).
+    nothing. :meth:`caches_request` and :meth:`stores_status` say what the three decide.
 
     :raises ValueError: for a ``ttl`` that is not a positive finite number, a method in ``methods`` other than ``GET``
-        and ``HEAD``, a fragment in ``paths`` that names no segment or a pattern that matches an empty path, or a
-        ``policy`` given with any of ``methods``, ``paths`` and ``statuses``.
+        and ``HEAD``, a status in ``statuses`` outside 2xx or a 206, or a fragment in ``paths`` that names no segment or
+        a pattern that matches an empty path.
     """
 
     storage: AsyncBaseStorage
@@ -89,26 +91,21 @@ class HttpCache:
     methods: Iterable[str] | None = None
     paths: Iterable[str | re.Pattern[str]] | None = None
     statuses: Iterable[int] | None = None
-    policy: FilterPolicy | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a TTL no entry could live by, a method a URL cannot key, and a policy beside the fields it replaces.
+        """Refuse a TTL no entry could live by, a method a URL cannot key, and a path rule that matches every path.
 
         The collections are frozen.
         """
         if self.ttl is not None and not (self.ttl > 0 and math.isfinite(self.ttl)):
             msg = f"ttl must be a positive finite number of seconds, or None (got {self.ttl})"
             raise ValueError(msg)
-        if self.policy is not None and (self.methods, self.paths, self.statuses) != (None, None, None):
-            msg = "policy= decides what is stored, so it cannot be combined with methods=, paths= or statuses="
-            raise ValueError(msg)
         if self.methods is not None:
             methods = frozenset(method.upper() for method in self.methods)
             if bodied := sorted(methods - _URL_KEYED_METHODS):
                 msg = (
                     f"methods= may name only GET and HEAD (got {', '.join(bodied)}): the cache keys an entry by its "
-                    f"URL, so two requests with different bodies would share one. For a read-only POST, pass "
-                    f"policy=FilterPolicy(use_body_key=True, ...), which keys it by its body too"
+                    f"URL, so two requests with different bodies would share one"
                 )
                 raise ValueError(msg)
             object.__setattr__(self, "methods", methods)
@@ -118,22 +115,34 @@ class HttpCache:
                 _check_path(path)
             object.__setattr__(self, "paths", paths)
         if self.statuses is not None:
-            object.__setattr__(self, "statuses", frozenset(self.statuses))
+            statuses = frozenset(self.statuses)
+            if unstorable := sorted(status for status in statuses if not _storable(status)):
+                msg = (
+                    f"statuses= may name only 2xx statuses other than 206 (got {', '.join(map(str, unstorable))}): "
+                    f"hishel stores no other response, and a 206 holds only part of the body"
+                )
+                raise ValueError(msg)
+            object.__setattr__(self, "statuses", statuses)
 
-    def filter_policy(self) -> FilterPolicy:
-        """Return the hishel policy this cache stores by: its own ``policy``, or one built from its three fields.
+    def caches_request(self, method: str, path: str) -> bool:
+        """Return whether a request with *method* (in any case) and the URL path *path* goes through the cache.
 
-        A field left ``None`` takes its default; an empty one matches nothing. A test reads it to check what a client's
-        cache keeps (``filter_policy().request_filters``), without building the client's stack.
+        ``methods`` left ``None`` means ``GET``, and ``paths`` left ``None`` any path; an empty collection matches
+        nothing. Any other request is sent past the cache: never looked up, never stored.
         """
-        if self.policy is not None:
-            return self.policy
-        methods = {"GET"} if self.methods is None else self.methods
-        statuses = {200} if self.statuses is None else self.statuses
-        requests: list[BaseFilter[Request]] = [MethodFilter(methods)]
-        if self.paths is not None:
-            requests.append(PathFragmentFilter(self.paths))
-        return FilterPolicy(request_filters=requests, response_filters=[StatusCodeFilter(statuses)])
+        methods = _DEFAULT_METHODS if self.methods is None else self.methods
+        if method.upper() not in methods:
+            return False
+        return self.paths is None or any(_matches(path, rule) for rule in self.paths)
+
+    def stores_status(self, status: int) -> bool:
+        """Return whether a response with *status* may be stored: one in ``statuses``, ``200`` when it is ``None``."""
+        return status in (_DEFAULT_STATUSES if self.statuses is None else self.statuses)
+
+
+def _storable(status: int) -> bool:
+    """Return whether hishel stores a response with *status*: a 2xx, but not a 206, which holds part of a body."""
+    return httpx2.codes.is_success(status) and status != httpx2.codes.PARTIAL_CONTENT
 
 
 def _check_path(path: str | re.Pattern[str]) -> None:
@@ -148,70 +157,3 @@ def _check_path(path: str | re.Pattern[str]) -> None:
 def _matches(path: str, rule: str | re.Pattern[str]) -> bool:
     """Return whether the URL path *path* holds the fragment *rule*, or contains a match of the pattern *rule*."""
     return path_has_fragment(path, rule) if isinstance(rule, str) else rule.search(path) is not None
-
-
-# Filters. Each decides from the request line or the response status alone, so none needs the body.
-
-
-class PathFragmentFilter(BaseFilter[Request]):
-    """Cache a request whose URL path matches any of *fragments*, as :class:`HttpCache`'s ``paths`` match.
-
-    A string is one or more whole segments, matched as a rule matches; a compiled pattern is searched for in the path.
-    """
-
-    def __init__(self, fragments: Iterable[str | re.Pattern[str]]) -> None:
-        """Match a path holding any of *fragments*.
-
-        :raises ValueError: for a fragment that names no path segment, or a pattern that matches an empty path, either
-            of which would match every path.
-        """
-        self._fragments = tuple(fragments)
-        for fragment in self._fragments:
-            _check_path(fragment)
-
-    @override
-    def needs_body(self) -> bool:
-        """Return ``False``: the path is enough."""
-        return False
-
-    @override
-    def apply(self, item: Request, body: bytes | None) -> bool:
-        """Return whether *item*'s path matches one of the fragments."""
-        path = httpx2.URL(item.url).path
-        return any(_matches(path, fragment) for fragment in self._fragments)
-
-
-class MethodFilter(BaseFilter[Request]):
-    """Cache a request whose method is in *methods*."""
-
-    def __init__(self, methods: Iterable[str]) -> None:
-        """Match a request whose method is one of *methods*, in any case."""
-        self._methods = frozenset(method.upper() for method in methods)
-
-    @override
-    def needs_body(self) -> bool:
-        """Return ``False``: the method is enough."""
-        return False
-
-    @override
-    def apply(self, item: Request, body: bytes | None) -> bool:
-        """Return whether *item*'s method is allowed."""
-        return item.method in self._methods
-
-
-class StatusCodeFilter(BaseFilter[Response]):
-    """Store a response whose status is in *codes*, so an error body never poisons the cache."""
-
-    def __init__(self, codes: Iterable[int]) -> None:
-        """Match a response whose status is one of *codes*."""
-        self._codes = frozenset(codes)
-
-    @override
-    def needs_body(self) -> bool:
-        """Return ``False``: the status is enough."""
-        return False
-
-    @override
-    def apply(self, item: Response, body: bytes | None) -> bool:
-        """Return whether *item*'s status is allowed."""
-        return item.status_code in self._codes

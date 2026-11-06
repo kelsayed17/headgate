@@ -91,7 +91,7 @@ from headgate.breaker import CircuitBreaker
 from headgate.breaker._breaker import BreakerOpenError
 from headgate.breaker._registry import NO_BREAKER
 from headgate.breaker._scope import scoped_registry
-from headgate.cache._transport import host_untested, store_accepted
+from headgate.cache._transport import host_untested, served_from_cache, stamp_ttl, store_accepted
 from headgate.errors import (
     CircuitOpenError,
     ClientError,
@@ -822,7 +822,7 @@ class AsyncBaseClient:
         self._stamp_idempotency_key(request, context, options.get("idempotency_key"))
         # The cache transport only setdefaults the client's own TTL, so a per-call TTL stamped here wins.
         if call.cache_ttl is not None:
-            request.extensions["hishel_ttl"] = call.cache_ttl
+            stamp_ttl(request, call.cache_ttl)
         context.attach(request)
         return _Prepared(request, context, follow)
 
@@ -1147,7 +1147,7 @@ def _charge_response(response: httpx2.Response, verdict: Verdict) -> None:
     A response another request's attempt produced (a cache hit, a stored response, a shared download) is untested; a
     5xx this request fetched itself is a failure; a 429 is neither, since the origin is up and asked us to slow down.
     """
-    if host_untested(response) or response.extensions.get("hishel_from_cache"):
+    if host_untested(response) or served_from_cache(response):
         verdict.mark_untested()
     elif response.status_code >= httpx2.codes.INTERNAL_SERVER_ERROR:
         verdict.mark_failed()

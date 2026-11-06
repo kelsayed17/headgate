@@ -29,7 +29,7 @@ from headgate.otel import OpenTelemetryObserver
 from headgate.ratelimit import Rate
 from headgate.retry import NO_RETRY, Backoff, Hedge
 from headgate.testing import FakeTransport, TestClock, isolated_breakers
-from tests.cache._helpers import FaultyStorage, every_get_policy
+from tests.cache._helpers import FaultyStorage, every_get_rules
 from tests.observe._support import client
 from tests.support.events import Recorder
 
@@ -104,14 +104,14 @@ async def _hedged(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage)
 async def _cache_hit(observers: tuple[Observer, ...], storage: AsyncSqliteStorage) -> None:
     """Make two calls for one cacheable resource, the second served from the cache."""
     fresh = httpx2.Response(200, content=b"cached", headers={"Cache-Control": "max-age=60"})
-    policy = TransportPolicy(cache=HttpCache(policy=every_get_policy(), storage=storage))
+    policy = TransportPolicy(cache=HttpCache(**every_get_rules(), storage=storage))
     await _call(client(FakeTransport().reply("GET", "/v1/x", fresh), *observers, policy=policy), times=2)
 
 
 async def _cache_degraded(observers: tuple[Observer, ...], storage: AsyncSqliteStorage) -> None:
     """Make one call whose cache storage fails, so it is handed to the network."""
     broken = FaultyStorage(storage, OSError("disk gone"), failing="get_entries")
-    policy = TransportPolicy(cache=HttpCache(policy=every_get_policy(), storage=broken))
+    policy = TransportPolicy(cache=HttpCache(**every_get_rules(), storage=broken))
     await _call(client(FakeTransport().reply("GET", "/v1/x"), *observers, policy=policy))
 
 
