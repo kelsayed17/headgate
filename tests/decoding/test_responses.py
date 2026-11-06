@@ -259,7 +259,7 @@ def test_the_constructor_and_on_refuse_with_the_same_message(status: int) -> Non
 
 def test_the_constructor_accepts_a_legal_answer() -> None:
     """Accept legal statuses and read them with their readers."""
-    expect = Expect(decoder(_Ok), {400: decoder(_No), 404: nothing})
+    expect = Expect[_Ok | _No | None](decoder(_Ok), {400: decoder(_No), 404: nothing})
     assert set(expect.answers) == {400, 404}
     assert expect.answers[400](response(b'{"message": "no"}', status=400)) == _No(message="no")
 

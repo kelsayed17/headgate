@@ -5,7 +5,7 @@
 
 A recording ``MockTransport`` captures every outgoing ``httpx2.Request``, so each test asserts the verb maps to the
 right HTTP method and threads its arguments through. Every verb takes the call's declared responses as ``expect=``
-(a bare :data:`~headgate._responses.Reader` or an :class:`~headgate._responses.Expect`), and an undeclared non-2xx
+(a bare :class:`~headgate._responses.Reader` or an :class:`~headgate._responses.Expect`), and an undeclared non-2xx
 always raises.
 
 t-string paths are rendered once, while the request is built, so everything after (the send, the error path's

@@ -10,7 +10,7 @@ import json
 import httpx2
 import pytest
 
-from headgate import Expect, HttpOptions, as_bytes, json_reader, nothing
+from headgate import Expect, HttpOptions, Reader, as_bytes, json_reader, nothing
 from headgate._responses import accepts
 from headgate.errors import ResponseParseError, UpstreamStatusError
 from headgate.testing import FakeTransport
@@ -49,6 +49,7 @@ async def test_a_matching_media_type_is_decoded(content_type: str) -> None:
 async def test_another_media_type_raises_before_the_reader_runs(content_type: str | None) -> None:
     """Raise ``ResponseParseError`` with the status and the declared type, never calling the reader."""
 
+    @Reader
     def must_not_run(resp: httpx2.Response) -> bytes:
         raise AssertionError(resp)
 

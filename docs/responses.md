@@ -7,8 +7,8 @@ declare raises. There is no raw mode, so no call can receive a status it did not
 
 ## Readers
 
-A reader is any `Callable[[httpx2.Response], T]` (the `Reader[T]` alias). It receives the whole response, body already
-read and capped, because some readers need a header too. headgate ships these:
+A reader is a `Reader[T]`: `Reader(fn)` around a function of the response that returns a `T`. It receives the whole
+response, body already read and capped, because some readers need a header too. headgate ships these:
 
 | Reader | Returns | For |
 | --- | --- | --- |
@@ -42,6 +42,28 @@ It hands `decode` an empty body as it is, unless `empty=` names the bytes to dec
 
 `nothing` is a claim about the wire, so declare it only for an endpoint documented to send no body you need. Await
 such a call as a statement.
+
+A reader of your own wraps its function in `Reader`, or puts `@Reader` over the `def`:
+
+```python
+import httpx2
+
+from headgate import Reader
+
+REQUEST_ID = Reader(lambda response: response.headers["X-Request-Id"], name="request_id")
+
+
+@Reader
+def location(response: httpx2.Response) -> str:
+    return response.headers["Location"]
+
+
+repr(location)  # 'Reader(location)'
+```
+
+A reader's `repr` names its function, or the `name=` it was given. `expect=`, `Expect` and `conditional` take only a
+`Reader` (or, for `expect=`, an `Expect`) and raise `TypeError` for anything else, such as a model class (`expect=Order`
+where `expect=decoder(Order)` was meant) or a bare function, which are callable too.
 
 ## Declared non-2xx answers
 

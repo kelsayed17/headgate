@@ -27,6 +27,7 @@ from headgate import (
     HttpOptions,
     Problem,
     RateLimitError,
+    Reader,
     RefusedError,
     RetryPolicy,
     SecurityOptions,
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
 
     from syrupy.assertion import SnapshotAssertion
 
-    from headgate._responses import Reader, RefusalCheck
+    from headgate._responses import RefusalCheck
 
 _BASE: Final = "https://api.example.test/v1"
 #: A credential in the query string, which every message must redact.
@@ -197,6 +198,7 @@ async def _surviving_505() -> None:
     await _get(_client(505))
 
 
+@Reader
 def _refuse_quota(_resp: httpx2.Response) -> bytes:
     """Refuse a 200 body as a provider's quota error."""
     msg = "quota exhausted"

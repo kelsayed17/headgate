@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Expect, UpstreamStatusError, nothing
+from headgate import Expect, Reader, UpstreamStatusError, nothing
 from headgate.testing import FakeTransport
 from tests.integration._support import client
 
@@ -99,6 +99,7 @@ async def test_a_call_not_following_redirects_keeps_the_location_of_a_one_shot_b
     assert location == "/v1/elsewhere"
 
 
+@Reader
 def _location(response: httpx2.Response, /) -> str | None:
     """Return *response*'s ``Location``, if it kept one."""
     return response.headers.get("Location")
@@ -117,6 +118,7 @@ async def test_a_declared_redirect_answer_reads_the_unfollowed_hop() -> None:
     assert status == httpx2.codes.TEMPORARY_REDIRECT
 
 
+@Reader
 def _status(response: httpx2.Response, /) -> int:
     """Return *response*'s status."""
     return response.status_code

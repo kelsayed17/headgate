@@ -6,7 +6,7 @@
 A client method is one provider endpoint, and it returns that endpoint's documented outcome as a typed value or raises
 a ``ClientError``. So each call declares, where it is made, what it can get back:
 
-* a :data:`Reader` for any 2xx, the success reader;
+* a :class:`Reader` for any 2xx, the success reader: a function of the response, wrapped as ``Reader(fn)``;
 * optionally an :class:`Expect`, which adds the exact non-2xx statuses the provider documents as answers.
 
 Anything a call did not declare raises through the base client's status ladder. There is no raw mode, so no call can
@@ -14,8 +14,8 @@ receive an undeclared status. A refusal the provider writes inside a body is rai
 :class:`RefusedError`, and the base client turns it into a ``ClientError`` carrying the status the wire sent.
 
 This module is codec-free: it imports neither msgspec nor pydantic. The JSON ``decoder`` a client builds its success
-reader with comes from the flavor module it chose, :mod:`headgate.msgspec` or :mod:`headgate.pydantic`, and both build
-on :func:`body_reader`, as :func:`json_reader` does.
+reader with comes from the flavor module it chose, :mod:`headgate.msgspec` or :mod:`headgate.pydantic`, and both read
+the body as :func:`body_reader` and :func:`json_reader` do.
 """
 
 from __future__ import annotations
@@ -25,10 +25,11 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Final, final
+from typing import Final, final, override
 
 import httpx2
 
+from headgate._core import check_kind
 from headgate.errors import UpstreamStatusError
 from headgate.streaming._events import EventParser
 
@@ -46,15 +47,47 @@ __all__ = [
 ]
 
 
-type Reader[T] = Callable[[httpx2.Response], T]
-"""Turns a response into a value.
+@final
+class Reader[T]:
+    """Turns a response into a value: ``Reader(fn)`` around a function of the response, or ``@Reader`` over a ``def``.
 
-A reader receives the whole response (status, headers, body), because it may need what a header declares, such as a
-``content-type`` choosing between JSON and an event stream. It may raise :class:`~headgate.errors.DecodeError` (the
-body is not what was declared; a ``ValueError``, ``LookupError`` or ``TypeError`` from code over ``response.json()``
-counts the same) or :class:`RefusedError` (the provider said no inside the body). It never builds a ``ClientError``
-itself: the base client does, so the error carries the real status and the client's name.
-"""
+    A reader receives the whole response (status, headers, body), because it may need what a header declares, such as a
+    ``content-type`` choosing between JSON and an event stream. It may raise :class:`~headgate.errors.DecodeError` (the
+    body is not what was declared; a ``ValueError``, ``LookupError`` or ``TypeError`` from code over ``response.json()``
+    counts the same) or :class:`RefusedError` (the provider said no inside the body). It never builds a ``ClientError``
+    itself: the base client does, so the error carries the real status and the client's name.
+
+    It is a class rather than any function of a response so that ``expect=`` refuses what only looks like one: a model
+    class, ``str`` and a bare function are all callable, and each is a mistake there.
+
+    Its ``repr`` is ``Reader(<name>)``: *name* when given, else the function's ``__name__`` (a ``functools.partial``'s
+    function's), else its type's.
+    """
+
+    __slots__ = ("_name", "_read")
+
+    def __init__(self, read: Callable[[httpx2.Response], T], /, *, name: str | None = None) -> None:
+        """Wrap *read*, the function that turns a response into a value, under *name* or *read*'s own."""
+        # Private, so the type parameter stays covariant: a Reader[Order] is a Reader[Order | None].
+        self._read = read
+        self._name = _name_of(read) if name is None else name
+
+    def __call__(self, response: httpx2.Response, /) -> T:
+        """Return what the wrapped function reads from *response*."""
+        return self._read(response)
+
+    @override
+    def __repr__(self) -> str:
+        """Return ``Reader(<name>)``."""
+        return f"Reader({self._name})"
+
+
+def _name_of(read: object) -> str:
+    """Return what a reader over *read* is named: its ``__name__``, a partial's function's, or its type's name."""
+    target = read.func if isinstance(read, functools.partial) else read
+    name = getattr(target, "__name__", None)
+    return name if isinstance(name, str) else type(target).__name__
+
 
 #: Statuses that mean "we could not ask", never an answer about the request: our own credentials (401, 407), and the
 #: rate limit the retry transport and the breaker own (429). Every 5xx is refused by range beside these.
@@ -127,11 +160,12 @@ class Expect[T]:
     decode falls through to the ladder with its real status, so a claim covers only the body shape it names: a declared
     business 403 never swallows a real permission 403.
 
-    ``Expect`` is deliberately not callable. A verb takes ``Reader[T] | Expect[T]``, and that union is unambiguous only
-    because of it.
+    ``Expect`` is deliberately not callable: reading a response is the client's dispatch, and a callable ``Expect``
+    would be a second way to read one outside it.
 
-    The constructor refuses exactly what :meth:`on` refuses, since an ``Expect`` built with ``answers`` makes the same
-    claim, and then freezes ``answers`` into a read-only copy that neither the caller's dict nor the default can change.
+    ``ok`` and every reader in ``answers`` must be a :class:`Reader`. The constructor refuses exactly what :meth:`on`
+    refuses, since an ``Expect`` built with ``answers`` makes the same claim, and then freezes ``answers`` into a
+    read-only copy that neither the caller's dict nor the default can change.
 
     ``headers`` are request headers the declaration needs sent (a conditional read's preconditions, see
     :func:`headgate.cache.conditional`); a header the call sets itself wins.
@@ -148,9 +182,11 @@ class Expect[T]:
     accept: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
-        """Refuse an unclaimable status in ``answers`` or a malformed ``accept``; freeze ``answers`` and ``headers``."""
-        for status in self.answers:
+        """Refuse a non-reader, an unclaimable status in ``answers`` or a malformed ``accept``; freeze the mappings."""
+        check_kind("ok", self.ok, Reader, "a Reader")
+        for status, read in self.answers.items():
             _refuse_unclaimable(status)
+            check_kind("answers", read, Reader, "a Reader for each status")
         # A frozen, slotted dataclass refuses plain assignment even here; object.__setattr__ is the documented route.
         object.__setattr__(self, "answers", MappingProxyType(dict(self.answers)))
         object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
@@ -163,10 +199,12 @@ class Expect[T]:
         No ranges and no ``default``: OpenAPI allows ``4XX``, but a range is a claim about statuses nobody documented.
         This ``Expect`` is left as it was.
 
+        :raises TypeError: for a *read* that is not a :class:`Reader`.
         :raises ValueError: for a status outside 100-599; for 401, 407, 429 or any 5xx, which mean we could not ask
             (the credentials are ours, and the transport owns 429 and 5xx through retry and the breaker); or for a
             status already declared. It is raised where the ``Expect`` is built, usually at import.
         """
+        check_kind("read", read, Reader, "a Reader")
         _refuse_unclaimable(status)
         if status in self.answers:
             msg = f"{status} is already declared on this Expect"
@@ -240,6 +278,9 @@ def body_reader[T](
         ALLOTMENTS: Final = body_reader(decode_allotments)
         STATEMENTS: Final = body_reader(partial(decode_statements, table=Statement))
 
+    The reader is named after *decode*, so those two print as ``Reader(decode_allotments)`` and
+    ``Reader(decode_statements)``.
+
     A ``ValueError``, ``LookupError``, ``TypeError`` or :class:`~headgate.errors.DecodeError` from *decode* is a body
     of the wrong shape, which the client raises as :class:`~headgate.errors.ResponseParseError` on a 2xx.
 
@@ -252,17 +293,29 @@ def body_reader[T](
     quota, rate limit, server, a malformed request, any undocumented code) and leave a code about the subject (an
     unknown instrument, a rejected order) in the value for the caller.
     """
+    return _body_reader(decode, empty=empty, refuse=refusal_check, name=_name_of(decode))
+
+
+def _body_reader[T](
+    decode: Callable[[bytes], T],
+    /,
+    *,
+    empty: bytes | None,
+    refuse: Callable[[T], RefusedError | None] | None,
+    name: str,
+) -> Reader[T]:
+    """Build the reader :func:`body_reader` documents, named *name*: for a builder that names its reader itself."""
 
     def _read(resp: httpx2.Response, /) -> T:
         content = resp.content
         if empty is not None and not content.strip():
             content = empty
         value = decode(content)
-        if refusal_check is not None and (refused := refusal_check(value)) is not None:
+        if refuse is not None and (refused := refuse(value)) is not None:
             raise refused
         return value
 
-    return _read
+    return Reader(_read, name=name)
 
 
 def json_reader[T](
@@ -286,31 +339,37 @@ def json_reader[T](
     return body_reader(decode, empty=b"[]" if allow_empty_body else None, refusal_check=refusal_check)
 
 
-def as_bytes(resp: httpx2.Response, /) -> bytes:
-    """Return the body undecoded, for a wire that is not a format from the client's point of view.
-
-    A CSV, TXT, ZIP, PDF or XML dump a parser reads later, or an opaque blob. It never raises. It is named ``as_bytes``
-    rather than ``body`` because ``body`` is the commonest parameter name in a client and would shadow the import.
-    """
+def _as_bytes(resp: httpx2.Response, /) -> bytes:
     return resp.content
 
 
-def nothing(resp: httpx2.Response, /) -> None:
-    """Return ``None``: the call's answer is that it completed. For a void write (a cancel, a delete, a reset) or HEAD.
+#: Return the body undecoded, for a wire that is not a format from the client's point of view.
+#:
+#: A CSV, TXT, ZIP, PDF or XML dump a parser reads later, or an opaque blob. It never raises. It is named ``as_bytes``
+#: rather than ``body`` because ``body`` is the commonest parameter name in a client and would shadow the import.
+as_bytes: Final[Reader[bytes]] = Reader(_as_bytes, name="as_bytes")
 
-    Throwing a body away is a claim about the wire, so declare ``nothing`` only for an endpoint documented to send no
-    body you need. Await such a call as a statement: type checkers reject binding a ``None``-typed result.
-    """
+
+def _nothing(resp: httpx2.Response, /) -> None:
     del resp
 
 
-def event_stream(resp: httpx2.Response, /) -> list[httpx2.ServerSentEvent]:
-    """Return each server-sent event in the buffered body, in order, as ``Stream.aiter_events`` yields them.
+#: Return ``None``: the call's answer is that it completed. For a void write (a cancel, a delete, a reset) or HEAD.
+#:
+#: Throwing a body away is a claim about the wire, so declare ``nothing`` only for an endpoint documented to send no
+#: body you need. Await such a call as a statement: type checkers reject binding a ``None``-typed result.
+nothing: Final[Reader[None]] = Reader(_nothing, name="nothing")
 
-    It is the same WHATWG parser: each event carries its ``event``, ``data``, ``id`` and ``retry``, the body is UTF-8
-    whatever its ``charset`` says, and a block without data (a ``retry:`` hint, an ``event: ping``) is not an event.
-    No per-event limit applies, because the body is already buffered and capped by the client, and a large reply is
-    legitimately one event. Choosing whether a body is an event stream is the caller's job, usually by reading the
-    ``content-type``.
-    """
+
+def _event_stream(resp: httpx2.Response, /) -> list[httpx2.ServerSentEvent]:
     return list(EventParser().feed(resp.content))
+
+
+#: Return each server-sent event in the buffered body, in order, as ``Stream.aiter_events`` yields them.
+#:
+#: It is the same WHATWG parser: each event carries its ``event``, ``data``, ``id`` and ``retry``, the body is UTF-8
+#: whatever its ``charset`` says, and a block without data (a ``retry:`` hint, an ``event: ping``) is not an event.
+#: No per-event limit applies, because the body is already buffered and capped by the client, and a large reply is
+#: legitimately one event. Choosing whether a body is an event stream is the caller's job, usually by reading the
+#: ``content-type``.
+event_stream: Final[Reader[list[httpx2.ServerSentEvent]]] = Reader(_event_stream, name="event_stream")

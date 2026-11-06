@@ -54,6 +54,7 @@ from headgate._core import (
     CallStarted,
     Emitter,
     Slot,
+    check_kind,
     current_timing,
     policy_is_disabled,
 )
@@ -76,7 +77,6 @@ from headgate._options import (
     Timeouts,
     TransportPolicy,
     check_deadline,
-    check_kind,
     check_timeout_fits,
     httpx_timeout,
     match_route,
@@ -299,7 +299,7 @@ class AsyncBaseClient:
     * ``ResponseParseError``: a 2xx body the reader could not read;
     * ``ResponseTooLargeError``: a body past ``HttpOptions.max_response_bytes``.
 
-    There is no ``None`` return except from a reader that returns it (:func:`~headgate._responses.nothing`): every
+    There is no ``None`` return except from a reader that returns it (:data:`~headgate._responses.nothing`): every
     undeclared non-2xx raises, a 404 included. A non-2xx the provider documents as an answer is declared with
     :meth:`Expect.on <headgate._responses.Expect.on>` and comes back as its own wire type.
 
@@ -518,7 +518,7 @@ class AsyncBaseClient:
         cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
     ) -> object:
-        """Send a HEAD and read the reply through *expect*: by default :func:`~headgate.nothing`, as a HEAD has no body.
+        """Send a HEAD and read the reply through *expect*: by default :data:`~headgate.nothing`, as a HEAD has no body.
 
         A reader still has the status line and headers, ``Content-Length`` and ``Content-Encoding`` included, so
         ``expect=`` reads a header off a HEAD; the size cap is not applied to a body that does not exist.
@@ -643,7 +643,10 @@ class AsyncBaseClient:
             idempotency key (``idempotency_key=``, or the policy's header in ``headers=``, a view's or the client's),
             as one key on pages with different bodies would have the server replay the first page's answer. A later
             page with a body is held to the same rules, and raises from the iteration.
+        :raises TypeError: for an ``expect=`` that is neither a :class:`~headgate.Reader` nor an ``Expect``, before the
+            pager runs.
         """
+        spec: Expect[P] = _expectation(expect)
         body, as_json, call_options = _walk_body(**options)
         # How a body is sent is the walk's: the pager's writer encodes every page's, whatever request the pager returns.
         write = pages.write if isinstance(pages, WritingPager) else None
@@ -653,7 +656,6 @@ class AsyncBaseClient:
         refusal = _post_refusal(write, as_json=as_json, fixed_key=self._one_key_for_every_page(call_options))
         if first.body is not None and refusal is not None:
             raise ValueError(refusal)
-        spec: Expect[P] = expect if isinstance(expect, Expect) else Expect(expect)
         answers = {status: _paired(read) for status, read in spec.answers.items()}
         paired = Expect(_paired(spec.ok), answers, headers=spec.headers, accept=spec.accept)
 
@@ -701,7 +703,7 @@ class AsyncBaseClient:
 
         See :meth:`_dispatch` for how the last three read the body.
         """
-        spec: Expect[T] = expect if isinstance(expect, Expect) else Expect(expect)
+        spec: Expect[T] = _expectation(expect)
         prepared = self._prepare(call)
         explicit = self._view.headers_for(call.options.get("headers"))
         _stamp_headers(prepared.request, explicit, spec.headers)
@@ -1235,13 +1237,22 @@ def _post_refusal[B](write: Writer[B] | None, *, as_json: bool, fixed_key: bool)
     return None
 
 
+def _expectation[T](expect: Reader[T] | Expect[T]) -> Expect[T]:
+    """Return *expect* as an ``Expect``: itself, or one whose success reader it is.
+
+    :raises TypeError: for an *expect* that is neither, such as a model class or a bare function.
+    """
+    check_kind("expect", expect, (Reader, Expect), "a Reader or an Expect")
+    return expect if isinstance(expect, Expect) else Expect(expect)
+
+
 def _paired[T](read: Reader[T]) -> Reader[tuple[T, httpx2.Response]]:
     """Return a reader that returns what *read* reads together with the response, for a pager to read headers from."""
 
     def _read(resp: httpx2.Response, /) -> tuple[T, httpx2.Response]:
         return read(resp), resp
 
-    return _read
+    return Reader(_read, name="paired")
 
 
 def _invalid_url(exc: httpx2.InvalidURL, site: CallSite) -> ClientError:

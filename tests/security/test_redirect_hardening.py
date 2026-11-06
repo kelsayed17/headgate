@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import CachedTokenAuth, Expect, HttpOptions, Minted, TransportError, UpstreamStatusError
+from headgate import CachedTokenAuth, Expect, HttpOptions, Minted, Reader, TransportError, UpstreamStatusError
 from tests.security._servers import client_ssl_context, serving
 from tests.security._web import BASE, Web
 from tests.support.clients import StubClient
@@ -46,6 +46,7 @@ async def test_a_redirect_the_call_does_not_follow_keeps_its_location() -> None:
     """Leave a downgrade the call does not follow whole, so a declared 3xx still reads its ``Location``."""
     web = Web({f"{BASE}/start": "http://api.example/x"})
 
+    @Reader
     def location(resp: httpx2.Response) -> str:
         """Return the redirect's target."""
         return resp.headers["Location"]

@@ -27,6 +27,7 @@ from headgate import (
     Problem,
     Rate,
     RateLimitError,
+    Reader,
     RefusedError,
     ResponseParseError,
     ResponseTooLargeError,
@@ -517,6 +518,7 @@ async def test_a_refusal_and_a_parse_error_carry_the_request_id() -> None:
     """Read the request id of the response a refusal or an unreadable body came on."""
     answer = httpx2.Response(200, text="<html>", headers={"x-request-id": _REQUEST_ID})
 
+    @Reader
     def refuse(_resp: httpx2.Response) -> bytes:
         """Refuse the body."""
         msg = "refused"
@@ -531,6 +533,7 @@ async def test_a_refusal_and_a_parse_error_carry_the_request_id() -> None:
     assert (refused.value.request_id, unreadable.value.request_id) == (_REQUEST_ID, _REQUEST_ID)
 
 
+@Reader
 def _empty_value_error(_resp: httpx2.Response) -> bytes:
     """Fail as a reader whose error has no message."""
     raise ValueError

@@ -12,7 +12,7 @@ here is what a client is written with:
   :class:`PageOptions`, :class:`ViewOptions`, :class:`TransportPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`,
   :class:`Timeouts` and :data:`DEFAULT_TIMEOUTS`, :class:`IdempotencyKeys`, :class:`Route`, :class:`Middleware` and
   :data:`Next` (what a middleware calls to continue);
-* declared responses: :class:`Expect`, :data:`Reader` and the readers, :data:`RefusalCheck`, :class:`RefusedError`;
+* declared responses: :class:`Expect`, :class:`Reader` and the readers, :data:`RefusalCheck`, :class:`RefusedError`;
 * codecs: :class:`Codec`, and :func:`decoder_for`, :func:`encoder_for` and :func:`decode_with`, which build a reader, a
   writer and a decode on any codec;
 * request bodies: :class:`EncodedBody`, :data:`Writer` and :func:`json_writer`;

@@ -27,6 +27,7 @@ from headgate import (
     PageLimit,
     PageLimitError,
     PageNumber,
+    Reader,
     RequestOptions,
     ResponseParseError,
     UpstreamStatusError,
@@ -463,7 +464,7 @@ async def test_a_declared_answer_is_a_page() -> None:
     def answer(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(404, request=request)
 
-    expect = Expect(decoder(Page)).on(404, lambda _resp: Page([]))
+    expect = Expect(decoder(Page)).on(404, Reader(lambda _resp: Page([])))
     paginated = _Api(answer).client().paginate("items", expect=expect, pages=LinkHeader(items=items_of))
     assert [page async for page in paginated.pages()] == [Page([])]
 

@@ -4,7 +4,7 @@
 """The ``text/event-stream`` grammar (WHATWG HTML, "Server-sent events"), parsed from bytes as they arrive.
 
 :class:`EventParser` is what :meth:`Stream.aiter_events <headgate.streaming.Stream.aiter_events>` and the buffered
-:func:`~headgate.event_stream` reader share. It follows the grammar where httpx2's ``EventSource`` departs from it: the
+:data:`~headgate.event_stream` reader share. It follows the grammar where httpx2's ``EventSource`` departs from it: the
 stream is UTF-8 whatever its ``charset`` says, one leading byte order mark is skipped, a block whose data buffer is
 empty (``event: ping``, ``retry:`` or ``id:`` alone) dispatches nothing, and ``retry:`` takes only ASCII digits. Each
 event is still an ``httpx2.ServerSentEvent``, carrying the ``retry`` its own block named, as httpx2's does; the

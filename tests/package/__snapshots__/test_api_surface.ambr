@@ -682,7 +682,8 @@
   class RateRule(object)(fragment: 'str', rate: 'Rate | RateBudget') -> 'None'
       field fragment: str
       field rate: Rate | RateBudget
-  type Reader[T] = Callable[[httpx2.Response], T]
+  class Reader(Generic)(read: 'Callable[[httpx2.Response], T]', /, *, name: 'str | None' = None) -> 'None'
+      def __call__(self, response: 'httpx2.Response', /) -> 'T'
   type RefusalCheck = Callable[[httpx2.Response], RefusedError | None]
   class RefusedError(Exception)(message: 'str', *, code: 'str | None' = None, kind: 'type[UpstreamStatusError]' = <class 'headgate.errors.UpstreamStatusError'>) -> 'None'
   class RequestOptions(dict)(no signature)
@@ -755,14 +756,14 @@
       key deadline: float | None (optional)
       key retry: bool | RetryPolicy (optional)
   type Writer[T] = Callable[[T], EncodedBody]
-  def as_bytes(resp: 'httpx2.Response', /) -> 'bytes'
+  as_bytes: Reader[bytes] = Reader(as_bytes)
   def body_reader(decode: 'Callable[[bytes], T]', /, *, empty: 'bytes | None' = None, refusal_check: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
   def decode_with(codec: 'Codec', content: 'bytes', type_: 'TypeForm[T]') -> 'T'
   def decoder_for(codec: 'Codec', type_: 'TypeForm[T]', *, allow_empty_body: 'bool' = False, refusal_check: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
   def encoder_for(codec: 'Codec', type_: 'TypeForm[T]') -> 'Writer[T]'
-  def event_stream(resp: 'httpx2.Response', /) -> 'list[httpx2.ServerSentEvent]'
+  event_stream: Reader[list[httpx2.ServerSentEvent]] = Reader(event_stream)
   def json_reader(decode: 'Callable[[bytes], T]', *, allow_empty_body: 'bool' = False, refusal_check: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
   def json_writer(encode: 'Callable[[T], bytes]') -> 'Writer[T]'
-  def nothing(resp: 'httpx2.Response', /) -> 'None'
+  nothing: Reader[None] = Reader(nothing)
   '''
 # ---

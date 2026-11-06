@@ -17,9 +17,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from headgate._core import type_text
 from headgate._failures import shorten
 from headgate._request_body import EncodedBody
-from headgate._responses import body_reader
+from headgate._responses import _body_reader
 from headgate.errors import DecodeError
 
 if TYPE_CHECKING:
@@ -107,10 +108,13 @@ def decoder_for[T](
     A body *codec* finds malformed or of another type raises :class:`~headgate.errors.DecodeError`, described by the
     codec. ``allow_empty_body`` reads an empty body as an empty array, as *codec* encodes one, for a list-shaped type
     whose provider answers "no data" with nothing; ``refusal_check`` runs on the decoded value, as on
-    :func:`~headgate.body_reader`.
+    :func:`~headgate.body_reader`. The reader is named after *codec*'s class and *type_*:
+    ``Reader(MsgspecCodec list[Order])``.
     """
     empty = codec.encoder(list[object])([]) if allow_empty_body else None
-    return body_reader(_translated(codec, codec.decoder(type_)), empty=empty, refusal_check=refusal_check)
+    decode = _translated(codec, codec.decoder(type_))
+    name = f"{type(codec).__name__} {type_text(type_)}"
+    return _body_reader(decode, empty=empty, refuse=refusal_check, name=name)
 
 
 def encoder_for[T](codec: Codec, type_: TypeForm[T]) -> Writer[T]:

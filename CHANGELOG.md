@@ -47,6 +47,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   view's, so a call made on `with_options(retry=False)` with `retry=True` is retried under its route's policy or the
   client's. Before, `True` was also the default, so it could not override the view's `retry=False`, contrary to "a
   call's own options win over the view's".
+- A reader is a `Reader`, a class: wrap a function of the response as `Reader(fn)`, or put `@Reader` over its `def`.
+  `expect=`, `Expect(ok, answers)`, `Expect.on` and `conditional` raise `TypeError` for anything else, such as a model
+  class (`expect=Order`, where `expect=decoder(Order)` was meant), `str` or a bare function, and a type checker
+  rejects them too. A reader's `repr` names its function. `nothing`, `as_bytes` and `event_stream` are `Reader`
+  values, and `body_reader`, `json_reader` and `decoder_for` return one, so code built on them is unchanged. A refusal
+  of the wrong kind now says what it got: `the class str`, `the type list[Order]`, or the value's type.
 
 ### Removed
 

@@ -19,7 +19,7 @@ import msgspec
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from headgate import CachedTokenAuth, HttpOptions, Minted, Timeouts, TransportPolicy
+from headgate import CachedTokenAuth, HttpOptions, Minted, Reader, Timeouts, TransportPolicy
 from headgate import pydantic as pydantic_flavor
 from headgate._auth import AUTH_HOP, StaticHeaderAuth
 from headgate._client import AsyncBaseClient
@@ -703,6 +703,7 @@ async def test_the_host_check_runs_before_a_declared_answer() -> None:
     """
     seen: list[int] = []
 
+    @Reader
     def declared_reader(resp: httpx2.Response) -> _Answer:
         seen.append(resp.status_code)
         msg = "a different refusal, if this ever runs"
@@ -803,6 +804,7 @@ async def test_a_refused_reader_becomes_its_kind_with_the_real_status_and_code()
 async def test_a_refusal_from_a_declared_non_2xx_reader_keeps_that_status() -> None:
     """Check that a declared 409 whose reader refuses raises with 409 and the reader's code."""
 
+    @Reader
     def refusing(_resp: httpx2.Response) -> _Answer:
         msg = "the provider refused, in its own words"
         raise RefusedError(msg, code="E42")
@@ -829,6 +831,7 @@ async def test_a_status_error_never_carries_a_query_string_secret() -> None:
 async def test_a_refused_reader_never_carries_a_query_string_secret() -> None:
     """Check that ``refusal_error`` builds its message from the sanitized URL too."""
 
+    @Reader
     def refusing(_resp: httpx2.Response) -> _Value:
         msg = "the provider refused"
         raise RefusedError(msg)

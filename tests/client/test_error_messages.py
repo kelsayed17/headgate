@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Expect, HttpOptions, RefusedError, StaticHeaderAuth, TransportPolicy
+from headgate import Expect, HttpOptions, Reader, RefusedError, StaticHeaderAuth, TransportPolicy
 from headgate._failures import MESSAGE_TEXT_LIMIT, CallSite, transport_error
 from headgate._responses import as_bytes
 from headgate.errors import (
@@ -199,11 +199,13 @@ async def test_a_very_long_bad_url_is_named_in_a_bounded_message() -> None:
 # --- A reader's failure lands in the tree ---
 
 
+@Reader
 def _json_key(resp: httpx2.Response) -> object:
     """Read the ``"value"`` field of the body, as hand-written reader code does."""
     return resp.json()["value"]
 
 
+@Reader
 def _first_item(resp: httpx2.Response) -> object:
     """Read the first item of a list body."""
     return resp.json()[0]
@@ -231,6 +233,7 @@ def _validate(token: str) -> int:
     raise ValueError(token)
 
 
+@Reader
 def _quoting_reader(resp: httpx2.Response) -> object:
     """Fail as a codec does: a safe diagnosis, chained to the library's error that quotes the input value."""
     try:
@@ -264,6 +267,7 @@ async def test_a_parse_error_names_the_status_and_the_request_line() -> None:
 async def test_a_parse_error_message_is_bounded() -> None:
     """Bound a reader's diagnosis, which can quote as much of the body as it likes."""
 
+    @Reader
     def verbose(resp: httpx2.Response) -> object:
         raise ValueError(resp.text)
 
@@ -287,6 +291,7 @@ async def test_a_readers_refusal_is_chained_to_the_error_it_becomes() -> None:
     """Chain the ``ClientError`` to the reader's ``RefusedError``, so the traceback shows where the reader refused."""
     refusal = RefusedError("quota exhausted", code="Q", kind=RateLimitError)
 
+    @Reader
     def refuse(_resp: httpx2.Response) -> bytes:
         raise refusal
 
