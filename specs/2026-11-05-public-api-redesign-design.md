@@ -124,8 +124,10 @@ response.
 - `reader_for(codec, T, *, allow_empty_body=False, refuse=None) -> Reader[T]` and `writer_for(codec, T) -> Writer[T]`
   replace `decoder_for` and `encoder_for`.
 - Flavor modules mirror them: `headgate.msgspec.reader(T)` / `.writer(T)`, and the same for pydantic.
-- `body_reader(decode, *, empty=None, refuse=None)` stays as the escape hatch, with the empty-body keyword spelled
-  the same as the others.
+- `body_reader(decode, *, empty=None, refuse=None)` stays as the escape hatch, with the refusal keyword spelled the
+  same as the others. Its `empty=` takes the bytes to decode in place of an empty body, since without a codec it
+  cannot encode an empty array itself; the codec builders' `allow_empty_body=` is that same choice made for you.
+  (Amended with the phase 2 plan.)
 - `as_json` is a ready reader using the standard library's `json.loads`, so a core-only install can read JSON without
   learning codecs. It is named beside `as_bytes`, and not `JSON`, which would differ from the `Json` body class (3.3)
   only in case. (Amended with the phase 2 plan.)
