@@ -28,7 +28,6 @@ from headgate import (
     Problem,
     RateLimitError,
     Reader,
-    RefusedError,
     RetryPolicy,
     SecurityOptions,
     TransportPolicy,
@@ -36,6 +35,7 @@ from headgate import (
     nothing,
 )
 from headgate.breaker import BreakerRegistry
+from headgate.errors import RefusedError
 from headgate.ratelimit import UNLIMITED
 from headgate.retry import NO_RETRY, Backoff
 from headgate.testing import TestClock
@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 
     from syrupy.assertion import SnapshotAssertion
 
-    from headgate._responses import RefusalCheck
+    from headgate._responses import ResponseCheck
 
 _BASE: Final = "https://api.example.test/v1"
 #: A credential in the query string, which every message must redact.
@@ -101,7 +101,7 @@ def _client(
         http=HttpOptions(
             transport=options.transport or transport,
             max_response_bytes=options.max_response_bytes,
-            refusal_check=options.refusal_check,
+            response_check=options.response_check,
             follow_redirects=options.follow_redirects,
             security=options.security,
             max_redirects=options.max_redirects,
@@ -218,10 +218,10 @@ def _sign_in_redirect(resp: httpx2.Response) -> RefusedError | None:
 
 
 async def _host_check_refusal() -> None:
-    """Refuse a key-error redirect from the host's ``refusal_check``: the 302 it arrived with."""
-    check: RefusalCheck = _sign_in_redirect
+    """Refuse a key-error redirect from the host's ``response_check``: the 302 it arrived with."""
+    check: ResponseCheck = _sign_in_redirect
     redirect = httpx2.Response(302, headers={"location": "/login"})
-    await _get(_client(redirect, http=HttpOptions(refusal_check=check, follow_redirects=False)))
+    await _get(_client(redirect, http=HttpOptions(response_check=check, follow_redirects=False)))
 
 
 async def _parse_error() -> None:

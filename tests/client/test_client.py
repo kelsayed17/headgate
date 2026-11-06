@@ -23,8 +23,15 @@ from headgate import CachedTokenAuth, HttpOptions, Minted, Reader, Timeouts, Tra
 from headgate import pydantic as pydantic_flavor
 from headgate._auth import AUTH_HOP, StaticHeaderAuth
 from headgate._client import AsyncBaseClient
-from headgate._responses import Expect, RefusalCheck, RefusedError, as_bytes, nothing
-from headgate.errors import AuthError, RateLimitError, ResponseParseError, TransportError, UpstreamStatusError
+from headgate._responses import Expect, ResponseCheck, as_bytes, nothing
+from headgate.errors import (
+    AuthError,
+    RateLimitError,
+    RefusedError,
+    ResponseParseError,
+    TransportError,
+    UpstreamStatusError,
+)
 from headgate.msgspec import reader
 from headgate.ratelimit import UNLIMITED, Rate
 from headgate.ratelimit._budget import Pacer
@@ -631,7 +638,7 @@ class _Status(msgspec.Struct, frozen=True):
 
 
 def _serving(
-    *responses: httpx2.Response, follow_redirects: bool = True, refusal_check: RefusalCheck | None = None
+    *responses: httpx2.Response, follow_redirects: bool = True, response_check: ResponseCheck | None = None
 ) -> StubClient:
     """Return a client whose successive requests are answered by *responses*, in order."""
     it = iter(responses)
@@ -641,7 +648,7 @@ def _serving(
         http=HttpOptions(
             transport=httpx2.MockTransport(lambda _request: next(it)),
             follow_redirects=follow_redirects,
-            refusal_check=refusal_check,
+            response_check=response_check,
         ),
     )
 
@@ -655,7 +662,7 @@ def _key_page_refusal(resp: httpx2.Response) -> RefusedError | None:
     return None
 
 
-async def test_a_host_refusal_is_raised_as_its_kind_with_the_real_status() -> None:
+async def test_a_response_check_refuses_a_sign_in_redirect() -> None:
     """Check that a key-error 302 named by the host check raises with the 302, the code, the source and the body."""
     client = _serving(
         httpx2.Response(
@@ -664,7 +671,7 @@ async def test_a_host_refusal_is_raised_as_its_kind_with_the_real_status() -> No
             content=b"Moved to key page",
         ),
         follow_redirects=False,
-        refusal_check=_key_page_refusal,
+        response_check=_key_page_refusal,
     )
     with pytest.raises(AuthError) as ei:
         await client.get("x", expect=reader(dict[str, str]))
@@ -686,7 +693,7 @@ async def test_a_host_check_returning_none_changes_nothing_and_sees_every_respon
         httpx2.Response(httpx2.codes.OK, content=b'{"ok":"yes"}'),
         httpx2.Response(httpx2.codes.NOT_FOUND),
         follow_redirects=False,
-        refusal_check=refusal,
+        response_check=refusal,
     )
     assert await client.get("x", expect=reader(dict[str, str])) == {"ok": "yes"}
     with pytest.raises(UpstreamStatusError) as ei:
@@ -715,7 +722,7 @@ async def test_the_host_check_runs_before_a_declared_answer() -> None:
     client = _serving(
         httpx2.Response(httpx2.codes.BAD_REQUEST, json={"message": "refused"}),
         follow_redirects=False,
-        refusal_check=refusal,
+        response_check=refusal,
     )
     with pytest.raises(AuthError) as ei:
         await client.post("x", expect=Expect(reader(_Value)).on(httpx2.codes.BAD_REQUEST, declared_reader))
@@ -723,16 +730,22 @@ async def test_the_host_check_runs_before_a_declared_answer() -> None:
     assert seen == []
 
 
-def test_a_refusing_client_that_follows_redirects_is_refused_at_construction() -> None:
-    """Check that a refusal check on a redirect-following client is a ``ValueError``: it would miss a hop's refusal."""
-    with pytest.raises(ValueError, match="follow_redirects=False"):
-        HttpOptions(refusal_check=_key_page_refusal)
+def test_a_response_check_requires_no_redirects() -> None:
+    """Check that a response check on a redirect-following client is a ``ValueError``: it would miss a hop's refusal."""
+    with pytest.raises(ValueError, match=r"^an HttpOptions with a response_check= must set follow_redirects=False$"):
+        HttpOptions(response_check=_key_page_refusal, follow_redirects=True)
+
+
+def test_the_old_refusal_check_keyword_is_refused() -> None:
+    """Refuse ``refusal_check=``, which is spelled ``response_check=``."""
+    with pytest.raises(TypeError, match="refusal_check"):
+        HttpOptions(**cast("Any", {"refusal_check": _key_page_refusal}))
 
 
 async def test_a_per_call_follow_redirects_on_a_refusing_client_is_refused() -> None:
     """Check that one call cannot turn redirect-following on for a client with a refusal check."""
     client = _serving(
-        httpx2.Response(httpx2.codes.OK, content=b"{}"), follow_redirects=False, refusal_check=_key_page_refusal
+        httpx2.Response(httpx2.codes.OK, content=b"{}"), follow_redirects=False, response_check=_key_page_refusal
     )
     with pytest.raises(ValueError, match="follow redirects"):
         await client.get("x", expect=reader(dict[str, str]), follow_redirects=True)

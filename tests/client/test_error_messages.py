@@ -5,7 +5,7 @@
 
 Every message can reach an application boundary's error detail, so each names the request line and the status in the
 same shape, is bounded, and never repeats a credential: not a header value the HTTP library quotes back, not a URL
-pasted whole, not a body. A reader's or a ``refusal_check``'s failure, however it is raised, lands in the same tree.
+pasted whole, not a body. A reader's or a ``response_check``'s failure, however it is raised, lands in the same tree.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Expect, HttpOptions, Reader, RefusedError, StaticHeaderAuth, TransportPolicy
+from headgate import Expect, HttpOptions, Reader, StaticHeaderAuth, TransportPolicy
 from headgate._failures import MESSAGE_TEXT_LIMIT, CallSite, transport_error
 from headgate._responses import as_bytes
 from headgate.errors import (
@@ -27,6 +27,7 @@ from headgate.errors import (
     ClientError,
     DecodeError,
     RateLimitError,
+    RefusedError,
     ResponseParseError,
     TransportError,
     UpstreamStatusError,
@@ -39,7 +40,7 @@ from tests.support.clients import StubClient
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
 
-    from headgate._responses import RefusalCheck
+    from headgate._responses import ResponseCheck
 
 _HOST = "example.test"
 #: The credential every test that could leak one carries.
@@ -49,7 +50,7 @@ _URL_IN_MESSAGE = 400
 
 
 def _client(
-    handler: Callable[[httpx2.Request], httpx2.Response], *, refusal_check: RefusalCheck | None = None
+    handler: Callable[[httpx2.Request], httpx2.Response], *, response_check: ResponseCheck | None = None
 ) -> StubClient:
     """Return a client over *handler* that sends each request once."""
     return StubClient(
@@ -58,8 +59,8 @@ def _client(
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(
             transport=httpx2.MockTransport(handler),
-            refusal_check=refusal_check,
-            follow_redirects=refusal_check is None,
+            response_check=response_check,
+            follow_redirects=response_check is None,
         ),
     )
 
@@ -302,7 +303,7 @@ async def test_a_readers_refusal_is_chained_to_the_error_it_becomes() -> None:
     assert caught.value.__cause__ is refusal
 
 
-# --- A refusal_check that raises rather than returns ---
+# --- A response_check that raises rather than returns ---
 
 
 def _raising_check(resp: httpx2.Response) -> RefusedError | None:
@@ -318,9 +319,9 @@ def _redirecting(_request: httpx2.Request) -> httpx2.Response:
     return httpx2.Response(httpx2.codes.FOUND, headers={"location": "/login"})
 
 
-async def test_a_refusal_check_that_raises_is_treated_like_one_that_returns() -> None:
+async def test_a_response_check_that_raises_is_treated_like_one_that_returns() -> None:
     """Map a raised ``RefusedError`` from the host check to its ``ClientError``, with the status the wire sent."""
-    async with _client(_redirecting, refusal_check=_raising_check) as client:
+    async with _client(_redirecting, response_check=_raising_check) as client:
         with pytest.raises(AuthError) as caught:
             await client.get("series", expect=as_bytes)
 
@@ -329,9 +330,9 @@ async def test_a_refusal_check_that_raises_is_treated_like_one_that_returns() ->
     assert failures(_HOST) == 0
 
 
-async def test_a_refusal_check_that_raises_on_a_stream_is_treated_like_one_that_returns() -> None:
+async def test_a_response_check_that_raises_on_a_stream_is_treated_like_one_that_returns() -> None:
     """Map a raised ``RefusedError`` the same way on ``stream``, before the block is entered."""
-    async with _client(_redirecting, refusal_check=_raising_check) as client:
+    async with _client(_redirecting, response_check=_raising_check) as client:
         with pytest.raises(AuthError, match="bad key"):
             async with client.stream("big.csv"):
                 pass

@@ -18,6 +18,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- `HttpOptions(refusal_check=...)` is `HttpOptions(response_check=...)`, and its type `RefusalCheck` is `ResponseCheck`. The
+  check is unchanged: it sees the final response and returns a `RefusedError` or `None`. The `ValueError` for a
+  redirect-following client names `response_check=`.
+- `RefusedError` is imported from `headgate.errors`: write `from headgate.errors import RefusedError` in place of
+  `from headgate import RefusedError`. It is still not a `ClientError`.
 - `SigningAuth` signs every attempt, inside the retry layer, so a retry or a hedge carries a fresh signature instead of
   repeating the first. It still re-sends once on a 401, now signed afresh. A signature that must change per attempt
   belongs in `SigningAuth`, not in a middleware. A `SigningAuth` given to a bare `httpx2.AsyncClient`, or wrapped in

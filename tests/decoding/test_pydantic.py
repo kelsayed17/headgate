@@ -23,8 +23,7 @@ from pydantic_core import PydanticCustomError
 from headgate import HttpOptions
 from headgate import msgspec as msgspec_flavor
 from headgate._failures import MESSAGE_TEXT_LIMIT
-from headgate._responses import RefusedError
-from headgate.errors import DecodeError, ResponseParseError
+from headgate.errors import DecodeError, RefusedError, ResponseParseError
 from headgate.pydantic import PydanticCodec, _schema_names, decode, reader, to_builtins, writer
 from headgate.testing import FakeTransport
 from tests.support.clients import StubClient

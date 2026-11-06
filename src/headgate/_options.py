@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
     from headgate._core import Observer
     from headgate._middleware import Middleware
-    from headgate._responses import RefusalCheck
+    from headgate._responses import ResponseCheck
     from headgate.cache import HttpCache
     from headgate.ratelimit import RateRule
     from headgate.security import Resolver
@@ -365,7 +365,7 @@ class HttpOptions:
       httpx2 counts an auth flow's hops in the same history as redirects, so each request a
       :class:`~headgate.CachedTokenAuth` mint sends, and a 401 it re-mints after, uses one of ``max_redirects`` too.
     * ``max_response_bytes``: the cap on a buffered body, counted after decompression.
-    * ``refusal_check``: a per-host check run on every final response (see :data:`~headgate.RefusalCheck`). It sees
+    * ``response_check``: a per-host check run on every final response (see :data:`~headgate.ResponseCheck`). It sees
       only the final response, so a refusal written on a followed hop would be skipped, and it therefore requires
       ``follow_redirects=False``.
     * ``security``: where requests and credentials may go (:class:`SecurityOptions`): trusted origins and the SSRF
@@ -386,7 +386,7 @@ class HttpOptions:
     follow_redirects: bool = True
     max_redirects: int = 5
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
-    refusal_check: RefusalCheck | None = None
+    response_check: ResponseCheck | None = None
     security: SecurityOptions = field(default_factory=SecurityOptions)
     ssl_context: ssl.SSLContext | None = None
     limits: httpx2.Limits = field(default_factory=lambda: DEFAULT_LIMITS)
@@ -406,8 +406,8 @@ class HttpOptions:
             msg = f"max_redirects must be >= 0 (got {self.max_redirects})"
             raise ValueError(msg)
         self._check_guard()
-        if self.refusal_check is not None and self.follow_redirects:
-            msg = "an HttpOptions with a refusal_check= must set follow_redirects=False"
+        if self.response_check is not None and self.follow_redirects:
+            msg = "an HttpOptions with a response_check= must set follow_redirects=False"
             raise ValueError(msg)
         if self.user_agent is not None and (not self.user_agent or not self.user_agent.isprintable()):
             msg = "user_agent must be a non-empty, printable product token"

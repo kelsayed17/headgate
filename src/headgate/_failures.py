@@ -4,7 +4,7 @@
 """The ``ClientError`` a failed exchange becomes: pure builders.
 
 Each builder returns its error rather than raising it, so the caller raises it with the right cause (``from exc`` for
-a transport failure, ``from refused`` for a reader's :class:`~headgate._responses.RefusedError`). Each takes the
+a transport failure, ``from refused`` for a reader's :class:`~headgate.errors.RefusedError`). Each takes the
 :class:`CallSite` it failed at: the client class's name, the request line and the attempt count, which every
 ``ClientError`` carries with the response's request id, whether a retry could succeed, and any ``Retry-After``.
 
@@ -44,7 +44,7 @@ from headgate.errors import (
 from headgate.retry._policy import UNRETRYABLE_ERRORS
 
 if TYPE_CHECKING:
-    from headgate._responses import RefusedError
+    from headgate.errors import RefusedError
     from headgate.retry._policy import RetryOutcome
 
 __all__ = [
@@ -303,7 +303,7 @@ def status_error(resp: httpx2.Response, site: CallSite) -> UpstreamStatusError:
 
 
 def refusal_error(refused: RefusedError, resp: httpx2.Response, site: CallSite) -> UpstreamStatusError:
-    """Build the ``ClientError`` for a provider's :class:`RefusedError`, from a reader or the host's ``refusal_check``.
+    """Build the ``ClientError`` for a provider's :class:`RefusedError`, from a reader or the host's ``response_check``.
 
     Both paths build the error here, so both carry the provider's code, the client's name and the body snippet.
     ``refused.kind`` names the class, and the status is the one the wire sent: a refusal written inside a 200 body

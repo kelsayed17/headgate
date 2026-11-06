@@ -13,10 +13,10 @@ import pytest
 
 from headgate import BreakerPolicy, HttpOptions, TransportPolicy
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
-from headgate._responses import RefusedError
 from headgate.errors import (
     ClientError,
     ClientTimeoutError,
+    RefusedError,
     ResponseParseError,
     ResponseTooLargeError,
     TransportError,
@@ -30,7 +30,7 @@ from tests.support.clients import StubClient
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Coroutine
 
-    from headgate import RefusalCheck
+    from headgate import ResponseCheck
 
 _HOST = "x.test"
 _BASE = f"https://{_HOST}"
@@ -56,14 +56,14 @@ def _client(
     handler: Handler,
     *,
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
-    refusal_check: RefusalCheck | None = None,
+    response_check: ResponseCheck | None = None,
 ) -> StubClient:
-    """Build a client over an async in-memory *handler*; a *refusal_check* turns redirect-following off."""
+    """Build a client over an async in-memory *handler*; a *response_check* turns redirect-following off."""
     http = HttpOptions(
         transport=httpx2.MockTransport(handler),
         max_response_bytes=max_response_bytes,
-        refusal_check=refusal_check,
-        follow_redirects=refusal_check is None,
+        response_check=response_check,
+        follow_redirects=response_check is None,
     )
     return StubClient(base_url=_BASE, rate=_RATE, http=http)
 
@@ -167,16 +167,16 @@ async def test_a_redirect_that_is_not_followed_raises() -> None:
     assert raised.value.status_code == httpx2.codes.FOUND
 
 
-async def test_a_refusal_check_runs_on_the_head_before_the_block() -> None:
+async def test_a_response_check_runs_on_the_head_before_the_block() -> None:
     """Refuse a stream through the host check before the caller's block runs."""
     client = _client(
         _answer(httpx2.Response(200, content=b"data")),
-        refusal_check=lambda resp: RefusedError("no") if resp.status_code == httpx2.codes.OK else None,
+        response_check=lambda resp: RefusedError("no") if resp.status_code == httpx2.codes.OK else None,
     )
     with pytest.raises(UpstreamStatusError, match="no"):
         async with client.stream("f"):
             pytest.fail("a refused stream never opens")
-    with pytest.raises(ValueError, match="refusal"):
+    with pytest.raises(ValueError, match="response_check"):
         async with client.stream("f", follow_redirects=True):
             pytest.fail("a refusing client never follows redirects")
 

@@ -18,7 +18,8 @@ _PRELUDE = dedent(
     import msgspec
 
     import headgate.msgspec
-    from headgate import Expect, Reader, RefusedError, as_bytes, nothing, reader_for
+    from headgate import Expect, Reader, as_bytes, nothing, reader_for
+    from headgate.errors import RefusedError
     from headgate.msgspec import CODEC, reader
     from tests.support.clients import StubClient
 

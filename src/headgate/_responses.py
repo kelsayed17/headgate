@@ -35,14 +35,13 @@ from typing import Final, NoReturn, final, override
 import httpx2
 
 from headgate._core import check_kind
-from headgate.errors import DecodeError, UpstreamStatusError
+from headgate.errors import DecodeError, RefusedError
 from headgate.streaming._events import EventParser
 
 __all__ = [
     "Expect",
     "Reader",
-    "RefusalCheck",
-    "RefusedError",
+    "ResponseCheck",
     "accepts",
     "as_bytes",
     "as_json",
@@ -119,33 +118,7 @@ def _refuse_unclaimable(status: int) -> None:
         raise ValueError(msg)
 
 
-class RefusedError(Exception):
-    """A provider's refusal, as a reader or a host check saw it.
-
-    A reader raises it for a refusal written inside a body (an error envelope, a ``REQUEST_NOT_PROCESSED`` status, a
-    vendor error code); a reader's ``refuse`` and a client's ``refusal_check`` return one instead. The base client is
-    its only catcher, and turns it into ``kind(message, status_code=<the status the wire sent>, code=code, ...)``, so
-    a refusal in a 200 body carries 200.
-
-    ``code`` is the provider's own code. ``kind`` is the ``ClientError`` class that code means: ``AuthError`` for a
-    credential, ``RateLimitError`` for a quota or rate limit, and ``UpstreamStatusError`` otherwise.
-
-    It is an exception rather than a return value because ``T | RefusedError`` would widen every reader's type and
-    blur a refusal with the values a reader legitimately returns. It is not a ``ClientError``: the base client
-    converts it before a caller of the client sees it.
-    """
-
-    def __init__(
-        self, message: str, *, code: str | None = None, kind: type[UpstreamStatusError] = UpstreamStatusError
-    ) -> None:
-        """Record the refusal's *message*, the provider's *code*, and the ``ClientError`` *kind* it becomes."""
-        super().__init__(message)
-        self.message = message
-        self.code = code
-        self.kind = kind
-
-
-type RefusalCheck = Callable[[httpx2.Response], RefusedError | None]
+type ResponseCheck = Callable[[httpx2.Response], RefusedError | None]
 """A per-host check, run on the final response before anything the call declared.
 
 It names a refusal the status line alone cannot show, such as a key-error redirect, and returns ``None`` for

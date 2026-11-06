@@ -28,7 +28,7 @@ ladder as a verb, except that:
 - **an exception the block raises that is not a `ClientError` is the caller's own**, even an `OSError` or an httpx2
   error: it propagates unchanged, the breaker is charged nothing for it, and `CallFinished` reports the status the
   stream opened with and no error.
-- the client's `refusal_check` runs on the response head, before the block is entered.
+- the client's `response_check` runs on the response head, before the block is entered.
 
 A `Stream` has `status_code`, `headers` and `request_id`, and three ways to read the body, one per stream:
 `aiter_bytes(chunk_size=None)` (decoded bytes as they arrive), `aiter_lines()` (decoded text lines) and

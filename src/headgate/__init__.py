@@ -13,7 +13,7 @@ here is what a client is written with:
   :class:`Timeouts` and :data:`DEFAULT_TIMEOUTS`, :class:`IdempotencyKeys`, :class:`Route`, :class:`Middleware` and
   :data:`Next` (what a middleware calls to continue);
 * declared responses: :class:`Expect`, :class:`Reader` and the readers (:data:`as_json` among them),
-  :data:`RefusalCheck`, :class:`RefusedError`;
+  :data:`ResponseCheck`;
 * codecs: :class:`Codec`, and :func:`reader_for`, :func:`writer_for` and :func:`decode_with`, which build a reader, a
   writer and a decode on any codec;
 * request bodies: :class:`EncodedBody` and :data:`Writer`;
@@ -57,8 +57,7 @@ from headgate._request_body import EncodedBody, Writer
 from headgate._responses import (
     Expect,
     Reader,
-    RefusalCheck,
-    RefusedError,
+    ResponseCheck,
     as_bytes,
     as_json,
     body_reader,
@@ -140,9 +139,8 @@ __all__ = [
     "RateLimitError",
     "RateRule",
     "Reader",
-    "RefusalCheck",
-    "RefusedError",
     "RequestOptions",
+    "ResponseCheck",
     "ResponseParseError",
     "ResponseTooLargeError",
     "RetryPolicy",

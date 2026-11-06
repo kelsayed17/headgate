@@ -83,7 +83,7 @@ from headgate._options import (
     reject_upstream_httpx,
 )
 from headgate._request_body import check_one_body, request_content
-from headgate._responses import Expect, Reader, RefusedError, accepts, nothing
+from headgate._responses import Expect, Reader, accepts, nothing
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
 from headgate._view import KEEP, ROOT_DEFAULTS, ViewOptions
@@ -99,6 +99,7 @@ from headgate.errors import (
     DecodeError,
     ForbiddenDestinationError,
     RateLimitError,
+    RefusedError,
 )
 from headgate.pagination import PageRequest, WritingPager
 from headgate.pagination._paginated import PageWalk
@@ -115,7 +116,7 @@ if TYPE_CHECKING:
 
     from headgate._options import Route
     from headgate._request_body import Body, EncodedBody, UploadFiles, Writer
-    from headgate._responses import RefusalCheck
+    from headgate._responses import ResponseCheck
     from headgate.breaker._breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
     from headgate.cache import HttpCache
@@ -354,7 +355,7 @@ class AsyncBaseClient:
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
         self._source = type(self).__name__
         self._timing = current_timing()
-        self._refusal_check = http.refusal_check
+        self._response_check = http.response_check
         self._max_response_bytes = http.max_response_bytes
         self._request_id_headers = http.request_id_headers
         check_timeout_fits(http.timeout, policy.deadline)
@@ -545,7 +546,7 @@ class AsyncBaseClient:
         exits. The call runs through the same stack and failure ladder as a verb, except that:
 
         * a 2xx is the only success: there is no ``expect=``, and a 3xx raises unless redirects are followed;
-        * the client's ``refusal_check`` runs on the response head, before the block is entered;
+        * the client's ``response_check`` runs on the response head, before the block is entered;
         * the deadline bounds opening the stream (every attempt, backoff and the head checks), not reading it, since
           the caller's pace of iteration decides how long the body takes. Each read is bounded by the read timeout;
           to bound the whole body, wrap the block in ``asyncio.timeout``;
@@ -698,7 +699,7 @@ class AsyncBaseClient:
         Every response passes four layers, in order:
 
         1. **transport** (:meth:`_exchange`): a transport failure, a surviving 429/5xx, or an open breaker raises;
-        2. **host**: the client's ``refusal_check`` runs on the final response;
+        2. **host**: the client's ``response_check`` runs on the final response;
         3. **endpoint**: a status the call declared exactly goes to its reader; any other 2xx to the success reader;
         4. **default**: any other non-2xx raises through :func:`~headgate._failures.status_error`.
 
@@ -756,7 +757,7 @@ class AsyncBaseClient:
         async with self._deadline(prepared):
             streamed, verdict = await held.enter_async_context(self._exchange(prepared))
             announce_deprecation(prepared.context, streamed)
-            if (refused := _refusal(self._refusal_check, streamed)) is not None:
+            if (refused := _checked(self._response_check, streamed)) is not None:
                 head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
                 raise refusal_error(refused, head, self._site(prepared)) from refused
             if not streamed.is_success:
@@ -772,7 +773,7 @@ class AsyncBaseClient:
         """Build *call*'s request and stamp its context on it.
 
         Raises ``ValueError`` for a t-string value no path segment can hold, for a call that would follow redirects
-        on a client with a ``refusal_check``, for a ``deadline=`` that is not positive and finite and for body options
+        on a client with a ``response_check``, for a ``deadline=`` that is not positive and finite and for body options
         that do not combine; ``TypeError`` for a ``content=`` that is no body; and ``ClientError`` for a URL httpx2
         cannot parse.
         """
@@ -782,9 +783,9 @@ class AsyncBaseClient:
             url, route = str(call.url), None
         log_url = loggable_url(url)
         follow = self._http_client.follow_redirects if call.follow_redirects is None else call.follow_redirects
-        # The per-call half of the constructor's check: the client itself never follows with a refusal_check.
-        if self._refusal_check is not None and follow:
-            msg = f"{self._source} has a refusal_check=, so no call may follow redirects"
+        # The per-call half of the constructor's check: the client itself never follows with a response_check.
+        if self._response_check is not None and follow:
+            msg = f"{self._source} has a response_check=, so no call may follow redirects"
             raise ValueError(msg)
         options = call.options
         params = options.get("params")
@@ -1062,7 +1063,7 @@ class AsyncBaseClient:
     def _dispatch[T](self, resp: httpx2.Response, spec: Expect[T], site: CallSite) -> T:
         """Read the final *resp* through the host check, the call's declared responses and the status ladder.
 
-        A ``RefusedError`` from a reader, or raised or returned by the ``refusal_check``, becomes the ``ClientError``
+        A ``RefusedError`` from a reader, or raised or returned by the ``response_check``, becomes the ``ClientError``
         its kind names, with the real status. A reader that finds the body is not the shape it expected (a codec's
         ``DecodeError``, or the ``ValueError``, ``LookupError`` or ``TypeError`` hand-written code over
         ``response.json()`` raises, or nesting too deep to parse) on a 2xx raises ``ResponseParseError`` naming the
@@ -1070,7 +1071,7 @@ class AsyncBaseClient:
         covers only the body shape it names. A body whose ``Content-Type`` is not the one ``Expect(accept=...)`` asked
         for is such a shape error.
         """
-        if (refused := _refusal(self._refusal_check, resp)) is not None:
+        if (refused := _checked(self._response_check, resp)) is not None:
             raise refusal_error(refused, resp, site) from refused
         read = spec.answers.get(resp.status_code)
         if read is None:
@@ -1198,7 +1199,7 @@ def _breaker_gate(breaker: Breaker, verdict: Verdict) -> Callable[[], bool]:
     return refusing
 
 
-def _refusal(check: RefusalCheck | None, resp: httpx2.Response) -> RefusedError | None:
+def _checked(check: ResponseCheck | None, resp: httpx2.Response) -> RefusedError | None:
     """Run the client's *check* on *resp*, treating a ``RefusedError`` it raises like one it returns."""
     if check is None:
         return None

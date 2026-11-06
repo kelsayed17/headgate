@@ -44,7 +44,8 @@ if TYPE_CHECKING:
     from typing_extensions import TypeForm
 
     from headgate._request_body import Writer
-    from headgate._responses import Reader, RefusedError
+    from headgate._responses import Reader
+    from headgate.errors import RefusedError
 
 __all__ = ["CODEC", "MsgspecCodec", "decode", "reader", "to_builtins", "writer"]
 

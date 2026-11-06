@@ -28,7 +28,6 @@ from headgate import (
     Rate,
     RateLimitError,
     Reader,
-    RefusedError,
     ResponseParseError,
     ResponseTooLargeError,
     RetryPolicy,
@@ -40,6 +39,7 @@ from headgate import (
 )
 from headgate._core import CallContext
 from headgate.breaker import BreakerRegistry
+from headgate.errors import RefusedError
 from headgate.retry import NO_RETRY
 from tests.support.breakers import failures
 from tests.support.clients import StubClient

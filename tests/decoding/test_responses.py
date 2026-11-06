@@ -15,8 +15,15 @@ import msgspec
 import pytest
 
 from headgate import HttpOptions, body_reader
-from headgate._responses import Expect, Reader, RefusedError, as_bytes, as_json, nothing
-from headgate.errors import ClientError, DecodeError, RateLimitError, ResponseParseError, UpstreamStatusError
+from headgate._responses import Expect, Reader, as_bytes, as_json, nothing
+from headgate.errors import (
+    ClientError,
+    DecodeError,
+    RateLimitError,
+    RefusedError,
+    ResponseParseError,
+    UpstreamStatusError,
+)
 from headgate.msgspec import decode, reader
 from headgate.testing import FakeTransport
 from tests.support.clients import StubClient

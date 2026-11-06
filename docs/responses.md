@@ -39,7 +39,7 @@ STATEMENTS: Final = body_reader(partial(decode_statements, table=Statement))
 
 It hands `decode` an empty body as it is, unless `empty=` names the bytes to decode instead: `body_reader(decode,
 empty=b"[]")` reads an empty body as the empty JSON array. Its `refuse=` runs on the decoded value, as a codec reader's
-does (see [refusals inside a body](#refusals-inside-a-body)).
+does (see [a refusal inside the body](#a-refusal-inside-the-body)).
 
 `as_json` reads JSON into builtins with the standard library's `json.loads`, so a core-only install can read JSON
 without a codec. It is typed `object`, the honest type of `json.loads`: narrow it with `isinstance` or a `match`. It
@@ -97,7 +97,7 @@ There are no ranges (`4XX`) and no default: a range is a claim about statuses no
 A response is read in this order:
 
 1. **Transport.** A network failure, a 429 or 5xx that outlasted the retries, or an open breaker raises.
-2. **Host check.** The client's `HttpOptions(refusal_check=...)`, if any, runs on the final response.
+2. **Response check.** The client's `HttpOptions(response_check=...)`, if any, runs on the final response.
 3. **Declared.** A status declared with `on` goes to its reader; any other 2xx to the success reader.
 4. **Status ladder.** Any other status raises: 401 and 403 as `AuthError`, the rest as `UpstreamStatusError`.
 
@@ -119,17 +119,17 @@ comma-separated.
 `Expect(..., headers={...})` sends request headers the declaration needs; a header the call or its view sets in
 `headers=` wins. This is how [conditional reads](caching.md#conditional-reads) send their preconditions.
 
-## Refusals inside a body
+## A refusal inside the body
 
 Some providers answer a failure with a 200 and an error envelope. A reader raises `RefusedError` for that, and the
 client turns it into the `ClientError` its `kind` names (`UpstreamStatusError` by default, `AuthError`,
-`RateLimitError`), with the status the wire sent and the provider's `code`. The simplest way is a reader's `refuse`, which runs on
-the decoded value and returns a refusal or `None`:
+`RateLimitError`), with the status the wire sent and the provider's `code`. The simplest way is a reader's `refuse`,
+which runs on the decoded value and returns a refusal or `None`:
 
 ```python
 import msgspec
 
-from headgate import RateLimitError, RefusedError
+from headgate.errors import RateLimitError, RefusedError
 from headgate.msgspec import reader
 
 
@@ -153,10 +153,12 @@ leave a code about the subject (an unknown instrument, a rejected order) in the 
 inside a 200 bypasses the retry backoff and the breaker, because a 200 looks healthy to both, so retrying it is the
 caller's decision.
 
-A refusal written in the status line or headers rather than the body (a key-error redirect to a sign-in page) belongs to
-a host-wide `HttpOptions(refusal_check=...)`: a function of the response that returns a `RefusedError` or `None` (its
-type is `RefusalCheck`). It sees only the final response, so it requires `follow_redirects=False`, and a call that asks
-to follow redirects on such a client raises `ValueError`.
+## A check of the response
+
+A refusal written in the status line or headers rather than the body (a key-error redirect to a sign-in page) belongs
+to a host-wide `HttpOptions(response_check=...)`: a function of the response that returns a `RefusedError` (from
+`headgate.errors`) or `None` (its type is `ResponseCheck`). It sees only the final response, so it requires
+`follow_redirects=False`, and a call that asks to follow redirects on such a client raises `ValueError`.
 
 ## Codecs
 

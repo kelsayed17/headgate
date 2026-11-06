@@ -371,7 +371,7 @@ class OrdersClient(AsyncBaseClient):
 | `follow_redirects`, `max_redirects` | `True`, `5` |
 | `max_response_bytes` | 32 MiB |
 | `security` | `SecurityOptions()`: credentials to `base_url`'s origin only, SSRF guard off |
-| `refusal_check` | none |
+| `response_check` | none |
 | `observers`, `middleware` | none |
 
 Every option, its validation and the precedence of call, view, route and policy:

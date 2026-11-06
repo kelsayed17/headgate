@@ -13,6 +13,7 @@ import msgspec
 import pytest
 
 import headgate
+import headgate.errors
 import headgate.msgspec
 import headgate.pydantic
 from headgate import Expect, HttpOptions, Reader, as_bytes, event_stream, nothing, reader_for
@@ -90,6 +91,10 @@ def test_the_old_builders_are_gone() -> None:
     for flavor in (headgate.msgspec, headgate.pydantic):
         for name in ("decoder", "encoder"):
             assert not hasattr(flavor, name), (flavor.__name__, name)
+    for name in ("RefusalCheck", "RefusedError"):
+        assert not hasattr(headgate, name), name
+    assert hasattr(headgate, "ResponseCheck")
+    assert headgate.errors.RefusedError.__module__ == "headgate.errors"
 
 
 def test_stock_readers_are_readers() -> None:
