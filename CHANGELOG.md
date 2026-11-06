@@ -81,8 +81,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - A body nested too deeply for its parser (around 100,000 levels for `json.loads` and msgspec) raises
   `ResponseParseError` on a 2xx, or the status's error on a declared non-2xx, where it raised a raw `RecursionError`,
   whichever reader read it: a codec's, `as_json`, `body_reader(json.loads)` or a hand-written reader over
-  `response.json()`. A token mint that meets one raises `ResponseParseError` too. The message ends `nested too deeply`
-  (pydantic's names its own recursion limit, as it already did).
+  `response.json()`. A token mint that meets one raises `ResponseParseError` too. The message ends `nested too deeply`,
+  whichever reader and parser met it.
 
 - A cached response still honors `Vary`: hishel 2 keys an entry by its URL alone, so headgate matches the headers a
   response varies on itself. A response with `Vary: *` is no longer stored, since nothing could match it.

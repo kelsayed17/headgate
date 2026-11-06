@@ -336,8 +336,8 @@ def _as_bytes(resp: httpx2.Response, /) -> bytes:
 as_bytes: Final[Reader[bytes]] = Reader(_as_bytes, name="as_bytes")
 
 
-#: What a reader says of a body nested too deeply for its parser's own stack, whichever parser it is.
-NESTED_TOO_DEEPLY: Final = "not JSON: nested too deeply"
+#: What :data:`as_json` says of a body nested too deeply for ``json.loads``'s own stack.
+_NESTED_TOO_DEEPLY: Final = "not JSON: nested too deeply"
 
 #: What :data:`as_json` says of ``NaN``, ``Infinity``, a number too large for a float, or an integer too long to read.
 _NOT_A_NUMBER: Final = "not JSON: NaN, Infinity or a number out of range"
@@ -395,7 +395,7 @@ def _decode_json(content: bytes, /) -> object:
     except ValueError:
         raise DecodeError(_NOT_A_NUMBER) from None
     except RecursionError:
-        raise DecodeError(NESTED_TOO_DEEPLY) from None
+        raise DecodeError(_NESTED_TOO_DEEPLY) from None
     if _SURROGATE_ESCAPE.search(text) and _holds_a_lone_surrogate(value):
         msg = "not JSON: a string with a lone surrogate"
         raise DecodeError(msg) from None

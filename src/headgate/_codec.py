@@ -18,9 +18,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 from headgate._core import type_text
-from headgate._failures import shorten
+from headgate._failures import NESTED_TOO_DEEPLY, shorten
 from headgate._request_body import EncodedBody
-from headgate._responses import NESTED_TOO_DEEPLY, _body_reader
+from headgate._responses import _body_reader
 from headgate.errors import DecodeError
 
 if TYPE_CHECKING:
@@ -76,8 +76,8 @@ def _translated[T](codec: Codec, decode: Callable[[bytes], T]) -> Callable[[byte
     """Return *decode*, raising each of *codec*'s ``errors`` as a :class:`DecodeError` with its bounded description.
 
     A ``RecursionError``, which a parser such as msgspec raises for a body nested too deeply for its own stack, is a
-    ``DecodeError`` too: ``not JSON: nested too deeply``. The library's error is not chained: it may quote the input,
-    which a traceback or ``logger.exception`` would repeat.
+    ``DecodeError`` too: ``nested too deeply``, which names no format, since a codec may read any. The library's error
+    is not chained: it may quote the input, which a traceback or ``logger.exception`` would repeat.
     """
     errors = codec.errors
 
@@ -95,7 +95,7 @@ def _translated[T](codec: Codec, decode: Callable[[bytes], T]) -> Callable[[byte
 def decode_with[T](codec: Codec, content: bytes, type_: TypeForm[T]) -> T:
     """Decode *content* into the type expression *type_* with *codec*: for bytes that are not a whole response.
 
-    :raises DecodeError: for bytes *codec* finds malformed or of another type.
+    :raises DecodeError: for bytes *codec* finds malformed or of another type, or nested too deeply to parse.
     """
     return _translated(codec, codec.decoder(type_))(content)
 

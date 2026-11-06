@@ -37,6 +37,7 @@ except ImportError as exc:
 
 from headgate._codec import decode_with, reader_for, writer_for
 from headgate._codec import drop_none as _drop_none
+from headgate._failures import NESTED_TOO_DEEPLY
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -55,6 +56,9 @@ _ERRORS_SHOWN = 5
 
 #: What a message shows in place of the input: a key in a failure's location, or a value its reason would quote.
 _REDACTED: Final = "[...]"
+
+#: What pydantic's ``json_invalid`` reason holds for a body nested past its parser's recursion limit.
+_RECURSION_LIMIT: Final = "recursion limit exceeded"
 
 #: The failures whose reason quotes the input, each with the context value that holds it: an unknown tag, the character
 #: a UUID failed at, and a timezone offset the input named.
@@ -149,10 +153,13 @@ class PydanticCodec:
 
         A failure's location keeps list positions and the names the type declares (fields and aliases, tags), and shows
         ``[...]`` for a key of the input's own; a reason that would quote the input (an unknown tag) shows ``[...]`` in
-        its place. A validator of your own is quoted as it words its message.
+        its place. A validator of your own is quoted as it words its message. A body nested past pydantic's recursion
+        limit is ``nested too deeply``, as every codec says it.
         """
         exc = cast("ValidationError", error)  # the only one of :attr:`errors`
         errors = exc.errors(include_input=False, include_url=False, include_context=True)[:_ERRORS_SHOWN]
+        if any(error["type"] == "json_invalid" and _RECURSION_LIMIT in error["msg"] for error in errors):
+            return NESTED_TOO_DEEPLY
         shown = "; ".join(f"{_location(error['loc'])}: {_reason(error)}" for error in errors)
         count = exc.error_count()
         more = f" (+{count - len(errors)} more)" if count > len(errors) else ""

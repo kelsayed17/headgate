@@ -328,5 +328,5 @@ async def test_a_body_nested_too_deeply_is_a_parse_error() -> None:
     assert str(raised.value).endswith("nested too deeply")
     with pytest.raises(DecodeError) as decoded:
         decode(deep, list[object])
-    assert str(decoded.value) == "not JSON: nested too deeply"
+    assert str(decoded.value) == "nested too deeply"
     assert decoded.value.__suppress_context__

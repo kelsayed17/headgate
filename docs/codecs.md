@@ -37,8 +37,8 @@ Three functions work on any codec, the two above included:
   another.
 
 A body the codec cannot read raises `DecodeError`, which a call raises as `ResponseParseError` with the codec's
-description of what was wrong. A body nested too deeply for the library's parser is refused the same way, as
-`not JSON: nested too deeply`. A library's own validation error never escapes the `ClientError` tree.
+description of what was wrong. A body nested too deeply for the library's parser is refused the same way, and
+every codec describes it as `nested too deeply`. A library's own validation error never escapes the `ClientError` tree.
 
 ## Bringing your own library
 

@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_REQUEST_ID_HEADERS",
     "MESSAGE_TEXT_LIMIT",
+    "NESTED_TOO_DEEPLY",
     "SHAPE_ERRORS",
     "CallSite",
     "body_snippet",
@@ -96,8 +97,9 @@ _AUTH_STATUSES = frozenset({httpx2.codes.UNAUTHORIZED, httpx2.codes.FORBIDDEN})
 #: ``RecursionError``).
 SHAPE_ERRORS: tuple[type[Exception], ...] = (DecodeError, ValueError, LookupError, TypeError, RecursionError)
 
-#: What a message says of a ``RecursionError``, whose own message reports a stack size that varies by machine.
-_TOO_DEEP = "nested too deeply"
+#: What every reader says of a body nested too deeply for its parser, whichever parser it is and whatever its format: a
+#: ``RecursionError``'s own message reports a stack size that varies by machine.
+NESTED_TOO_DEEPLY: Final = "nested too deeply"
 
 #: A header name as RFC 9110 defines it (a ``token``), the only kind of name a message repeats.
 _HEADER_NAME = re.compile(rb"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
@@ -322,7 +324,7 @@ def parse_error(exc: Exception, resp: httpx2.Response, site: CallSite) -> Respon
     The message names the status and the request line, and the reader's diagnosis bounded by :func:`shorten`: for a
     ``RecursionError``, ``nested too deeply``.
     """
-    detail = _TOO_DEEP if isinstance(exc, RecursionError) else shorten(str(exc)) or type(exc).__name__
+    detail = NESTED_TOO_DEEPLY if isinstance(exc, RecursionError) else shorten(str(exc)) or type(exc).__name__
     return ResponseParseError(
         f"unreadable {resp.status_code} body for {site.method} {site.url}: {detail}",
         status_code=resp.status_code,
@@ -436,7 +438,7 @@ def mint_error(exc: Exception, *, source: str) -> Exception:
         return transport_error(exc, CallSite(source, method, f"{log_url} (token mint)"))
     if isinstance(exc, SHAPE_ERRORS + _MISREAD_RESPONSE_ERRORS):
         too_deep = isinstance(exc, RecursionError)
-        detail = _TOO_DEEP if too_deep else shorten(redact_secrets(str(exc))) or type(exc).__name__
+        detail = NESTED_TOO_DEEPLY if too_deep else shorten(redact_secrets(str(exc))) or type(exc).__name__
         return ResponseParseError(f"unreadable token response: {detail}", source=source)
     return exc
 

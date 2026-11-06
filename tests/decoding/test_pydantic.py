@@ -429,10 +429,13 @@ def test_the_writer_serializes_by_the_declared_type_without_a_warning() -> None:
 
 
 async def test_a_body_nested_too_deeply_is_a_parse_error() -> None:
-    """Raise ``ResponseParseError`` for a body nested past the parser's limit: pydantic reports it as its own error."""
+    """Raise ``ResponseParseError`` for a body nested past pydantic's recursion limit, as every codec words it."""
     deep = b"[" * 100_000 + b"]" * 100_000
     fake = FakeTransport().reply("GET", "/x", httpx2.Response(200, content=deep))
     client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
     with pytest.raises(ResponseParseError) as raised:
         await client.get("x", expect=reader(list[object]))
-    assert "recursion limit exceeded" in str(raised.value)
+    assert str(raised.value) == "[StubClient] unreadable 200 body for GET x: nested too deeply"
+    with pytest.raises(DecodeError) as decoded:
+        decode(deep, list[object])
+    assert str(decoded.value) == "nested too deeply"
