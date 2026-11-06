@@ -18,9 +18,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
-- `HttpOptions(refusal_check=...)` is `HttpOptions(response_check=...)`, and its type `RefusalCheck` is `ResponseCheck`. The
-  check is unchanged: it sees the final response and returns a `RefusedError` or `None`. The `ValueError` for a
-  redirect-following client names `response_check=`.
+- `HttpOptions(refusal_check=...)` is `HttpOptions(response_check=...)`, and its type `RefusalCheck` is
+  `ResponseCheck`. The check is unchanged: it sees the final response and returns a `RefusedError` or `None`. The
+  `ValueError` for a redirect-following client names `response_check=`.
 - `RefusedError` is imported from `headgate.errors`: write `from headgate.errors import RefusedError` in place of
   `from headgate import RefusedError`. It is still not a `ClientError`.
 - `SigningAuth` signs every attempt, inside the retry layer, so a retry or a hedge carries a fresh signature instead of
@@ -60,14 +60,16 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `expect=`, `Expect(ok, answers)`, `Expect.on` and `conditional` raise `TypeError` for anything else, such as a model
   class (`expect=Order`, where `expect=reader(Order)` was meant), `str` or a bare function, and a type checker
   rejects them too. A reader's `repr` names its function. `nothing`, `as_bytes` and `event_stream` are `Reader`
-  values, and `body_reader` and `reader_for` return one, so code built on them is unchanged. A refusal
-  of the wrong kind now says what it got: `the class str`, `the type list[Order]`, or the value's type.
+  values, and `body_reader` and `reader_for` return one, so code built on them is unchanged. `Expect(ok, answers)`
+  whose answers read different types no longer infers their union: chain `.on()`, or spell the union out as
+  `Expect[A | B | None]`. A refusal of the wrong kind now says what it got: `the class str`, `the type list[Order]`, or
+  the value's type.
 - The reader and writer builders share one vocabulary. Write `reader_for(codec, Type)` for `decoder_for(codec, Type)`,
   `writer_for(codec, Type)` for `encoder_for(codec, Type)`, and `headgate.msgspec.reader(Type)` and
   `headgate.msgspec.writer(Type)` for `headgate.msgspec.decoder(Type)` and `headgate.msgspec.encoder(Type)`, and the
   same for `headgate.pydantic`. A reader's refusal check is spelled `refuse=` where it was `refusal_check=`, on
-  `reader_for`, the flavors' `reader` and `body_reader`. `HttpOptions(refusal_check=)` and `Codec.decoder` and
-  `Codec.encoder` keep their names.
+  `reader_for`, the flavors' `reader` and `body_reader`. `Codec.decoder` and `Codec.encoder` keep their
+  names.
 
 ### Removed
 
@@ -88,7 +90,6 @@ change the public API; such changes are listed under **Changed** and **Removed**
   whichever reader read it: a codec's, `as_json`, `body_reader(json.loads)` or a hand-written reader over
   `response.json()`. A token mint that meets one raises `ResponseParseError` too. The message ends `nested too deeply`,
   whichever reader and parser met it.
-
 - A cached response still honors `Vary`: hishel 2 keys an entry by its URL alone, so headgate matches the headers a
   response varies on itself. A response with `Vary: *` is no longer stored, since nothing could match it.
 - Under `Partition.SHARED`, a response varying on a header the cache never stores (`Authorization`, a cookie, a

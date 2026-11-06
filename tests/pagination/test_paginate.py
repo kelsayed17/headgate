@@ -32,6 +32,7 @@ from headgate import (
     ResponseParseError,
     UpstreamStatusError,
 )
+from headgate._client import _paired
 from headgate.msgspec import reader
 from headgate.pagination import PageRequest
 from headgate.ratelimit import Rate
@@ -465,6 +466,12 @@ async def test_a_declared_answer_is_a_page() -> None:
     expect = Expect(reader(Page)).on(404, Reader(lambda _resp: Page([])))
     paginated = _Api(answer).client().paginate("items", expect=expect, pages=LinkHeader(items=items_of))
     assert [page async for page in paginated.pages()] == [Page([])]
+
+
+def test_a_paired_reader_keeps_the_inner_readers_name() -> None:
+    """Name the reader a pagination ``Expect`` pairs with its response after the reader it wraps."""
+    inner = Reader(lambda _resp: Page([]), name="pages")
+    assert repr(_paired(inner)) == "Reader(paired Reader(pages))"
 
 
 async def test_a_page_that_leads_back_raises_instead_of_looping() -> None:

@@ -320,7 +320,7 @@ def _redirecting(_request: httpx2.Request) -> httpx2.Response:
 
 
 async def test_a_response_check_that_raises_is_treated_like_one_that_returns() -> None:
-    """Map a raised ``RefusedError`` from the host check to its ``ClientError``, with the status the wire sent."""
+    """Map a raised ``RefusedError`` from the response check to its ``ClientError``, with the status the wire sent."""
     async with _client(_redirecting, response_check=_raising_check) as client:
         with pytest.raises(AuthError) as caught:
             await client.get("series", expect=as_bytes)

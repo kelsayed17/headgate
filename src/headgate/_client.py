@@ -699,7 +699,7 @@ class AsyncBaseClient:
         Every response passes four layers, in order:
 
         1. **transport** (:meth:`_exchange`): a transport failure, a surviving 429/5xx, or an open breaker raises;
-        2. **host**: the client's ``response_check`` runs on the final response;
+        2. **response check**: the client's ``response_check`` runs on the final response;
         3. **endpoint**: a status the call declared exactly goes to its reader; any other 2xx to the success reader;
         4. **default**: any other non-2xx raises through :func:`~headgate._failures.status_error`.
 
@@ -1061,7 +1061,7 @@ class AsyncBaseClient:
     # Reading the answer.
 
     def _dispatch[T](self, resp: httpx2.Response, spec: Expect[T], site: CallSite) -> T:
-        """Read the final *resp* through the host check, the call's declared responses and the status ladder.
+        """Read the final *resp* through the response check, the call's declared responses and the status ladder.
 
         A ``RefusedError`` from a reader, or raised or returned by the ``response_check``, becomes the ``ClientError``
         its kind names, with the real status. A reader that finds the body is not the shape it expected (a codec's
@@ -1255,7 +1255,7 @@ def _paired[T](read: Reader[T]) -> Reader[tuple[T, httpx2.Response]]:
     def _read(resp: httpx2.Response, /) -> tuple[T, httpx2.Response]:
         return read(resp), resp
 
-    return Reader(_read, name="paired")
+    return Reader(_read, name=f"paired {read!r}")
 
 
 def _invalid_url(exc: httpx2.InvalidURL, site: CallSite) -> ClientError:

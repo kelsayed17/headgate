@@ -21,8 +21,9 @@ response, body already read and capped, because some readers need a header too. 
 
 A reader that finds the body is not the shape it expected raises: a codec raises `DecodeError`, and the `ValueError`,
 `LookupError` or `TypeError` hand-written code over `response.json()` raises, or nesting too deep to parse, counts the
-same. On a 2xx the client turns it into `ResponseParseError`, naming the status, the request line and the reader's diagnosis. A reader never builds a
-`ClientError` itself: the client does, so the error carries the real status and the client's name.
+same. On a 2xx the client turns it into `ResponseParseError`, naming the status, the request line and the reader's
+diagnosis. A reader never builds a `ClientError` itself: the client does, so the error carries the real status and the
+client's name.
 
 `body_reader` turns a hand-written bytes decoder, the kind its tests feed fixture files, into a reader. Name each
 reader once, at module level, and pass a fixed argument with `functools.partial`:

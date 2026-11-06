@@ -274,7 +274,7 @@ class AuthError(UpstreamStatusError):
 
 
 class RefusedError(Exception):
-    """A provider's refusal, as a reader or a host check saw it.
+    """A provider's refusal, as a reader or a response check saw it.
 
     A reader raises it for a refusal written inside a body (an error envelope, a ``REQUEST_NOT_PROCESSED`` status, a
     vendor error code); a reader's ``refuse`` and a client's ``response_check`` each return one instead. The base

@@ -58,7 +58,7 @@ How requests are sent and responses read.
 | `follow_redirects` | `True` | the client's default; a call can override it |
 | `max_redirects` | `5` | the hop limit, auth-flow hops included |
 | `max_response_bytes` | 32 MiB | the cap on a buffered body, counted after decompression; `stream()` is uncapped |
-| `response_check` | `None` | a host-wide check of every final response; requires `follow_redirects=False` |
+| `response_check` | `None` | a check of every final response; requires `follow_redirects=False` |
 | `security` | `SecurityOptions()` | where requests and credentials may go: see below |
 | `ssl_context` | `None` | TLS for the default transport: a private CA, mutual TLS, pinning |
 | `limits` | 10 connections, 5 kept alive | the default transport's pool |

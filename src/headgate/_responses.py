@@ -59,8 +59,9 @@ class Reader[T]:
     ``content-type`` choosing between JSON and an event stream. It may raise :class:`~headgate.errors.DecodeError` (the
     body is not what was declared; a ``ValueError``, ``LookupError`` or ``TypeError`` from code over
     ``response.json()``, or nesting too deep to parse, counts the same) or :class:`RefusedError` (the provider said no
-    inside the body). It never builds a ``ClientError`` itself: the base client does, so the error carries the real
-    status and the client's name.
+    inside the body). A ``RecursionError`` it raises is read as a body nested too deeply to parse, a shape error like
+    the others. It never builds a ``ClientError`` itself: the base client does, so the error carries the real status
+    and the client's name.
 
     It is a class rather than any function of a response so that ``expect=`` refuses what only looks like one: a model
     class, ``str`` and a bare function are all callable, and each is a mistake there.
@@ -119,7 +120,7 @@ def _refuse_unclaimable(status: int) -> None:
 
 
 type ResponseCheck = Callable[[httpx2.Response], RefusedError | None]
-"""A per-host check, run on the final response before anything the call declared.
+"""A response check, run on the final response before anything the call declared.
 
 It names a refusal the status line alone cannot show, such as a key-error redirect, and returns ``None`` for
 everything else; raising the :class:`RefusedError` instead of returning it is treated the same. It reads the status

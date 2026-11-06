@@ -168,7 +168,7 @@ async def test_a_redirect_that_is_not_followed_raises() -> None:
 
 
 async def test_a_response_check_runs_on_the_head_before_the_block() -> None:
-    """Refuse a stream through the host check before the caller's block runs."""
+    """Refuse a stream through the response check before the caller's block runs."""
     client = _client(
         _answer(httpx2.Response(200, content=b"data")),
         response_check=lambda resp: RefusedError("no") if resp.status_code == httpx2.codes.OK else None,

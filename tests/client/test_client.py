@@ -3,7 +3,7 @@
 
 """``AsyncBaseClient``: construction, the transport stack, retries, the breaker, requests, auth and responses.
 
-The declared-response pipeline (host check, declared answers, the status ladder) is pinned at the end.
+The declared-response pipeline (response check, declared answers, the status ladder) is pinned at the end.
 """
 
 from __future__ import annotations
@@ -663,7 +663,7 @@ def _key_page_refusal(resp: httpx2.Response) -> RefusedError | None:
 
 
 async def test_a_response_check_refuses_a_sign_in_redirect() -> None:
-    """Check that a key-error 302 named by the host check raises with the 302, the code, the source and the body."""
+    """Check that a key-error 302 named by the response check raises with the 302, the code, the source and the body."""
     client = _serving(
         httpx2.Response(
             httpx2.codes.FOUND,
@@ -682,7 +682,7 @@ async def test_a_response_check_refuses_a_sign_in_redirect() -> None:
 
 
 async def test_a_host_check_returning_none_changes_nothing_and_sees_every_response() -> None:
-    """Check that a host check returning ``None`` lets a 2xx decode and a non-2xx raise, and sees both."""
+    """Check that a response check returning ``None`` lets a 2xx decode and a non-2xx raise, and sees both."""
     seen: list[int] = []
 
     def refusal(resp: httpx2.Response) -> RefusedError | None:
