@@ -35,8 +35,8 @@ class PydanticSeries(BaseModel, frozen=True):
     values: list[float]
 
 
-MSGSPEC_SERIES = msgspec_flavor.decoder(MsgspecSeries)
-PYDANTIC_SERIES = pydantic_flavor.decoder(PydanticSeries)
+MSGSPEC_SERIES = msgspec_flavor.reader(MsgspecSeries)
+PYDANTIC_SERIES = pydantic_flavor.reader(PydanticSeries)
 
 
 class MsgspecClient(AsyncBaseClient):

@@ -17,14 +17,11 @@ origin; only a miss reaches the origin with the validator.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate._responses import Expect
-
-if TYPE_CHECKING:
-    from headgate._responses import Reader
+from headgate._core import check_kind
+from headgate._responses import Expect, Reader
 
 __all__ = ["Fresh", "NotModified", "Validator", "conditional"]
 
@@ -77,7 +74,10 @@ def conditional[T](reader: Reader[T], *, validator: Validator | None = None) -> 
     Pass the result as ``expect=``. Without a *validator* (the first read) no precondition is sent and the result is
     always :class:`Fresh`, carrying the validator for the next call. A precondition the call sets itself through
     ``headers=`` wins over *validator*'s.
+
+    :raises TypeError: for a *reader* that is not a :class:`~headgate.Reader`.
     """
+    check_kind("reader", reader, Reader, "a Reader")
 
     def fresh(response: httpx2.Response, /) -> Fresh[T]:
         return Fresh(reader(response), Validator.of(response))
@@ -86,4 +86,5 @@ def conditional[T](reader: Reader[T], *, validator: Validator | None = None) -> 
         return NotModified(Validator.of(response, held=validator))
 
     preconditions = {} if validator is None else validator.headers()
-    return Expect[Fresh[T] | NotModified](fresh, headers=preconditions).on(httpx2.codes.NOT_MODIFIED, not_modified)
+    ok = Reader[Fresh[T] | NotModified](fresh)
+    return Expect(ok, headers=preconditions).on(httpx2.codes.NOT_MODIFIED, Reader(not_modified))

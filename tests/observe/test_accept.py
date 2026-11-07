@@ -5,14 +5,12 @@
 
 from __future__ import annotations
 
-import json
-
 import httpx2
 import pytest
 
-from headgate import Expect, HttpOptions, as_bytes, json_reader, nothing
+from headgate import Expect, HttpOptions, Reader, as_bytes, as_json, nothing
 from headgate._responses import accepts
-from headgate.errors import ResponseParseError, UpstreamStatusError
+from headgate.errors import DecodeError, ResponseParseError, UpstreamStatusError
 from headgate.testing import FakeTransport
 from tests.observe._support import client
 
@@ -49,6 +47,7 @@ async def test_a_matching_media_type_is_decoded(content_type: str) -> None:
 async def test_another_media_type_raises_before_the_reader_runs(content_type: str | None) -> None:
     """Raise ``ResponseParseError`` with the status and the declared type, never calling the reader."""
 
+    @Reader
     def must_not_run(resp: httpx2.Response) -> bytes:
         raise AssertionError(resp)
 
@@ -124,7 +123,7 @@ def test_without_accept_every_response_is_accepted() -> None:
     assert accepts(Expect(as_bytes), httpx2.Response(200, content=b"<html>", headers={"content-type": "text/html"}))
 
 
-def test_json_reader_refuses_an_empty_body_unless_allowed() -> None:
-    """Refuse an empty body by default: an empty 200 is corruption for every provider but a list-shaped one."""
-    with pytest.raises(json.JSONDecodeError):
-        json_reader(json.loads)(httpx2.Response(200, content=b""))
+def test_as_json_refuses_an_empty_body() -> None:
+    """Refuse an empty body: an empty 200 is corruption for every provider but a list-shaped one."""
+    with pytest.raises(DecodeError):
+        as_json(httpx2.Response(200, content=b""))

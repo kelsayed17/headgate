@@ -151,7 +151,7 @@ from http import HTTPStatus
 import msgspec
 
 from headgate import AsyncBaseClient, BearerAuth, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 
 
 class Repository(msgspec.Struct, frozen=True):
@@ -164,7 +164,7 @@ class Issue(msgspec.Struct, frozen=True):
     title: str
 
 
-REPOSITORY_OR_NONE = Expect(decoder(Repository)).on(HTTPStatus.NOT_FOUND, nothing)
+REPOSITORY_OR_NONE = Expect(reader(Repository)).on(HTTPStatus.NOT_FOUND, nothing)
 ISSUE_PAGES = LinkHeader(items=lambda page: page)  # each page is a JSON list of issues
 
 
@@ -181,7 +181,7 @@ class GitHub(AsyncBaseClient):
         return await self.get(t"repos/{owner}/{name}", expect=REPOSITORY_OR_NONE)
 
     def open_issues(self, owner: str, name: str):
-        return self.paginate(t"repos/{owner}/{name}/issues", expect=decoder(list[Issue]), pages=ISSUE_PAGES)
+        return self.paginate(t"repos/{owner}/{name}/issues", expect=reader(list[Issue]), pages=ISSUE_PAGES)
 ```
 
 ```python

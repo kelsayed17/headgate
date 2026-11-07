@@ -4,7 +4,7 @@
 """The ``ClientError`` a failed exchange becomes: pure builders.
 
 Each builder returns its error rather than raising it, so the caller raises it with the right cause (``from exc`` for
-a transport failure, ``from refused`` for a reader's :class:`~headgate._responses.RefusedError`). Each takes the
+a transport failure, ``from refused`` for a reader's :class:`~headgate.errors.RefusedError`). Each takes the
 :class:`CallSite` it failed at: the client class's name, the request line and the attempt count, which every
 ``ClientError`` carries with the response's request id, whether a retry could succeed, and any ``Retry-After``.
 
@@ -44,12 +44,13 @@ from headgate.errors import (
 from headgate.retry._policy import UNRETRYABLE_ERRORS
 
 if TYPE_CHECKING:
-    from headgate._responses import RefusedError
+    from headgate.errors import RefusedError
     from headgate.retry._policy import RetryOutcome
 
 __all__ = [
     "DEFAULT_REQUEST_ID_HEADERS",
     "MESSAGE_TEXT_LIMIT",
+    "NESTED_TOO_DEEPLY",
     "SHAPE_ERRORS",
     "CallSite",
     "body_snippet",
@@ -92,8 +93,13 @@ _AUTH_STATUSES = frozenset({httpx2.codes.UNAUTHORIZED, httpx2.codes.FORBIDDEN})
 
 #: What a reader or a token mint raises for a body that is not the shape it expected: a codec's ``DecodeError``, and
 #: what hand-written code over ``response.json()`` raises (``JSONDecodeError`` is a ``ValueError``; a missing key, an
-#: index past the end, or indexing the wrong container).
-SHAPE_ERRORS: tuple[type[Exception], ...] = (DecodeError, ValueError, LookupError, TypeError)
+#: index past the end, or indexing the wrong container; or nesting too deep to parse, which ``json.loads`` raises as
+#: ``RecursionError``).
+SHAPE_ERRORS: tuple[type[Exception], ...] = (DecodeError, ValueError, LookupError, TypeError, RecursionError)
+
+#: What every reader says of a body nested too deeply for its parser, whichever parser it is and whatever its format: a
+#: ``RecursionError``'s own message reports a stack size that varies by machine.
+NESTED_TOO_DEEPLY: Final = "nested too deeply"
 
 #: A header name as RFC 9110 defines it (a ``token``), the only kind of name a message repeats.
 _HEADER_NAME = re.compile(rb"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
@@ -297,7 +303,7 @@ def status_error(resp: httpx2.Response, site: CallSite) -> UpstreamStatusError:
 
 
 def refusal_error(refused: RefusedError, resp: httpx2.Response, site: CallSite) -> UpstreamStatusError:
-    """Build the ``ClientError`` for a provider's :class:`RefusedError`, from a reader or the host's ``refusal_check``.
+    """Build the ``ClientError`` for a provider's :class:`RefusedError`, from a reader or the host's ``response_check``.
 
     Both paths build the error here, so both carry the provider's code, the client's name and the body snippet.
     ``refused.kind`` names the class, and the status is the one the wire sent: a refusal written inside a 200 body
@@ -315,9 +321,10 @@ def refusal_error(refused: RefusedError, resp: httpx2.Response, site: CallSite) 
 def parse_error(exc: Exception, resp: httpx2.Response, site: CallSite) -> ResponseParseError:
     """Build the ``ClientError`` for a 2xx body its reader could not read (one of :data:`SHAPE_ERRORS`).
 
-    The message names the status and the request line, and the reader's diagnosis bounded by :func:`shorten`.
+    The message names the status and the request line, and the reader's diagnosis bounded by :func:`shorten`: for a
+    ``RecursionError``, ``nested too deeply``.
     """
-    detail = shorten(str(exc)) or type(exc).__name__
+    detail = NESTED_TOO_DEEPLY if isinstance(exc, RecursionError) else shorten(str(exc)) or type(exc).__name__
     return ResponseParseError(
         f"unreadable {resp.status_code} body for {site.method} {site.url}: {detail}",
         status_code=resp.status_code,
@@ -404,7 +411,7 @@ def mint_error(exc: Exception, *, source: str) -> Exception:
     * any other ``httpx2.HTTPError`` or an ``OSError`` becomes ``TransportError`` / ``ClientTimeoutError``;
     * one of :data:`SHAPE_ERRORS` (an unreadable token response), or an ``httpx2.StreamError`` or
       ``httpx2.CookieConflict`` (a response handled out of order, a cookie name two cookies share), becomes
-      ``ResponseParseError``.
+      ``ResponseParseError``; a ``RecursionError`` is described as ``nested too deeply``.
 
     Anything else is returned as it is, for the caller to re-raise: it is a bug in the mint, not a failure to report.
     """
@@ -430,7 +437,8 @@ def mint_error(exc: Exception, *, source: str) -> Exception:
         method, log_url = _request_line(exc)
         return transport_error(exc, CallSite(source, method, f"{log_url} (token mint)"))
     if isinstance(exc, SHAPE_ERRORS + _MISREAD_RESPONSE_ERRORS):
-        detail = shorten(redact_secrets(str(exc))) or type(exc).__name__
+        too_deep = isinstance(exc, RecursionError)
+        detail = NESTED_TOO_DEEPLY if too_deep else shorten(redact_secrets(str(exc))) or type(exc).__name__
         return ResponseParseError(f"unreadable token response: {detail}", source=source)
     return exc
 

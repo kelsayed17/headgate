@@ -58,7 +58,7 @@ How requests are sent and responses read.
 | `follow_redirects` | `True` | the client's default; a call can override it |
 | `max_redirects` | `5` | the hop limit, auth-flow hops included |
 | `max_response_bytes` | 32 MiB | the cap on a buffered body, counted after decompression; `stream()` is uncapped |
-| `refusal_check` | `None` | a host-wide check of every final response; requires `follow_redirects=False` |
+| `response_check` | `None` | a check of every final response; requires `follow_redirects=False` |
 | `security` | `SecurityOptions()` | where requests and credentials may go: see below |
 | `ssl_context` | `None` | TLS for the default transport: a private CA, mutual TLS, pinning |
 | `limits` | 10 connections, 5 kept alive | the default transport's pool |
@@ -184,7 +184,7 @@ await client.get(
 )
 ```
 
-plus `body=` (what a codec's `encoder` wrote), `json=`, `data=`, `content=` or `files=` for a body and
+plus `body=` (what a flavor's `writer` wrote), `json=`, `data=`, `content=` or `files=` for a body and
 `idempotency_key=` for a write. `stream()` takes the same options without `expect=` and `cache_ttl=`, and `paginate()`
 takes `expect=`, `pages=`, `limit=` and the same options, applied to each page; a walk of POSTs takes `body=` or
 `json=` and no other body option ([Walks of POSTs](pagination.md#walks-of-posts)).

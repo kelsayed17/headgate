@@ -16,7 +16,7 @@ from headgate import (
     RetryPolicy,
     TransportPolicy,
     UpstreamStatusError,
-    json_reader,
+    body_reader,
     nothing,
 )
 from headgate._core import RetryScheduled, Timing, timing_override
@@ -126,7 +126,7 @@ async def test_a_post_is_resent_only_with_an_idempotency_key() -> None:
     with pytest.raises(UpstreamStatusError):
         await _client(plain).post("orders", expect=nothing, json={"qty": 1})
     order = await _client(keyed, idempotency=IdempotencyKeys()).post(
-        "orders", expect=json_reader(json.loads), json={"qty": 1}
+        "orders", expect=body_reader(json.loads), json={"qty": 1}
     )
 
     assert len(plain.calls) == 1

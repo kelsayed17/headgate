@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from headgate import AsyncBaseClient, BearerAuth, Cursor, Expect, HttpOptions, Rate, nothing
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 
 if TYPE_CHECKING:
     import httpx2
@@ -54,7 +54,7 @@ def cursor_after(page: ReleasePage) -> str | None:
 
 
 # Readers and pagers are values: build them once, at import, where a bad declaration fails.
-SERIES = decoder(Series)
+SERIES = reader(Series)
 SERIES_OR_NONE = Expect(SERIES).on(HTTPStatus.NOT_FOUND, nothing)  # the API documents 404 as "no such series"
 RELEASE_PAGES = Cursor(items=releases_on, next=cursor_after, param="cursor")
 
@@ -81,7 +81,7 @@ class CatalogClient(AsyncBaseClient):
 
     def releases(self) -> Paginated[ReleasePage, Release]:
         """Return every release, fetched a page at a time as the iteration reaches it."""
-        return self.paginate("releases", expect=decoder(ReleasePage), pages=RELEASE_PAGES)
+        return self.paginate("releases", expect=reader(ReleasePage), pages=RELEASE_PAGES)
 
 
 async def main(api_key: str) -> tuple[float, Series | None, list[str]]:

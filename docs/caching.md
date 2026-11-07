@@ -45,7 +45,7 @@ policy = TransportPolicy(cache=cache)
   value already keeps entries apart, so those responses are stored.
 - **Stored on accept.** A response the rules allow is written to storage only once the call's `expect=` reader has
   accepted it. A call whose reader raises stores nothing, so the cache never serves an answer the client refused:
-  a refusal inside a 200 that a reader's `refusal_check` catches, an undecodable body, an undeclared status. A
+  a refusal inside a 200 that a reader's `refuse` catches, an undecodable body, an undeclared status. A
   declared non-2xx (`Expect(...).on(404, ...)`) is never stored, since `statuses` names 2xx only. A `stream()` has no
   reader, so passing its head checks accepts it. A write that fails then never fails the call, which keeps its answer;
   it is counted as a degradation when the storage raises it (see [storage faults](#storage-faults)). Until then,
@@ -135,11 +135,11 @@ representation, or `NotModified(validator)` for a 304. headgate stores nothing; 
 
 ```python
 from headgate.cache import Fresh, NotModified, Validator, conditional
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 
 
 async def refresh(client: CatalogClient, held: Series, validator: Validator | None) -> tuple[Series, Validator]:
-    result = await client.get("series/GDP", expect=conditional(decoder(Series), validator=validator))
+    result = await client.get("series/GDP", expect=conditional(reader(Series), validator=validator))
     match result:
         case Fresh(value=series, validator=new):
             return series, new

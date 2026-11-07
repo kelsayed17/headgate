@@ -58,7 +58,7 @@ class Series(msgspec.Struct, frozen=True):
 
 
 _BODY = msgspec.json.encode(Series("GDP", [float(i) for i in range(50)]))
-_SERIES = msgspec_flavor.decoder(Series)
+_SERIES = msgspec_flavor.reader(Series)
 
 
 def _ok(request: httpx2.Request) -> httpx2.Response:

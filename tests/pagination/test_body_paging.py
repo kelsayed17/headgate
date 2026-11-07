@@ -22,6 +22,7 @@ from headgate import (
     BodyOffset,
     ClientError,
     Cursor,
+    EncodedBody,
     Expect,
     HttpOptions,
     IdempotencyKeys,
@@ -31,13 +32,13 @@ from headgate import (
     PageLimit,
     PageLimitError,
     PageOptions,
+    Reader,
     RetryPolicy,
     TransportPolicy,
     UpstreamStatusError,
     Writer,
-    json_writer,
 )
-from headgate.msgspec import decoder, encoder
+from headgate.msgspec import reader, writer
 from headgate.pagination import PageRequest, WritingPager
 from headgate.ratelimit import Rate
 from headgate.retry import IDEMPOTENT_METHODS
@@ -88,7 +89,7 @@ class Query(msgspec.Struct, frozen=True):
     cursor: str | None = None
 
 
-QUERY: Final = encoder(Query)
+QUERY: Final = writer(Query)
 
 
 def items_of(page: Page) -> list[Item]:
@@ -184,7 +185,7 @@ async def test_a_body_cursor_walk_posts_each_cursor_in_the_body() -> None:
     """POST the caller's body, then the same body carrying each cursor, written by the request's writer."""
     api = _Api(_by_body_cursor)
     first = Query(kind="a", limit=2)
-    paginated = api.client().paginate("search", body=first, params={"v": "1"}, expect=decoder(Page), pages=QUERY_CURSOR)
+    paginated = api.client().paginate("search", body=first, params={"v": "1"}, expect=reader(Page), pages=QUERY_CURSOR)
 
     items = [item async for item in paginated]
 
@@ -219,7 +220,7 @@ async def test_a_body_without_a_writer_is_sent_as_json() -> None:
     api = _Api(answer)
     call: dict[str, object] = {"method": "tools/call", "params": {"name": "orders", "arguments": {"state": "open"}}}
     pages = BodyCursor[Page, Item, dict[str, object]](items=items_of, next=cursor_of, put=_put_tool_cursor)
-    paginated = api.client().paginate("mcp", json=call, expect=decoder(Page), pages=pages)
+    paginated = api.client().paginate("mcp", json=call, expect=reader(Page), pages=pages)
 
     assert [item.id async for item in paginated] == [1, 2, 3, 4]
     assert [body.params.arguments for body in api.bodies(ToolCall)] == [
@@ -239,7 +240,7 @@ async def test_a_query_cursor_walk_can_post_a_body() -> None:
 
     api = _Api(answer)
     pages = Cursor[Page, Item, Query](items=items_of, next=cursor_of, param="after", write=QUERY)
-    paginated = api.client().paginate("search", body=Query(kind="a", limit=2), expect=decoder(Page), pages=pages)
+    paginated = api.client().paginate("search", body=Query(kind="a", limit=2), expect=reader(Page), pages=pages)
 
     assert [item.id async for item in paginated] == [1, 2, 3, 4]
     assert [request.url.params.get("after") for request in api.sent] == [None, "b", "c"]
@@ -250,7 +251,7 @@ async def test_a_body_offset_walk_advances_by_the_items_received_until_a_short_p
     """Start at the body's offset, advance it by each page's item count, and stop at a page shorter than the size."""
     api = _Api(_by_body_offset(total=7))
     first = Query(kind="a", limit=2, offset=1)
-    paginated = api.client().paginate("search", body=first, expect=decoder(Page), pages=QUERY_OFFSET)
+    paginated = api.client().paginate("search", body=first, expect=reader(Page), pages=QUERY_OFFSET)
 
     assert [item.id async for item in paginated] == [1, 2, 3, 4, 5, 6]
     assert [body.offset for body in api.bodies(Query)] == [1, 3, 5, 7]
@@ -262,7 +263,7 @@ async def test_a_body_offset_walk_stops_at_an_empty_page() -> None:
     first = Query(kind="a", limit=2)
 
     assert [
-        item.id async for item in api.client().paginate("search", body=first, expect=decoder(Page), pages=QUERY_OFFSET)
+        item.id async for item in api.client().paginate("search", body=first, expect=reader(Page), pages=QUERY_OFFSET)
     ] == [
         0,
         1,
@@ -280,7 +281,7 @@ async def test_a_body_offset_walk_ends_at_the_total_a_page_reports() -> None:
     )
     first = Query(kind="a", limit=2)
     assert [
-        item.id async for item in api.client().paginate("search", body=first, expect=decoder(Page), pages=pages)
+        item.id async for item in api.client().paginate("search", body=first, expect=reader(Page), pages=pages)
     ] == [
         0,
         1,
@@ -301,7 +302,7 @@ async def test_a_body_cursor_walk_stops_when_no_cursor_follows(last: str | None)
     first = Query(kind="a", limit=2)
 
     assert [
-        item.id async for item in api.client().paginate("search", body=first, expect=decoder(Page), pages=QUERY_CURSOR)
+        item.id async for item in api.client().paginate("search", body=first, expect=reader(Page), pages=QUERY_CURSOR)
     ] == [1]
     assert len(api.sent) == 1
 
@@ -320,7 +321,7 @@ async def test_a_body_cursor_page_with_no_items_ends_the_walk() -> None:
     first = Query(kind="a", limit=2)
 
     assert [
-        item.id async for item in api.client().paginate("search", body=first, expect=decoder(Page), pages=QUERY_CURSOR)
+        item.id async for item in api.client().paginate("search", body=first, expect=reader(Page), pages=QUERY_CURSOR)
     ] == [0]
     assert len(api.sent) == len(("the page with an item", "the empty page"))
 
@@ -332,7 +333,7 @@ async def test_a_body_cursor_walk_can_go_past_an_empty_page() -> None:
     pages = replace(QUERY_CURSOR, stop_on_empty=False)
 
     assert [
-        item.id async for item in api.client().paginate("search", body=first, expect=decoder(Page), pages=pages)
+        item.id async for item in api.client().paginate("search", body=first, expect=reader(Page), pages=pages)
     ] == [0, 2]
 
 
@@ -345,7 +346,7 @@ async def test_a_walk_of_posts_past_its_page_limit_raises_naming_the_post() -> N
     api = _Api(_endless)
     first = Query(kind="a", limit=1)
     paginated = api.client().paginate(
-        "search", body=first, expect=decoder(Page), pages=QUERY_CURSOR, limit=PageLimit(_BUDGET)
+        "search", body=first, expect=reader(Page), pages=QUERY_CURSOR, limit=PageLimit(_BUDGET)
     )
 
     items: list[int] = []
@@ -361,7 +362,7 @@ async def test_a_walk_of_posts_can_stop_quietly_at_its_page_limit() -> None:
     api = _Api(_endless)
     first = Query(kind="a", limit=1)
     limit = PageLimit(_BUDGET, on_limit="stop")
-    paginated = api.client().paginate("search", body=first, expect=decoder(Page), pages=QUERY_CURSOR, limit=limit)
+    paginated = api.client().paginate("search", body=first, expect=reader(Page), pages=QUERY_CURSOR, limit=limit)
 
     assert [item.id async for item in paginated] == list(range(_BUDGET))
     assert len(api.sent) == _BUDGET
@@ -374,7 +375,7 @@ async def test_a_repeating_body_cursor_raises_instead_of_looping() -> None:
         return _page(request, [1], "same")
 
     first = Query(kind="a", limit=1)
-    paginated = _Api(answer).client().paginate("search", body=first, expect=decoder(Page), pages=QUERY_CURSOR)
+    paginated = _Api(answer).client().paginate("search", body=first, expect=reader(Page), pages=QUERY_CURSOR)
 
     with pytest.raises(ClientError, match="pagination loop") as raised:
         _ = [page async for page in paginated.pages()]
@@ -395,7 +396,7 @@ _OPAQUE_CURSOR: Final = BodyCursor[Page, Item, _Opaque](
     items=items_of,
     next=cursor_of,
     put=lambda _body, cursor: _Opaque(cursor),
-    write=json_writer(lambda body: json.dumps({"cursor": body.cursor}).encode()),
+    write=lambda body: EncodedBody(json.dumps({"cursor": body.cursor}).encode()),
 )
 
 #: Enough pages for CPython to hand a freed body's address to a later one.
@@ -410,7 +411,7 @@ async def test_a_walk_tells_its_pages_apart_by_the_bytes_it_sends() -> None:
         number = 0 if cursor is None else int(cursor)
         return _page(request, [number], None if number + 1 == _MANY else str(number + 1))
 
-    paginated = _Api(answer).client().paginate("search", body=_Opaque(), expect=decoder(Page), pages=_OPAQUE_CURSOR)
+    paginated = _Api(answer).client().paginate("search", body=_Opaque(), expect=reader(Page), pages=_OPAQUE_CURSOR)
 
     assert [item.id async for item in paginated] == list(range(_MANY))
 
@@ -422,7 +423,7 @@ async def test_a_walk_finds_a_loop_among_bodies_that_are_equal_only_as_sent() ->
         return _page(request, [1], "same")
 
     api = _Api(answer)
-    paginated = api.client().paginate("search", body=_Opaque(), expect=decoder(Page), pages=_OPAQUE_CURSOR)
+    paginated = api.client().paginate("search", body=_Opaque(), expect=reader(Page), pages=_OPAQUE_CURSOR)
 
     with pytest.raises(ClientError, match="pagination loop"):
         _ = [page async for page in paginated.pages()]
@@ -448,7 +449,7 @@ async def test_a_post_page_is_not_resent_by_default() -> None:
 
     with pytest.raises(UpstreamStatusError) as raised:
         _ = [
-            item async for item in api.client().paginate("search", body=first, expect=decoder(Page), pages=QUERY_CURSOR)
+            item async for item in api.client().paginate("search", body=first, expect=reader(Page), pages=QUERY_CURSOR)
         ]
 
     assert len(api.sent) == 1
@@ -460,7 +461,7 @@ async def test_a_post_page_is_resent_under_a_policy_that_treats_post_as_idempote
     api = _Api(_flaky())
     first = Query(kind="a", limit=2)
     retry = RetryPolicy(methods=IDEMPOTENT_METHODS | {"POST"})
-    paginated = api.client().paginate("search", body=first, expect=decoder(Page), pages=QUERY_CURSOR, retry=retry)
+    paginated = api.client().paginate("search", body=first, expect=reader(Page), pages=QUERY_CURSOR, retry=retry)
 
     assert [item.id async for item in paginated] == [1, 2, 3, 4]
     assert len(api.sent) == len(("the 503", "page 1", "page 2", "page 3"))
@@ -471,7 +472,7 @@ async def test_each_post_page_gets_its_own_idempotency_key() -> None:
     """Stamp a fresh key on each page under ``IdempotencyKeys``, so a page is re-sent with its own key."""
     api = _Api(_flaky(), policy=TransportPolicy(breaker=None, idempotency=IdempotencyKeys()))
     first = Query(kind="a", limit=2)
-    paginated = api.client().paginate("search", body=first, expect=decoder(Page), pages=QUERY_CURSOR)
+    paginated = api.client().paginate("search", body=first, expect=reader(Page), pages=QUERY_CURSOR)
 
     assert [item.id async for item in paginated] == [1, 2, 3, 4]
     keys = [request.headers["idempotency-key"] for request in api.sent]
@@ -486,7 +487,7 @@ async def test_a_declared_answer_is_a_post_page() -> None:
         return httpx2.Response(404, request=request)
 
     first = Query(kind="a", limit=2)
-    expect = Expect(decoder(Page)).on(404, lambda _resp: Page([]))
+    expect = Expect(reader(Page)).on(404, Reader(lambda _resp: Page([])))
     paginated = _Api(answer).client().paginate("search", body=first, expect=expect, pages=QUERY_CURSOR)
 
     assert [page async for page in paginated.pages()] == [Page([])]
@@ -499,7 +500,7 @@ async def test_an_undeclared_status_on_a_post_page_raises() -> None:
         return httpx2.Response(404, request=request)
 
     first = Query(kind="a", limit=2)
-    paginated = _Api(answer).client().paginate("search", body=first, expect=decoder(Page), pages=QUERY_CURSOR)
+    paginated = _Api(answer).client().paginate("search", body=first, expect=reader(Page), pages=QUERY_CURSOR)
 
     with pytest.raises(UpstreamStatusError) as raised:
         _ = [page async for page in paginated.pages()]
@@ -561,7 +562,7 @@ def test_a_walk_of_posts_refuses_one_idempotency_key_for_every_page(options: Pag
     message = r"^an idempotency key would be sent with every page's body; a walk of POSTs takes none$"
     with pytest.raises(ValueError, match=message):
         _Api(_by_body_cursor).client().paginate(
-            "search", body=first, expect=decoder(Page), pages=QUERY_CURSOR, **options
+            "search", body=first, expect=reader(Page), pages=QUERY_CURSOR, **options
         )
 
 
@@ -571,7 +572,7 @@ def test_a_walk_of_posts_refuses_a_fixed_key_in_the_configured_idempotency_heade
     first = Query(kind="a", limit=2)
     with pytest.raises(ValueError, match="idempotency key would be sent with every page's body"):
         _Api(_by_body_cursor, policy=policy).client().paginate(
-            "search", body=first, expect=decoder(Page), pages=QUERY_CURSOR, headers={"x-request-key": "k"}
+            "search", body=first, expect=reader(Page), pages=QUERY_CURSOR, headers={"x-request-key": "k"}
         )
 
 
@@ -588,14 +589,14 @@ def test_a_walk_of_posts_refuses_a_fixed_key_the_client_or_a_view_sends(where: s
             base_url=_BASE, rate=_RATE, policy=api.policy, http=HttpOptions(transport=transport, headers=headers)
         )
     with pytest.raises(ValueError, match="idempotency key would be sent with every page's body"):
-        client.paginate("search", body=Query(kind="a", limit=2), expect=decoder(Page), pages=QUERY_CURSOR)
+        client.paginate("search", body=Query(kind="a", limit=2), expect=reader(Page), pages=QUERY_CURSOR)
 
 
 def test_a_walk_of_gets_may_carry_an_idempotency_header() -> None:
     """Leave a GET walk's headers alone: no body, no replayed answer."""
     client = _Api(_by_body_cursor).client()
     pages = Cursor[Page, Item](items=items_of, next=cursor_of, param="after")
-    client.paginate("items", expect=decoder(Page), pages=pages, headers={"Idempotency-Key": "k"})
+    client.paginate("items", expect=reader(Page), pages=pages, headers={"Idempotency-Key": "k"})
 
 
 async def test_a_walk_of_posts_takes_a_json_body_beside_the_url() -> None:
@@ -607,7 +608,7 @@ async def test_a_walk_of_posts_takes_a_json_body_beside_the_url() -> None:
     api = _Api(_by_body_cursor)
     pages = BodyCursor[Page, Item, dict[str, object]](items=items_of, next=cursor_of, put=put)
     query: dict[str, object] = {"kind": "a"}
-    paginated = api.client().paginate("search", json=query, expect=decoder(Page), pages=pages)
+    paginated = api.client().paginate("search", json=query, expect=reader(Page), pages=pages)
 
     assert [item.id async for item in paginated] == [1, 2, 3, 4]
     assert api.bodies(dict[str, object]) == [{"kind": "a"}, {"kind": "a", "cursor": "b"}, {"kind": "a", "cursor": "c"}]
@@ -624,7 +625,7 @@ async def test_a_json_walk_sends_every_page_with_the_walks_retry_and_options() -
     query: dict[str, object] = {"kind": "a"}
     retry = RetryPolicy(methods=IDEMPOTENT_METHODS | {"POST"})
     paginated = api.client().paginate(
-        "search", json=query, expect=decoder(Page), pages=pages, retry=retry, headers={"X-Trace": "t"}
+        "search", json=query, expect=reader(Page), pages=pages, retry=retry, headers={"X-Trace": "t"}
     )
 
     assert [item.id async for item in paginated] == [1, 2, 3, 4]
@@ -644,7 +645,7 @@ _BAD_BODY_ARGUMENTS: Final[list[tuple[dict[str, Any], str]]] = [
 def test_a_bad_body_argument_is_refused(arguments: dict[str, Any], message: str) -> None:
     """Refuse two bodies, and a body no pager can rewrite."""
     with pytest.raises(ValueError, match=message):
-        _Api(_by_body_cursor).client().paginate("search", expect=decoder(Page), pages=QUERY_CURSOR, **arguments)
+        _Api(_by_body_cursor).client().paginate("search", expect=reader(Page), pages=QUERY_CURSOR, **arguments)
 
 
 #: A cursor walk over :class:`Query` bodies with no writer, so a ``body=`` has nothing to encode it.
@@ -656,7 +657,7 @@ def test_a_body_whose_pager_has_no_writer_is_refused() -> None:
     client = _Api(_by_body_cursor).client()
     message = r"^a POSTed body is encoded by its pager's write=, so the pager needs one; send builtins as json=$"
     with pytest.raises(ValueError, match=message):
-        client.paginate("search", body=Query(kind="a", limit=2), expect=decoder(Page), pages=_UNWRITTEN)
+        client.paginate("search", body=Query(kind="a", limit=2), expect=reader(Page), pages=_UNWRITTEN)
 
 
 def test_json_whose_pager_has_a_writer_is_refused() -> None:
@@ -666,14 +667,14 @@ def test_json_whose_pager_has_a_writer_is_refused() -> None:
     pages = Cursor[Page, Item, dict[str, object]](items=items_of, next=cursor_of, param="after", write=wrong_writer)
     client = _Api(_by_body_cursor).client()
     with pytest.raises(ValueError, match=r"^json= is sent as JSON, so its pager takes no write=$"):
-        client.paginate("search", json=query, expect=decoder(Page), pages=pages)
+        client.paginate("search", json=query, expect=reader(Page), pages=pages)
 
 
 def test_a_pagers_refusal_is_raised_when_the_walk_is_built() -> None:
     """Raise a pager's refusal from ``paginate`` itself, before any iteration: here a body pager given no body."""
     client = _Api(_by_body_cursor).client()
     with pytest.raises(ValueError, match="BodyCursor rewrites the request body, so its walk needs one"):
-        client.paginate("search", expect=decoder(Page), pages=cast("Any", QUERY_CURSOR))
+        client.paginate("search", expect=reader(Page), pages=cast("Any", QUERY_CURSOR))
 
 
 class _Rebuilt(WritingPager[Page, Item, Query]):
@@ -712,7 +713,7 @@ class _Rebuilt(WritingPager[Page, Item, Query]):
 async def test_every_page_is_written_as_the_first_was() -> None:
     """Write every page with the pager's writer, whatever request the pager returns."""
     api = _Api(_by_body_cursor)
-    paginated = api.client().paginate("search", body=Query(kind="a", limit=2), expect=decoder(Page), pages=_Rebuilt())
+    paginated = api.client().paginate("search", body=Query(kind="a", limit=2), expect=reader(Page), pages=_Rebuilt())
 
     assert [item.id async for item in paginated] == [1, 2, 3, 4]
     assert [body.cursor for body in api.bodies(Query)] == [None, "b", "c"]
@@ -728,7 +729,7 @@ async def test_a_body_given_as_none_is_no_body() -> None:
     pages = BodyCursor[Page, Item, dict[str, object]](items=items_of, next=cursor_of, put=put)
     query: dict[str, object] = {"kind": "a"}
     both: dict[str, Any] = {"body": None, "json": query}
-    paginated = api.client().paginate("search", expect=decoder(Page), pages=pages, **both)
+    paginated = api.client().paginate("search", expect=reader(Page), pages=pages, **both)
 
     assert [item.id async for item in paginated] == [1, 2, 3, 4]
 
@@ -743,7 +744,7 @@ async def test_an_offset_walk_of_posts_writes_its_body_on_every_page() -> None:
 
     api = _Api(answer)
     pages = Offset[Page, Item, Query](items=items_of, page_size=2, write=QUERY)
-    paginated = api.client().paginate("search", body=Query(kind="a", limit=2), expect=decoder(Page), pages=pages)
+    paginated = api.client().paginate("search", body=Query(kind="a", limit=2), expect=reader(Page), pages=pages)
 
     assert [item.id async for item in paginated] == [0, 1, 2, 3, 4]
     assert [request.url.params["offset"] for request in api.sent] == ["0", "2", "4"]
@@ -757,7 +758,7 @@ QUERY_PARAM_CURSOR: Final = Cursor[Page, Item, Query](items=items_of, next=curso
 
 async def _search(client: StubClient, query: Query | None = None) -> list[int]:
     """Search with *query*, or list everything without one: one call, whether the body is given or not."""
-    paginated = client.paginate("search", body=query, expect=decoder(Page), pages=QUERY_PARAM_CURSOR)
+    paginated = client.paginate("search", body=query, expect=reader(Page), pages=QUERY_PARAM_CURSOR)
     return [item.id async for item in paginated]
 
 
@@ -818,7 +819,7 @@ async def test_a_body_that_appears_mid_walk_is_held_to_the_same_rules(
 ) -> None:
     """Refuse a later page's body that cannot be sent as the walk says, from the iteration, before sending it."""
     api = _Api(_by_param_cursor)
-    paginated = api.client().paginate("search", expect=decoder(Page), pages=cast("Any", pages), **options)
+    paginated = api.client().paginate("search", expect=reader(Page), pages=cast("Any", pages), **options)
 
     with pytest.raises(ValueError, match=message):
         _ = [item async for item in paginated]
@@ -855,7 +856,7 @@ async def test_an_attribute_named_write_is_not_a_writer() -> None:
     pages = _Logged()
     api = _Api(_by_body_cursor)
     query: dict[str, object] = {"kind": "a"}
-    paginated = api.client().paginate("search", json=query, expect=decoder(Page), pages=pages)
+    paginated = api.client().paginate("search", json=query, expect=reader(Page), pages=pages)
 
     assert [item.id async for item in paginated] == [1, 2, 3, 4]
     assert pages.log.getvalue() == ""

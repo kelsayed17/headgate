@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Final
 import httpx2
 
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
-from headgate._core import check_fragment, origin_of, origin_text, path_has_fragment
+from headgate._core import check_fragment, check_kind, origin_of, origin_text, path_has_fragment
 from headgate._failures import DEFAULT_REQUEST_ID_HEADERS
 from headgate.breaker import BreakerPolicy
 from headgate.retry import RetryPolicy
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
     from headgate._core import Observer
     from headgate._middleware import Middleware
-    from headgate._responses import RefusalCheck
+    from headgate._responses import ResponseCheck
     from headgate.cache import HttpCache
     from headgate.ratelimit import RateRule
     from headgate.security import Resolver
@@ -139,18 +139,6 @@ def _set_phases(timeouts: Timeouts) -> list[tuple[str, float]]:
 #: The timeouts of every phase a client leaves unset. ``timeout.over(DEFAULT_TIMEOUTS)`` is what *timeout* resolves to
 #: on a client, every phase set: what a deadline computed from the timeouts reads.
 DEFAULT_TIMEOUTS: Final = Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)
-
-
-def check_kind(option: str, value: object, kind: type | tuple[type, ...], wanted: str) -> None:
-    """Refuse a *value* for *option* that is not a *kind*, such as a bare number where a value object goes.
-
-    Such a value would otherwise pass construction and fail at the first request, far from where it was written.
-
-    :raises TypeError: naming the option, what it takes (*wanted*) and the type it got.
-    """
-    if not isinstance(value, kind):
-        msg = f"{option}= takes {wanted} (got {type(value).__name__})"
-        raise TypeError(msg)
 
 
 #: What a ``timeout=`` takes, for :func:`check_kind`'s message.
@@ -377,7 +365,7 @@ class HttpOptions:
       httpx2 counts an auth flow's hops in the same history as redirects, so each request a
       :class:`~headgate.CachedTokenAuth` mint sends, and a 401 it re-mints after, uses one of ``max_redirects`` too.
     * ``max_response_bytes``: the cap on a buffered body, counted after decompression.
-    * ``refusal_check``: a per-host check run on every final response (see :data:`~headgate.RefusalCheck`). It sees
+    * ``response_check``: a response check run on every final response (see :data:`~headgate.ResponseCheck`). It sees
       only the final response, so a refusal written on a followed hop would be skipped, and it therefore requires
       ``follow_redirects=False``.
     * ``security``: where requests and credentials may go (:class:`SecurityOptions`): trusted origins and the SSRF
@@ -398,7 +386,7 @@ class HttpOptions:
     follow_redirects: bool = True
     max_redirects: int = 5
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
-    refusal_check: RefusalCheck | None = None
+    response_check: ResponseCheck | None = None
     security: SecurityOptions = field(default_factory=SecurityOptions)
     ssl_context: ssl.SSLContext | None = None
     limits: httpx2.Limits = field(default_factory=lambda: DEFAULT_LIMITS)
@@ -418,8 +406,8 @@ class HttpOptions:
             msg = f"max_redirects must be >= 0 (got {self.max_redirects})"
             raise ValueError(msg)
         self._check_guard()
-        if self.refusal_check is not None and self.follow_redirects:
-            msg = "an HttpOptions with a refusal_check= must set follow_redirects=False"
+        if self.response_check is not None and self.follow_redirects:
+            msg = "an HttpOptions with a response_check= must set follow_redirects=False"
             raise ValueError(msg)
         if self.user_agent is not None and (not self.user_agent or not self.user_agent.isprintable()):
             msg = "user_agent must be a non-empty, printable product token"
