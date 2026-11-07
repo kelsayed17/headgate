@@ -129,13 +129,27 @@ def test_a_registered_name_is_secret_whatever_its_spelling() -> None:
         ),
         ("cloning 'https://ghp_SECRET@github.test/o/r.git'", "cloning 'https://***@github.test/o/r.git'"),
         ("see https://h.test/a@b and //not-a-host", "see https://h.test/a@b and //not-a-host"),
+        ("failed to reach https://user:p@ss@h.test/x", "failed to reach https://***@h.test/x"),
+        ("failed to reach https://user:p@ss@h.test?q=a@b", "failed to reach https://***@h.test?q=a@b"),
+        ("see https://u:p@w@[::1]:8080/x", "see https://***@[::1]:8080/x"),
+        ("failed to reach https://user:p@ss@h.test", "failed to reach https://***@h.test"),
+        ("failed to reach https://u:p;w@d@h.test/x", "failed to reach https://***@h.test/x"),
+        ("failed to reach https://user:p@ss@h.test#f=a@b", "failed to reach https://***@h.test#f=a@b"),
+        ("see https://u:pw@h1.test https://x@h2.test/y", "see https://***@h1.test https://***@h2.test/y"),
     ],
 )
 def test_redact_secrets_replaces_a_url_userinfo_in_free_text(text: str, expected: str) -> None:
-    """Redact the userinfo of a URL inside a message, and leave an ``@`` later in a path alone."""
+    """Redact the whole userinfo of a URL in a message, a password's bare ``@`` included, and not an ``@`` after it."""
     assert redact_secrets(text) == expected
 
 
-def test_a_url_too_malformed_to_split_is_redacted_as_text_rather_than_raising() -> None:
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://u:pw@[::1/x?api_key=SECRET", "http://***@[::1/x?api_key=***"),
+        ("http://u:p@ss@[::1/x?api_key=SECRET", "http://***@[::1/x?api_key=***"),
+    ],
+)
+def test_a_url_too_malformed_to_split_is_redacted_as_text_rather_than_raising(url: str, expected: str) -> None:
     """Redact an unclosed IPv6 bracket's URL as free text: its message must still be safe, and it must not raise."""
-    assert sanitize_url("http://u:pw@[::1/x?api_key=SECRET") == "http://***@[::1/x?api_key=***"
+    assert sanitize_url(url) == expected

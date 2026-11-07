@@ -104,8 +104,10 @@ _REDACTED: Final = "***"
 #: match it.
 _PAIR: Final = re.compile(r"(?<![\w-])((?:(?![A-Za-z])[\w-])*+)([A-Za-z][\w-]*)=([^&\s'\"]+)")
 
-#: The userinfo of a URL in free text: everything between ``//`` and an ``@`` before the first ``/``, ``?`` or ``#``.
-_USERINFO: Final = re.compile(r"//[^/?#\s@'\"]+@")
+#: The userinfo of a URL in free text: everything between ``//`` and the last ``@`` before the first ``/``, ``?`` or
+#: ``#``. The last, because a password may hold a bare ``@`` (``//user:p@ss@host``), and stopping at the first would
+#: leave the rest of it in the message.
+_USERINFO: Final = re.compile(r"//[^/?#\s'\"]+@")
 
 #: A value that escapes to nothing but dots is a structural dot segment, not data. See :func:`escape_segment`.
 _DOT_SEGMENTS: Final = {".": "%2E", "..": "%2E%2E"}
