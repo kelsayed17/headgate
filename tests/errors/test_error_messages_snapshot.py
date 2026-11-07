@@ -27,14 +27,15 @@ from headgate import (
     HttpOptions,
     Problem,
     RateLimitError,
-    RefusedError,
+    Reader,
     RetryPolicy,
     SecurityOptions,
     TransportPolicy,
-    json_reader,
+    body_reader,
     nothing,
 )
 from headgate.breaker import BreakerRegistry
+from headgate.errors import RefusedError
 from headgate.ratelimit import UNLIMITED
 from headgate.retry import NO_RETRY, Backoff
 from headgate.testing import TestClock
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
 
     from syrupy.assertion import SnapshotAssertion
 
-    from headgate._responses import Reader, RefusalCheck
+    from headgate._responses import ResponseCheck
 
 _BASE: Final = "https://api.example.test/v1"
 #: A credential in the query string, which every message must redact.
@@ -100,7 +101,7 @@ def _client(
         http=HttpOptions(
             transport=options.transport or transport,
             max_response_bytes=options.max_response_bytes,
-            refusal_check=options.refusal_check,
+            response_check=options.response_check,
             follow_redirects=options.follow_redirects,
             security=options.security,
             max_redirects=options.max_redirects,
@@ -197,6 +198,7 @@ async def _surviving_505() -> None:
     await _get(_client(505))
 
 
+@Reader
 def _refuse_quota(_resp: httpx2.Response) -> bytes:
     """Refuse a 200 body as a provider's quota error."""
     msg = "quota exhausted"
@@ -216,16 +218,16 @@ def _sign_in_redirect(resp: httpx2.Response) -> RefusedError | None:
 
 
 async def _host_check_refusal() -> None:
-    """Refuse a key-error redirect from the host's ``refusal_check``: the 302 it arrived with."""
-    check: RefusalCheck = _sign_in_redirect
+    """Refuse a key-error redirect from the host's ``response_check``: the 302 it arrived with."""
+    check: ResponseCheck = _sign_in_redirect
     redirect = httpx2.Response(302, headers={"location": "/login"})
-    await _get(_client(redirect, http=HttpOptions(refusal_check=check, follow_redirects=False)))
+    await _get(_client(redirect, http=HttpOptions(response_check=check, follow_redirects=False)))
 
 
 async def _parse_error() -> None:
     """Answer a 2xx the reader cannot parse: ``ResponseParseError`` naming the status and the content type."""
     page = httpx2.Response(200, text="<html>", headers={"content-type": "text/html"})
-    await _get(_client(page), expect=json_reader(json.loads))
+    await _get(_client(page), expect=body_reader(json.loads))
 
 
 async def _too_large() -> None:

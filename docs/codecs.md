@@ -13,10 +13,10 @@ bytes into a type and writes a value back. headgate ships two, and any other lib
 `pip install headgate` alone brings neither. Each module has the same shortcuts, so switching is changing one import:
 
 ```python
-from headgate.msgspec import decode, decoder, encoder, to_builtins
+from headgate.msgspec import decode, reader, to_builtins, writer
 
-ORDER = decoder(Order)  # a reader, for expect=
-NEW_ORDER = encoder(NewOrder)  # a writer, for body=
+ORDER = reader(Order)  # a reader, for expect=
+NEW_ORDER = writer(NewOrder)  # a writer, for body=
 ```
 
 Both decode strictly (a field that changes type on the wire fails rather than being coerced), ignore fields the type
@@ -31,13 +31,14 @@ itself, for the functions below.
 
 Three functions work on any codec, the two above included:
 
-- `decoder_for(codec, Type, *, allow_empty_body=False, refusal_check=None)` builds a reader for `expect=`;
-- `encoder_for(codec, Type)` builds a writer for `body=`, sent under the codec's media type;
+- `reader_for(codec, Type, *, allow_empty_body=False, refuse=None)` builds a reader for `expect=`;
+- `writer_for(codec, Type)` builds a writer for `body=`, sent under the codec's media type;
 - `decode_with(codec, content, Type)` decodes bytes that are not a whole response, such as a document nested in
   another.
 
 A body the codec cannot read raises `DecodeError`, which a call raises as `ResponseParseError` with the codec's
-description of what was wrong. A library's own validation error never escapes the `ClientError` tree.
+description of what was wrong. A body nested too deeply for the library's parser is refused the same way, and
+every codec describes it as `nested too deeply`. A library's own validation error never escapes the `ClientError` tree.
 
 ## Bringing your own library
 
@@ -57,7 +58,7 @@ cattrs over orjson, for example:
 import cattrs
 import orjson
 
-from headgate import decoder_for, encoder_for
+from headgate import reader_for, writer_for
 
 converter = cattrs.Converter(forbid_extra_keys=False)
 
@@ -80,12 +81,22 @@ class CattrsJson:
 
 
 CODEC = CattrsJson()
-ORDER = decoder_for(CODEC, Order)
-NEW_ORDER = encoder_for(CODEC, NewOrder)
+ORDER = reader_for(CODEC, Order)
+NEW_ORDER = writer_for(CODEC, NewOrder)
 ```
 
-A writer is a function of a value returning an `EncodedBody`: the bytes and the `Content-Type` they are sent with.
-`json_writer(encode)` builds one from any value-to-bytes function, sending JSON, for a body written without a codec.
+A writer is a function of a value returning an `EncodedBody`: the bytes and the `Content-Type` they are sent with,
+`application/json` unless it names another. A body written without a codec is a plain function of that shape:
+
+```python
+import json
+
+from headgate import EncodedBody
+
+
+def write_order(order: dict[str, object]) -> EncodedBody:
+    return EncodedBody(json.dumps(order).encode())
+```
 
 A format other than JSON is the same five members with another `media_type`: a msgpack codec says
 `"application/msgpack"`, and its writers send that. To read only that type back, declare it on the call's `Expect`:

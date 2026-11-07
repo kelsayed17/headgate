@@ -59,12 +59,12 @@ client for the GitHub REST API:
 
 ```python
 from headgate import AsyncBaseClient, BearerAuth, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 
 # Readers and pagers are values: build them once, at import, where a bad declaration fails.
-REPOSITORY = decoder(Repository)
+REPOSITORY = reader(Repository)
 REPOSITORY_OR_NONE = Expect(REPOSITORY).on(HTTPStatus.NOT_FOUND, nothing)  # a missing or hidden repository
-ISSUES = decoder(list[Issue])
+ISSUES = reader(list[Issue])
 ISSUE_PAGES = LinkHeader(items=_issues)
 
 
@@ -177,7 +177,7 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from headgate import AsyncBaseClient, BearerAuth, Cursor, Expect, HttpOptions, Rate, nothing
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 
 if TYPE_CHECKING:
     import httpx2
@@ -218,7 +218,7 @@ def cursor_after(page: ReleasePage) -> str | None:
 
 
 # Readers and pagers are values: build them once, at import, where a bad declaration fails.
-SERIES = decoder(Series)
+SERIES = reader(Series)
 SERIES_OR_NONE = Expect(SERIES).on(HTTPStatus.NOT_FOUND, nothing)  # the API documents 404 as "no such series"
 RELEASE_PAGES = Cursor(items=releases_on, next=cursor_after, param="cursor")
 
@@ -245,7 +245,7 @@ class CatalogClient(AsyncBaseClient):
 
     def releases(self) -> Paginated[ReleasePage, Release]:
         """Return every release, fetched a page at a time as the iteration reaches it."""
-        return self.paginate("releases", expect=decoder(ReleasePage), pages=RELEASE_PAGES)
+        return self.paginate("releases", expect=reader(ReleasePage), pages=RELEASE_PAGES)
 ```
 
 Use it with `async with`, which closes the connection pool on the way out:
@@ -371,7 +371,7 @@ class OrdersClient(AsyncBaseClient):
 | `follow_redirects`, `max_redirects` | `True`, `5` |
 | `max_response_bytes` | 32 MiB |
 | `security` | `SecurityOptions()`: credentials to `base_url`'s origin only, SSRF guard off |
-| `refusal_check` | none |
+| `response_check` | none |
 | `observers`, `middleware` | none |
 
 Every option, its validation and the precedence of call, view, route and policy:
@@ -381,7 +381,7 @@ Every option, its validation and the precedence of call, view, route and policy:
 
 Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`) takes the URL, `expect=` (on `head`, `nothing` unless
 given), and optionally `retry=False` or a `RetryPolicy`, `follow_redirects=`, `cache_ttl=`, `timeout=`, `deadline=`,
-`idempotency_key=`, and the request options `params=`, `headers=`, `body=` (what a codec's `encoder` wrote), `json=`,
+`idempotency_key=`, and the request options `params=`, `headers=`, `body=` (what a flavor's `writer` wrote), `json=`,
 `data=`, `content=` and `files=`. `client.with_options(headers=..., timeout=..., deadline=..., retry=...)` returns a
 view with other defaults that shares the pool, the budgets and the breakers; the client it came from owns the pool.
 
@@ -460,13 +460,13 @@ Fault schedules, cassettes and switching the policy off: [testing](https://kelsa
 ## Codecs
 
 The core imports no serialization library. `headgate.msgspec` (`headgate[msgspec]`) and `headgate.pydantic`
-(`headgate[pydantic]`) are two codecs with the same shortcuts, `decode`, `decoder`, `encoder` and `to_builtins`, so
+(`headgate[pydantic]`) are two codecs with the same shortcuts, `decode`, `reader`, `writer` and `to_builtins`, so
 switching is changing one import. Both decode strictly (a field that changes type fails), ignore unknown fields, and
 raise a mismatch as `DecodeError`, which the client turns into `ResponseParseError`.
 
 Any other library plugs in as a `Codec`: an object naming its media type, the errors it raises, a decoder and an
-encoder per type, and a description that never quotes the input. `decoder_for(codec, Type)` and
-`encoder_for(codec, Type)` build a reader and a writer on it, and `headgate.testing.check_codec` holds it to the
+encoder per type, and a description that never quotes the input. `reader_for(codec, Type)` and
+`writer_for(codec, Type)` build a reader and a writer on it, and `headgate.testing.check_codec` holds it to the
 promises the built-in codecs keep. See [codecs](https://kelsayed17.github.io/headgate/codecs/).
 
 ## Development

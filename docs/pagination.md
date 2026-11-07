@@ -8,7 +8,7 @@ as a `post` is: see [Walks of POSTs](#walks-of-posts).
 
 ```python
 from headgate import Cursor
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 
 
 def items_of(page: Page) -> list[Item]:
@@ -21,7 +21,7 @@ def cursor_of(page: Page) -> str | None:
 
 ITEM_PAGES = Cursor(items=items_of, next=cursor_of, param="after")
 
-async for item in client.paginate("items", expect=decoder(Page), pages=ITEM_PAGES, params={"limit": 100}):
+async for item in client.paginate("items", expect=reader(Page), pages=ITEM_PAGES, params={"limit": 100}):
     ...
 ```
 
@@ -36,8 +36,8 @@ query and, for a POST, the bytes its body is sent as, so two bodies are one page
 soon as it has them: the page after the one that filled the list is never requested.
 
 ```python
-everything = await client.paginate("items", expect=decoder(Page), pages=ITEM_PAGES).collect()
-first_250 = await client.paginate("items", expect=decoder(Page), pages=ITEM_PAGES).collect(max_items=250)
+everything = await client.paginate("items", expect=reader(Page), pages=ITEM_PAGES).collect()
+first_250 = await client.paginate("items", expect=reader(Page), pages=ITEM_PAGES).collect(max_items=250)
 ```
 
 `max_items=0` returns `[]` without a request, and a negative count raises `ValueError`. Use `max_items` to bound how
@@ -51,9 +51,9 @@ for as long as you keep asking. `limit=PageLimit(max_pages)` bounds the walk:
 
 ```python
 from headgate import PageLimit, PageLimitError
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 
-orders = client.paginate("orders", expect=decoder(Page), pages=ORDER_PAGES, limit=PageLimit(50))
+orders = client.paginate("orders", expect=reader(Page), pages=ORDER_PAGES, limit=PageLimit(50))
 try:
     async for order in orders:
         ...
@@ -129,16 +129,16 @@ Each strategy is a frozen value: build it once, next to the client, as with read
 Some endpoints take their query as a request body, so the page token or offset travels in the body too: a search API
 that is a POST, or a JSON-RPC call whose arguments carry a cursor. `paginate` walks one when it is given a body, as
 `post` is: `json=` for builtins sent as JSON, or `body=` for your own value. A `body=` is encoded for each page by the
-pager's `write=` (a codec's `encoder`): the writer belongs to the endpoint, like the reader and the pager, so it is
+pager's `write=` (a flavor's `writer`): the writer belongs to the endpoint, like the reader and the pager, so it is
 built once beside them, and a pager that rewrites the body needs your value, not its bytes.
 
 ```python
 import msgspec
 
 from headgate import BodyCursor, BodyOffset
-from headgate.msgspec import decoder, encoder
+from headgate.msgspec import reader, writer
 
-QUERY = encoder(Query)
+QUERY = writer(Query)
 
 
 def with_cursor(query: Query, cursor: str) -> Query:
@@ -148,7 +148,7 @@ def with_cursor(query: Query, cursor: str) -> Query:
 SEARCH_PAGES = BodyCursor[Page, Item, Query](items=items_of, next=cursor_of, put=with_cursor, write=QUERY)
 
 query = Query(kind="open", limit=100)
-async for item in client.paginate("search", body=query, expect=decoder(Page), pages=SEARCH_PAGES):
+async for item in client.paginate("search", body=query, expect=reader(Page), pages=SEARCH_PAGES):
     ...
 ```
 
@@ -222,7 +222,7 @@ class HeaderTokens:
 A pager walked with `body=` subclasses `WritingPager` instead, which makes every member abstract, so leaving one out
 is an error when the pager is built rather than a `None` mid-walk. A frozen dataclass field named `write` gives the
 writer, as the strategies do. Here it has no default, since a walk with `body=` needs one
-(`SearchPages(write=encoder(Query))`):
+(`SearchPages(write=writer(Query))`):
 
 ```python
 from dataclasses import dataclass

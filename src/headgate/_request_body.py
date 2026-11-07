@@ -3,8 +3,9 @@
 
 """A call's request body: an encoded ``body=``, raw ``content=`` (bytes, a stream, or a stream factory) and ``files=``.
 
-``body=`` is the write side of ``expect=``: a codec's ``encoder(Type)`` builds a :data:`Writer`, a function from
-a value of that type to the :class:`EncodedBody` the call sends, its bytes and their ``Content-Type``.
+``body=`` is the write side of ``expect=``: a flavor's ``writer(Type)``, or :func:`~headgate.writer_for` on any codec,
+builds a :data:`Writer`, a function from a value of that type to the :class:`EncodedBody` the call sends, its bytes
+and their ``Content-Type``. A hand-written writer is a plain function returning an ``EncodedBody``.
 
 A streamed body is either replayable or not, and the retry layer has to know which: a stream given as an iterable is
 consumed by the first send, so the call is marked non-replayable (:data:`~headgate.retry.REPLAYABLE_BODY`) and never
@@ -26,7 +27,6 @@ __all__ = [
     "UploadFiles",
     "Writer",
     "check_one_body",
-    "json_writer",
     "request_content",
 ]
 
@@ -45,15 +45,6 @@ class EncodedBody:
 
 type Writer[T] = Callable[[T], EncodedBody]
 """Encodes a value of type ``T`` into the :class:`EncodedBody` a call sends as ``body=``."""
-
-
-def json_writer[T](encode: Callable[[T], bytes]) -> Writer[T]:
-    """Build a writer around a codec's value-to-bytes function, sending JSON; each flavor's ``encoder`` builds on it."""
-
-    def _write(value: T, /) -> EncodedBody:
-        return EncodedBody(encode(value))
-
-    return _write
 
 
 type BodyFactory = Callable[[], AsyncIterable[bytes]]

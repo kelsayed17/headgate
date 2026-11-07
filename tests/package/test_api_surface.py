@@ -24,6 +24,8 @@ import pytest
 # typing's is_typeddict misses a typing_extensions TypedDict, which a closed one (PEP 728) is before 3.15.
 from typing_extensions import is_typeddict
 
+from headgate import Reader
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
@@ -126,6 +128,30 @@ def _render_class(name: str, cls: type) -> list[str]:
     return lines
 
 
+#: The module whose annotations type the stock readers, which the re-exporting modules do not annotate.
+_READERS_MODULE = "headgate._responses"
+
+#: An annotation wrapped in ``Final[...]``, and what it wraps.
+_FINAL = re.compile(r"(?:typing\.)?Final\[(.*)\]")
+
+
+def _render_reader(name: str, reader: Reader[object]) -> str:
+    """Render a reader value as ``name: <annotation> = <repr>``, its annotation taken from where it is defined.
+
+    A reader's ``__call__`` signature has an unbound ``T``, which says nothing about what it returns, so its declared
+    type stands in. A reader with no annotation, or only a bare ``Final``, fails the test, since it has none to show.
+    """
+    module = importlib.import_module(_READERS_MODULE)
+    annotations = annotationlib.get_annotations(module, format=annotationlib.Format.STRING)
+    annotation = annotations.get(name)
+    final = None if annotation is None else _FINAL.fullmatch(annotation)
+    if annotation is not None and final is not None:
+        annotation = final.group(1)
+    if annotation is None or annotation in {"Final", "typing.Final"}:
+        pytest.fail(f"the reader {name} needs a full annotation in {_READERS_MODULE}, such as Final[Reader[bytes]]")
+    return f"{name}: {annotation} = {_masked(repr(reader))}"
+
+
 def _render(module_name: str) -> str:
     """Render *module_name*'s public surface, name by name in ``__all__`` order."""
     module = importlib.import_module(module_name)
@@ -138,6 +164,8 @@ def _render(module_name: str) -> str:
             lines.append(f"type {name}{list(obj.__type_params__) or ''} = {value}")
         elif isinstance(obj, type):
             lines.extend(_render_class(name, obj))
+        elif isinstance(obj, Reader):
+            lines.append(_render_reader(name, obj))
         elif callable(obj):
             lines.extend(f"def {name}{_signature(form)}" for form in _forms(obj))
         else:

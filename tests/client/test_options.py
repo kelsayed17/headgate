@@ -17,7 +17,7 @@ import ssl
 import uuid
 from dataclasses import replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, override
+from typing import TYPE_CHECKING, Any, ClassVar, cast, override
 
 import httpx2
 import pytest
@@ -50,6 +50,8 @@ if TYPE_CHECKING:
 
 _RATE = Rate.per_second(1000)
 _BASE = "https://api.example.test"
+
+type Rows = list[int]
 _KEY = "key-1"
 
 
@@ -490,3 +492,21 @@ async def test_a_custom_transport_is_used_as_it_is() -> None:
 def test_an_installed_copy_reports_its_distributions_version() -> None:
     """Report the version the installed ``headgate`` distribution declares."""
     assert headgate_version() == importlib.metadata.version("headgate")
+
+
+@pytest.mark.parametrize(
+    ("value", "named"),
+    [
+        (str, "the class str"),
+        (list[int], "the type list[int]"),
+        (Rows, "the type Rows"),
+        (Any, "the type Any"),
+        (1, "int"),
+    ],
+    ids=["class", "generic", "alias", "any", "value"],
+)
+def test_check_kind_names_what_it_got(value: object, named: str) -> None:
+    """Name a class, a type expression and a plain value apart, so a refusal says which mistake it was."""
+    with pytest.raises(TypeError) as caught:
+        StubClient(base_url=_BASE, rate=cast("Any", value))
+    assert str(caught.value) == f"rate= takes a Rate, such as Rate.per_second(10), or a RateBudget (got {named})"
