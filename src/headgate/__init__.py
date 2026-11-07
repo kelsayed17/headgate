@@ -12,10 +12,11 @@ here is what a client is written with:
   :class:`PageOptions`, :class:`ViewOptions`, :class:`TransportPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`,
   :class:`Timeouts` and :data:`DEFAULT_TIMEOUTS`, :class:`IdempotencyKeys`, :class:`Route`, :class:`Middleware` and
   :data:`Next` (what a middleware calls to continue);
-* declared responses: :class:`Expect`, :data:`Reader` and the readers, :data:`RefusalCheck`, :class:`RefusedError`;
-* codecs: :class:`Codec`, and :func:`decoder_for`, :func:`encoder_for` and :func:`decode_with`, which build a reader, a
+* declared responses: :class:`Expect`, :class:`Reader` and the readers (:data:`as_json` among them),
+  :data:`ResponseCheck`;
+* codecs: :class:`Codec`, and :func:`reader_for`, :func:`writer_for` and :func:`decode_with`, which build a reader, a
   writer and a decode on any codec;
-* request bodies: :class:`EncodedBody`, :data:`Writer` and :func:`json_writer`;
+* request bodies: :class:`EncodedBody` and :data:`Writer`;
 * auth: :class:`BearerAuth`, :class:`StaticHeaderAuth`, :class:`QueryParamAuth`, :class:`SigningAuth`,
   :class:`CachedTokenAuth`,
   :class:`Minted`, :data:`MAX_MINT_RESPONSE_BYTES`;
@@ -41,7 +42,7 @@ from headgate._auth import (
     StaticHeaderAuth,
 )
 from headgate._client import AsyncBaseClient, Method, PageOptions, RequestOptions
-from headgate._codec import Codec, decode_with, decoder_for, encoder_for
+from headgate._codec import Codec, decode_with, reader_for, writer_for
 from headgate._middleware import Middleware, Next
 from headgate._options import (
     DEFAULT_TIMEOUTS,
@@ -52,16 +53,15 @@ from headgate._options import (
     Timeouts,
     TransportPolicy,
 )
-from headgate._request_body import EncodedBody, Writer, json_writer
+from headgate._request_body import EncodedBody, Writer
 from headgate._responses import (
     Expect,
     Reader,
-    RefusalCheck,
-    RefusedError,
+    ResponseCheck,
     as_bytes,
+    as_json,
     body_reader,
     event_stream,
-    json_reader,
     nothing,
 )
 from headgate._view import ViewOptions
@@ -139,9 +139,8 @@ __all__ = [
     "RateLimitError",
     "RateRule",
     "Reader",
-    "RefusalCheck",
-    "RefusedError",
     "RequestOptions",
+    "ResponseCheck",
     "ResponseParseError",
     "ResponseTooLargeError",
     "RetryPolicy",
@@ -156,12 +155,11 @@ __all__ = [
     "ViewOptions",
     "Writer",
     "as_bytes",
+    "as_json",
     "body_reader",
     "decode_with",
-    "decoder_for",
-    "encoder_for",
     "event_stream",
-    "json_reader",
-    "json_writer",
     "nothing",
+    "reader_for",
+    "writer_for",
 ]

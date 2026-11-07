@@ -10,12 +10,9 @@ call can receive an undeclared status unread.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import httpx2
 
-if TYPE_CHECKING:
-    from headgate._responses import Reader
+from headgate import Reader
 
 
 def response(content: bytes = b"", *, status: int = 200, headers: dict[str, str] | None = None) -> httpx2.Response:
@@ -28,4 +25,4 @@ def _whole(resp: httpx2.Response, /) -> httpx2.Response:
     return resp
 
 
-RESPONSE: Reader[httpx2.Response] = _whole
+RESPONSE: Reader[httpx2.Response] = Reader(_whole, name="response")

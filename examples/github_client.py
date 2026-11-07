@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from headgate import AsyncBaseClient, BearerAuth, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 
 if TYPE_CHECKING:
     import httpx2
@@ -54,9 +54,9 @@ def _issues(page: list[Issue]) -> list[Issue]:
 
 
 # Readers and pagers are values: build them once, at import, where a bad declaration fails.
-REPOSITORY = decoder(Repository)
+REPOSITORY = reader(Repository)
 REPOSITORY_OR_NONE = Expect(REPOSITORY).on(HTTPStatus.NOT_FOUND, nothing)  # a missing or hidden repository
-ISSUES = decoder(list[Issue])
+ISSUES = reader(list[Issue])
 ISSUE_PAGES = LinkHeader(items=_issues)
 
 

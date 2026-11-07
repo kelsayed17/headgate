@@ -22,7 +22,7 @@ import msgspec
 import pytest
 from pydantic import BaseModel
 
-from headgate import Codec, EncodedBody, HttpOptions, decode_with, decoder_for, encoder_for, json_writer, nothing
+from headgate import Codec, EncodedBody, HttpOptions, decode_with, nothing, reader_for, writer_for
 from headgate import msgspec as msgspec_flavor
 from headgate import pydantic as pydantic_flavor
 from headgate._failures import MESSAGE_TEXT_LIMIT
@@ -104,7 +104,7 @@ async def test_a_writer_sends_its_codecs_media_type() -> None:
     """Send the codec's bytes under the codec's media type."""
     fake = FakeTransport().reply("POST", "/rows", 201)
     client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
-    await client.post("rows", body=encoder_for(_TAGGED, _Row)(_Row(value=1)), expect=nothing)
+    await client.post("rows", body=writer_for(_TAGGED, _Row)(_Row(value=1)), expect=nothing)
 
     assert fake.calls[0].headers["content-type"] == "application/vnd.example+json"
     assert fake.calls[0].content == b'{"value":1}'
@@ -116,35 +116,37 @@ async def test_a_codecs_own_error_is_a_parse_error_with_its_description() -> Non
     client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
 
     with pytest.raises(ResponseParseError, match=r"shape: Expected `int`, got `str` - at `\$\.value`") as raised:
-        await client.get("rows", expect=decoder_for(_TAGGED, _Row))
+        await client.get("rows", expect=reader_for(_TAGGED, _Row))
     assert raised.value.__cause__ is None
 
 
 def test_an_empty_body_reads_as_the_codecs_empty_array() -> None:
     """Read an empty body as the empty array the codec encodes, when the reader allows it."""
-    assert decoder_for(_TAGGED, list[_Row], allow_empty_body=True)(response(b"")) == []
+    assert reader_for(_TAGGED, list[_Row], allow_empty_body=True)(response(b"")) == []
 
 
 def test_an_empty_body_is_refused_unless_the_reader_allows_it() -> None:
     """Refuse an empty body by default: an empty 200 is corruption for every provider but a list-shaped one."""
     with pytest.raises(DecodeError):
-        decoder_for(_TAGGED, list[_Row])(response(b""))
+        reader_for(_TAGGED, list[_Row])(response(b""))
 
 
 @pytest.mark.filterwarnings("error")
 def test_readers_and_writers_hand_a_codec_the_type_they_were_built_for() -> None:
     """Build the empty array and each writer from the declared types, which pydantic serializes by without a warning."""
     codec = pydantic_flavor.CODEC
-    assert decoder_for(codec, list[_Model], allow_empty_body=True)(response(b"")) == []
-    assert encoder_for(codec, _Model)(_Model(value=1)) == EncodedBody(b'{"value":1}', "application/json")
-    assert pydantic_flavor.encoder(_Model)(_Model(value=1)).content == b'{"value":1}'
+    assert reader_for(codec, list[_Model], allow_empty_body=True)(response(b"")) == []
+    assert writer_for(codec, _Model)(_Model(value=1)) == EncodedBody(b'{"value":1}', "application/json")
+    assert pydantic_flavor.writer(_Model)(_Model(value=1)).content == b'{"value":1}'
 
 
-def test_a_json_writer_wraps_a_plain_encode_function() -> None:
-    """Send what a plain encode function writes as JSON, for a writer that is not built on a codec."""
-    assert json_writer(lambda value: json.dumps(value).encode())({"a": 1}) == EncodedBody(
-        b'{"a": 1}', "application/json"
-    )
+def test_a_hand_written_writer_returns_an_encoded_body_sent_as_json() -> None:
+    """Send what a plain function writes as JSON by default, for a writer that is not built on a codec."""
+
+    def write(value: dict[str, int], /) -> EncodedBody:
+        return EncodedBody(json.dumps(value).encode())
+
+    assert write({"a": 1}) == EncodedBody(b'{"a": 1}', "application/json")
 
 
 def test_a_description_is_bounded() -> None:

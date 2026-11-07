@@ -25,7 +25,7 @@ from headgate import HttpOptions, QueryParamAuth, TransportPolicy, nothing
 from headgate._user_agent import headgate_version
 from headgate.errors import ResponseParseError, TransportError, UpstreamStatusError
 from headgate.events import AttemptFinished, CallFinished, CallInfo, CallStarted, RetryScheduled
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 from headgate.otel import OpenTelemetryObserver
 from headgate.retry import NO_RETRY
 from headgate.testing import FakeTransport, TestClock
@@ -190,7 +190,7 @@ async def test_an_unreadable_body_is_an_error_with_its_status(telemetry: Telemet
     """Report a 2xx whose body could not be read with its status and the parse error."""
     fake = FakeTransport().reply("GET", "/v1/x", httpx2.Response(200, content=b"not json"))
     with pytest.raises(ResponseParseError):
-        await client(fake, http=telemetry.http).get("x", expect=decoder(dict[str, int]))
+        await client(fake, http=telemetry.http).get("x", expect=reader(dict[str, int]))
 
     span = telemetry.span()
     assert (_attributes(span)["http.response.status_code"], _attributes(span)["error.type"]) == (

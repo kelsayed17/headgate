@@ -41,7 +41,7 @@ _EVENT_STREAM: Final = "text/event-stream"
 class Stream(Protocol):
     """A response whose head has arrived and whose body is read as it arrives, inside ``client.stream(...)``.
 
-    The status is a 2xx (anything else raised before the block was entered) and the client's ``refusal_check`` has
+    The status is a 2xx (anything else raised before the block was entered) and the client's ``response_check`` has
     passed. Read the body once, with one of :meth:`aiter_bytes`, :meth:`aiter_lines` or :meth:`aiter_events`; the
     response is closed when the block exits, whether or not it was read to the end. A network failure or timeout while
     reading raises ``TransportError`` / ``ClientTimeoutError`` from the iteration.

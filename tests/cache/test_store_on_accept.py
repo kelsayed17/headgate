@@ -3,7 +3,7 @@
 
 """A miss is stored only once the call's reader accepts the response.
 
-Many providers report a refusal inside a 200 (a spent quota, a bad key), which a reader's ``refusal_check`` turns into
+Many providers report a refusal inside a 200 (a spent quota, a bad key), which a reader's ``refuse`` turns into
 an error. Stored on the way through, that refusal would be served for the entry's whole lifetime without the provider
 being asked again. Stored on accept, a response any reader refuses is never stored, while one it accepts is, as before.
 """
@@ -15,16 +15,14 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import HttpCache, RefusedError, as_bytes
+from headgate import HttpCache, Reader, as_bytes
 from headgate.cache import Partition
 from headgate.cache._transport import ResilientCacheTransport
-from headgate.errors import ClientError
+from headgate.errors import ClientError, RefusedError
 from tests.cache._helpers import GENEROUS_CAP, FaultyStorage, accept, cache_transport, every_get_rules, stub_client
 
 if TYPE_CHECKING:
     from hishel import AsyncSqliteStorage, Entry, Request, Response
-
-    from headgate import Reader
 
 _REFUSED = b"quota exhausted"
 _ANSWER = b"42"
@@ -47,6 +45,7 @@ class _Provider(httpx2.AsyncBaseTransport):
         return httpx2.Response(httpx2.codes.OK, content=_ANSWER)
 
 
+@Reader
 def _refused_in_200(resp: httpx2.Response, /) -> bytes:
     """Read the body, refusing the provider's in-band quota error."""
     if resp.content == _REFUSED:
@@ -55,6 +54,7 @@ def _refused_in_200(resp: httpx2.Response, /) -> bytes:
     return resp.content
 
 
+@Reader
 def _numeric(resp: httpx2.Response, /) -> int:
     """Read the body as a number, which a refusal is not."""
     return int(resp.content)

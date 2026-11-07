@@ -21,7 +21,7 @@ _ONE_MEBIBYTE = 1024 * 1024
 
 
 def _data(body: bytes) -> list[str]:
-    """Return the ``data`` of each event :func:`event_stream` reads from *body*."""
+    """Return the ``data`` of each event :data:`event_stream` reads from *body*."""
     return [event.data for event in event_stream(response(body))]
 
 

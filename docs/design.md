@@ -27,7 +27,7 @@ src/headgate/
   _client.py         AsyncBaseClient: a call end to end
   _stack.py          the transport stack, assembled in one place
   _options.py        TransportPolicy, HttpOptions, Timeouts, IdempotencyKeys, Route
-  _responses.py      Reader, Expect, RefusedError and the built-in readers
+  _responses.py      Reader, Expect and the built-in readers
   _failures.py       the ClientError a failed exchange becomes
   _auth.py           StaticHeaderAuth, QueryParamAuth, CachedTokenAuth
   _codec.py          the Codec protocol, and the readers and writers built on one
@@ -78,7 +78,7 @@ AsyncBaseClient.get(url, expect=..., **options)
                                  followed redirect's body
   _sent              a surviving 429/5xx raised; the breaker charged with what the exchange showed
   read_capped        the body, up to max_response_bytes, decompressed bytes counted
-  _dispatch          refusal_check, then the declared answers, then the status ladder
+  _dispatch          response_check, then the declared answers, then the status ladder
 ```
 
 `stream()` takes the same path, except that the response is handed to the caller's block open, with the breaker scope

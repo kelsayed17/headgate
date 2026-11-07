@@ -11,7 +11,11 @@ re-parenting a class changes that mapping.
 
 :class:`DecodeError` is deliberately not a ``ClientError``. A codec raises it for a body it cannot decode, and the base
 client turns it into ``ResponseParseError`` (a 2xx body) or the status error (a declared non-2xx), as it does the
-``ValueError``, ``LookupError`` or ``TypeError`` a hand-written reader raises for a body of the wrong shape.
+``ValueError``, ``LookupError`` or ``TypeError`` a hand-written reader raises for a body of the wrong shape, or nesting
+too deep to parse.
+
+:class:`RefusedError` is deliberately not a ``ClientError`` either. A reader or a client's ``response_check`` produces
+it, and the base client converts it into the ``ClientError`` its ``kind`` names, so a caller of a client never sees it.
 
 Every ``ClientError`` pickles, so it can cross a process or a durable-workflow boundary. The default exception reduce,
 ``(cls, self.args)``, re-runs ``__init__``: that fails on a required keyword-only argument (``status_code``) and would
@@ -40,6 +44,7 @@ __all__ = [
     "PageLimitError",
     "Problem",
     "RateLimitError",
+    "RefusedError",
     "ResponseParseError",
     "ResponseTooLargeError",
     "TransportError",
@@ -264,8 +269,34 @@ class AuthError(UpstreamStatusError):
     """Our own credential was refused.
 
     A 401 or 403 from the status ladder, or a host's refusal naming the credential in another shape (a redirect to a
-    sign-in page, which a client's ``refusal_check=`` check names). The status is never invented.
+    sign-in page, which a client's ``response_check=`` check names). The status is never invented.
     """
+
+
+class RefusedError(Exception):
+    """A provider's refusal, as a reader or a response check saw it.
+
+    A reader raises it for a refusal written inside a body (an error envelope, a ``REQUEST_NOT_PROCESSED`` status, a
+    vendor error code); a reader's ``refuse`` and a client's ``response_check`` each return one instead. The base
+    client is its only catcher, and turns it into ``kind(message, status_code=<the status the wire sent>, code=code,
+    ...)``, so a refusal in a 200 body carries 200.
+
+    ``code`` is the provider's own code. ``kind`` is the ``ClientError`` class that code means: ``AuthError`` for a
+    credential, ``RateLimitError`` for a quota or rate limit, and ``UpstreamStatusError`` otherwise.
+
+    It is an exception rather than a return value because ``T | RefusedError`` would widen every reader's type and
+    blur a refusal with the values a reader legitimately returns. It is not a ``ClientError``: the base client
+    converts it before a caller of the client sees it.
+    """
+
+    def __init__(
+        self, message: str, *, code: str | None = None, kind: type[UpstreamStatusError] = UpstreamStatusError
+    ) -> None:
+        """Record the refusal's *message*, the provider's *code*, and the ``ClientError`` *kind* it becomes."""
+        super().__init__(message)
+        self.message = message
+        self.code = code
+        self.kind = kind
 
 
 class ClientConfigurationError(ClientError):

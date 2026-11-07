@@ -54,6 +54,7 @@ from headgate._core import (
     CallStarted,
     Emitter,
     Slot,
+    check_kind,
     current_timing,
     policy_is_disabled,
 )
@@ -76,14 +77,13 @@ from headgate._options import (
     Timeouts,
     TransportPolicy,
     check_deadline,
-    check_kind,
     check_timeout_fits,
     httpx_timeout,
     match_route,
     reject_upstream_httpx,
 )
 from headgate._request_body import check_one_body, request_content
-from headgate._responses import Expect, Reader, RefusedError, accepts, nothing
+from headgate._responses import Expect, Reader, accepts, nothing
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
 from headgate._view import KEEP, ROOT_DEFAULTS, ViewOptions
@@ -99,6 +99,7 @@ from headgate.errors import (
     DecodeError,
     ForbiddenDestinationError,
     RateLimitError,
+    RefusedError,
 )
 from headgate.pagination import PageRequest, WritingPager
 from headgate.pagination._paginated import PageWalk
@@ -115,7 +116,7 @@ if TYPE_CHECKING:
 
     from headgate._options import Route
     from headgate._request_body import Body, EncodedBody, UploadFiles, Writer
-    from headgate._responses import RefusalCheck
+    from headgate._responses import ResponseCheck
     from headgate.breaker._breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
     from headgate.cache import HttpCache
@@ -167,7 +168,7 @@ class RequestOptions(_SendOptions, total=False, closed=True):
       to no narrower mapping). Its values are encoded the way httpx2 encodes a mapping: a list or tuple repeats the key
       once per item, and any value that is not a ``str``, number, bool or ``None`` is sent as its ``str()``.
     * ``headers``: added to the client's; a clash is won by the call.
-    * ``body``: an :class:`~headgate.EncodedBody` a codec's ``encoder`` wrote (``body=NEW_ORDER(order)``), sent
+    * ``body``: an :class:`~headgate.EncodedBody` a flavor's ``writer`` wrote (``body=NEW_ORDER(order)``), sent
       with its ``Content-Type`` unless ``headers=`` (the call's or its view's, not the client's defaults) sets one. It
       combines with no other body option.
     * ``json`` / ``data``: a JSON body of builtins (a codec's ``to_builtins`` builds one) or a form body.
@@ -299,7 +300,7 @@ class AsyncBaseClient:
     * ``ResponseParseError``: a 2xx body the reader could not read;
     * ``ResponseTooLargeError``: a body past ``HttpOptions.max_response_bytes``.
 
-    There is no ``None`` return except from a reader that returns it (:func:`~headgate._responses.nothing`): every
+    There is no ``None`` return except from a reader that returns it (:data:`~headgate._responses.nothing`): every
     undeclared non-2xx raises, a 404 included. A non-2xx the provider documents as an answer is declared with
     :meth:`Expect.on <headgate._responses.Expect.on>` and comes back as its own wire type.
 
@@ -354,7 +355,7 @@ class AsyncBaseClient:
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
         self._source = type(self).__name__
         self._timing = current_timing()
-        self._refusal_check = http.refusal_check
+        self._response_check = http.response_check
         self._max_response_bytes = http.max_response_bytes
         self._request_id_headers = http.request_id_headers
         check_timeout_fits(http.timeout, policy.deadline)
@@ -518,7 +519,7 @@ class AsyncBaseClient:
         cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
     ) -> object:
-        """Send a HEAD and read the reply through *expect*: by default :func:`~headgate.nothing`, as a HEAD has no body.
+        """Send a HEAD and read the reply through *expect*: by default :data:`~headgate.nothing`, as a HEAD has no body.
 
         A reader still has the status line and headers, ``Content-Length`` and ``Content-Encoding`` included, so
         ``expect=`` reads a header off a HEAD; the size cap is not applied to a body that does not exist.
@@ -545,7 +546,7 @@ class AsyncBaseClient:
         exits. The call runs through the same stack and failure ladder as a verb, except that:
 
         * a 2xx is the only success: there is no ``expect=``, and a 3xx raises unless redirects are followed;
-        * the client's ``refusal_check`` runs on the response head, before the block is entered;
+        * the client's ``response_check`` runs on the response head, before the block is entered;
         * the deadline bounds opening the stream (every attempt, backoff and the head checks), not reading it, since
           the caller's pace of iteration decides how long the body takes. Each read is bounded by the read timeout;
           to bound the whole body, wrap the block in ``asyncio.timeout``;
@@ -626,11 +627,12 @@ class AsyncBaseClient:
         :meth:`get` (or :meth:`post`).
 
         A walk of POSTs passes its body as :meth:`post` does, as ``json=`` or ``body=``, either ``None`` for no body.
-        ``json=`` is builtins, sent as JSON. ``body=`` is the caller's own value, which the pager's ``write`` (a codec's
-        ``encoder``, see :class:`~headgate.pagination.WritingPager`) encodes for each page: the writer belongs to the
-        endpoint, like the reader and the pager, and a pager that rewrites the body (:class:`~headgate.BodyCursor`,
-        :class:`~headgate.BodyOffset`) needs the value, not its bytes. A page with a body is then a :meth:`post` in
-        every respect: in particular it is re-sent only when that is safe, unless ``retry=`` says otherwise.
+        ``json=`` is builtins, sent as JSON. ``body=`` is the caller's own value, which the pager's ``write`` (a
+        flavor's ``writer``, see :class:`~headgate.pagination.WritingPager`) encodes for each page: the writer belongs
+        to the endpoint, like the reader and the pager, and a pager that rewrites the body
+        (:class:`~headgate.BodyCursor`, :class:`~headgate.BodyOffset`) needs the value, not its bytes. A page with a
+        body is then a :meth:`post` in every respect: in particular it is re-sent only when that is safe, unless
+        ``retry=`` says otherwise.
 
         *limit* is a page budget (:class:`~headgate.PageLimit`): at most ``max_pages`` pages are fetched. When more
         would follow, the walk raises :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or
@@ -643,7 +645,10 @@ class AsyncBaseClient:
             idempotency key (``idempotency_key=``, or the policy's header in ``headers=``, a view's or the client's),
             as one key on pages with different bodies would have the server replay the first page's answer. A later
             page with a body is held to the same rules, and raises from the iteration.
+        :raises TypeError: for an ``expect=`` that is neither a :class:`~headgate.Reader` nor an ``Expect``, before the
+            pager runs.
         """
+        spec: Expect[P] = _expectation(expect)
         body, as_json, call_options = _walk_body(**options)
         # How a body is sent is the walk's: the pager's writer encodes every page's, whatever request the pager returns.
         write = pages.write if isinstance(pages, WritingPager) else None
@@ -653,7 +658,6 @@ class AsyncBaseClient:
         refusal = _post_refusal(write, as_json=as_json, fixed_key=self._one_key_for_every_page(call_options))
         if first.body is not None and refusal is not None:
             raise ValueError(refusal)
-        spec: Expect[P] = expect if isinstance(expect, Expect) else Expect(expect)
         answers = {status: _paired(read) for status, read in spec.answers.items()}
         paired = Expect(_paired(spec.ok), answers, headers=spec.headers, accept=spec.accept)
 
@@ -695,13 +699,13 @@ class AsyncBaseClient:
         Every response passes four layers, in order:
 
         1. **transport** (:meth:`_exchange`): a transport failure, a surviving 429/5xx, or an open breaker raises;
-        2. **host**: the client's ``refusal_check`` runs on the final response;
+        2. **response check**: the client's ``response_check`` runs on the final response;
         3. **endpoint**: a status the call declared exactly goes to its reader; any other 2xx to the success reader;
         4. **default**: any other non-2xx raises through :func:`~headgate._failures.status_error`.
 
         See :meth:`_dispatch` for how the last three read the body.
         """
-        spec: Expect[T] = expect if isinstance(expect, Expect) else Expect(expect)
+        spec: Expect[T] = _expectation(expect)
         prepared = self._prepare(call)
         explicit = self._view.headers_for(call.options.get("headers"))
         _stamp_headers(prepared.request, explicit, spec.headers)
@@ -753,7 +757,7 @@ class AsyncBaseClient:
         async with self._deadline(prepared):
             streamed, verdict = await held.enter_async_context(self._exchange(prepared))
             announce_deprecation(prepared.context, streamed)
-            if (refused := _refusal(self._refusal_check, streamed)) is not None:
+            if (refused := _checked(self._response_check, streamed)) is not None:
                 head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
                 raise refusal_error(refused, head, self._site(prepared)) from refused
             if not streamed.is_success:
@@ -769,7 +773,7 @@ class AsyncBaseClient:
         """Build *call*'s request and stamp its context on it.
 
         Raises ``ValueError`` for a t-string value no path segment can hold, for a call that would follow redirects
-        on a client with a ``refusal_check``, for a ``deadline=`` that is not positive and finite and for body options
+        on a client with a ``response_check``, for a ``deadline=`` that is not positive and finite and for body options
         that do not combine; ``TypeError`` for a ``content=`` that is no body; and ``ClientError`` for a URL httpx2
         cannot parse.
         """
@@ -779,9 +783,9 @@ class AsyncBaseClient:
             url, route = str(call.url), None
         log_url = loggable_url(url)
         follow = self._http_client.follow_redirects if call.follow_redirects is None else call.follow_redirects
-        # The per-call half of the constructor's check: the client itself never follows with a refusal_check.
-        if self._refusal_check is not None and follow:
-            msg = f"{self._source} has a refusal_check=, so no call may follow redirects"
+        # The per-call half of the constructor's check: the client itself never follows with a response_check.
+        if self._response_check is not None and follow:
+            msg = f"{self._source} has a response_check=, so no call may follow redirects"
             raise ValueError(msg)
         options = call.options
         params = options.get("params")
@@ -1057,16 +1061,17 @@ class AsyncBaseClient:
     # Reading the answer.
 
     def _dispatch[T](self, resp: httpx2.Response, spec: Expect[T], site: CallSite) -> T:
-        """Read the final *resp* through the host check, the call's declared responses and the status ladder.
+        """Read the final *resp* through the response check, the call's declared responses and the status ladder.
 
-        A ``RefusedError`` from a reader, or raised or returned by the ``refusal_check``, becomes the ``ClientError``
+        A ``RefusedError`` from a reader, or raised or returned by the ``response_check``, becomes the ``ClientError``
         its kind names, with the real status. A reader that finds the body is not the shape it expected (a codec's
         ``DecodeError``, or the ``ValueError``, ``LookupError`` or ``TypeError`` hand-written code over
-        ``response.json()`` raises) on a 2xx raises ``ResponseParseError`` naming the status and request line; on a
-        declared non-2xx it falls through to the status ladder, because a declaration covers only the body shape it
-        names. A body whose ``Content-Type`` is not the one ``Expect(accept=...)`` asked for is such a shape error.
+        ``response.json()`` raises, or nesting too deep to parse) on a 2xx raises ``ResponseParseError`` naming the
+        status and request line; on a declared non-2xx it falls through to the status ladder, because a declaration
+        covers only the body shape it names. A body whose ``Content-Type`` is not the one ``Expect(accept=...)`` asked
+        for is such a shape error.
         """
-        if (refused := _refusal(self._refusal_check, resp)) is not None:
+        if (refused := _checked(self._response_check, resp)) is not None:
             raise refusal_error(refused, resp, site) from refused
         read = spec.answers.get(resp.status_code)
         if read is None:
@@ -1194,7 +1199,7 @@ def _breaker_gate(breaker: Breaker, verdict: Verdict) -> Callable[[], bool]:
     return refusing
 
 
-def _refusal(check: RefusalCheck | None, resp: httpx2.Response) -> RefusedError | None:
+def _checked(check: ResponseCheck | None, resp: httpx2.Response) -> RefusedError | None:
     """Run the client's *check* on *resp*, treating a ``RefusedError`` it raises like one it returns."""
     if check is None:
         return None
@@ -1235,13 +1240,22 @@ def _post_refusal[B](write: Writer[B] | None, *, as_json: bool, fixed_key: bool)
     return None
 
 
+def _expectation[T](expect: Reader[T] | Expect[T]) -> Expect[T]:
+    """Return *expect* as an ``Expect``: itself, or one whose success reader it is.
+
+    :raises TypeError: for an *expect* that is neither, such as a model class or a bare function.
+    """
+    check_kind("expect", expect, (Reader, Expect), "a Reader or an Expect")
+    return expect if isinstance(expect, Expect) else Expect(expect)
+
+
 def _paired[T](read: Reader[T]) -> Reader[tuple[T, httpx2.Response]]:
     """Return a reader that returns what *read* reads together with the response, for a pager to read headers from."""
 
     def _read(resp: httpx2.Response, /) -> tuple[T, httpx2.Response]:
         return read(resp), resp
 
-    return _read
+    return Reader(_read, name=f"paired {read!r}")
 
 
 def _invalid_url(exc: httpx2.InvalidURL, site: CallSite) -> ClientError:

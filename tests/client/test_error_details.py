@@ -27,18 +27,19 @@ from headgate import (
     Problem,
     Rate,
     RateLimitError,
-    RefusedError,
+    Reader,
     ResponseParseError,
     ResponseTooLargeError,
     RetryPolicy,
     TransportError,
     TransportPolicy,
     UpstreamStatusError,
-    json_reader,
+    body_reader,
     nothing,
 )
 from headgate._core import CallContext
 from headgate.breaker import BreakerRegistry
+from headgate.errors import RefusedError
 from headgate.retry import NO_RETRY
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
@@ -283,7 +284,7 @@ async def test_a_parse_error_names_the_status_and_content_type() -> None:
     """Record the status and declared content type of a 2xx body its reader could not read."""
     script = Script(httpx2.Response(200, content=b"<html>", headers={"Content-Type": "text/html"}))
     with pytest.raises(ResponseParseError) as raised:
-        await _client(script).get("orders", expect=json_reader(json.loads))
+        await _client(script).get("orders", expect=body_reader(json.loads))
 
     assert (raised.value.status_code, raised.value.content_type) == (200, "text/html")
 
@@ -517,6 +518,7 @@ async def test_a_refusal_and_a_parse_error_carry_the_request_id() -> None:
     """Read the request id of the response a refusal or an unreadable body came on."""
     answer = httpx2.Response(200, text="<html>", headers={"x-request-id": _REQUEST_ID})
 
+    @Reader
     def refuse(_resp: httpx2.Response) -> bytes:
         """Refuse the body."""
         msg = "refused"
@@ -526,11 +528,12 @@ async def test_a_refusal_and_a_parse_error_carry_the_request_id() -> None:
         with pytest.raises(UpstreamStatusError) as refused:
             await client.get("orders", expect=refuse)
         with pytest.raises(ResponseParseError) as unreadable:
-            await client.get("orders", expect=json_reader(json.loads))
+            await client.get("orders", expect=body_reader(json.loads))
 
     assert (refused.value.request_id, unreadable.value.request_id) == (_REQUEST_ID, _REQUEST_ID)
 
 
+@Reader
 def _empty_value_error(_resp: httpx2.Response) -> bytes:
     """Fail as a reader whose error has no message."""
     raise ValueError
