@@ -1,5 +1,7 @@
 # Phase 2: Readers — Implementation Plan
 
+Status: done · merged in #60.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make a reader a real type, so a wrong `expect=` is a type error and a runtime `TypeError`. Give readers and writers one vocabulary, and split the two kinds of refusal check by what each sees.
