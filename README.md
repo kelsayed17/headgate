@@ -142,14 +142,16 @@ is the better pick.
 Python 3.14 or newer.
 
 ```bash
-pip install 'headgate[msgspec]'    # or: uv add 'headgate[msgspec]'. headgate, and the msgspec codec
-pip install 'headgate[pydantic]'   # headgate, and the pydantic codec
-pip install 'headgate[curl]'       # + AsyncCurlTransport: a browser's TLS fingerprint, via curl_cffi
-pip install 'headgate[otel]'       # + OpenTelemetryObserver (opentelemetry-api only)
-pip install 'headgate[cache]'      # + what hishel's AsyncSqliteStorage needs (hishel[async]: anysqlite)
+uv add 'headgate[msgspec]'    # headgate, and the msgspec codec
+uv add 'headgate[pydantic]'   # headgate, and the pydantic codec
+uv add 'headgate[curl]'       # + AsyncCurlTransport: a browser's TLS fingerprint, via curl_cffi
+uv add 'headgate[otel]'       # + OpenTelemetryObserver (opentelemetry-api only)
+uv add 'headgate[cache]'      # + what hishel's AsyncSqliteStorage needs (hishel[async]: anysqlite)
 ```
 
-`pip install headgate` alone brings no serialization library: httpx2, hishel and typing-extensions only. Pick a codec as
+With pip, install the same extras with `pip install 'headgate[msgspec]'` and so on.
+
+`uv add headgate` alone brings no serialization library: httpx2, hishel and typing-extensions only. Pick a codec as
 an extra, or bring your own (see [codecs](https://kelsayed17.github.io/headgate/codecs/)).
 
 <details>
