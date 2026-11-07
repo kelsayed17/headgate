@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import httpx2
 import msgspec
+import pytest
 from pydantic import BaseModel
 
 from headgate import msgspec as msgspec_flavor
@@ -75,6 +76,18 @@ def test_sanitize_url(benchmark: BenchmarkFixture) -> None:
 def test_redact_secrets(benchmark: BenchmarkFixture) -> None:
     """Measure redacting credentials from a transport error message."""
     benchmark(redact_secrets, _ERROR_TEXT)
+
+
+#: Words of 16 KiB, as a server-controlled value an error message quotes whole: a redirect to an invalid port, a token
+#: field that fails to parse. Trying every letter as a start would be quadratic in the word's length. The hyphenated
+#: word catches a word boundary that forgets ``-``; the digits exercise the possessive prefix of the pattern.
+_LONG_WORDS = {"letters": "a" * 16384, "hyphenated": "a-" * 8192, "digits": "1" * 16384}
+
+
+@pytest.mark.parametrize("word", list(_LONG_WORDS.values()), ids=list(_LONG_WORDS))
+def test_redact_secrets_long_word(benchmark: BenchmarkFixture, word: str) -> None:
+    """Measure redacting a transport error that quotes one 16 KiB word, which holds no pair to redact."""
+    benchmark(redact_secrets, f"Invalid URL in location header: Invalid port: '{word}'.")
 
 
 def test_status_error(benchmark: BenchmarkFixture) -> None:

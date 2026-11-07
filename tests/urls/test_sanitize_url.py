@@ -82,6 +82,33 @@ def test_redact_secrets_replaces_secret_pairs_in_free_text() -> None:
     assert redact_secrets(text) == "bad response from 'https://x.test/?apikey=***&q=1' and token=*** end"
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("_token=x", "_token=***"),
+        ("1token=x", "1token=***"),
+        ("-token=x", "-token=***"),
+        ("étoken=x", "étoken=***"),
+        ("_-1token=x", "_-1token=***"),
+        ("a.token=x", "a.token=***"),
+        ("xtoken=x", "xtoken=x"),
+        ("a=btoken=x", "a=btoken=x"),
+        ("123=x", "123=x"),
+        ("é=x", "é=x"),
+        ("token= token=x", "token= token=***"),
+    ],
+)
+def test_a_pair_name_starts_at_the_first_ascii_letter_of_its_word(text: str, expected: str) -> None:
+    """Start a pair's name at the first ASCII letter of its word, and never inside a word.
+
+    A word is a run of letters, digits, ``_`` and ``-``. What precedes the first ASCII letter (``_``, a digit, ``-``,
+    a non-ASCII letter) is kept in front of the name; a word that starts with another ASCII letter (``xtoken``) is a
+    name of its own, and a value runs to the next ``&``, space or quote, so ``a=btoken=x`` holds one pair. A word with
+    no ASCII letter (``123``, ``é``) holds no name, and a pair with an empty value (``token=``) is not one.
+    """
+    assert redact_secrets(text) == expected
+
+
 def test_a_registered_name_is_secret_whatever_its_spelling() -> None:
     """Fold a registered name like a listed one: case-insensitive, with ``_`` and ``-`` ignored."""
     # The registry is process-wide and add-only, so a name unique to this run keeps the test independent of order.
