@@ -97,8 +97,12 @@ _registered_secret_params: set[str] = set()
 _REDACTED: Final = "***"
 
 #: A ``name=value`` pair in free text. The value stops at ``&``, whitespace or a quote, which is where an URL embedded
-#: in an exception message ends.
-_PAIR: Final = re.compile(r"([A-Za-z][\w-]*)=([^&\s'\"]+)")
+#: in an exception message ends. The name starts at the first ASCII letter of its word (a run of ``[\w-]``), and what
+#: precedes that letter (digits, ``_``, ``-``, non-ASCII letters) is matched in group 1 and kept. A match starts only
+#: at the start of a word, so a word with no ``=`` after it costs one full attempt; trying every letter as a start
+#: would be quadratic in the word's length. Group 1 is possessive: giving a character back never lets ``[A-Za-z]``
+#: match it.
+_PAIR: Final = re.compile(r"(?<![\w-])((?:(?![A-Za-z])[\w-])*+)([A-Za-z][\w-]*)=([^&\s'\"]+)")
 
 #: The userinfo of a URL in free text: everything between ``//`` and the last ``@`` before the first ``/``, ``?`` or
 #: ``#``. The last, because a password may hold a bare ``@`` (``//user:p@ss@host``), and stopping at the first would
@@ -131,7 +135,7 @@ def redact_secrets(text: str) -> str:
     A userinfo (``//user:pw@`` or ``//token@``) becomes ``//***@``; a pair whose name is a credential keeps its name.
     """
     text = _USERINFO.sub(f"//{_REDACTED}@", text)
-    return _PAIR.sub(lambda m: f"{m[1]}={_REDACTED}" if is_secret_param(m[1]) else m[0], text)
+    return _PAIR.sub(lambda m: f"{m[1]}{m[2]}={_REDACTED}" if is_secret_param(m[2]) else m[0], text)
 
 
 def escape_segment(value: object) -> str:
