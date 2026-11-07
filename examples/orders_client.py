@@ -32,7 +32,7 @@ from headgate import (
     TransportPolicy,
     nothing,
 )
-from headgate.msgspec import decode, decoder, encoder
+from headgate.msgspec import decode, reader, writer
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -102,9 +102,9 @@ def orders_on(page: list[Order]) -> list[Order]:
     return page
 
 
-ORDER = decoder(Order)
-NEW_ORDER = encoder(NewOrder)
-ORDER_OR_REJECTION = Expect(ORDER).on(HTTPStatus.UNPROCESSABLE_ENTITY, decoder(Rejection))
+ORDER = reader(Order)
+NEW_ORDER = writer(NewOrder)
+ORDER_OR_REJECTION = Expect(ORDER).on(HTTPStatus.UNPROCESSABLE_ENTITY, reader(Rejection))
 ORDER_PAGES = LinkHeader(items=orders_on)
 
 
@@ -154,7 +154,7 @@ class OrdersClient(AsyncBaseClient):
     def orders(self, *, status: str) -> Paginated[list[Order], Order]:
         """Return the orders in *status*, a page of 100 at a time."""
         query = {"status": status, "per_page": 100}
-        return self.paginate("orders", expect=decoder(list[Order]), pages=ORDER_PAGES, params=query)
+        return self.paginate("orders", expect=reader(list[Order]), pages=ORDER_PAGES, params=query)
 
     async def export_orders(self, write: Callable[[bytes], object]) -> None:
         """Stream the CSV export of every order into *write*, a chunk at a time, never holding it whole."""

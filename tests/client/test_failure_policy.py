@@ -22,7 +22,7 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
-from headgate.msgspec import decoder
+from headgate.msgspec import reader
 from headgate.ratelimit import Rate
 from headgate.retry import RetryPolicy
 
@@ -46,7 +46,7 @@ async def test_raises_upstream_status_on_server_error() -> None:
     transport = _answering(500)
     async with _client(transport) as c:
         with pytest.raises(UpstreamStatusError) as ei:
-            await c.get("/x", expect=decoder(dict[str, int]))
+            await c.get("/x", expect=reader(dict[str, int]))
         assert ei.value.status_code == httpx2.codes.INTERNAL_SERVER_ERROR
 
 
@@ -60,7 +60,7 @@ async def test_raises_transport_on_network_error() -> None:
     transport = httpx2.MockTransport(boom)
     async with _client(transport) as c:
         with pytest.raises(TransportError):
-            await c.get("/x", expect=decoder(dict[str, int]))
+            await c.get("/x", expect=reader(dict[str, int]))
 
 
 @pytest.mark.parametrize(
@@ -81,7 +81,7 @@ async def test_a_network_error_with_an_empty_message_still_names_what_failed(
 
     async with _client(httpx2.MockTransport(boom)) as c:
         with pytest.raises(expected) as ei:
-            await c.get("/x", expect=decoder(dict[str, int]))
+            await c.get("/x", expect=reader(dict[str, int]))
     assert raised.__name__ in str(ei.value)
 
 
@@ -90,7 +90,7 @@ async def test_raises_parse_error_on_bad_json() -> None:
     transport = _answering(httpx2.codes.OK, b"not json")
     async with _client(transport) as c:
         with pytest.raises(ResponseParseError):
-            await c.get("/x", expect=decoder(dict[str, int]))
+            await c.get("/x", expect=reader(dict[str, int]))
 
 
 # --- non-success statuses raise ---
@@ -102,7 +102,7 @@ async def test_missing_resource_raises(status: int) -> None:
     transport = _answering(status)
     async with _client(transport) as c:
         with pytest.raises(UpstreamStatusError) as ei:
-            await c.get("/x", expect=decoder(dict[str, int]))
+            await c.get("/x", expect=reader(dict[str, int]))
         assert ei.value.status_code == status
 
 
@@ -112,7 +112,7 @@ async def test_auth_status_raises_auth_error(status: int) -> None:
     transport = _answering(status)
     async with _client(transport) as c:
         with pytest.raises(AuthError) as ei:
-            await c.get("/x", expect=decoder(dict[str, int]))
+            await c.get("/x", expect=reader(dict[str, int]))
         assert ei.value.status_code == status
 
 
@@ -121,7 +121,7 @@ async def test_bad_request_raises_upstream_status() -> None:
     transport = _answering(400)
     async with _client(transport) as c:
         with pytest.raises(UpstreamStatusError) as ei:
-            await c.get("/x", expect=decoder(dict[str, int]))
+            await c.get("/x", expect=reader(dict[str, int]))
         assert ei.value.status_code == httpx2.codes.BAD_REQUEST
 
 
@@ -140,7 +140,7 @@ async def test_the_error_names_the_client_class_that_raised_it() -> None:
         rate=Rate.per_second(2), base_url="https://example.test", policy=_POLICY, http=HttpOptions(transport=transport)
     ) as c:
         with pytest.raises(UpstreamStatusError) as ei:
-            await c.get("/x", expect=decoder(dict[str, int]))
+            await c.get("/x", expect=reader(dict[str, int]))
         assert ei.value.source == "NamedClient"
 
 
@@ -153,7 +153,7 @@ async def test_rate_limited_raises_rate_limit_error() -> None:
     transport = _answering(429)
     async with _client(transport) as c:
         with pytest.raises(RateLimitError) as ei:
-            await c.get("/x", expect=decoder(dict[str, int]))
+            await c.get("/x", expect=reader(dict[str, int]))
         assert ei.value.status_code == httpx2.codes.TOO_MANY_REQUESTS
         assert isinstance(ei.value, UpstreamStatusError), "must stay catchable as the parent"
 
@@ -171,7 +171,7 @@ async def test_timeout_raises_client_timeout_error() -> None:
 
     async with _client(httpx2.MockTransport(_timeout)) as c:
         with pytest.raises(ClientTimeoutError) as ei:
-            await c.get("/x", expect=decoder(dict[str, int]))
+            await c.get("/x", expect=reader(dict[str, int]))
         assert isinstance(ei.value, TransportError), "must stay catchable as the parent"
 
 
@@ -184,7 +184,7 @@ async def test_a_builtin_timeout_raises_client_timeout_error() -> None:
 
     async with _client(httpx2.MockTransport(_timeout)) as c:
         with pytest.raises(ClientTimeoutError, match="resolver timed out"):
-            await c.get("/x", expect=decoder(dict[str, int]))
+            await c.get("/x", expect=reader(dict[str, int]))
 
 
 # --- success ---
@@ -194,5 +194,5 @@ async def test_returns_value_on_success() -> None:
     """Check that a successful read returns the decoded payload."""
     transport = _answering(httpx2.codes.OK, b'{"a": 1}')
     async with _client(transport) as c:
-        result = await c.get("/x", expect=decoder(dict[str, int]))
+        result = await c.get("/x", expect=reader(dict[str, int]))
         assert result == {"a": 1}

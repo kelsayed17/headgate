@@ -4,8 +4,8 @@
 """The msgspec codec: strict JSON decoding into ``msgspec.Struct`` types, and request bodies written back.
 
 :data:`CODEC` is msgspec as a :class:`~headgate.Codec`. A client usually reaches it through the shortcuts here
-(``from headgate.msgspec import decoder, encoder``): :func:`decode` is the bytes-level primitive, :func:`decoder`
-builds a response reader on it and :func:`encoder` its mirror, a request-body writer; :func:`to_builtins` prepares
+(``from headgate.msgspec import reader, writer``): :func:`decode` is the bytes-level primitive, :func:`reader`
+builds a response reader on it and :func:`writer` its mirror, a request-body writer; :func:`to_builtins` prepares
 builtins for ``json=`` or ``data=``. Every decode failure is the shared :class:`~headgate.errors.DecodeError`.
 
 A ``DecodeError``'s message is msgspec's own diagnosis (the expected type and the path), bounded, with the input
@@ -35,7 +35,7 @@ except ImportError as exc:
     msg = "headgate.msgspec needs msgspec: pip install headgate[msgspec]"
     raise ImportError(msg) from exc
 
-from headgate._codec import decode_with, decoder_for, encoder_for
+from headgate._codec import decode_with, reader_for, writer_for
 from headgate._codec import drop_none as _drop_none
 
 if TYPE_CHECKING:
@@ -44,9 +44,10 @@ if TYPE_CHECKING:
     from typing_extensions import TypeForm
 
     from headgate._request_body import Writer
-    from headgate._responses import Reader, RefusedError
+    from headgate._responses import Reader
+    from headgate.errors import RefusedError
 
-__all__ = ["CODEC", "MsgspecCodec", "decode", "decoder", "encoder", "to_builtins"]
+__all__ = ["CODEC", "MsgspecCodec", "decode", "reader", "to_builtins", "writer"]
 
 #: One encoder serves every value: msgspec encodes by the value's own type, so it holds no per-type state.
 _JSON_ENCODER: Final = msgspec.json.Encoder()
@@ -121,36 +122,36 @@ def decode[T](content: bytes, type_: TypeForm[T], *, strict: bool = True) -> T:
     return decode_with(CODEC if strict else _LAX, content, type_)
 
 
-def decoder[T](
+def reader[T](
     type_: TypeForm[T],
     *,
     strict: bool = True,
     allow_empty_body: bool = False,
-    refusal_check: Callable[[T], RefusedError | None] | None = None,
+    refuse: Callable[[T], RefusedError | None] | None = None,
 ) -> Reader[T]:
     """Build a reader that decodes the body as strict JSON into the type expression *type_*.
 
     *type_* carries the whole wire shape, so one function serves every JSON body: an enveloped object
-    (``decoder(MyResponse)``), a bare array (``decoder(list[MyRow])``), a bare map (``decoder(dict[str, MyRow])``), or
-    a union where a provider's body is genuinely one shape or the other (``decoder(list[A] | A)``).
+    (``reader(MyResponse)``), a bare array (``reader(list[MyRow])``), a bare map (``reader(dict[str, MyRow])``), or a
+    union where a provider's body is genuinely one shape or the other (``reader(list[A] | A)``).
 
     msgspec decodes the expression atomically, so one malformed element fails the whole body with
     :class:`~headgate.errors.DecodeError`. ``strict=False`` is the deliberate opt-out for a wire that needs lax
-    coercion. ``allow_empty_body`` and ``refusal_check`` are documented on :func:`~headgate.decoder_for`.
+    coercion. ``allow_empty_body`` and ``refuse`` are documented on :func:`~headgate.reader_for`.
     """
     codec = CODEC if strict else _LAX
-    return decoder_for(codec, type_, allow_empty_body=allow_empty_body, refusal_check=refusal_check)
+    return reader_for(codec, type_, allow_empty_body=allow_empty_body, refuse=refuse)
 
 
-def encoder[T](type_: TypeForm[T], *, drop_none: bool = False) -> Writer[T]:
+def writer[T](type_: TypeForm[T], *, drop_none: bool = False) -> Writer[T]:
     """Build a writer that encodes a value of the type expression *type_* as a JSON request body.
 
-    The mirror of :func:`decoder`: build it once, at import (``NEW_ORDER = encoder(NewOrder)``), and send with
+    The mirror of :func:`reader`: build it once, at import (``NEW_ORDER = writer(NewOrder)``), and send with
     ``body=NEW_ORDER(order)``. msgspec encodes the value straight to bytes, with the same renames, field order and
     ``omit_defaults`` as :func:`to_builtins`; *type_* types the writer, so it takes only that type. ``drop_none=True``
     removes ``None``-valued fields recursively, as :func:`to_builtins` does.
     """
-    return encoder_for(_DROPPING_NONE if drop_none else CODEC, type_)
+    return writer_for(_DROPPING_NONE if drop_none else CODEC, type_)
 
 
 @overload

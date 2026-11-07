@@ -5,7 +5,7 @@
 
 :data:`CODEC` is pydantic as a :class:`~headgate.Codec`, with the same shortcuts as :mod:`headgate.msgspec`, so
 switching codec is changing one import
-(``from headgate.pydantic import decoder, encoder, to_builtins``). Wire models are frozen, strict ``BaseModel``
+(``from headgate.pydantic import reader, writer, to_builtins``). Wire models are frozen, strict ``BaseModel``
 classes::
 
     class Row(BaseModel):
@@ -35,8 +35,9 @@ except ImportError as exc:
     msg = "headgate.pydantic needs pydantic: pip install headgate[pydantic]"
     raise ImportError(msg) from exc
 
-from headgate._codec import decode_with, decoder_for, encoder_for
+from headgate._codec import decode_with, reader_for, writer_for
 from headgate._codec import drop_none as _drop_none
+from headgate._failures import NESTED_TOO_DEEPLY
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -46,15 +47,19 @@ if TYPE_CHECKING:
     from typing_extensions import TypeForm
 
     from headgate._request_body import Writer
-    from headgate._responses import Reader, RefusedError
+    from headgate._responses import Reader
+    from headgate.errors import RefusedError
 
-__all__ = ["CODEC", "PydanticCodec", "decode", "decoder", "encoder", "to_builtins"]
+__all__ = ["CODEC", "PydanticCodec", "decode", "reader", "to_builtins", "writer"]
 
 #: How many of a validation's failures a ``DecodeError`` message names; the count of the rest follows them.
 _ERRORS_SHOWN = 5
 
 #: What a message shows in place of the input: a key in a failure's location, or a value its reason would quote.
 _REDACTED: Final = "[...]"
+
+#: What pydantic's ``json_invalid`` reason holds for a body nested past its parser's recursion limit.
+_RECURSION_LIMIT: Final = "recursion limit exceeded"
 
 #: The failures whose reason quotes the input, each with the context value that holds it: an unknown tag, the character
 #: a UUID failed at, and a timezone offset the input named.
@@ -85,9 +90,9 @@ def _schema_names(schema: object) -> set[str]:
 def _cached_adapter(type_: TypeForm[object]) -> TypeAdapter[Any]:
     """Return the one ``TypeAdapter`` for *type_*, built on first use, adding the names its schema holds to ``_NAMES``.
 
-    ``decoder`` typically runs on every request, and :func:`decode` may run once per element of a larger document, so
-    each type expression is compiled once. A cache shared by every type expression cannot carry each entry's type
-    parameter, which is why it returns ``TypeAdapter[Any]``; :func:`_adapter` restores it.
+    A codec's ``decoder`` typically runs on every request, and :func:`decode` may run once per element of a larger
+    document, so each type expression is compiled once. A cache shared by every type expression cannot carry each
+    entry's type parameter, which is why it returns ``TypeAdapter[Any]``; :func:`_adapter` restores it.
     """
     adapter = TypeAdapter(type_)
     _NAMES.update(_schema_names(adapter.core_schema))
@@ -149,10 +154,13 @@ class PydanticCodec:
 
         A failure's location keeps list positions and the names the type declares (fields and aliases, tags), and shows
         ``[...]`` for a key of the input's own; a reason that would quote the input (an unknown tag) shows ``[...]`` in
-        its place. A validator of your own is quoted as it words its message.
+        its place. A validator of your own is quoted as it words its message. A body nested past pydantic's recursion
+        limit is ``nested too deeply``, as every codec says it.
         """
         exc = cast("ValidationError", error)  # the only one of :attr:`errors`
         errors = exc.errors(include_input=False, include_url=False, include_context=True)[:_ERRORS_SHOWN]
+        if any(error["type"] == "json_invalid" and _RECURSION_LIMIT in error["msg"] for error in errors):
+            return NESTED_TOO_DEEPLY
         shown = "; ".join(f"{_location(error['loc'])}: {_reason(error)}" for error in errors)
         count = exc.error_count()
         more = f" (+{count - len(errors)} more)" if count > len(errors) else ""
@@ -193,32 +201,32 @@ def decode[T](content: bytes, type_: TypeForm[T], *, strict: bool = True) -> T:
     return decode_with(CODEC if strict else _LAX, content, type_)
 
 
-def decoder[T](
+def reader[T](
     type_: TypeForm[T],
     *,
     strict: bool = True,
     allow_empty_body: bool = False,
-    refusal_check: Callable[[T], RefusedError | None] | None = None,
+    refuse: Callable[[T], RefusedError | None] | None = None,
 ) -> Reader[T]:
     """Build a reader that validates the body as strict JSON against the type expression *type_*.
 
-    Accepts the same shapes as :func:`headgate.msgspec.decoder` (an enveloped model, ``list[Row]``,
+    Accepts the same shapes as :func:`headgate.msgspec.reader` (an enveloped model, ``list[Row]``,
     ``dict[str, Row]``, a union of shapes). One malformed element fails the whole body. ``allow_empty_body`` and
-    ``refusal_check`` are documented on :func:`~headgate.decoder_for`.
+    ``refuse`` are documented on :func:`~headgate.reader_for`.
     """
     codec = CODEC if strict else _LAX
-    return decoder_for(codec, type_, allow_empty_body=allow_empty_body, refusal_check=refusal_check)
+    return reader_for(codec, type_, allow_empty_body=allow_empty_body, refuse=refuse)
 
 
-def encoder[T](type_: TypeForm[T], *, drop_none: bool = False) -> Writer[T]:
+def writer[T](type_: TypeForm[T], *, drop_none: bool = False) -> Writer[T]:
     """Build a writer that encodes a value of the type expression *type_* as a JSON request body.
 
-    The mirror of :func:`decoder`: build it once, at import (``NEW_ORDER = encoder(NewOrder)``), and send with
+    The mirror of :func:`reader`: build it once, at import (``NEW_ORDER = writer(NewOrder)``), and send with
     ``body=NEW_ORDER(order)``. The value is serialized by *type_*'s ``TypeAdapter``, with field aliases applied, as
     :func:`to_builtins` applies them. ``drop_none=True`` removes ``None``-valued fields recursively, as
     :func:`to_builtins` does.
     """
-    return encoder_for(_DROPPING_NONE if drop_none else CODEC, type_)
+    return writer_for(_DROPPING_NONE if drop_none else CODEC, type_)
 
 
 @overload

@@ -123,7 +123,7 @@ class WritingPager[P, I, B](Pager[P, I, B], ABC):
     @property
     @abstractmethod
     def write(self) -> Writer[B] | None:
-        """The writer (a codec's ``encoder``) that encodes each page's body, or ``None`` for one sent as JSON."""
+        """The writer (a flavor's ``writer``) that encodes each page's body, or ``None`` for one sent as JSON."""
 
     @override
     @abstractmethod
@@ -183,7 +183,7 @@ class Cursor[P, I, B = None](WritingPager[P, I, B]):
     The last page is the one whose ``next`` returns ``None`` or ``""``, or one with no items: a cursor that advances
     while returning nothing makes no progress. Set ``stop_on_empty=False`` for an endpoint that sends empty pages
     mid-walk. ``B`` is the type of the request body for a walk of POSTs (``Cursor[Page, Item, Query]``), and
-    ``None`` for a walk of GETs. ``write`` encodes a ``body=`` on each page (a codec's ``encoder``); a walk of POSTs
+    ``None`` for a walk of GETs. ``write`` encodes a ``body=`` on each page (a flavor's ``writer``); a walk of POSTs
     without one sends ``json=``, and a walk of GETs leaves it unused.
     """
 
@@ -393,7 +393,7 @@ class BodyCursor[P, I, B](WritingPager[P, I, B]):
     For an endpoint whose query is a request body (a search API, a JSON-RPC call): the walk POSTs the body the caller
     passed ``paginate``, and each next page POSTs ``put(body, cursor)``, the same body carrying the cursor ``next``
     read from the page. ``put`` returns a new body, leaving the one it was given as it was. ``write`` encodes each
-    page's body (a codec's ``encoder``); without it the body is sent as JSON, so it is builtins. The last page is the
+    page's body (a flavor's ``writer``); without it the body is sent as JSON, so it is builtins. The last page is the
     one whose ``next`` returns ``None`` or ``""``, or one with no items (``stop_on_empty=False`` follows the cursor
     past an empty page).
     """

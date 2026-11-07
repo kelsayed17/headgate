@@ -86,6 +86,21 @@ async def test_a_stale_validator_comes_back_fresh() -> None:
     assert result == Fresh(b"v2 body", Validator(etag=_ETAG, last_modified=_MODIFIED))
 
 
+async def test_a_conditional_read_comes_back_fresh_then_not_modified_through_its_two_readers() -> None:
+    """Read fresh, then send the validator that came back and read the 304; the ``Expect`` names both readers."""
+    origin = _Origin()
+    client = _client(origin)
+
+    first = await client.get(_URL, expect=conditional(as_bytes))
+    assert isinstance(first, Fresh)
+    again = conditional(as_bytes, validator=first.validator)
+    second = await client.get(_URL, expect=again)
+
+    assert second == NotModified(first.validator)
+    assert "Reader(fresh)" in repr(again)
+    assert "Reader(not_modified)" in repr(again)
+
+
 async def test_a_date_validator_alone_is_sent_as_if_modified_since() -> None:
     """A validator with only a date sends only ``If-Modified-Since``; the 304's ETag joins what the caller held."""
     origin = _Origin()

@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The shared core every layer may import: time, origins, the per-call context, events and the policy switch.
+"""The shared core every layer may import: time, origins, the per-call context, events, the policy switch, kind checks.
 
 It imports only the standard library and ``httpx2``, so the policy subpackages (:mod:`headgate.retry`,
 :mod:`headgate.breaker`, :mod:`headgate.ratelimit`) can depend on it and on nothing else of headgate's. Coordination
@@ -28,6 +28,7 @@ from headgate._core._events import (
     RateLimited,
     RetryScheduled,
 )
+from headgate._core._kinds import check_kind, type_text
 from headgate._core._origin import origin_of, origin_text, same_origin
 from headgate._core._paths import check_fragment, path_has_fragment
 from headgate._core._retry_after import RETRY_AFTER_STATUSES, parse_retry_after, retry_after_of
@@ -85,6 +86,7 @@ __all__ = [
     "Timing",
     "asyncio_sleep",
     "check_fragment",
+    "check_kind",
     "current_timing",
     "origin_of",
     "origin_text",
@@ -96,4 +98,5 @@ __all__ = [
     "same_origin",
     "system_random",
     "timing_override",
+    "type_text",
 ]

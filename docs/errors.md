@@ -20,7 +20,9 @@ ClientError                      also: an unparsable URL, a pagination loop
 
 A natural mapping for a service calling upstreams: `ClientTimeoutError` to 504, `ClientConfigurationError` to 503, and
 every other `ClientError` to 502. `DecodeError` is not a `ClientError`: a codec raises it, and the client turns it
-into `ResponseParseError` before a caller sees it.
+into `ResponseParseError` before a caller sees it. Neither is `headgate.errors.RefusedError`, which a reader (or an
+`HttpOptions(response_check=)`) produces for a refusal: the client converts it into the `ClientError` its `kind`
+names.
 
 ## What every error carries
 
