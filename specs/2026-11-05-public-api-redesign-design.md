@@ -1,6 +1,6 @@
 # headgate public API redesign
 
-Status: for approval · 2026-11-05
+Status: approved · 2026-11-05. Phase 1 done (#56); Phase 2 in progress (#60).
 
 ## Why
 
