@@ -34,7 +34,7 @@ from typing import Final, NoReturn, final, override
 
 import httpx2
 
-from headgate._core import check_kind
+from headgate._core import check_kind, kind_of
 from headgate.errors import DecodeError, RefusedError
 from headgate.streaming._events import EventParser
 
@@ -66,17 +66,30 @@ class Reader[T]:
     It is a class rather than any function of a response so that ``expect=`` refuses what only looks like one: a model
     class, ``str`` and a bare function are all callable, and each is a mistake there.
 
-    Its ``repr`` is ``Reader(<name>)``: *name* when given, else the function's ``__name__`` (a ``functools.partial``'s
-    function's), else its type's.
+    Its ``repr`` is ``Reader(<name>)``: *name* when given, else a wrapped reader's own name, else the function's
+    ``__name__`` (a ``functools.partial``'s function's), else its type's.
     """
 
     __slots__ = ("_name", "_read")
 
     def __init__(self, read: Callable[[httpx2.Response], T], /, *, name: str | None = None) -> None:
-        """Wrap *read*, the function that turns a response into a value, under *name* or *read*'s own."""
+        """Wrap *read*, the function that turns a response into a value, under *name* or *read*'s own.
+
+        :raises TypeError: for a *read* that cannot be called, here rather than at the first response.
+        """
+        if not callable(read):
+            msg = f"Reader takes a function of the response (got {kind_of(read)})"
+            raise TypeError(msg)
         # Private, so the type parameter stays covariant: a Reader[Order] is a Reader[Order | None].
         self._read = read
-        self._name = _name_of(read) if name is None else name
+        if name is None:
+            name = read.name if isinstance(read, Reader) else _name_of(read)
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        """What the reader reads, as its ``repr`` names it: ``as_json``, ``MsgspecCodec list[Order]``."""
+        return self._name
 
     def __call__(self, response: httpx2.Response, /) -> T:
         """Return what the wrapped function reads from *response*."""
@@ -85,7 +98,7 @@ class Reader[T]:
     @override
     def __repr__(self) -> str:
         """Return ``Reader(<name>)``."""
-        return f"Reader({self._name})"
+        return f"Reader({self.name})"
 
 
 def _name_of(read: object) -> str:
