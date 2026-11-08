@@ -154,13 +154,15 @@ skip_covered = true
 source_paths = ["src/"]
 pytest_add_cli_args_test_selection = ["tests/"]
 # Tests of the source's own shape (the API-surface snapshot, the import boundary, the no-logging/no-environment
-# contracts) read the files mutmut rewrites with its trampolines, so mutation runs leave them out; they check structure,
-# not behaviour, and the regular suite still runs them.
+# contracts, and the type tests that run ty over the package, which infers a class's variance from its body) read the
+# files mutmut rewrites with its trampolines, so mutation runs leave them out; they check structure, not behaviour, and
+# the regular suite still runs them.
 pytest_add_cli_args = [
     "-p", "no:cacheprovider", "-x", "-q",
     "--deselect", "tests/package/test_api_surface.py",
     "--deselect", "tests/package/test_boundaries.py",
     "--deselect", "tests/package/test_contracts.py",
+    "--deselect", "tests/decoding/test_reader_types.py",
 ]
 # The docs tests run the README's and the guides' examples and check their links, so the pages they read come along.
 also_copy = [
