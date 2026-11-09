@@ -685,6 +685,7 @@
       field rate: Rate | RateBudget
   class Reader(Generic)(read: 'Callable[[httpx2.Response], T]', /, *, name: 'str | None' = None) -> 'None'
       def __call__(self, response: 'httpx2.Response', /) -> 'T'
+      property name
   class RequestOptions(dict)(no signature)
       closed
       key params: Mapping[str, object] | None (optional)

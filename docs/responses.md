@@ -69,7 +69,9 @@ def location(response: httpx2.Response) -> str:
 repr(location)  # 'Reader(location)'
 ```
 
-A reader's `repr` names its function, or the `name=` it was given. `expect=`, `Expect` and `conditional` take only a
+A reader's `repr` and its read-only `name` give the `name=` it was given, or else its function's name. A reader wrapped
+in another `Reader` keeps its own name. `Reader` raises `TypeError` for something that cannot be called, where it is
+written rather than at the first response. `expect=`, `Expect` and `conditional` take only a
 `Reader` (or, for `expect=`, an `Expect`) and raise `TypeError` for anything else, such as a model class (`expect=Order`
 where `expect=reader(Order)` was meant) or a bare function, which are callable too.
 

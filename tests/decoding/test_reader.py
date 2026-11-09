@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import functools
+import re
 from typing import TYPE_CHECKING, Any, cast
 
 import httpx2
@@ -16,7 +17,7 @@ import headgate
 import headgate.errors
 import headgate.msgspec
 import headgate.pydantic
-from headgate import Expect, HttpOptions, Reader, as_bytes, event_stream, nothing, reader_for
+from headgate import Expect, HttpOptions, Reader, as_bytes, body_reader, event_stream, nothing, reader_for
 from headgate.cache import conditional
 from headgate.msgspec import CODEC
 from headgate.testing import FakeTransport
@@ -80,8 +81,35 @@ def test_a_reader_of_a_callable_without_a_name_is_named_by_its_type() -> None:
 
 
 def test_a_codec_readers_repr_names_the_type() -> None:
-    """Name a codec's reader after the codec's class and the type it decodes."""
+    """Name a codec's reader after the codec's class and the type it decodes, ``None`` included."""
     assert repr(reader_for(CODEC, list[Order])) == "Reader(MsgspecCodec list[Order])"
+    assert repr(reader_for(CODEC, None)) == "Reader(MsgspecCodec None)"
+
+
+def test_a_body_readers_repr_names_its_decode() -> None:
+    """Name a body reader after the function that decodes its bytes."""
+
+    def statements(content: bytes, /) -> bytes:
+        return content
+
+    assert repr(body_reader(statements)) == "Reader(statements)"
+
+
+@pytest.mark.parametrize(("value", "named"), [(42, "int"), (None, "NoneType")], ids=["number", "none"])
+def test_a_reader_refuses_what_is_not_callable(value: object, named: str) -> None:
+    """Refuse to wrap what cannot be called, where it is written rather than at the first response."""
+    with pytest.raises(TypeError, match=re.escape(f"Reader takes a function of the response (got {named})")):
+        Reader(cast("Any", value))
+
+
+def test_a_reader_of_a_reader_keeps_its_name() -> None:
+    """Name a reader wrapped in another after the inner reader's name, unless the outer one is given a name."""
+
+    def orders(r: httpx2.Response, /) -> int:
+        return r.status_code
+
+    assert repr(Reader(Reader(orders))) == "Reader(orders)"
+    assert repr(Reader(Reader(orders), name="rows")) == "Reader(rows)"
 
 
 def test_the_old_builders_are_gone() -> None:

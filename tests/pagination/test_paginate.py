@@ -309,7 +309,12 @@ def test_a_numbered_request_without_its_parameter_is_at_start() -> None:
     assert following == PageRequest("items", {"page": 6})
 
 
-@pytest.mark.parametrize("own", ["two", "-1", "²", -1, True, 2.0], ids=str)
+# ASCII ids: pytest escapes "²" to a node id that mutmut's second in-process collection cannot find.
+@pytest.mark.parametrize(
+    "own",
+    ["two", "-1", "²", -1, True, 2.0],
+    ids=["word", "negative-text", "superscript-digit", "negative", "bool", "float"],
+)
 def test_a_page_number_that_is_not_one_is_refused(own: object) -> None:
     """Refuse a caller's page that is not a whole number >= 0 when the walk is built."""
     client = _Api(_numbered(3)).client()
