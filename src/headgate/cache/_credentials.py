@@ -18,7 +18,8 @@ below hishel for the network:
   process, of the auth's class and :meth:`~headgate._core.CredentialStamper.credential_identity`, of the value of every
   dropped credential the auth did not declare (a middleware's, a caller's own ``Authorization`` header, a cookie, an
   ``api_key`` in the URL), and of the value of every header the client sets on all its requests
-  (``HttpOptions.headers``, where a static key is often configured). Two requests with different credentials therefore
+  (``HttpOptions.headers``, where a static key is often configured) or a view sets on all of its
+  (``with_options(headers=...)``, often one tenant's key). Two requests with different credentials therefore
   never share an entry, and the label can be neither reversed nor compared with another process's. A request with no
   credential at all gets no label, so anonymous entries are the same namespace
   :attr:`Partition.SHARED <headgate.cache.Partition.SHARED>` uses.
@@ -32,9 +33,9 @@ re-minted bearer token keeps its entries; a middleware that is a ``CredentialSta
 identity the same way, so a signer whose signature changes on every request still finds its entries. A call that sets
 the auth's own header or parameter itself (``headers=``, ``params=``), which the auth then leaves alone, is labeled by
 the value it sent as well: the client's auth is wrapped by :func:`mark_caller_credentials`, which records on the
-request, before the auth runs, which of its declared names the call set. A header nothing declares and the client does
-not set on all its requests (one call's ``X-Api-Key``) labels nothing: only a response's ``Vary`` tells such requests
-apart.
+request, before the auth runs, which of its declared names the call set. A header nothing declares and neither the
+client nor the call's view sets on all its requests (one call's ``X-Api-Key``) labels nothing: only a response's
+``Vary`` tells such requests apart.
 
 The key is per process, so credential-partitioned entries in a persistent storage are not found again after a restart,
 nor is an entry whose response varies on a request header (``Vary``); they expire by their TTL like any other.
@@ -50,7 +51,7 @@ from typing import TYPE_CHECKING, Final, override
 
 import httpx2
 
-from headgate._core import CredentialCarrier, CredentialStamper
+from headgate._core import EXPLICIT_HEADERS, CredentialCarrier, CredentialStamper, ExplicitHeaders
 from headgate._url import is_secret_param
 from headgate.cache._policy import Partition
 from headgate.errors import ClientConfigurationError
@@ -194,11 +195,13 @@ class CredentialScope:
         credentials: list[bytes] = []
         kept_headers: list[tuple[bytes, bytes]] = []
         caller = request.extensions.get(CALLER_CREDENTIALS, _NOTHING_SET)
+        explicit = request.extensions.get(EXPLICIT_HEADERS)
+        view_headers = explicit.view if isinstance(explicit, ExplicitHeaders) else frozenset[str]()
         for raw_name, raw_value in request.headers.raw:
             name = raw_name.decode("latin-1").lower()
             if name not in self._dropped_headers:
                 kept_headers.append((raw_name, _digest(b"value", name.encode("latin-1"), raw_value).encode()))
-                if name in self._client_headers:
+                if name in self._client_headers or name in view_headers:
                     credentials.extend((b"client", name.encode("latin-1"), raw_value))
             elif name not in self._represented_headers or name in caller.headers:
                 credentials.extend((b"header", name.encode("latin-1"), raw_value))

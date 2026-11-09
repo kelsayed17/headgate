@@ -19,6 +19,10 @@ auth flow yields. On any of them addressed elsewhere it removes:
 * every header the client sets on all its requests (``HttpOptions.headers``), where a static key is often configured,
   except ``User-Agent`` and the content negotiation headers (``Accept``, ``Accept-Encoding``, ``Accept-Language``):
   those name the client and the format it wants, never a caller, and the request would be malformed without them.
+* the same, for every header a view sets (``with_options(headers=...)``), and for every header the call set itself
+  (``headers=``) on a hop addressed to another origin than the one the call named: a redirect, or a later page of a
+  walk, whose URL the server chose (:class:`~headgate._core.ExplicitHeaders`). A call that names another origin's URL
+  itself still sends it its own headers.
 
 The request is still sent, unsigned: a provider may hand out a signed download URL on another host. A header of one of
 those names that the call set itself is removed too, since nothing on the request tells the two apart; a credential
@@ -49,7 +53,7 @@ from typing import TYPE_CHECKING, Final
 
 import httpx2
 
-from headgate._core import CredentialStamper, origin_text
+from headgate._core import EXPLICIT_HEADERS, CredentialStamper, ExplicitHeaders, origin_text
 from headgate.errors import ForbiddenDestinationError
 
 if TYPE_CHECKING:
@@ -141,6 +145,9 @@ class CredentialGuard:
             _remove(request, self._middleware_headers, self._middleware_params)
         if not self.trusts(request):
             _remove(request, self._headers, self._params)
+            explicit = request.extensions.get(EXPLICIT_HEADERS)
+            if isinstance(explicit, ExplicitHeaders):
+                _remove(request, explicit.withheld_at(origin) - _NEVER_CREDENTIALS, frozenset())
             if self._cookie_jar is not None:
                 httpx2.Cookies(self._cookie_jar).set_cookie_header(request)
 

@@ -85,6 +85,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A view's headers (`with_options(headers=...)`) partition the cache, as `HttpOptions(headers=...)` does. Two views
+  with different `X-Api-Key` values on one client were served each other's cached entries.
+- A view's headers are withheld from untrusted origins, as client-wide ones are, and a call's own `headers=` from a
+  redirect or a later page that leads to another origin than the one the call named. Both reached any origin a
+  redirect or a `Link` header named.
+- A next page an `https` page names on plain `http` raises `ForbiddenDestinationError` before it is sent, as a
+  downgrading redirect is refused. It was sent in cleartext.
 - A body nested too deeply for its parser (around 100,000 levels for `json.loads` and msgspec) raises
   `ResponseParseError` on a 2xx, or the status's error on a declared non-2xx, where it raised a raw `RecursionError`,
   whichever reader read it: a codec's, `as_json`, `body_reader(json.loads)` or a hand-written reader over
