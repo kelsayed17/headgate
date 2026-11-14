@@ -817,9 +817,9 @@ async def test_a_hedge_cancelled_before_it_was_sent_gives_its_retry_budget_back(
             retry=RetryPolicy(hedge=Hedge(after=0.001), budget=RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0))
         ),
         http=HttpOptions(
-            transport=httpx2.MockTransport(lambda request: httpx2.Response(200, content=b"{}", request=request)),
-            middleware=(middleware,),
+            transport=httpx2.MockTransport(lambda request: httpx2.Response(200, content=b"{}", request=request))
         ),
+        middleware=(middleware,),
     )
     for _ in range(2):
         await client.get("x", expect=RESPONSE)
