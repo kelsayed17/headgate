@@ -13,6 +13,7 @@ unguarded one fetched, and a per-call ``cache_ttl`` is checked before anything i
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import math
 from typing import TYPE_CHECKING, Final, override
 
@@ -175,6 +176,41 @@ async def test_a_hung_write_ends_with_the_deadline_and_counts_as_degraded(storag
 
     assert body == NETWORK_BODY
     assert CACHE_DEGRADATIONS["x"] == before + 1
+
+
+class _StallsMidBody(FaultyStorage):
+    """A real storage whose first write hands it half the body, then stalls before the rest."""
+
+    stalled = False
+
+    @override
+    async def create_entry(
+        self, request: Request, response: Response, key: str, *, ttl: float | None = None, tti: float | None = None
+    ) -> Entry:
+        if not self.stalled:
+            self.stalled = True
+            response = dataclasses.replace(response, stream=_half_then_stall())
+        return await super().create_entry(request, response, key, ttl=ttl, tti=tti)
+
+
+async def _half_then_stall() -> AsyncIterator[bytes]:
+    """Yield the first half of :data:`NETWORK_BODY`, then never the rest."""
+    yield NETWORK_BODY[: len(NETWORK_BODY) // 2]
+    await asyncio.Event().wait()
+
+
+async def test_a_write_cut_off_mid_body_is_never_served(storage: AsyncSqliteStorage) -> None:
+    """Fetch again after a write the deadline cut off partway, rather than serve the half that was written."""
+    network = Network()
+    client = stub_client(transport=network, cache=HttpCache(storage=_StallsMidBody(storage)))
+    before = CACHE_DEGRADATIONS["x"]
+    async with client, asyncio.timeout(5):
+        first = await client.get("series", expect=as_bytes, deadline=0.2)
+        second = await client.get("series", expect=as_bytes)
+
+    assert first == second == NETWORK_BODY
+    assert CACHE_DEGRADATIONS["x"] == before + 1, "the deadline cut the first write off"
+    assert network.calls == _PAIR, "the half-written entry was not a hit"
 
 
 # M20: a raw UTF-8 header value passes through.
