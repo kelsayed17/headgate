@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 __all__ = ["REMEMBERED_PAGES", "PageLimit", "PageWalk", "Paginated", "Remembered"]
 
 #: How many of the most recent pages a walk remembers to catch a loop: any loop a real server makes is far shorter.
+# shortcut: a cycle longer than 4096 pages goes undetected (a PageLimit still ends it); raise this if a real walk ever
+# loops past it, at about 100 bytes of memory per page remembered.
 REMEMBERED_PAGES: Final = 4096
 
 #: The bytes a remembered key is cut to: a digest, so a page's key costs the same whatever its body's size.
