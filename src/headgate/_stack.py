@@ -78,17 +78,18 @@ _RESPONSE_HOOKS = (refuse_https_downgrade, refuse_unreplayable_redirect, drop_fo
 
 @dataclass(frozen=True, slots=True)
 class Credentials:
-    """A client's credentials as its stack sees them: the auth, the guard that keeps them on trusted origins, the jar.
+    """A client's credentials as its stack sees them: the auth, the guard keeping them on trusted origins, the jar.
 
-    The same guard runs as the first request hook and below the last middleware and a ``SigningAuth``'s signature
-    (see :func:`build_transport_stack`).
-    The jar is the client's: one that stores nothing unless ``HttpOptions(cookies=True)``, and the guard sends an
+    The middleware is here too, since the guard keeps what each declares on trusted origins as well. The same guard
+    runs as the first request hook and below the last middleware and a ``SigningAuth``'s signature (see
+    :func:`build_transport_stack`). The jar is the client's: one that stores nothing unless ``HttpOptions(cookies=True)``, and the guard sends an
     untrusted origin only that jar's cookies for it.
     """
 
     auth: httpx2.Auth | None
     guard: CredentialGuard
     cookie_jar: CookieJar
+    middleware: tuple[Middleware, ...] = ()
 
     @classmethod
     def of(
@@ -104,7 +105,7 @@ class Credentials:
             middleware=middleware,
             cookie_jar=jar if http.cookies else None,
         )
-        return cls(auth, guard, jar)
+        return cls(auth, guard, jar, middleware)
 
 
 def build_http_client(
@@ -142,15 +143,14 @@ def build_transport_stack(
     timing: Timing,
     credentials: Credentials,
     *,
-    middleware: tuple[Middleware, ...],
     observed: bool,
 ) -> httpx2.AsyncBaseTransport:
     """Build the layers under ``httpx2.AsyncClient``, bottom-up: each statement wraps the layer before it.
 
     The rate-limit layer spends from *budgets*. The cache partitions its entries by *credentials*' auth. A
     ``SigningAuth`` signs each send below the rate layer, after its wait, and the middleware layer is built for
-    *middleware*; the guard runs again below each, so what they stamp stays on trusted origins too. An *observed*
-    client's attempts are reported (``AttemptFinished``).
+    *credentials*' middleware; the guard runs again below each, so what they stamp stays on trusted origins too. An
+    *observed* client's attempts are reported (``AttemptFinished``).
     """
     layer = SendTrackingTransport(transport=_network(http))
     if isinstance(signer := credentials.auth, SigningAuth):
@@ -160,12 +160,12 @@ def build_transport_stack(
         scope = credential_scope(
             cache,
             credentials.auth,
-            middleware=middleware,
+            middleware=credentials.middleware,
             headers=http.headers,
             guarded=not http.security.allow_private_hosts,
         )
         layer = ResilientCacheTransport(layer, cache, max_body_bytes=http.max_response_bytes, scope=scope)
-    if middleware:
+    if middleware := credentials.middleware:
         layer = MiddlewareTransport(transport=layer, middleware=middleware, guard=credentials.guard, signer=None)
     if observed:
         layer = AttemptTransport(transport=layer)

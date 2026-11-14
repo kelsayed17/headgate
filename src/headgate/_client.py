@@ -345,9 +345,7 @@ class AsyncBaseClient:
         credentials = Credentials.of(base_url=base_url, auth=auth, http=http, middleware=middleware)
         lanes = [Lane(route.fragment, *_route_rate(route)) for route in policy.routes]
         self._budgets = budgets = PathBudgets(default=rate, lanes=lanes, timing=self._timing)
-        stack = build_transport_stack(
-            budgets, policy, http, self._timing, credentials, middleware=middleware, observed=bool(observers)
-        )
+        stack = build_transport_stack(budgets, policy, http, self._timing, credentials, observed=bool(observers))
         self._http_client = build_http_client(
             base_url=base_url, credentials=credentials, http=http, timeout=policy.timeout, transport=stack
         )
