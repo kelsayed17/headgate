@@ -963,3 +963,52 @@ async def test_a_link_anchored_to_another_resource_ends_the_walk() -> None:
 
     assert [item.id async for item in paginated] == [1]
     assert len(api.sent) == 1
+
+
+def _soda(total: int) -> Callable[[httpx2.Request], httpx2.Response]:
+    """Serve *total* items by ``$offset`` and ``$limit``, as a SODA endpoint pages them."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        offset, limit = int(request.url.params["$offset"]), int(request.url.params["$limit"])
+        return _page(request, list(range(offset, min(offset + limit, total))))
+
+    return answer
+
+
+#: A SODA walk's pager: the offset in ``$offset``, the page size in ``$limit``.
+_SODA_PAGES = Offset(items=items_of, page_size=2, param="$offset", size_param="$limit")
+
+
+async def test_an_offset_walk_steps_by_the_page_size_the_caller_sends() -> None:
+    """Step by the caller's own ``$limit``, send it with every page, and end at the page shorter than it."""
+    api = _Api(_soda(total=8))
+    paginated = api.client().paginate("rows", expect=reader(Page), pages=_SODA_PAGES, params={"$limit": "3"})
+
+    assert [item.id async for item in paginated] == list(range(8))
+    assert [(url.params["$offset"], url.params["$limit"]) for url in api.sent] == [("0", "3"), ("3", "3"), ("6", "3")]
+
+
+async def test_an_offset_walk_sends_its_page_size_when_the_caller_sends_none() -> None:
+    """Send ``page_size`` under ``size_param`` when the caller's ``params=`` name no size."""
+    api = _Api(_soda(total=3))
+    paginated = api.client().paginate("rows", expect=reader(Page), pages=_SODA_PAGES)
+
+    assert [item.id async for item in paginated] == [0, 1, 2]
+    assert [(url.params["$offset"], url.params["$limit"]) for url in api.sent] == [("0", "2"), ("2", "2")]
+
+
+@pytest.mark.parametrize("size", ["x", "0", 0, -1, True])
+def test_a_page_size_that_is_not_one_is_refused(size: object) -> None:
+    """Refuse a caller's page size that is not an int of at least 1, or a string of digits, when the walk is built."""
+    with pytest.raises(ValueError, match=r"\$limit must be a page size"):
+        _SODA_PAGES.first(PageRequest("rows", {"$limit": size}))
+
+
+@pytest.mark.parametrize(
+    ("size_param", "message"),
+    [("", "size_param must name a query parameter"), ("$offset", "size_param must differ from param")],
+)
+def test_an_offset_refuses_a_size_param_it_cannot_send(size_param: str, message: str) -> None:
+    """Refuse an empty size parameter, and one that names the offset's own parameter."""
+    with pytest.raises(ValueError, match=re.escape(message)):
+        Offset(items=items_of, page_size=2, param="$offset", size_param=size_param)

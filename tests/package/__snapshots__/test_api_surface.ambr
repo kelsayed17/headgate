@@ -263,10 +263,11 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Offset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', start: 'int' = 0, total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
+  class Offset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', size_param: 'str | None' = None, start: 'int' = 0, total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field param: str = 'offset'
+      field size_param: str | None = None
       field start: int = 0
       field total: Callable[[P], int | None] | None = None
       field write: Writer[B] | None = None
@@ -647,10 +648,11 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Offset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', start: 'int' = 0, total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
+  class Offset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', size_param: 'str | None' = None, start: 'int' = 0, total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field param: str = 'offset'
+      field size_param: str | None = None
       field start: int = 0
       field total: Callable[[P], int | None] | None = None
       field write: Writer[B] | None = None

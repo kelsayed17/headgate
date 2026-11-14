@@ -8,6 +8,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `Offset(size_param=...)` sends the page size under that query parameter (`limit`, `per_page`, SODA's `$limit`).
+  It sends the caller's own size there when `params=` give one, and steps by it, and sends `page_size` otherwise. A
+  page shorter than that size ends the walk. An endpoint whose callers choose their page size no longer needs a pager
+  of its own.
 - `ClientError.sent`: whether any byte of the failed call can have reached the network. It is `False` only when no
   byte can have, so the call is safe to send again whatever its method. It is `True` when some may have, so a write
   may have been processed, and `None` on an error no client call raised. It covers every send, retry and followed
