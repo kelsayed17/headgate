@@ -347,18 +347,25 @@ class GitHub:
 
 ### 8. The top level
 
-`headgate.__all__` keeps about 48 names:
+(Amended with the phase 8 plan.)
+
+`headgate.__all__` keeps 52 names:
 
 | Area | Names |
 | --- | --- |
-| The client | `Client`, `RequestOptions`, `CallOptions`, `ViewOptions` |
-| Configuration | `TransportPolicy`, `HttpOptions`, `SecurityOptions`, `Timeouts`, `Route`, `RouteOptions`, `IdempotencyKeys`, `Middleware` |
+| The client | `Client`, `Method`, `RequestOptions`, `CallOptions`, `ViewOptions` |
+| Configuration | `TransportPolicy`, `HttpOptions`, `SecurityOptions`, `Timeouts`, `Route`, `RouteOptions`, `IdempotencyKeys`, `ResponseCheck` |
+| Middleware | `Middleware`, `Next`, `call_info` |
 | Policy values | `RetryPolicy`, `BreakerPolicy`, `Rate`, `RateBudget`, `HttpCache` |
-| Responses | `Expect`, `Reader`, `Writer`, `Codec`, `reader_for`, `writer_for`, `body_reader`, `as_json`, `as_bytes`, `nothing`, `event_stream` |
-| Bodies | `Body`, `EncodedBody`, `Json`, `Form`, `Multipart`, `Raw` |
+| Responses | `Expect`, `Reader`, `as_json`, `as_bytes`, `body_reader`, `nothing`, `event_stream` |
+| Codecs | `Codec`, `reader_for`, `writer_for`, `decode_with` |
+| Bodies | `Body`, `EncodedBody`, `Json`, `Form`, `Multipart`, `Raw`, `Writer` |
 | Auth | `BearerAuth`, `StaticHeaderAuth`, `QueryParamAuth`, `SigningAuth`, `CachedTokenAuth`, `Minted` |
 | Pages | `Paginated` |
 | Errors | `ClientError`, `TransportError`, `ClientTimeoutError`, `UpstreamStatusError`, `AuthError`, `RateLimitError` |
+
+`call_info` (5.1), `ResponseCheck` and `decode_with` were not in the first table. Each has no subpackage to live in,
+and goal 4 forbids making a seam private.
 
 Everything else lives once, in its subpackage:
 
@@ -366,11 +373,12 @@ Everything else lives once, in its subpackage:
 - the other errors and `Problem`, in `headgate.errors`;
 - the seam types (5.1), in `headgate.security` and `headgate.timing`.
 
-`Method` and `Next` stay at the top level, beside the `stream(method=)` and `Middleware` that need them (two more
-names than the table). `DEFAULT_TIMEOUTS` becomes the class attribute `Timeouts.DEFAULT`, and
-`MAX_MINT_RESPONSE_BYTES`, which no option sets, becomes private, with its value stated in the auth guide. My call.
+`DEFAULT_TIMEOUTS` becomes the class attribute `Timeouts.DEFAULT`, and `MAX_MINT_RESPONSE_BYTES`, which no option
+sets, becomes private, with its value stated in the auth guide. My call.
 
-No name is exported from two places.
+No object is exported from two places, where "exported" means listed in a public module's `__all__`. So the
+subpackages stop re-exporting what the top level exports (`headgate.retry.RetryPolicy` goes), and
+`headgate.testing.faults` becomes private, since `headgate.testing` exports all of it. A test enforces the rule.
 
 ## Migration
 
