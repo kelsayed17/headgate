@@ -85,6 +85,16 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A one-shot `content=` stream is never sent twice below the retry layer either. When an HTTP/2 GOAWAY moved the
+  request to a new connection, an async-iterable file went out empty and the server processed an empty POST, and an
+  async generator raised a raw `httpx2.StreamConsumed`. The second read is now refused, and the call raises
+  `TransportError`.
+- A `files=` upload of a file that cannot seek, such as a pipe, is sent once, like a one-shot `content=` stream. A
+  retry or a followed 307 or 308 sent it again with an empty file.
+- A hedge sends its own copy of an in-memory body, and a streamed or multipart body is never hedged. A middleware that
+  read `request.content` failed every hedged call with `RequestNotRead`, and two sends read one file at once.
+- An empty or blank idempotency key is refused: `idempotency_key=""`, or an `IdempotencyKeys` factory returning one,
+  raises `ValueError`. An empty `Idempotency-Key` header no longer makes a POST retryable.
 - A view's headers (`with_options(headers=...)`) partition the cache, as `HttpOptions(headers=...)` does. Two views
   with different `X-Api-Key` values on one client were served each other's cached entries.
 - A view's headers are withheld from untrusted origins, as client-wide ones are, and a call's own `headers=` from a

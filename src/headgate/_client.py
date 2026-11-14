@@ -85,7 +85,7 @@ from headgate._options import (
     match_route,
     reject_upstream_httpx,
 )
-from headgate._request_body import check_one_body, request_content
+from headgate._request_body import check_one_body, files_replayable, request_content
 from headgate._responses import Expect, Reader, accepts, nothing
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
@@ -815,6 +815,7 @@ class AsyncBaseClient:
             body=body, content=options.get("content"), json=options.get("json"), data=options.get("data"), files=files
         )
         content, replayable = (body.content, True) if body is not None else request_content(options.get("content"))
+        replayable = replayable and files_replayable(files)
         try:
             request = self._http_client.build_request(
                 call.method,
@@ -887,13 +888,16 @@ class AsyncBaseClient:
         """Put the call's idempotency key on *request* once, before the retry layer, so every attempt carries it.
 
         The key is the call's ``idempotency_key=``, else a fresh one from the policy's ``IdempotencyKeys`` for a POST
-        or PATCH. A key the caller already set in ``headers=`` is kept.
+        or PATCH. A key the caller already set in ``headers=`` is kept. Raises ``ValueError`` for an empty or blank key.
         """
         keys = self._policy.idempotency
         header = "Idempotency-Key" if keys is None else keys.header
         if key is None and keys is not None and request.method in KEYED_METHODS:
             key = keys.factory()
         if key is not None:
+            if not key.strip():
+                msg = "an idempotency key must not be empty or blank: it would make a re-sent write look safe"
+                raise ValueError(msg)
             request.headers.setdefault(header, key)
         context.idempotency_key = request.headers.get(header)
 

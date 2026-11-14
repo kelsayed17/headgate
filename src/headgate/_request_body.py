@@ -10,6 +10,7 @@ and their ``Content-Type``. A hand-written writer is a plain function returning 
 A streamed body is either replayable or not, and the retry layer has to know which: a stream given as an iterable is
 consumed by the first send, so the call is marked non-replayable (:data:`~headgate.retry.REPLAYABLE_BODY`) and never
 re-sent; a stream given as a factory is built afresh, by calling the factory once, each time the request is sent.
+A ``files=`` upload is replayable unless one of its files is a file object that cannot be rewound, such as a pipe.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ __all__ = [
     "UploadFiles",
     "Writer",
     "check_one_body",
+    "files_replayable",
     "request_content",
 ]
 
@@ -103,6 +105,15 @@ def request_content(body: Body | None) -> tuple[bytes | AsyncIterable[bytes] | N
         )
         raise TypeError(msg)
     return _Replayed(body), True
+
+
+def files_replayable(files: UploadFiles | None) -> bool:
+    """Return whether every file in *files* can be read again: bytes, text, or a file object that can seek."""
+    if files is None:
+        return True
+    values = files.values() if isinstance(files, Mapping) else (value for _, value in files)
+    contents = (value[1] if isinstance(value, tuple) else value for value in values)
+    return all(isinstance(content, bytes | str) or content.seekable() for content in contents)
 
 
 def check_one_body(

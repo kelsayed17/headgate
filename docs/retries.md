@@ -58,8 +58,11 @@ Each attempt's result is classified, in this order:
    began is safe; a `ReadTimeout` after the body was sent is not. A custom transport that reports no progress is judged
    by the exception's type instead.
 
-A request whose body is a one-shot stream (`content=` an async iterable) is never sent twice; the error notes why. Give
-`content=` a factory instead to keep it retryable (see [streaming](streaming.md#request-bodies)).
+A request whose body is a one-shot stream (`content=` an async iterable, or a `files=` upload of a file that cannot
+seek, such as a pipe) is never sent twice; the error notes why. That holds below the retry layer too: when an HTTP/2
+server's GOAWAY moves the request to a new connection, the body refuses a second read and the call raises
+`TransportError` rather than sending it empty. Give `content=` a factory instead to keep it retryable (see
+[streaming](streaming.md#request-bodies)).
 
 The retry policy applies to each request the client sends: a followed redirect's hop, and a token-mint hop of a
 [`CachedTokenAuth`](auth.md#cachedtokenauth), each run their own sequence of attempts.
@@ -113,7 +116,8 @@ one send leaves the others running, its body read (a bounded head) and its conne
 meanwhile; no hedge starts once an answer is in. Hedges count as attempts, spend the retry budget, respect the deadline and the
 breaker, and appear in events (`RetryScheduled` with reason `hedge`) and in the history (`attempt 2/3 (hedge): ...`).
 
-Only `methods` are hedged, and only with a replayable body. A policy whose `methods` include POST or PATCH refuses a
+Only `methods` are hedged, and only with an in-memory body (bytes, `body=`, `json=` or a form): a hedge sends a copy of
+it, and a streamed or multipart body is sent once, unhedged. A policy whose `methods` include POST or PATCH refuses a
 hedge when it is constructed.
 
 ## Idempotency keys
@@ -121,6 +125,8 @@ hedge when it is constructed.
 A POST is safe to retry once the server can recognize a re-send. `TransportPolicy(idempotency=IdempotencyKeys())`
 stamps a fresh key on every POST and PATCH, under `Idempotency-Key` by default (`IdempotencyKeys(header=...,
 factory=...)` changes either). A call can pass its own with `idempotency_key=`, and a key set in `headers=` is kept.
+An empty or blank key is no key: `idempotency_key=` or a factory giving one raises `ValueError`, and one in `headers=`
+does not make the request retryable.
 The key is stamped once per call, before the retry layer, so every attempt carries the same one, and a keyed request is
 retried like an idempotent one.
 

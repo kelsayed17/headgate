@@ -28,9 +28,9 @@ opened or the deadline came during the wait, the rate budget could not admit it 
 cancelled during the wait, or the send was cancelled before the rate budget dispatched it (a hedge that lost while
 queued). A send the rate budget refused is withdrawn from the call's attempts, with no history line.
 
-A hedge is sent as a copy of the request (its own headers and extensions, the same replayable body) on the same call
-context, so concurrent sends share the context's send progress. That is sound because only idempotent methods are
-hedged, and their retry decisions never depend on send progress.
+A hedge is sent as a copy of the request (its own headers and extensions, and a copy of its in-memory body; a
+streamed body is never hedged) on the same call context, so concurrent sends share the context's send progress. That
+is sound because only idempotent methods are hedged, and their retry decisions never depend on send progress.
 
 Every attempt adds a history line to the call's notes, which the client attaches to the error it raises, for example
 ``attempt 2/3: 503 Service Unavailable (Retry-After 2.0s) after 0.41s`` or ``attempt 1/3: ReadTimeout after 30.0s``.
@@ -143,12 +143,12 @@ async def _parked(response: httpx2.Response, request: httpx2.Request) -> httpx2.
 
 
 def _clone(request: httpx2.Request) -> httpx2.Request:
-    """Return a copy of *request* for a hedge to send beside it: own headers and extensions, the same body stream."""
+    """Return a copy of *request* for a hedge to send beside it: own headers, extensions and in-memory body."""
     return httpx2.Request(
         request.method,
         request.url,
         headers=request.headers.copy(),
-        stream=request.stream,
+        content=request.content,
         extensions=dict(request.extensions),
     )
 
@@ -196,7 +196,9 @@ class _Sequence:
         self._policy = policy
         self._timeout = request.extensions.get("timeout")
         self._method = request.method.upper()
-        self._keyed = (context.idempotency_key or request.headers.get(_IDEMPOTENCY_HEADER)) is not None
+        key = context.idempotency_key or request.headers.get(_IDEMPOTENCY_HEADER)
+        # An empty or blank key identifies nothing, so it makes no request safe to re-send.
+        self._keyed = bool(key and key.strip())
         self._replayable = context.get(REPLAYABLE_BODY) is not False
         self._ledger = ledger
         self._sent = 0
@@ -265,12 +267,14 @@ class _Sequence:
         return _Attempt(result, verdict, request)
 
     async def _round(self, *, paid: bool = False) -> _Attempt:
-        """Run one attempt: hedged when a hedge is configured and the request is idempotent and replayable.
+        """Run one attempt: hedged when a hedge is configured and the request is idempotent with an in-memory body.
 
+        A streamed body is never hedged, replayable or not: two sends would read one file or factory at once.
         *paid* says the attempt is a retry, which spent the retry budget before it was scheduled.
         """
         hedge = self._policy.hedge
-        if hedge is None or self._method not in self._policy.methods or not self._replayable:
+        in_memory = isinstance(self._request.stream, httpx2.ByteStream)
+        if hedge is None or self._method not in self._policy.methods or not in_memory:
             return await self._send(self._request, paid=paid)
         return await self._hedged(hedge, paid=paid)
 
