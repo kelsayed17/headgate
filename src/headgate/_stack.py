@@ -82,8 +82,8 @@ class Credentials:
 
     The middleware is here too, since the guard keeps what each declares on trusted origins as well. The same guard
     runs as the first request hook and below the last middleware and a ``SigningAuth``'s signature (see
-    :func:`build_transport_stack`). The jar is the client's: one that stores nothing unless ``HttpOptions(cookies=True)``, and the guard sends an
-    untrusted origin only that jar's cookies for it.
+    :func:`build_transport_stack`). The jar is the client's: one that stores nothing unless
+    ``HttpOptions(cookies=True)``, and the guard sends an untrusted origin only that jar's cookies for it.
     """
 
     auth: httpx2.Auth | None
