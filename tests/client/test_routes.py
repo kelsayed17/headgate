@@ -101,6 +101,26 @@ async def test_a_redirects_later_hops_keep_the_call_s_route() -> None:
     assert budget_for(client, "other") is budget_for(client)
 
 
+async def test_a_hop_to_another_origin_keeps_the_route_but_not_its_pause() -> None:
+    """Spend a cross-origin hop's turn from the call's route budget, yet let only the client's own origin pause it.
+
+    The redirect target's 429 ``Retry-After`` answers this one call; the budget, which every call on the route shares,
+    stays unpaused (review finding M11).
+    """
+    moved = httpx2.Response(302, headers={"Location": "https://cdn.example/exports/a"})
+    refused = httpx2.Response(429, headers={"Retry-After": "30"})
+    script = Script(moved, refused)
+    client = _client(script, Route("/exports", rate=Rate.per_second(1000)), retry=None)
+
+    with pytest.raises(RateLimitError):
+        await client.get("exports/a", expect=nothing)
+
+    exports = budget_for(client, "exports/a")
+    assert [request.url.host for request in script.sent] == ["api.example.test", "cdn.example"]
+    assert [_budget_of(request) for request in script.sent] == [exports, exports]
+    assert exports.pause_remaining == 0
+
+
 # None is off; leaving an option out inherits.
 
 
