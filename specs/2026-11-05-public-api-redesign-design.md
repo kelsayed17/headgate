@@ -224,10 +224,12 @@ per-path rule.
   on that is rewritten as one route per path. My call.
 - `RateRule` and `TransportPolicy.rate_limits` are removed; `Route(..., rate=)` takes a `Rate` or a shared
   `RateBudget`.
-- `cache=False` on a route keeps that path out of the cache. `HttpCache(paths=)` stays as the cache's own filter, for
-  a cache that should keep only a few paths.
-- A route may also match a call's t-string template (`Route(t"orders/{id}")`), not only a path fragment. Whether to
-  include this is left to the builder.
+- `cache=None` on a route keeps that path out of the cache, `None` being off as in `TransportPolicy(cache=None)`.
+  `HttpCache(paths=)` stays as the cache's own filter, for a cache that should keep only a few paths. (Amended with the
+  phase 4 plan, which also writes `Route(fragment, /, **options)` as a final class and moves `observers` and
+  `middleware` to the constructor.)
+- A route may also match a call's t-string template (`Route(t"orders/{id}")`), not only a path fragment. The phase 4
+  plan leaves this out: it is additive and can follow on the new shape. (Amended with the phase 4 plan.)
 
 ### 5. Seams and shared state
 
