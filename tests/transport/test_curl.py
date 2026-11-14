@@ -15,9 +15,10 @@ import importlib
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import anysqlite
+import certifi
 import httpx2
 import pytest
 from curl_cffi import CurlECode, CurlHttpVersion, CurlOpt
@@ -26,9 +27,11 @@ from hishel import AsyncSqliteStorage
 from hishel.httpx2 import AsyncCacheTransport
 
 import headgate.curl
-from headgate import AsyncBaseClient, HttpOptions, Rate, _curl, nothing
+from headgate import AsyncBaseClient, HttpOptions, Rate, RetryPolicy, _curl, nothing
+from headgate._core import CallContext
 from headgate.cache._transport import served_from_cache
 from headgate.curl import AsyncCurlTransport
+from headgate.retry._policy import RETRY_POLICY
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator
@@ -39,6 +42,8 @@ _CONNECT_TIMEOUT = 2.0
 _READ_TIMEOUT = 7.0
 _PLAIN = b"already plain"
 _CLOSE_DEADLINE = 5.0
+_LATE = 2.0
+_PROXY = "http://proxy.example.test:3128"
 
 
 class _Headers:
@@ -64,10 +69,10 @@ class _CurlResponse:
         self.reason = "OK"
         self.infos: dict[str, Any] = {}
         self.http_version: int = CurlHttpVersion.V2_0
-        self.quit_now = asyncio.Event()
+        # The transfer, which runs until the response is closed.
+        self.astream_task: asyncio.Task[object] | None = asyncio.create_task(asyncio.Event().wait())
         self._chunks = chunks or []
         self._failure = failure
-        self.closed = False
 
     async def aiter_content(self) -> AsyncIterator[bytes]:
         """Yield the body's chunks, then raise the configured mid-body failure, if any."""
@@ -75,10 +80,6 @@ class _CurlResponse:
             yield chunk
         if self._failure is not None:
             raise self._failure
-
-    async def aclose(self) -> None:
-        """Record the close."""
-        self.closed = True
 
 
 class _Session:
@@ -112,7 +113,7 @@ def sessions(monkeypatch: pytest.MonkeyPatch) -> list[_Session]:
         made.append(_Session(**kwargs))
         return made[-1]
 
-    monkeypatch.setattr(_curl, "_AsyncSession", build)
+    monkeypatch.setattr(_curl, "_Session", build)
     return made
 
 
@@ -149,11 +150,41 @@ def test_the_session_ignores_the_ambient_proxy_keeps_no_cookie_and_follows_no_re
 ) -> None:
     """Build the curl session so the stack above sees every hop, status and cookie itself."""
     _, session = _transport(sessions, curl_options={CurlOpt.FRESH_CONNECT: True})
-    assert session.init["curl_options"] == {CurlOpt.FRESH_CONNECT: True, CurlOpt.NOPROXY: "*"}
+    assert session.init["curl_options"][CurlOpt.FRESH_CONNECT] is True
+    assert session.init["curl_options"][CurlOpt.NOPROXY] == "*"
     assert session.init["allow_redirects"] is False
     assert session.init["trust_env"] is False
     assert session.init["discard_cookies"] is True
     assert session.init["impersonate"] == "chrome"
+
+
+def test_the_trust_store_is_certifis_whatever_the_environment_says(sessions: list[_Session]) -> None:
+    """Verify TLS against certifi's bundle, which no environment variable can replace, as ``trust_env=False`` promises.
+
+    ``curl_cffi`` takes the bundle ``REQUESTS_CA_BUNDLE`` or ``CURL_CA_BUNDLE`` names, and its handles fall back to one
+    ``SSL_CERT_FILE`` names; a ``curl_options`` entry is set on every request after those.
+    """
+    _, session = _transport(sessions)
+    options = session.init["curl_options"]
+    assert options[CurlOpt.CAINFO] == options[CurlOpt.PROXY_CAINFO] == certifi.where()
+
+
+def test_a_callers_own_trust_store_is_kept(sessions: list[_Session]) -> None:
+    """Keep a ``CurlOpt.CAINFO`` the caller set, over certifi's bundle."""
+    _, session = _transport(sessions, curl_options={CurlOpt.CAINFO: "/etc/ssl/corp.pem"})
+    assert session.init["curl_options"][CurlOpt.CAINFO] == "/etc/ssl/corp.pem"
+
+
+def test_an_explicit_proxy_is_used_for_every_host(sessions: list[_Session]) -> None:
+    """Send through a ``CurlOpt.PROXY`` the caller set, for every host, instead of bypassing it with ``NOPROXY="*"``."""
+    _, session = _transport(sessions, curl_options={CurlOpt.PROXY: _PROXY})
+    assert session.init["curl_options"][CurlOpt.NOPROXY] == ""
+
+
+def test_a_callers_own_noproxy_is_kept(sessions: list[_Session]) -> None:
+    """Keep a ``CurlOpt.NOPROXY`` the caller set, over the transport's own."""
+    _, session = _transport(sessions, curl_options={CurlOpt.PROXY: _PROXY, CurlOpt.NOPROXY: "internal.test"})
+    assert session.init["curl_options"][CurlOpt.NOPROXY] == "internal.test"
 
 
 async def test_a_request_goes_through_curl_and_comes_back_as_an_httpx_response(sessions: list[_Session]) -> None:
@@ -260,24 +291,36 @@ async def test_a_cached_encoded_response_replays_without_a_decoding_error(sessio
 
 
 async def test_a_streamed_body_arrives_chunk_by_chunk_and_is_closed(sessions: list[_Session]) -> None:
-    """Yield each curl chunk in order, then close the curl response."""
+    """Yield each curl chunk in order, skipping the empty one that opened the stream, then end the transfer."""
     transport, session = _transport(sessions)
-    curl = _CurlResponse(chunks=[b"ab", b"cd"])
+    curl = _CurlResponse(chunks=[b"", b"ab", b"cd"])
     session.respond = lambda: curl
     async with httpx2.AsyncClient(transport=transport) as client, client.stream("GET", _URL) as response:
         assert [chunk async for chunk in response.aiter_raw()] == [b"ab", b"cd"]
-    assert curl.closed
+    assert curl.astream_task is not None
+    assert curl.astream_task.cancelled()
 
 
-async def test_closing_a_response_early_tells_curl_to_abort(sessions: list[_Session]) -> None:
-    """Set ``quit_now`` on close, so curl aborts the transfer instead of queuing the rest of the body."""
+async def test_closing_a_response_early_ends_the_transfer(sessions: list[_Session]) -> None:
+    """Cancel the transfer's task on close, so curl drops the handle instead of queuing the rest of the body."""
     transport, session = _transport(sessions)
     curl = _CurlResponse(chunks=[b"ab", b"cd"])
     session.respond = lambda: curl
     async with httpx2.AsyncClient(transport=transport) as client, client.stream("GET", _URL):
         pass
-    assert curl.quit_now.is_set()
-    assert curl.closed
+    assert curl.astream_task is not None
+    assert curl.astream_task.cancelled()
+
+
+async def test_closing_a_response_without_a_transfer_task_does_nothing_more(sessions: list[_Session]) -> None:
+    """Close a response ``curl_cffi`` left without a transfer task, having nothing to cancel."""
+    transport, session = _transport(sessions)
+    curl = _CurlResponse(chunks=[_PLAIN])
+    assert curl.astream_task is not None
+    curl.astream_task.cancel()
+    curl.astream_task = None
+    session.respond = lambda: curl
+    assert (await _get(transport)).content == _PLAIN
 
 
 @pytest.mark.parametrize(
@@ -426,14 +469,45 @@ async def test_closing_the_transport_closes_the_curl_session(sessions: list[_Ses
     assert session.closed
 
 
-class _Handler(BaseHTTPRequestHandler):
-    """Serve ``/gzip`` as a gzip-encoded body and ``/endless`` as a body that never ends."""
+class _Server(ThreadingHTTPServer):
+    """A loopback server whose handlers can wait on :attr:`release` and count the POSTs that reached it."""
 
+    release: threading.Event
+    posts: int
+
+
+class _Handler(BaseHTTPRequestHandler):
+    """Serve the paths the real-curl tests need, over keep-alive HTTP/1.1.
+
+    ``/gzip`` is a gzip-encoded body; ``/endless`` a body that never ends; ``/late-head`` waits before an endless body's
+    head; ``/late-body`` and ``/stall`` send the head, then wait (``/stall`` after one chunk) until the test is over.
+    """
+
+    protocol_version = "HTTP/1.1"
     chunk: ClassVar[bytes] = b"x" * 65536
 
+    def do_POST(self) -> None:
+        """Count the POST and drop the connection unanswered the first time, as a server that processed it and died."""
+        server = cast("_Server", self.server)
+        self.rfile.read(int(self.headers["Content-Length"]))
+        server.posts += 1
+        if server.posts == 1:
+            self.close_connection = True
+            return
+        self.send_response(_CREATED)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self) -> None:
-        """Answer the two paths."""
+        """Answer the paths."""
+        release = cast("_Server", self.server).release
+        if self.path == "/late-head":
+            release.wait(_LATE)
         self.send_response(200)
+        if self.path == "/ok":
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if self.path == "/gzip":
             body = gzip.compress(_PLAIN)
             self.send_header("Content-Encoding", "gzip")
@@ -441,8 +515,15 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        self.send_header("Connection", "close")
         self.end_headers()
         try:
+            if self.path in {"/late-body", "/stall"}:
+                if self.path == "/stall":
+                    self.wfile.write(self.chunk)
+                self.wfile.flush()
+                release.wait()
+                return
             while True:
                 self.wfile.write(self.chunk)
         except OSError:  # the client aborted, which is what the test wants
@@ -450,17 +531,26 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def server() -> Iterator[str]:
-    """Run :class:`_Handler` on a loopback port and return its base URL."""
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+def httpd() -> Iterator[_Server]:
+    """Run :class:`_Handler` on a loopback port."""
+    httpd = _Server(("127.0.0.1", 0), _Handler)
+    httpd.release = threading.Event()
+    httpd.posts = 0
     httpd.daemon_threads = True
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{httpd.server_port}"
+        yield httpd
     finally:
+        httpd.release.set()
         httpd.shutdown()
         httpd.server_close()
+
+
+@pytest.fixture
+def server(httpd: _Server) -> str:
+    """Return the base URL of the loopback server."""
+    return f"http://127.0.0.1:{httpd.server_port}"
 
 
 class TestRealCurl:
@@ -479,6 +569,78 @@ class TestRealCurl:
         transport = AsyncCurlTransport(impersonate="chrome")
         async with httpx2.AsyncClient(transport=transport) as client, client.stream("GET", f"{server}/endless") as r:
             async with asyncio.timeout(_CLOSE_DEADLINE):
+                async for _ in r.aiter_raw():
+                    break
+                await r.aclose()
+        assert r.is_closed
+
+    @pytest.mark.parametrize(
+        ("headers", "methods", "posts"),
+        [
+            pytest.param({}, None, 1, id="an-unkeyed-post-is-sent-once"),
+            pytest.param({"Idempotency-Key": "k"}, None, 2, id="a-keyed-post-may-be-sent-again"),
+            pytest.param({}, frozenset({"POST"}), 2, id="a-post-the-policy-calls-idempotent-may-be-sent-again"),
+        ],
+    )
+    async def test_libcurl_sends_again_only_what_the_retry_layer_would(
+        self, httpd: _Server, server: str, headers: dict[str, str], methods: frozenset[str] | None, posts: int
+    ) -> None:
+        """Send a request the retry layer would not repeat on a fresh connection, so libcurl cannot re-send it itself.
+
+        On a reused keep-alive connection, libcurl answers a connection that died without a response by sending the
+        request again on a new one, below the retry layer's write-safety rule.
+        """
+        transport = AsyncCurlTransport(impersonate="chrome")
+        async with httpx2.AsyncClient(transport=transport) as client:
+            await client.get(f"{server}/ok")
+            request = client.build_request("POST", f"{server}/ok", content=b"order", headers=headers)
+            if methods is not None:
+                CallContext.of(request).put(RETRY_POLICY, RetryPolicy(methods=methods))
+            if posts == 1:
+                with pytest.raises(httpx2.TransportError):
+                    await client.send(request)
+            else:
+                assert (await client.send(request)).status_code == _CREATED
+        assert httpd.posts == posts
+
+    async def test_a_call_cancelled_while_waiting_for_a_handle_leaves_the_pool_whole(self, server: str) -> None:
+        """Give up a call still waiting for a free handle without taking one, so the next call gets the freed handle."""
+        transport = AsyncCurlTransport(impersonate="chrome", max_connections=1)
+        async with httpx2.AsyncClient(transport=transport) as client:
+            async with client.stream("GET", f"{server}/endless"):
+                with pytest.raises(TimeoutError):
+                    async with asyncio.timeout(0.2):
+                        await client.get(f"{server}/ok")
+            async with asyncio.timeout(_CLOSE_DEADLINE):
+                response = await client.get(f"{server}/ok")
+        assert response.status_code == httpx2.codes.OK
+
+    async def test_a_call_cancelled_before_its_head_gives_its_handle_back(self, server: str) -> None:
+        """End the transfer of a call cancelled before its head, so it holds no handle and downloads nothing."""
+        transport = AsyncCurlTransport(impersonate="chrome", max_connections=1)
+        async with httpx2.AsyncClient(transport=transport) as client:
+            with pytest.raises(TimeoutError):
+                async with asyncio.timeout(0.2):
+                    await client.get(f"{server}/late-head")
+            async with asyncio.timeout(_CLOSE_DEADLINE):
+                response = await client.get(f"{server}/ok")
+        assert response.status_code == httpx2.codes.OK
+
+    async def test_a_stream_opens_at_its_head_before_any_body_byte(self, server: str) -> None:
+        """Return the response at its head, as a native transport does, for a stream whose first event is slow."""
+        transport = AsyncCurlTransport(impersonate="chrome")
+        async with (
+            httpx2.AsyncClient(transport=transport) as client,
+            asyncio.timeout(_LATE / 2),
+            client.stream("GET", f"{server}/late-body") as response,
+        ):
+            assert response.status_code == httpx2.codes.OK
+
+    async def test_closing_a_stalled_body_returns_at_once(self, server: str) -> None:
+        """Abort a transfer whose body has stalled on close, instead of waiting for curl's own timeout."""
+        transport = AsyncCurlTransport(impersonate="chrome")
+        async with httpx2.AsyncClient(transport=transport) as client, client.stream("GET", f"{server}/stall") as r:
+            async with asyncio.timeout(_LATE / 2):
                 async for _ in r.aiter_raw():
                     break
                 await r.aclose()

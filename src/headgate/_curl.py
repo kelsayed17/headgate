@@ -43,8 +43,15 @@ the fingerprint and proxy parameter bag and the shims for ``curl_cffi`` older th
 
 The transport behaves like a native httpx2 one wherever the layers above it can tell:
 
-* curl ignores the environment's proxy (``NOPROXY="*"``), keeps no cookie and follows no redirect, so the stack above
-  it (redirect handling, the breaker, retry) sees every hop and every status.
+* curl ignores the environment's proxy (``NOPROXY="*"``, or ``""`` beside an explicit ``CurlOpt.PROXY``, so that proxy
+  serves every host), keeps no cookie and follows no redirect, so the stack above it (redirect handling, the breaker,
+  retry) sees every hop and every status.
+* curl verifies TLS against certifi's bundle, which no ``SSL_CERT_FILE``, ``CURL_CA_BUNDLE`` or ``REQUESTS_CA_BUNDLE``
+  replaces; a ``CurlOpt.CAINFO`` in ``curl_options`` does. libcurl itself still writes the TLS session keys to the file
+  ``SSLKEYLOGFILE`` names, when that variable is set.
+* A request the retry layer would not send again (a method outside the call's idempotent ones, without an idempotency
+  key) goes out on a fresh connection, because libcurl re-sends a request whose reused connection died unanswered.
+* The response is returned at its head, before any body byte, and a call cancelled before then removes its transfer.
 * curl decompresses the body itself and exposes no raw one (``curl_cffi`` issue 438). The response therefore carries no
   ``Content-Encoding`` or ``Content-Length``: its stream already holds the decoded bytes, so httpx2 picks its identity
   decoder and a cache that stores the stream replays it correctly. The headers as received stay on the ``curl_cffi``
@@ -54,8 +61,8 @@ The transport behaves like a native httpx2 one wherever the layers above it can 
   ``HttpOptions(user_agent=...)`` are removed from the request when the caller left them untouched.
 * A curl error code, raised while sending or while streaming the body, maps onto the httpx2 exception a native
   transport would raise, so the policy layers classify it.
-* Closing a response before its body is read aborts the transfer. ``curl_cffi``'s own ``aclose`` waits for the whole
-  body to arrive into an unbounded queue, which would defeat headgate's response size cap.
+* Closing a response before its body is read aborts the transfer, even a stalled one. ``curl_cffi``'s own ``aclose``
+  waits for the whole body to arrive into an unbounded queue, which would defeat headgate's response size cap.
 
 **The SSRF guard** (``SecurityOptions(allow_private_hosts=False)``) vets every hop's host before this transport sends
 it, but cannot pin the connection to the address it vetted, because curl resolves the name itself. Pinning would take
@@ -69,14 +76,19 @@ from __future__ import annotations
 
 import asyncio
 import functools
-from typing import TYPE_CHECKING, Any, get_args, override
+from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, cast, get_args, override
 
 import httpx2
 
+from headgate._core import CallContext
 from headgate._user_agent import DEFAULT_USER_AGENT
+from headgate.retry._policy import IDEMPOTENT_METHODS, RETRY_POLICY
 
 try:
-    from curl_cffi import CurlECode, CurlHttpVersion, CurlOpt
+    import certifi
+    from curl_cffi import Curl, CurlECode, CurlHttpVersion, CurlInfo, CurlOpt
     from curl_cffi.requests.exceptions import RequestException as _RequestError
     from curl_cffi.requests.session import AsyncSession as _AsyncSession
     from curl_cffi.requests.session import HttpMethod
@@ -85,7 +97,8 @@ except ImportError as exc:
     raise ImportError(msg) from exc
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Mapping
+    from collections.abc import AsyncIterator, Callable, Mapping
+    from io import BytesIO
 
     from curl_cffi.requests import Response as _Response
     from curl_cffi.requests.impersonate import BrowserTypeLiteral
@@ -133,6 +146,63 @@ _WIRE_ENCODING_HEADERS = ("content-encoding", "content-length")
 
 _METHODS: dict[str, HttpMethod] = {method: method for method in get_args(HttpMethod)}
 
+#: The header the retry layer reads as an idempotency key when the call names none.
+_IDEMPOTENCY_HEADER = "Idempotency-Key"
+
+
+@dataclass
+class _Loan:
+    """One request's claim on a curl handle: whether it needs a fresh connection, and the handle while it holds one."""
+
+    fresh: bool
+    curl: Curl | None = None
+
+
+#: The request whose ``curl_cffi`` call is running. ``curl_cffi`` takes the handle inside that call, and calls back from
+#: the call's task or a task it starts there, which sees the same loan.
+_LOAN: ContextVar[_Loan] = ContextVar("headgate_curl_loan")
+
+
+class _Curl(Curl):
+    """A curl handle that opens a streamed response at the end of its head, not at its first body byte."""
+
+    _body: Callable[[bytes], object]
+
+    @override
+    def setopt(self, option: CurlOpt, value: Any) -> int:
+        # `curl_cffi` sets the stream's write callback, which opens the response on its first call, before the
+        # header buffer.
+        if option == CurlOpt.WRITEFUNCTION:
+            self._body = value
+        elif option == CurlOpt.HEADERDATA:
+            return super().setopt(CurlOpt.HEADERFUNCTION, functools.partial(self._header, value))
+        return super().setopt(option, value)
+
+    def _header(self, buffer: BytesIO, line: bytes) -> int:
+        """Keep a header *line* in *buffer*; at the end of a final (not 1xx, not a proxy's) head, open the stream."""
+        buffer.write(line)
+        if line in {b"\r\n", b"\n"} and cast("int", self.getinfo(CurlInfo.RESPONSE_CODE)) >= httpx2.codes.OK:
+            self._body(b"")
+        return len(line)
+
+
+class _Session(_AsyncSession):
+    """``curl_cffi``'s session, lending each request its own :class:`_Curl` through :data:`_LOAN`."""
+
+    @override
+    async def pop_curl(self) -> Curl:
+        curl = await self.pool.get() or _Curl(debug=self.debug)
+        loan = _LOAN.get()
+        loan.curl = curl
+        if loan.fresh:  # set after the await, so no other request sees it; `release_curl` resets it
+            curl.setopt(CurlOpt.FRESH_CONNECT, 1)
+        return curl
+
+    @override
+    def release_curl(self, curl: Curl) -> None:
+        _LOAN.get().curl = None
+        super().release_curl(curl)
+
 
 class AsyncCurlTransport(httpx2.AsyncBaseTransport):
     """Send each request through ``curl_cffi`` with a browser's TLS handshake, as an ``httpx2`` async transport.
@@ -156,9 +226,17 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
     ) -> None:
         # curl reads the environment's proxy settings on its own, and an httpx2 transport ignores them
         # (https://github.com/lexiforest/curl_cffi/issues/345).
-        options: dict[CurlOpt, Any] = {**(curl_options or {}), CurlOpt.NOPROXY: "*"}
+        # `""` overrides a `NO_PROXY` the environment sets, as `"*"` overrides its `HTTP_PROXY`.
+        # The CA bundle is set per request after the ones `curl_cffi` takes from the environment.
+        given = curl_options or {}
+        options: dict[CurlOpt, Any] = {
+            CurlOpt.NOPROXY: "" if CurlOpt.PROXY in given else "*",
+            CurlOpt.CAINFO: certifi.where(),
+            CurlOpt.PROXY_CAINFO: certifi.where(),
+            **given,
+        }
         self._default_headers = default_headers
-        self._session = _AsyncSession(
+        self._session = _Session(
             max_clients=max_connections,
             impersonate=impersonate,
             default_headers=default_headers,
@@ -179,6 +257,8 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
             for name, value in _httpx_default_headers():
                 if request.headers.get(name) == value:
                     del request.headers[name]
+        loan = _Loan(fresh=not _replay_safe(request))
+        token = _LOAN.set(loan)
         try:
             response = await self._session.request(
                 method=method,
@@ -190,6 +270,13 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
             )
         except _RequestError as exc:
             raise _httpx_error(request, exc) from exc
+        except BaseException:
+            # Cancelled before the head: `curl_cffi` would keep the transfer running, and its handle taken.
+            if loan.curl is not None:
+                self._session.acurl.remove_handle(loan.curl)
+            raise
+        finally:
+            _LOAN.reset(token)
         return _httpx_response(request, response)
 
     @override
@@ -226,23 +313,36 @@ class _CurlByteStream(httpx2.AsyncByteStream):
     def __init__(self, request: httpx2.Request, response: _Response) -> None:
         self._request = request
         self._response = response
-        # Set to make curl's write callback abort the transfer. Only a streamed response has one; for any other there
-        # is nothing left to abort, and a fresh event is never read.
-        self._abort: asyncio.Event = response.quit_now or asyncio.Event()
 
     @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         try:
             async for chunk in self._response.aiter_content():
-                yield bytes(chunk)  # `curl_cffi` leaves the chunk untyped; `bytes(bytes)` returns it without a copy
+                if chunk:  # the empty chunk that opened the stream at its head
+                    yield bytes(chunk)  # `curl_cffi` leaves the chunk untyped; `bytes(bytes)` returns it without a copy
         except _RequestError as exc:
             raise _httpx_error(self._request, exc) from exc
 
     @override
     async def aclose(self) -> None:
-        # Without the abort, `aclose` waits for (and queues) the rest of the body.
-        self._abort.set()
-        await self._response.aclose()
+        # `curl_cffi`'s `aclose` waits for (and queues) the rest of the body, and its `quit_now` is read only when a
+        # chunk arrives. Cancelling the transfer's task removes its handle, stalled or not.
+        task = self._response.astream_task
+        if isinstance(task, asyncio.Task):
+            task.cancel()
+            await asyncio.wait([task])
+
+
+def _replay_safe(request: httpx2.Request) -> bool:
+    """Return whether the retry layer may send *request* again, as libcurl does on its own when a connection dies.
+
+    That is a method the call's policy treats as idempotent, or a request carrying an idempotency key.
+    """
+    context = CallContext.of(request)
+    policy = context.get(RETRY_POLICY)
+    methods = IDEMPOTENT_METHODS if policy is None else policy.methods
+    keyed = (context.idempotency_key or request.headers.get(_IDEMPOTENCY_HEADER)) is not None
+    return request.method in methods or keyed
 
 
 def _httpx_error(request: httpx2.Request, exc: _RequestError) -> httpx2.RequestError:
