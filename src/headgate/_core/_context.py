@@ -117,6 +117,7 @@ class CallContext:
         "_emitter",
         "_notes",
         "_progress",
+        "_sent",
         "_slots",
         "follow_redirects",
         "idempotency_key",
@@ -140,6 +141,7 @@ class CallContext:
         self._emitter = emitter
         self._attempt = 0
         self._progress = SendProgress()
+        self._sent = False
         self._notes: list[str] = []
         self._slots: dict[object, object] = {}
         #: The ``Idempotency-Key`` (or configured header) value every attempt of the call carries, if any.
@@ -251,6 +253,15 @@ class CallContext:
     def withdraw_attempt(self) -> None:
         """Record that the attempt just begun was never sent (its rate-budget turn came too late): it does not count."""
         self._attempt -= 1
+
+    @property
+    def sent(self) -> bool:
+        """Whether any byte of the call can have reached the network, by any attempt (see :meth:`mark_sent`)."""
+        return self._sent
+
+    def mark_sent(self) -> None:
+        """Record that an attempt of the call may have written a byte, which no later attempt can undo."""
+        self._sent = True
 
     # Notes and events.
 

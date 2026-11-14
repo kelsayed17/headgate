@@ -115,6 +115,7 @@ async def test_a_call_whose_budget_turn_is_past_the_deadline_fails_at_once_unsen
         assert "never sent" in str(error)
         assert error.attempts == 0
         assert error.retryable
+        assert error.sent is False
         assert error.retry_after is not None
         assert error.retry_after > _QUEUE_DEADLINE
     assert len(fake.calls) == _ADMITTED

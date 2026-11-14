@@ -148,7 +148,9 @@ retried like an idempotent one.
 
 ## What `retryable` means
 
-`ClientError.retryable` is the retry policy's own verdict on the outcome that ended the call, by the rules above: it is
+`ClientError.retryable` has one meaning on every error: sending the call again later could succeed, and is safe as the
+call stands (its method is idempotent, it carries an idempotency key, or nothing of it was sent). For a status or a
+network failure, that is the retry policy's own verdict on the outcome that ended the call, by the rules above: it is
 `True` exactly when the call's `RetryPolicy` would re-send after it. So a surviving 503 on a GET is retryable, while a
 501 or 505 (outside `statuses`), a 503 the server marked `x-should-retry: false`, a 503 on a POST without an idempotency
 key, and a redirect loop are not. The message follows the same rule for a surviving 429 or 5xx: it calls the status
@@ -157,9 +159,13 @@ does not (`upstream 501 for GET orders`). A network failure while reading the bo
 be: retryable for an idempotent or keyed request, not for a POST that was written in full. The flag ignores what stopped
 the sequence (spent attempts, the budget, the deadline), since it answers whether sending again later could help.
 
-Two errors set it otherwise: a `RateLimitError` from a [rate budget](rate-budgets.md) paused past the deadline is
-retryable after its `retry_after`, and a token mint on a client of its own, which no retry layer judged, is retryable for
-any network failure but those re-sending cannot cure.
+The refusals headgate makes itself, before the request leaves, are retryable after their `retry_after`: a
+`CircuitOpenError` after the breaker's cooldown, a `RateLimitError` from a [rate budget](rate-budgets.md) paused past
+the deadline, and a `ClientTimeoutError` whose budget turn came after it. Errors that sending again cannot cure are not:
+`ForbiddenDestinationError`, `ResponseTooLargeError`, `ResponseParseError`, `ClientConfigurationError` and
+`PageLimitError`. A token mint on a client of its own, which no retry layer judged, is retryable for any network
+failure but those re-sending cannot cure. Whether a call that is not retryable may still have been processed is
+[`sent`](errors.md#what-every-error-carries).
 
 ## Attempt history
 

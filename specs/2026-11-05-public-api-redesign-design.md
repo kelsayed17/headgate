@@ -305,11 +305,16 @@ class GitHub:
 
 ### 6. Errors
 
-- **`retryable` means one thing:** sending this call again later could succeed. `CircuitOpenError` and a budget
-  pause become `retryable=True` with their `retry_after`. Today `CircuitOpenError` says `retryable=False` with
-  `retry_after≈60`, so the recipe in `docs/errors.md` re-raises the one error that says "come back in a minute".
-- **`sent`** is a new read-only attribute: whether any byte of the request reached the network.
-- A refusal by headgate's own rate budget carries `status_code=None` rather than another call's 429.
+(Amended with the phase 6 plan.)
+
+- **`retryable` means one thing:** sending this call again later could succeed, and is safe as the call stands (an
+  idempotent method, an idempotency key, or nothing of it sent). `CircuitOpenError` and a budget pause become
+  `retryable=True` with their `retry_after`. Today `CircuitOpenError` says `retryable=False` with `retry_after≈60`, so
+  the recipe in `docs/errors.md` re-raises the one error that says "come back in a minute".
+- **`sent`** is a new read-only attribute, `bool | None`: whether any byte of the request can have reached the
+  network. It is `False` only when headgate knows none did, and `None` on an error no client call raised.
+- A refusal by headgate's own rate budget carries `status_code=None` rather than another call's 429, so
+  `UpstreamStatusError.status_code` is `int | None`.
 - Every error attribute is a read-only property. Today `UpstreamStatusError.status_code` can be assigned.
 - Using a closed client keeps raising `RuntimeError`, which is pinned by a test and deliberate: it is a programming
   error, like the `ValueError` for a bad t-string.

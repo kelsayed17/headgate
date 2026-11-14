@@ -885,7 +885,11 @@ class AsyncBaseClient:
 
     @contextlib.asynccontextmanager
     async def _reported(self, prepared: _Prepared) -> AsyncGenerator[None]:
-        """Emit ``CallStarted`` and, on the way out, ``CallFinished``; add the call's notes to a ``ClientError``."""
+        """Emit ``CallStarted`` and, on the way out, ``CallFinished``; add the call's notes to a ``ClientError``.
+
+        A ``ClientError`` leaving the call takes the call's :attr:`~headgate.errors.ClientError.sent`, whichever layer
+        raised it, since what a caller needs to know is whether the call's own request can have left.
+        """
         context = prepared.context
         if context.observed:
             context.emit(CallStarted(call=context.info))
@@ -899,6 +903,8 @@ class AsyncBaseClient:
                 vars(exc)[_REPORTED] = True
                 for note in context.notes:
                     exc.add_note(note)
+                # What the call's own request sent, whichever layer raised the error: a token mint, a middleware.
+                vars(exc)["_sent"] = context.sent
             raise
         finally:
             if context.observed:
@@ -968,7 +974,9 @@ class AsyncBaseClient:
                 async with self._sent(prepared, verdict) as streamed:
                     yield streamed, verdict
         except BreakerOpenError as exc:
+            # Refused unsent, so sending again is safe whatever the method, and admitted once the cooldown has passed.
             details = self._site(prepared).details(retry_after=exc.retry_after)
+            details["retryable"] = True
             raise CircuitOpenError(str(exc), **details) from None
         except BudgetBacklogError as exc:
             # Our own pacing, not the provider's: the call was never sent (the retry layer withdrew the attempt), and
@@ -979,10 +987,11 @@ class AsyncBaseClient:
             msg = f"{site.method} {site.url}: never sent: {exc}"
             raise ClientTimeoutError(msg, **details) from None
         except BudgetPausedError as exc:
-            # Not the retry policy's call: the budget says when sending again will be admitted.
+            # Not the retry policy's call: the budget says when sending again will be admitted. The call got no
+            # response, so it carries no status, rather than the one the response that caused the pause had.
             details = self._site(prepared).details(retry_after=exc.retry_after)
             details["retryable"] = True
-            raise RateLimitError(str(exc), status_code=exc.status_code, **details) from None
+            raise RateLimitError(str(exc), status_code=None, **details) from None
         except httpx2.InvalidURL as exc:
             # A redirect joined past httpx2's length limit. Not an HTTPError, and not an origin failure.
             raise _invalid_url(exc, self._site(prepared)) from exc

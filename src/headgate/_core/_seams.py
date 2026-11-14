@@ -109,12 +109,11 @@ class BudgetBacklogError(Exception):
 class BudgetPausedError(Exception):
     """Raised by ``Pacer.wait`` when the server's pause outlasts the call's deadline, so the attempt is never sent.
 
-    ``AsyncBaseClient`` raises it to its caller as :class:`headgate.errors.RateLimitError`. ``retry_after`` is the
-    seconds left in the pause; ``status_code`` is the status of the response that asked for it.
+    ``AsyncBaseClient`` raises it to its caller as :class:`headgate.errors.RateLimitError` with no status code, since
+    the call it refuses got no response. ``retry_after`` is the seconds left in the pause.
     """
 
-    def __init__(self, message: str, *, retry_after: float, status_code: int) -> None:
-        """Record *message*, *retry_after* and *status_code*."""
+    def __init__(self, message: str, *, retry_after: float) -> None:
+        """Record *message* and *retry_after*."""
         super().__init__(message)
         self.retry_after = retry_after
-        self.status_code = status_code

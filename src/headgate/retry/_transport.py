@@ -59,7 +59,7 @@ from headgate._core import (
     Sleep,
     Timing,
 )
-from headgate.retry._classify import Attempted, Verdict, classify
+from headgate.retry._classify import Attempted, Verdict, classify, nothing_sent
 from headgate.retry._policy import (
     NETWORK_ERRORS,
     REPLAYABLE_BODY,
@@ -270,12 +270,16 @@ class _Sequence:
         except asyncio.CancelledError:
             # A losing hedge, or the whole call reaching its deadline: the history still accounts for the send. One
             # cancelled while queued in the rate budget never reached the network, so it gives back what it paid.
+            if not nothing_sent(progress, None):
+                context.mark_sent()
             context.add_note(f"{prefix}: cancelled after {_rounded(context.clock() - started)}")
             if paid and not progress.dispatched:
                 self._refund()
             raise
         finally:
             SENDING.reset(sending)
+        if not nothing_sent(progress, result):
+            context.mark_sent()
         verdict = classify(result, self._attempted(progress), self._policy, now=self._wall_clock())
         context.add_note(f"{prefix}: {_describe(result, verdict)} after {_rounded(context.clock() - started)}")
         return _Attempt(result, verdict, request)

@@ -92,16 +92,17 @@ async def test_a_pause_past_the_deadline_raises_rate_limit_error_without_sending
     budget = _budget(clock)
     server = _Server()
     client = _client(budget, server)
-    with pytest.raises(RateLimitError):
+    with pytest.raises(RateLimitError) as refused:
         await client.get("x", expect=RESPONSE)
 
     with pytest.raises(RateLimitError) as raised:
         await client.get("x", expect=RESPONSE, deadline=_DEADLINE)
 
+    assert refused.value.status_code == httpx2.codes.TOO_MANY_REQUESTS, "the 429 the wire sent for that call"
     error = raised.value
-    assert (error.status_code, error.retryable, error.retry_after) == (429, True, _PAUSE)
+    assert (error.status_code, error.retryable, error.retry_after, error.sent) == (None, True, _PAUSE, False)
     assert (error.attempts, getattr(error, "__notes__", [])) == (0, []), "an attempt never sent is no attempt"
-    assert "past the call's deadline" in str(error)
+    assert str(error).endswith("past the call's deadline"), "no status tag: this call got no status"
     assert server.received == 1, "the refused call never reached the server"
     assert failures(client, _HOST) == 0, "neither the 429 nor the local refusal is a host failure"
 
