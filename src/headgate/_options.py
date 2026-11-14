@@ -18,16 +18,21 @@ from __future__ import annotations
 import functools
 import math
 import uuid
-from dataclasses import KW_ONLY, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Unpack, final, override
 
 import httpx2
 
+# A closed TypedDict (PEP 728) refuses a keyword it does not name, so a stray or misspelled option is a type error.
+from typing_extensions import TypedDict
+
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
+from headgate._call_options import check_options
 from headgate._core import check_fragment, check_kind, origin_of, origin_text, path_has_fragment
 from headgate._failures import DEFAULT_REQUEST_ID_HEADERS
 from headgate.breaker import BreakerPolicy
+from headgate.ratelimit import Rate, RateBudget
 from headgate.retry import RetryPolicy
 
 if TYPE_CHECKING:
@@ -36,7 +41,6 @@ if TYPE_CHECKING:
 
     from headgate._responses import ResponseCheck
     from headgate.cache import HttpCache
-    from headgate.ratelimit import RateRule
     from headgate.security import Resolver
 
 __all__ = [
@@ -46,6 +50,7 @@ __all__ = [
     "HttpOptions",
     "IdempotencyKeys",
     "Route",
+    "RouteOptions",
     "SecurityOptions",
     "Timeouts",
     "TransportPolicy",
@@ -220,24 +225,91 @@ class IdempotencyKeys:
 KEYED_METHODS: Final = frozenset({"POST", "PATCH"})
 
 
-@dataclass(frozen=True, slots=True)
-class Route:
-    """Overrides for the requests whose URL path holds ``fragment``'s segments: their own retry policy and deadline.
+class RouteOptions(TypedDict, total=False, closed=True):
+    """What a :class:`Route` sets for its paths; an option left out takes the policy's, and ``None`` is off.
 
-    Matched like :class:`~headgate.RateRule`, the first matching route winning, so an endpoint's retry and deadline
-    change in the client's configuration rather than in the endpoint method. ``None`` keeps the policy's own value; a
-    call's ``retry=`` and ``deadline=`` win over both.
+    * ``retry``: a :class:`~headgate.RetryPolicy` that replaces the policy's on these paths, or ``None`` to send once.
+    * ``deadline``: seconds a call on these paths may take in all, or ``None`` for no deadline.
+    * ``rate``: a :class:`~headgate.Rate`, from which the client builds a budget of these paths' own, a
+      :class:`~headgate.RateBudget` shared with whoever else holds it, or ``None`` to pace nothing of their own (the
+      server's pauses still apply). Left out, the paths spend from the client's budget.
+    * ``cache``: ``None`` keeps these paths out of the client's cache: neither looked up nor stored. Left out, the
+      cache's own rules apply.
     """
 
-    fragment: str
-    _: KW_ONLY
-    retry: RetryPolicy | None = None
-    deadline: float | None = None
+    retry: RetryPolicy | None
+    deadline: float | None
+    rate: Rate | RateBudget | None
+    cache: None
 
-    def __post_init__(self) -> None:
-        """Refuse a fragment naming no segment, which matches every path, and a deadline not positive and finite."""
-        check_fragment(self.fragment)
-        check_deadline(self.deadline)
+
+#: The keywords :class:`RouteOptions` names, read once.
+_ROUTE_KEYS: Final = frozenset(RouteOptions.__optional_keys__)
+
+
+@final
+class Route:
+    """The one per-path rule: what the calls whose URL path holds ``fragment``'s segments do differently.
+
+    ``Route(fragment, /, **options)`` takes :class:`RouteOptions`. The fragment is one or more whole path segments,
+    matched anywhere in the path (``"/exports"`` matches ``/v2/exports/orders.csv``, not ``/v2/exports-archive``), as
+    the cache's path filter matches. The first route whose fragment matches a call's path is that call's route,
+    whole: what it sets applies, and what it leaves out comes from the policy and the client's budget. Two routes
+    never combine. A call's own options, and its view's, win over its route's. A redirect's later hops keep the
+    call's route.
+
+    A route is a value: two with the same fragment and options are equal, a shared ``RateBudget`` compared by
+    identity.
+
+    :raises TypeError: for an option :class:`RouteOptions` does not name, and for a value of the wrong kind, such as
+        ``retry=False`` (write ``retry=None``).
+    :raises ValueError: for a fragment naming no segment, which would match every path, and for a deadline that is not
+        positive and finite.
+    """
+
+    __slots__ = ("_fragment", "_options")
+
+    def __init__(self, fragment: str, /, **options: Unpack[RouteOptions]) -> None:
+        """Hold *fragment* and the *options* its paths take."""
+        check_fragment(fragment)
+        check_options("Route", options, _ROUTE_KEYS)
+        if "retry" in options:
+            retry = options["retry"]
+            if isinstance(retry, bool):
+                msg = "retry= takes a RetryPolicy, or None to send once (got bool): write retry=None for retry=False"
+                raise TypeError(msg)
+            check_kind("retry", retry, (RetryPolicy, type(None)), "a RetryPolicy, or None to send once")
+        if "deadline" in options:
+            check_deadline(options["deadline"])
+        if "rate" in options:
+            check_kind("rate", options["rate"], (Rate, RateBudget, type(None)), "a Rate, a RateBudget or None")
+        if "cache" in options and options["cache"] is not None:
+            check_kind("cache", options["cache"], (), "None, to keep these paths out of the cache")
+        self._fragment = fragment
+        self._options = options.copy()
+
+    @property
+    def fragment(self) -> str:
+        """The path segments the route matches."""
+        return self._fragment
+
+    @property
+    def options(self) -> RouteOptions:
+        """A copy of what the route sets: an option it leaves out is not a key."""
+        return self._options.copy()
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Route) and (self._fragment, self._options) == (other._fragment, other._options)
+
+    @override
+    def __hash__(self) -> int:
+        return hash((self._fragment, tuple(sorted(self._options.items()))))
+
+    @override
+    def __repr__(self) -> str:
+        options = "".join(f", {name}={value!r}" for name, value in self._options.items())
+        return f"Route({self._fragment!r}{options})"
 
 
 def match_route(routes: tuple[Route, ...], path: str) -> Route | None:
@@ -256,18 +328,16 @@ class TransportPolicy:
     * ``deadline``: seconds the whole logical call may take, every attempt, wait and the body read included; ``None``
       for none. Past it the call raises ``ClientTimeoutError``. A call overrides it with ``deadline=``.
     * ``breaker``: the circuit breaker (:class:`~headgate.BreakerPolicy`), or ``None`` for none.
-    * ``rate_limits``: per-path budgets (:class:`~headgate.RateRule`): a request whose path matches a rule spends from
-      the first matching rule's budget instead of the client's.
     * ``cache``: an opt-in :class:`~headgate.HttpCache`.
     * ``idempotency``: stamp idempotency keys on POST and PATCH (:class:`IdempotencyKeys`), or ``None``.
-    * ``routes``: per-route retry and deadline overrides (:class:`Route`).
+    * ``routes``: the per-path rules (:class:`Route`): a call's first matching route sets its retry, deadline, rate and
+      cache, and what it leaves out comes from here.
     """
 
     retry: RetryPolicy | None = field(default_factory=RetryPolicy)
     timeout: Timeouts = field(default_factory=Timeouts)
     deadline: float | None = 60.0
     breaker: BreakerPolicy | None = field(default_factory=BreakerPolicy)
-    rate_limits: tuple[RateRule, ...] = ()
     cache: HttpCache | None = None
     idempotency: IdempotencyKeys | None = None
     routes: tuple[Route, ...] = ()
@@ -282,8 +352,10 @@ class TransportPolicy:
         check_kind("breaker", self.breaker, (BreakerPolicy, type(None)), "a BreakerPolicy, or None for no breaker")
         check_deadline(self.deadline)
         check_timeout_fits(self.timeout, self.deadline)
-        object.__setattr__(self, "rate_limits", tuple(self.rate_limits))
-        object.__setattr__(self, "routes", tuple(self.routes))
+        routes = tuple(self.routes) if not isinstance(self.routes, str) else self.routes
+        for route in routes:
+            check_kind("routes", route, Route, "a tuple of Route, such as (Route('/exports', deadline=300.0),)")
+        object.__setattr__(self, "routes", routes)
 
 
 def _is_bare_origin(url: httpx2.URL) -> bool:

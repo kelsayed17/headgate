@@ -6,14 +6,14 @@ client side is cheaper than collecting 429s, and a budget that listens to the se
 hammering an API that has said "slow down".
 
 ```python
-from headgate import AsyncBaseClient, Rate, RateBudget, RateRule, TransportPolicy
+from headgate import AsyncBaseClient, Rate, RateBudget, Route, TransportPolicy
 
 shared = RateBudget(Rate.per_minute(600), max_in_flight=8)  # one provider quota, two clients
 search = AsyncBaseClient(base_url="https://api.example.com/search", rate=shared)
 reports = AsyncBaseClient(
     base_url="https://api.example.com/reports",
     rate=shared,
-    policy=TransportPolicy(rate_limits=(RateRule("/export", Rate.per_minute(6)),)),
+    policy=TransportPolicy(routes=(Route("/export", rate=Rate.per_minute(6)),)),
 )
 ```
 
@@ -45,12 +45,17 @@ and threads, because its state is plain numbers under a `threading.Lock` and not
 
 ## Per-path lanes
 
-`TransportPolicy(rate_limits=(RateRule(fragment, rate), ...))` gives the requests whose URL path holds `fragment` a
-budget of their own: the first matching rule wins, and a matching request spends from the rule's budget **instead
-of** the client's. A rule's `rate` is a `Rate` (a budget per client) or a shared `RateBudget`. The fragment is one or
-more whole path segments, matched anywhere in the path: `"/exports"` matches `/v2/exports` and
-`/v2/exports/orders.csv`, but not `/v2/exports-archive`. The cache's `paths` and the policy's `Route`
-match the same way.
+`TransportPolicy(routes=(Route(fragment, rate=...), ...))` gives the calls whose URL path holds `fragment` a budget of
+their own, spent **instead of** the client's. A route's `rate` is a `Rate` (a budget per client), a shared
+`RateBudget`, or `None`, which paces nothing of the route's own while the server's pauses still apply; a route that
+leaves `rate` out spends from the client's budget. The fragment is one or more whole path segments, matched anywhere
+in the path: `"/exports"` matches `/v2/exports` and `/v2/exports/orders.csv`, but not `/v2/exports-archive`. The cache's
+`paths` match the same way.
+
+The first matching route is the call's route, whole: its rate, retry policy, deadline and cache setting come from that
+one route, and what it leaves out from the policy and the client's budget. Two routes never combine, so a path that
+needs a lane of its own and a longer deadline gets one route that sets both. Every hop of a call, a redirect's
+included, spends from the budget of the call's route.
 
 ## Server feedback
 

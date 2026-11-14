@@ -1,7 +1,9 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Rate limiting: the budgets a client spends: :class:`Rate`, :class:`RateBudget`, :class:`RateRule`, :class:`Adaptive`.
+"""Rate limiting: the budgets a client spends: :class:`Rate`, :class:`RateBudget` and :class:`Adaptive`.
+
+A path's own budget is set by its :class:`~headgate.Route` (``Route("/exports", rate=Rate.per_minute(6))``).
 
 A client given no rate (``rate=None``) paces nothing of its own, but still waits out the pauses a server asks for. The
 layer that spends the budgets is the client's own, in this package's private modules.
@@ -10,6 +12,6 @@ Self-contained: it imports only ``httpx2``, the standard library and :mod:`headg
 """
 
 from headgate.ratelimit._budget import RateBudget
-from headgate.ratelimit._rate import Adaptive, Rate, RateRule
+from headgate.ratelimit._rate import Adaptive, Rate
 
-__all__ = ["Adaptive", "Rate", "RateBudget", "RateRule"]
+__all__ = ["Adaptive", "Rate", "RateBudget"]

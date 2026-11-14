@@ -36,7 +36,7 @@ src/headgate/
   _core/             shared seams only: time, origins, CallContext, events, the policy switch
   retry/             RetryPolicy and its values, RetryTransport, send tracking, the budget ledger
   breaker/           BreakerPolicy, BreakerRegistry, CircuitBreaker
-  ratelimit/         Rate, RateBudget, Adaptive, RateRule, RateLimitTransport, server feedback
+  ratelimit/         Rate, RateBudget, Adaptive, RateLimitTransport, server feedback
   cache/             HttpCache, partitions, the resilient cache transport, conditional reads
   security/          the credential guard, the https-downgrade refusal, the SSRF guard
   streaming/         Stream

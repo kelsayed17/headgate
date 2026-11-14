@@ -106,6 +106,7 @@ from headgate.breaker._scope import scoped_registry
 from headgate.cache._transport import (
     MAX_RESPONSE_BYTES,
     STREAMED,
+    UNCACHED,
     host_untested,
     served_from_cache,
     stamp_ttl,
@@ -124,7 +125,7 @@ from headgate.pagination import PageRequest, WritingPager
 from headgate.pagination._paginated import PageWalk
 from headgate.ratelimit import Rate, RateBudget
 from headgate.ratelimit._budget import BudgetPausedError
-from headgate.ratelimit._budgets import PathBudgets
+from headgate.ratelimit._budgets import CALL_BUDGET, Lane, PathBudgets
 from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE
 from headgate.streaming._stream import OpenStream
 
@@ -134,7 +135,7 @@ if TYPE_CHECKING:
 
     from headgate._core import Observer
     from headgate._middleware import Middleware
-    from headgate._options import Route
+    from headgate._options import Route, RouteOptions
     from headgate._request_body import Lowered
     from headgate._responses import ResponseCheck
     from headgate.breaker._breaker import Transition, Verdict
@@ -338,7 +339,8 @@ class AsyncBaseClient:
         self._view = ROOT_DEFAULTS
         self._owns_pool = True
         credentials = Credentials.of(base_url=base_url, auth=auth, http=http, middleware=middleware)
-        budgets = PathBudgets(default=rate, rules=policy.rate_limits, timing=self._timing)
+        lanes = [Lane(route.fragment, *_route_rate(route)) for route in policy.routes]
+        self._budgets = budgets = PathBudgets(default=rate, lanes=lanes, timing=self._timing)
         stack = build_transport_stack(
             budgets, policy, http, self._timing, credentials, middleware=middleware, observed=bool(observers)
         )
@@ -787,14 +789,15 @@ class AsyncBaseClient:
         # The absolute URL is for observers only (an OpenTelemetry span's url.full and server.address).
         full_url = sanitize_url(str(request.url)) if self._emitter.active else None
         info = CallInfo(method=call.method, url=log_url, route=route, full_url=full_url)
+        # The call's route is matched once, here; every layer reads what it set from the call's context.
         route_policy = match_route(self._policy.routes, request.url.path)
-        deadline = self._deadline_of(call, route_policy)
+        route_options = {} if route_policy is None else route_policy.options
+        deadline = self._deadline_of(call, route_options)
         if (timeout := options.get("timeout")) is not None:
             check_timeout_fits(timeout, deadline)
         context = CallContext(info, clock=self._timing.clock, deadline_after=deadline, emitter=self._emitter)
         context.follow_redirects = follow
-        if (retry := self._retry_of(call, route_policy)) is not None:
-            context.put(RETRY_POLICY, retry)
+        self._stamp_route(context, call, route_options, request.url.path)
         if not body.replayable:
             context.put(REPLAYABLE_BODY, value=False)
         self._stamp_idempotency_key(request, context, options.get("idempotency_key"))
@@ -804,22 +807,32 @@ class AsyncBaseClient:
         context.attach(request)
         return _Prepared(request, context, follow)
 
-    def _deadline_of(self, call: _Call, route: Route | None) -> float | None:
-        """Return the seconds *call* may take: its own ``deadline=``, else the view's, its route's, the policy's."""
+    def _stamp_route(self, context: CallContext, call: _Call, route: RouteOptions, path: str) -> None:
+        """Put on *context* what *call*'s *route* sets for every layer below: its retry policy, budget and cache."""
+        if (retry := self._retry_of(call, route)) is not None:
+            context.put(RETRY_POLICY, retry)
+        # Every hop of the call, a redirect's included, spends from the budget its route names.
+        context.put(CALL_BUDGET, self._budgets.for_path(path))
+        if "cache" in route:
+            context.put(UNCACHED, value=True)
+
+    def _deadline_of(self, call: _Call, route: RouteOptions) -> float | None:
+        """Return the seconds *call* may take: its own ``deadline=``, else the view's, its *route*'s, the policy's."""
         if "deadline" in call.options:
             deadline = call.options["deadline"]
             check_deadline(deadline)
             return deadline
         if self._view.deadline is not KEEP:
             return self._view.deadline
-        if route is not None and route.deadline is not None:
-            return route.deadline
+        if "deadline" in route:
+            return route["deadline"]
         return self._policy.deadline
 
-    def _retry_of(self, call: _Call, route: Route | None) -> RetryPolicy | None:
-        """Return *call*'s own retry policy when it overrides the client's: per call, view or route; else ``None``.
+    def _retry_of(self, call: _Call, route: RouteOptions) -> RetryPolicy | None:
+        """Return *call*'s own retry policy when it overrides the client's: per call, view or *route*; else ``None``.
 
-        A call's or a view's ``retry=None`` sends once; the policy's ``None`` is read where the stack is built.
+        A call's, a view's or a route's ``retry=None`` sends once; the policy's ``None`` is read where the stack is
+        built.
         """
         if self._policy_off:
             return SEND_ONCE
@@ -828,7 +841,10 @@ class AsyncBaseClient:
             return SEND_ONCE if retry is None else retry
         if self._view.retry is not KEEP:
             return self._view.retry
-        return None if route is None else route.retry
+        if "retry" in route:
+            retry = route["retry"]
+            return SEND_ONCE if retry is None else retry
+        return None
 
     def _follows(self, options: RequestOptions | StreamOptions) -> bool:
         """Return whether a call with *options* follows redirects: its own choice, else the view's, the client's."""
@@ -1098,6 +1114,12 @@ class AsyncBaseClient:
     def _unsent_site(self, prepared: _Prepared) -> CallSite:
         """Return :meth:`_site` for a call whose current attempt never reached the network: it does not count."""
         return replace(self._site(prepared), attempts=prepared.context.attempt - 1)
+
+
+def _route_rate(route: Route) -> tuple[Rate | RateBudget | None, bool]:
+    """Return the rate *route* sets, and whether it sets one; ``None`` paces nothing of the route's own."""
+    options = route.options
+    return (options["rate"], True) if "rate" in options else (None, False)
 
 
 def _stack_parts[T](name: str, parts: Sequence[T]) -> tuple[T, ...]:

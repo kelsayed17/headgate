@@ -344,8 +344,8 @@ class OrdersClient(AsyncBaseClient):
                 timeout=Timeouts(read=20.0),
                 deadline=30.0,  # each call, every attempt and wait included
                 idempotency=IdempotencyKeys(),  # every POST and PATCH carries a key, so it is retried safely
-                rate_limits=(RateRule("/exports", Rate.per_minute(6)),),  # a slower lane for the export endpoint
-                routes=(Route("/exports", deadline=300.0),),  # and a longer deadline
+                # the export endpoint gets a slower lane and a longer deadline
+                routes=(Route("/exports", rate=Rate.per_minute(6), deadline=300.0),),
             ),
             http=HttpOptions(transport=transport, user_agent="shop-sync/1.4"),
             observers=observers,
@@ -359,20 +359,18 @@ class OrdersClient(AsyncBaseClient):
 | `retry` | `RetryPolicy()`: 3 attempts |
 | `deadline` | `60.0` seconds per call |
 | `breaker` | `BreakerPolicy()`: 5 failures, 60 s |
-| `rate_limits` | none |
+| `timeout` | `Timeouts()`: connect 10 s, read 30 s, write 10 s, pool 15 s |
 | `cache` | none |
 | `idempotency` | none |
-| `routes` | none |
+| `routes` | none: `Route(fragment, retry=, deadline=, rate=, cache=)` per path, first match wins |
 
 | `HttpOptions` | Default |
 | --- | --- |
-| `timeout` | `Timeouts()`: connect 10 s, read 30 s, write 10 s, pool 15 s |
 | `headers` | none beyond `User-Agent` |
 | `follow_redirects`, `max_redirects` | `True`, `5` |
 | `max_response_bytes` | 32 MiB |
 | `security` | `SecurityOptions()`: credentials to `base_url`'s origin only, SSRF guard off |
 | `response_check` | none |
-| `observers`, `middleware` | none |
 
 Every option, its validation and the precedence of call, view, route and policy:
 [configuration](https://kelsayed17.github.io/headgate/configuration/).

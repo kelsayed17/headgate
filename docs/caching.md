@@ -27,7 +27,7 @@ policy = TransportPolicy(cache=cache)
 - **What is stored**: a request whose method is in `methods` (`{"GET"}` by default) and whose path matches one of
   `paths` (every path by default), answered with a status in `statuses` (`{200}` by default). It is stored **even past a `no-store`**, which is the point for a provider that sends no cache
   headers, or wrong ones. An empty collection matches nothing, so `methods=()` stores nothing.
-- **`paths` takes whole segments or patterns.** A string is one or more whole path segments, matched as a `RateRule`
+- **`paths` takes whole segments or patterns.** A string is one or more whole path segments, matched as a `Route`
   matches, so `"series"` keeps `/v1/series/GDP` but not `/v1/timeseries`. A compiled pattern is searched for in the
   path, for what segments cannot say, such as a file name's prefix or extension:
   `paths=[re.compile(r"/fut_fin_txt_\d{4}\.zip$")]`. Neither looks at the query string. A fragment that names no

@@ -8,6 +8,7 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `RouteOptions`, the closed TypedDict of what a `Route` sets: `retry`, `deadline`, `rate` and `cache`.
 - `Body`, the union of `EncodedBody`, `Json`, `Form`, `Multipart` and `Raw`, the body classes a call's `body=` takes.
   `Raw(...).replayable` and `Multipart(...).replayable` say whether a retry or a 307/308 redirect can send the body
   again: not for a `Raw` async iterable, nor a `Multipart` holding a file that cannot be rewound.
@@ -34,6 +35,20 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- **A route's explicit `retry=None` now sends once, and its explicit `deadline=None` now sets no deadline.** Each
+  meant "keep the policy's", and now means off, as a call's does: `Route` takes `**options: Unpack[RouteOptions]`, so
+  leaving an option out inherits. Find them with `grep -rnE "Route\([^)]*(retry|deadline)=None"`, and leave the
+  option out where you meant the policy's.
+- **`RateRule` and `TransportPolicy(rate_limits=)` are gone: a path's budget is its route's `rate=`.** This is not
+  silent: `rate_limits=` raises `TypeError`, so every configuration that used it has to be rewritten. Write
+  `TransportPolicy(routes=(Route(fragment, rate=rate),))` for `rate_limits=(RateRule(fragment, rate),)`, merged into
+  the route for that fragment if there is one. A call's first matching route is its route, whole: its retry, deadline,
+  rate and caching come from that route alone, and what it leaves out from the policy and the client's budget, so a
+  path that a route and a separate rate rule both matched now needs one route that sets everything. A route's
+  `rate=None` paces nothing of its own there, while the server's pauses still apply; `cache=None` keeps its paths out
+  of the cache. A redirect's later hops keep the call's route, and its budget, where a hop to another path could pick
+  another rule. `Route(fragment, retry=False)`, which retried, raises `TypeError`, as do an unknown option and a
+  `routes=` entry that is not a `Route`.
 - `None` is the one spelling of off. `TransportPolicy(retry=NO_RETRY)` is `TransportPolicy(retry=None)`, which sends
   every call once unless the call gives a policy of its own. A client's `rate=` defaults to `None`, a budget that paces
   nothing of its own but still waits out the server's pauses, where it defaulted to `UNLIMITED`; write `rate=None`, or
@@ -132,6 +147,7 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Removed
 
+- `RateRule` and `TransportPolicy.rate_limits`: write `Route(fragment, rate=...)` in `routes=`.
 - `headgate.retry.NO_RETRY`: write `retry=None`. `headgate.ratelimit.UNLIMITED`: leave `rate=` out, or write
   `rate=None`.
 - `OpenTelemetryObserver.install()`: pass the observer to the client twice, as `observers=(otel,)` and

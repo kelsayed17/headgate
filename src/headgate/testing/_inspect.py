@@ -30,10 +30,11 @@ def cache_of(client: AsyncBaseClient) -> HttpCache | None:
 def budget_for(client: AsyncBaseClient, url: str | None = None) -> RateBudget:
     """Return the :class:`~headgate.RateBudget` a request to *url* spends from, as the client's rate layer chooses it.
 
-    *url* is joined to the client's ``base_url`` as a verb's is, and the first :class:`~headgate.RateRule` whose
-    fragment its path holds names the budget. Without a *url*, it is the client's default budget: the one every request
-    that no rule names spends from, built from ``rate=``. A :class:`~headgate.RateBudget` passed as ``rate=`` is
-    returned as it is, so two clients sharing it return the same object.
+    *url* is joined to the client's ``base_url`` as a verb's is, and the first :class:`~headgate.Route` whose
+    fragment its path holds names the budget, when it sets ``rate=``. Without a *url*, it is the client's default
+    budget: the one every request that no route names a rate for spends from, built from ``rate=``. A
+    :class:`~headgate.RateBudget` passed as ``rate=`` is returned as it is, so two clients sharing it return the same
+    object.
     """
     built = built_with(client)
     if url is None:

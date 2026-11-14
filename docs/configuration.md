@@ -38,18 +38,30 @@ What the stack does to every request.
 | `timeout` | `Timeouts()` | per-phase timeouts; a phase left unset takes its default, and a phase set longer than `deadline` is refused |
 | `deadline` | `60.0` | seconds the whole call may take, or `None`; see [deadlines](deadlines.md) |
 | `breaker` | `BreakerPolicy()` | the per-origin breaker, or `None`; see [breaker](breaker.md) |
-| `rate_limits` | `()` | `RateRule`s: per-path budgets; see [rate budgets](rate-budgets.md#per-path-lanes) |
 | `cache` | `None` | an `HttpCache`; see [caching](caching.md) |
 | `idempotency` | `None` | `IdempotencyKeys()` stamps a key on every POST and PATCH; see [retries](retries.md#idempotency-keys) |
-| `routes` | `()` | `Route(fragment, retry=..., deadline=...)`: per-path overrides, first match wins |
+| `routes` | `()` | `Route(fragment, retry=..., deadline=..., rate=..., cache=...)`: the per-path rules, first match wins |
 
-A `Route` changes an endpoint's retry policy or deadline in configuration, so the endpoint method stays one line:
+A `Route` changes an endpoint's retry policy, deadline, rate or caching in configuration, so the endpoint method stays
+one line:
 
 ```python
-from headgate import RetryPolicy, Route, TransportPolicy
+from headgate import Rate, Route, TransportPolicy
 
-policy = TransportPolicy(routes=(Route("/charges", retry=RetryPolicy(attempts=1)), Route("/reports", deadline=300.0)))
+policy = TransportPolicy(
+    routes=(
+        Route("/charges", retry=None),  # sent once
+        Route("/reports", deadline=300.0, rate=Rate.per_minute(6)),  # a long deadline and a lane of its own
+        Route("/live", cache=None),  # never cached
+    )
+)
 ```
+
+`Route(fragment, /, **options)` takes `RouteOptions`. An option left out takes the policy's (or, for `rate`, the
+client's budget), and `None` turns it off: `retry=None` sends once, `deadline=None` sets no deadline, `rate=None`
+paces nothing of the route's own, and `cache=None` keeps the paths out of the cache. The first route whose fragment a
+call's path holds is the call's route, whole; two routes never combine. A call's own options, and its view's, win
+over its route's. An unknown option, or a value of the wrong kind (`retry=False`), raises `TypeError`.
 
 ## HttpOptions
 

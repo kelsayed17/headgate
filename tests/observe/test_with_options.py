@@ -155,7 +155,7 @@ async def test_retry_none_sends_once() -> None:
 async def test_a_view_policy_wins_over_the_routes_and_loses_to_the_calls() -> None:
     """Retry under the view's policy despite a no-retry route, and not at all when the call says so."""
     fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
-    policy = TransportPolicy(routes=(Route("/x", retry=RetryPolicy(attempts=1)),))
+    policy = TransportPolicy(routes=(Route("/x", retry=None),))
     view = client(fake, policy=policy).with_options(retry=RetryPolicy(attempts=2))
     await view.get("x", expect=nothing)
     assert len(fake.calls) == len(("503", "200"))

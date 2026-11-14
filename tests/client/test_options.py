@@ -27,7 +27,6 @@ from headgate import (
     IdempotencyKeys,
     Next,
     Rate,
-    RateRule,
     RetryPolicy,
     Route,
     SecurityOptions,
@@ -202,20 +201,18 @@ def test_default_transport_settings_cannot_ride_a_custom_transport(build: Callab
 def test_options_freeze_and_normalize_what_they_are_given() -> None:
     """Copy headers into a read-only mapping, normalize origins and request-id names, and make sequences tuples."""
     headers = {"X-A": "1"}
-    rules = [RateRule("/r", _RATE)]
-    routes = [Route("/reports")]
+    routes = [Route("/r", rate=_RATE), Route("/reports")]
     origins = frozenset({"HTTPS://CDN.example.test:443/", "http://files.example.test:8080"})
     options = HttpOptions(
         headers=headers, request_id_headers=("X-Trace-Id",), security=SecurityOptions(trusted_origins=origins)
     )
-    policy = TransportPolicy(rate_limits=tuple(rules), routes=tuple(routes))
+    policy = TransportPolicy(routes=tuple(routes))
     headers["X-A"] = "changed"
 
     assert isinstance(options.headers, MappingProxyType)
     assert options.headers == {"X-A": "1"}
     assert options.security.trusted_origins == {"https://cdn.example.test", "http://files.example.test:8080"}
     assert options.request_id_headers == ("x-trace-id",)
-    assert policy.rate_limits == tuple(rules)
     assert policy.routes == tuple(routes)
 
 
@@ -438,9 +435,7 @@ async def test_every_place_a_deadline_is_set_refuses_the_same_values(
 async def test_a_route_gives_matching_paths_their_own_retry_policy() -> None:
     """Send a matching path under the route's retry policy and every other path under the client's."""
     script = Script(503)
-    policy = TransportPolicy(
-        retry=RetryPolicy(attempts=3), routes=(Route("/reports", retry=RetryPolicy(attempts=1)), Route("/x"))
-    )
+    policy = TransportPolicy(retry=RetryPolicy(attempts=3), routes=(Route("/reports", retry=None), Route("/x")))
     client = _client(script, policy=policy)
     with pytest.raises(UpstreamStatusError):
         await client.get("v1/reports/daily", expect=nothing)
@@ -455,7 +450,7 @@ async def test_a_route_gives_matching_paths_their_own_retry_policy() -> None:
 async def test_a_calls_retry_policy_wins_over_its_route() -> None:
     """Let a call's ``retry=RetryPolicy(...)`` win over the route's policy."""
     script = Script(503)
-    client = _client(script, policy=TransportPolicy(routes=(Route("/reports", retry=RetryPolicy(attempts=1)),)))
+    client = _client(script, policy=TransportPolicy(routes=(Route("/reports", retry=None),)))
     with pytest.raises(UpstreamStatusError):
         await client.get("reports", expect=nothing, retry=RetryPolicy(attempts=2))
 

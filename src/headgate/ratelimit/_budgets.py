@@ -9,9 +9,9 @@ of the request and puts its URL back below hishel, so the path a budget is chose
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
-from headgate._core import SYSTEM_TIMING, path_has_fragment, policy_is_disabled
+from headgate._core import SYSTEM_TIMING, CallContext, Slot, path_has_fragment, policy_is_disabled
 from headgate.ratelimit._budget import RateBudget
 from headgate.ratelimit._rate import UNPACED, Rate
 
@@ -21,9 +21,8 @@ if TYPE_CHECKING:
     import httpx2
 
     from headgate._core import Timing
-    from headgate.ratelimit._rate import RateRule
 
-__all__ = ["PathBudgets", "as_budget"]
+__all__ = ["CALL_BUDGET", "Lane", "PathBudgets", "as_budget"]
 
 
 def as_budget(rate: Rate | RateBudget | None, timing: Timing = SYSTEM_TIMING) -> RateBudget:
@@ -40,23 +39,45 @@ def as_budget(rate: Rate | RateBudget | None, timing: Timing = SYSTEM_TIMING) ->
     return RateBudget(UNPACED if rate is None else rate, timing=timing)
 
 
-class PathBudgets:
-    """A client's budgets, chosen by URL path (see the module docstring for why not by extension).
+#: The budget a call spends from, put on its context by the client once, from the call's route, so every hop of the
+#: call (a redirect's included) spends from it.
+CALL_BUDGET = Slot[RateBudget]("rate_budget")
 
-    Every budget is resolved at construction. The first rule whose fragment the URL path holds wins; any other
-    request spends from :attr:`default`.
+
+class Lane(NamedTuple):
+    """A route as the rate layer sees it: its fragment and, when it sets one, its rate (``None`` paces nothing)."""
+
+    fragment: str
+    rate: Rate | RateBudget | None = None
+    sets_rate: bool = False
+
+
+class PathBudgets:
+    """A client's budgets, chosen by its routes (see the module docstring for why by URL path, not by extension).
+
+    Every budget is resolved at construction: one per route that sets a rate, built from a bare rate, and
+    :attr:`default` for every other request. A call spends from the budget its route names, which the client puts on
+    its context; a request no call built (a token mint) is matched by its own path, the first route whose fragment it
+    holds deciding, as for a call.
     """
 
-    __slots__ = ("_rules", "default")
+    __slots__ = ("_lanes", "default")
 
     def __init__(
-        self, *, default: Rate | RateBudget | None, rules: Sequence[RateRule] = (), timing: Timing = SYSTEM_TIMING
+        self, *, default: Rate | RateBudget | None, lanes: Sequence[Lane] = (), timing: Timing = SYSTEM_TIMING
     ) -> None:
-        """Resolve the default budget and one budget per rule, in rule order, building any from a bare rate."""
+        """Resolve the default budget and one budget per lane that sets a rate, in route order."""
         self.default = as_budget(default, timing)
-        self._rules = tuple((rule.fragment, as_budget(rule.rate, timing)) for rule in rules)
+        self._lanes = tuple(
+            (lane.fragment, as_budget(lane.rate, timing) if lane.sets_rate else self.default) for lane in lanes
+        )
+
+    def for_path(self, path: str) -> RateBudget:
+        """Return the budget a call to *path* spends from: its first matching route's, else :attr:`default`."""
+        return next((budget for fragment, budget in self._lanes if path_has_fragment(path, fragment)), self.default)
 
     def for_request(self, request: httpx2.Request) -> RateBudget:
-        """Return the budget *request* spends from: the first matching rule's, else :attr:`default`."""
-        path = request.url.path
-        return next((budget for fragment, budget in self._rules if path_has_fragment(path, fragment)), self.default)
+        """Return the budget *request* spends from: its call's (:data:`CALL_BUDGET`), else the one its path names."""
+        context = CallContext.find(request)
+        budget = None if context is None else context.get(CALL_BUDGET)
+        return self.for_path(request.url.path) if budget is None else budget

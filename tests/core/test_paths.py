@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
-from headgate import RateRule, Route
+from headgate import Route
 from headgate._core import check_fragment, path_has_fragment
 from headgate.cache import HttpCache
 from headgate.ratelimit import Rate
@@ -52,7 +52,7 @@ def test_a_fragment_does_not_match_part_of_a_segment(path: str, fragment: str) -
     "build",
     [
         lambda: check_fragment("//"),
-        lambda: RateRule("", Rate.per_second(1)),
+        lambda: Route("", rate=Rate.per_second(1)),
         lambda: Route("/"),
         lambda: HttpCache(storage=cast("Any", None), paths=("/orders", "")),
     ],

@@ -1,13 +1,13 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The values a budget is configured with: ``Rate``'s units and derived spacing, ``Adaptive``'s ranges, ``RateRule``."""
+"""The values a budget is configured with: ``Rate``'s units and derived spacing, ``Adaptive``'s ranges."""
 
 from __future__ import annotations
 
 import pytest
 
-from headgate.ratelimit import Adaptive, Rate, RateBudget, RateRule
+from headgate.ratelimit import Adaptive, Rate
 
 #: A rate whose burst is several requests, and one below a request per period.
 _BURST = 5
@@ -62,13 +62,6 @@ def test_adaptive_refuses_a_factor_outside_its_range(field: str, value: float) -
     """Refuse a decrease that does not decrease, an increase that does not increase, and a floor outside ``(0, 1]``."""
     with pytest.raises(ValueError, match=field):
         Adaptive(**{field: value})
-
-
-def test_a_rule_takes_a_rate_or_a_shared_budget() -> None:
-    """Accept a bare rate, from which the client builds a budget, or a budget shared with other holders."""
-    shared = RateBudget(Rate.per_second(1))
-    assert RateRule("/a", shared).rate is shared
-    assert RateRule("/b", Rate.per_second(1)).rate == Rate.per_second(1)
 
 
 def test_a_min_rate_of_the_whole_configured_rate_is_allowed() -> None:

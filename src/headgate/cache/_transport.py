@@ -78,6 +78,7 @@ __all__ = [
     "MAX_RESPONSE_BYTES",
     "STREAMED",
     "TRACE_HEADERS",
+    "UNCACHED",
     "CacheStorageError",
     "ResilientCacheTransport",
     "host_untested",
@@ -347,6 +348,9 @@ STREAMED = Slot[bool]("streamed")
 
 #: A call's own ``max_response_bytes``, which this layer holds a body up to in place of the client's cap.
 MAX_RESPONSE_BYTES = Slot[int]("max_response_bytes")
+
+#: Marks a call whose route keeps it out of the cache (``Route(..., cache=None)``): neither looked up nor stored.
+UNCACHED = Slot[bool]("uncached")
 
 #: The request extension naming the headers a tracer stamps on each attempt (OpenTelemetry's ``traceparent``, say),
 #: which differ on every call and so are left out of what identical GETs must agree on to share a download.
@@ -697,10 +701,11 @@ class ResilientCacheTransport(AsyncCacheTransport):
         # Stamped here because only a cached client has a default TTL to give; setdefault, so a per-call one wins.
         if self._ttl is not None:
             stamp_ttl(request, self._ttl, keep=True)
-        if not self._cache.caches_request(request.method, request.url.path):
+        context = CallContext.find(request)
+        uncached = context is not None and bool(context.get(UNCACHED))
+        if uncached or not self._cache.caches_request(request.method, request.url.path):
             # Neither looked up nor stored, so nothing here needs its body: it goes up as it arrives.
             return await self._live.handle_async_request(request)
-        context = CallContext.find(request)
         streamed = context is not None and bool(context.get(STREAMED))
         if request.method != "GET" or streamed:
             response, _ = await self._fetch(request, streamed=streamed)
