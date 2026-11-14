@@ -20,9 +20,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `CallOptions`, the TypedDict of every per-call option but the body, which every verb and `paginate()` take, and
   `headgate.streaming.StreamOptions`, the options of `stream()`. `with_options(follow_redirects=...)` sets a view's
   redirect choice, and is refused on a client with a `response_check`, as each of its calls would be.
-- `Stream.retry` and `EventParser.retry`: the reconnection time the server last set with an SSE `retry:` field, kept
-  across events as the WHATWG spec says, including a `retry:` sent in a block of its own. `Event.retry` is unchanged:
-  the field in that event's own block.
+- `Stream.retry`: the reconnection time the server last set with an SSE `retry:` field, kept across events as the
+  WHATWG spec says, including a `retry:` sent in a block of its own. The `retry` of each event `aiter_events` yields
+  (an `httpx2.ServerSentEvent`) is unchanged: the field in that event's own block.
+- `Stream.aiter_lines(max_line_size=...)`: a line past it, 1 MiB by default (`None` for no limit), raises
+  `ResponseTooLargeError`, before it ends if it never does. A body with no line ending used to be held whole.
 - `as_json`, a ready reader of JSON into builtins with the standard library's `json.loads`, so a core-only install
   can read JSON without a codec. It is typed `object`, and reads strict RFC 8259 JSON as `headgate.msgspec`'s reader
   does: a body that is not UTF-8, `NaN`, `Infinity`, a number out of range and a lone surrogate are each a
@@ -135,6 +137,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A send that waits for its rate-budget turn while a hedge starts beside it records its connection and the bytes it
+  writes into its own attempt. They went into the hedge's attempt, whichever send wrote them.
 - A problem+json error body with an extension nested hundreds of levels deep, about 1 KB, raised a raw
   `RecursionError` from every call. It is now read as no problem detail, and the status error names the body.
 - An error body declaring `charset=idna` or `charset=undefined` raised a bare `UnicodeError`. It is read as UTF-8,
@@ -159,6 +163,14 @@ change the public API; such changes are listed under **Changed** and **Removed**
   remembered by the URL it was sent to as well as by the relative URL it was written as.
 - A walk remembers a 16-byte digest of each page's request, and keeps only the last 4096, instead of every request
   whole. A walk of large POST bodies held all of them.
+- `Stream.aiter_lines` reads a body whose `charset` is no text encoding (`base64`, `rot13`, `idna`, `undefined`) as
+  UTF-8, and raises `ResponseParseError` for a body its `charset` cannot decode (UTF-16 without a byte order mark).
+  Each raised a raw `AssertionError`, `TypeError` or `UnicodeError`.
+- An SSE `retry:` of any length of digits is read; one past 2**63 - 1 milliseconds is held at that. More than 4,300
+  digits raised a raw `ValueError`, and a few hundred made `stream.retry / 1000` overflow.
+- Whether an SSE event passes `max_event_size` no longer depends on how the body is cut into chunks: a comment line,
+  or the byte order mark, still arriving counted toward it. A comment is now dropped as it arrives, so one that never
+  ends holds no memory.
 - A one-shot `content=` stream is never sent twice below the retry layer either. When an HTTP/2 GOAWAY moved the
   request to a new connection, an async-iterable file went out empty and the server processed an empty POST, and an
   async generator raised a raw `httpx2.StreamConsumed`. The second read is now refused, and the call raises
