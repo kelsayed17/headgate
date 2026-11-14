@@ -17,7 +17,7 @@ import ssl
 import uuid
 from dataclasses import replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, override
 
 import httpx2
 import pytest
@@ -591,3 +591,79 @@ def test_no_rate_paces_nothing_of_its_own(rate: str | None) -> None:
 
     budget = budget_for(client)
     assert (budget.rate, budget.max_in_flight) == (Rate.per_second(1_000_000), None)
+
+
+#: ``True`` where a value of another kind goes, typed so the call type-checks.
+_TRUE: Any = True
+
+#: Each configuration value of the wrong kind, the option the refusal names, and what it says it takes. The first
+#: five are review finding M22's, which used to pass construction and fail at the first request, or be misread.
+_WRONG_KINDS: Final[list[tuple[Callable[[], object], str]]] = [
+    (lambda: TransportPolicy(idempotency=_TRUE), r"^idempotency= takes IdempotencyKeys\(\), or None"),
+    (lambda: TransportPolicy(routes=cast("Any", ("/x",))), r"^routes= takes a tuple of Route"),
+    (lambda: HttpOptions(transport=cast("Any", httpx2.HTTPTransport())), r"^transport= takes an httpx2\.AsyncBase"),
+    (lambda: HttpOptions(request_id_headers=cast("Any", "x-request-id")), r"^request_id_headers= takes a tuple of"),
+    (lambda: SecurityOptions(trusted_origins=cast("Any", "https://cdn.example")), r"^trusted_origins= takes a frozen"),
+    (lambda: TransportPolicy(cache=cast("Any", "memory")), r"^cache= takes an HttpCache, or None"),
+    (lambda: TransportPolicy(deadline=cast("Any", "60")), r"^deadline= takes seconds, or None for no deadline"),
+    (lambda: TransportPolicy(deadline=_TRUE), r"^deadline= takes seconds, or None for no deadline"),
+    (lambda: HttpOptions(headers=cast("Any", [("a", "b")])), r"^headers= takes a mapping of header names to values"),
+    (lambda: HttpOptions(follow_redirects=cast("Any", "no")), r"^follow_redirects= takes a bool"),
+    (lambda: HttpOptions(max_redirects=_TRUE), r"^max_redirects= takes a number of hops, an int"),
+    (lambda: HttpOptions(max_response_bytes=cast("Any", 1.5)), r"^max_response_bytes= takes a number of bytes, an int"),
+    (lambda: HttpOptions(response_check=cast("Any", "strict")), r"^response_check= takes a function of the response"),
+    (lambda: HttpOptions(security=cast("Any", {})), r"^security= takes SecurityOptions\(\.\.\.\)"),
+    (lambda: HttpOptions(ssl_context=_TRUE), r"^ssl_context= takes an ssl\.SSLContext, or None"),
+    (lambda: HttpOptions(limits=cast("Any", 10)), r"^limits= takes httpx2\.Limits\(\.\.\.\)"),
+    (lambda: HttpOptions(proxy=cast("Any", 8080)), r"^proxy= takes a proxy URL, or None"),
+    (lambda: HttpOptions(user_agent=cast("Any", 1)), r"^user_agent= takes a product token, or None"),
+    (lambda: HttpOptions(cookies=cast("Any", "yes")), r"^cookies= takes a bool"),
+    (lambda: SecurityOptions(allow_private_hosts=cast("Any", "no")), r"^allow_private_hosts= takes a bool"),
+    (lambda: SecurityOptions(allow_private_hosts=False, resolver=cast("Any", "8.8.8.8")), r"^resolver= takes a resol"),
+    (lambda: IdempotencyKeys(header=cast("Any", 1)), r"^header= takes a header name"),
+    (lambda: IdempotencyKeys(factory=cast("Any", "uuid")), r"^factory= takes a function returning a fresh key"),
+    (lambda: StubClient(base_url=cast("Any", None)), r"^base_url= takes the API root"),
+    (lambda: StubClient(base_url=_BASE, policy=cast("Any", {})), r"^policy= takes TransportPolicy\(\.\.\.\)"),
+    (lambda: StubClient(base_url=_BASE, http=cast("Any", {})), r"^http= takes HttpOptions\(\.\.\.\)"),
+]
+_WRONG_KIND_IDS: Final = [
+    "idempotency",
+    "routes",
+    "sync-transport",
+    "request-id-str",
+    "origins-str",
+    "cache",
+    "deadline-str",
+    "deadline-bool",
+    "headers",
+    "follow-redirects",
+    "max-redirects-bool",
+    "max-response-bytes-float",
+    "response-check",
+    "security",
+    "ssl-context",
+    "limits",
+    "proxy",
+    "user-agent",
+    "cookies",
+    "allow-private-hosts",
+    "resolver",
+    "header",
+    "factory",
+    "base-url",
+    "policy",
+    "http",
+]
+
+
+@pytest.mark.parametrize(("build", "message"), _WRONG_KINDS, ids=_WRONG_KIND_IDS)
+def test_every_option_is_checked_for_its_kind(build: Callable[[], object], message: str) -> None:
+    """Refuse a configuration value of the wrong kind where it is written, naming the option and what it takes."""
+    with pytest.raises(TypeError, match=message):
+        build()
+
+
+def test_a_one_shot_iterator_of_names_is_refused() -> None:
+    """Refuse an iterator where names go, since reading it to check it would leave nothing to keep."""
+    with pytest.raises(TypeError, match=r"^request_id_headers= takes a tuple of header names.*\(got generator\)$"):
+        HttpOptions(request_id_headers=cast("Any", (name for name in ("x-trace-id",))))

@@ -28,7 +28,7 @@ from headgate._core._events import (
     RateLimited,
     RetryScheduled,
 )
-from headgate._core._kinds import check_kind, type_text
+from headgate._core._kinds import check_callable, check_int, check_kind, check_names, type_text
 from headgate._core._origin import origin_of, origin_text
 from headgate._core._paths import check_fragment, path_has_fragment, path_segments, segments_hold, url_path
 from headgate._core._retry_after import parse_retry_after, retry_after_of
@@ -89,8 +89,11 @@ __all__ = [
     "Slot",
     "Timing",
     "asyncio_sleep",
+    "check_callable",
     "check_fragment",
+    "check_int",
     "check_kind",
+    "check_names",
     "current_timing",
     "origin_of",
     "origin_text",

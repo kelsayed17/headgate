@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import functools
 import math
+import ssl
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Unpack, final, override
@@ -29,18 +31,26 @@ from typing_extensions import TypedDict
 
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
 from headgate._call_options import check_options
-from headgate._core import check_fragment, check_kind, origin_of, origin_text, path_has_fragment
+from headgate._core import (
+    check_callable,
+    check_fragment,
+    check_int,
+    check_kind,
+    check_names,
+    origin_of,
+    origin_text,
+    path_has_fragment,
+)
 from headgate._failures import DEFAULT_REQUEST_ID_HEADERS
 from headgate.breaker import BreakerPolicy
+from headgate.cache._policy import HttpCache
 from headgate.ratelimit import Rate, RateBudget
 from headgate.retry import RetryPolicy
 
 if TYPE_CHECKING:
-    import ssl
-    from collections.abc import Callable, Iterable, Mapping
+    from collections.abc import Callable, Iterable
 
     from headgate._responses import ResponseCheck
-    from headgate.cache import HttpCache
     from headgate.security import Resolver
 
 __all__ = [
@@ -103,7 +113,11 @@ def check_deadline(deadline: float | None) -> None:
     """Raise ``ValueError`` unless *deadline* is ``None`` or a positive, finite number of seconds (NaN is not).
 
     The one check for every place a deadline is set: the policy, a route, a view and a call.
+
+    :raises TypeError: for a *deadline* that is neither a number nor ``None``, a ``bool`` included.
     """
+    if isinstance(deadline, bool) or not isinstance(deadline, int | float | None):
+        check_kind("deadline", deadline, (), "seconds, or None for no deadline")
     if deadline is not None and not (deadline > 0 and math.isfinite(deadline)):
         msg = f"deadline must be > 0 and finite, or None (got {deadline})"
         raise ValueError(msg)
@@ -215,7 +229,9 @@ class IdempotencyKeys:
     factory: Callable[[], str] = field(default=_uuid4_text)
 
     def __post_init__(self) -> None:
-        """Refuse an empty header name."""
+        """Refuse a header that is not a name, and a factory that cannot be called."""
+        check_kind("header", self.header, str, "a header name")
+        check_callable("factory", self.factory, "a function returning a fresh key")
         if not self.header:
             msg = "header must name a header"
             raise ValueError(msg)
@@ -350,6 +366,8 @@ class TransportPolicy:
         """
         check_kind("retry", self.retry, (RetryPolicy, type(None)), "a RetryPolicy, or None to send every call once")
         check_kind("breaker", self.breaker, (BreakerPolicy, type(None)), "a BreakerPolicy, or None for no breaker")
+        check_kind("cache", self.cache, (HttpCache, type(None)), "an HttpCache, or None for no cache")
+        check_kind("idempotency", self.idempotency, (IdempotencyKeys, type(None)), "IdempotencyKeys(), or None")
         check_deadline(self.deadline)
         check_timeout_fits(self.timeout, self.deadline)
         routes = tuple(self.routes) if not isinstance(self.routes, str) else self.routes
@@ -434,7 +452,11 @@ class SecurityOptions:
     resolver: Resolver | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a resolver without the SSRF guard, and normalize the trusted origins."""
+        """Refuse a value of the wrong kind and a resolver without the SSRF guard, and normalize the trusted origins."""
+        check_names("trusted_origins", self.trusted_origins, "a frozenset of origins, such as {'https://cdn.example'}")
+        check_kind("allow_private_hosts", self.allow_private_hosts, bool, "a bool")
+        if self.resolver is not None:
+            check_callable("resolver", self.resolver, "a resolver function, or None")
         if self.allow_private_hosts and self.resolver is not None:
             msg = "resolver= is used only by the SSRF guard, so it needs allow_private_hosts=False"
             raise ValueError(msg)
@@ -486,6 +508,7 @@ class HttpOptions:
 
     def __post_init__(self) -> None:
         """Validate every option, and freeze and normalize the collections."""
+        self._check_kinds()
         self._check_transport()
         _check_positive("max_response_bytes", self.max_response_bytes)
         if self.max_redirects < 0:
@@ -504,6 +527,25 @@ class HttpOptions:
             raise ValueError(msg)
         object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
         object.__setattr__(self, "request_id_headers", names)
+
+    def _check_kinds(self) -> None:
+        """Refuse a value of the wrong kind where it is written, rather than at the first request."""
+        if self.transport is not None and not isinstance(self.transport, httpx2.AsyncBaseTransport):
+            reject_upstream_httpx(self.transport, what="transport")
+            check_kind("transport", self.transport, (), "an httpx2.AsyncBaseTransport, or None")
+        check_kind("headers", self.headers, Mapping, "a mapping of header names to values")
+        check_kind("follow_redirects", self.follow_redirects, bool, "a bool")
+        check_int("max_redirects", self.max_redirects, "a number of hops, an int")
+        check_int("max_response_bytes", self.max_response_bytes, "a number of bytes, an int")
+        if self.response_check is not None:
+            check_callable("response_check", self.response_check, "a function of the response, or None")
+        check_kind("security", self.security, SecurityOptions, "SecurityOptions(...)")
+        check_kind("ssl_context", self.ssl_context, (ssl.SSLContext, type(None)), "an ssl.SSLContext, or None")
+        check_kind("limits", self.limits, httpx2.Limits, "httpx2.Limits(...)")
+        check_kind("proxy", self.proxy, (str, type(None)), "a proxy URL, or None")
+        check_kind("user_agent", self.user_agent, (str, type(None)), "a product token, or None")
+        check_kind("cookies", self.cookies, bool, "a bool")
+        check_names("request_id_headers", self.request_id_headers, "a tuple of header names, such as ('x-trace-id',)")
 
     def _check_guard(self) -> None:
         """Refuse the SSRF guard with a proxy, which would resolve the target past it."""

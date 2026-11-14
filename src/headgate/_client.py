@@ -316,12 +316,16 @@ class AsyncBaseClient:
         *observers* receive the client's events (see :mod:`headgate.events`), and *middleware* runs once per attempt,
         in order, inside the retry layer (see :class:`~headgate.Middleware`).
 
-        :raises TypeError: for an upstream ``httpx`` *auth*, for a *rate* that is neither a ``Rate`` nor a
-            ``RateBudget``, such as a bare number, for *observers* or *middleware* that are not a sequence, and for a
-            middleware that does not declare its credentials.
+        :raises TypeError: for an argument of the wrong kind: an upstream ``httpx`` *auth*, a *rate* that is neither
+            a ``Rate``, a ``RateBudget`` nor ``None``, such as a bare number, *observers* or *middleware* that are not
+            a sequence, a middleware that does not declare its credentials, and a *base_url*, *policy* or *http* that
+            is not the kind it names.
         :raises ClientConfigurationError: for a cache partitioned by credential with an *auth* that does not declare
             its credentials (see :class:`~headgate.cache.Partition`).
         """
+        check_kind("base_url", base_url, str, "the API root, such as 'https://api.example.com/v1'")
+        check_kind("policy", policy, TransportPolicy, "TransportPolicy(...)")
+        check_kind("http", http, HttpOptions, "HttpOptions(...)")
         reject_upstream_httpx(auth, what="auth")
         check_kind(
             "rate", rate, (Rate, RateBudget, type(None)), "a Rate, such as Rate.per_second(10), a RateBudget or None"
