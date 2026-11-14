@@ -29,9 +29,9 @@ from headgate._core._events import (
     RetryScheduled,
 )
 from headgate._core._kinds import check_kind, type_text
-from headgate._core._origin import origin_of, origin_text, same_origin
+from headgate._core._origin import origin_of, origin_text
 from headgate._core._paths import check_fragment, path_has_fragment
-from headgate._core._retry_after import RETRY_AFTER_STATUSES, parse_retry_after, retry_after_of
+from headgate._core._retry_after import parse_retry_after, retry_after_of
 from headgate._core._seams import (
     BREAKER_GATE,
     EXPLICIT_HEADERS,
@@ -58,7 +58,6 @@ __all__ = [
     "BREAKER_GATE",
     "EXPLICIT_HEADERS",
     "OBSERVER_FAILURES",
-    "RETRY_AFTER_STATUSES",
     "SILENT",
     "SYSTEM_TIMING",
     "AttemptFinished",
@@ -99,7 +98,6 @@ __all__ = [
     "policy_disabled",
     "policy_is_disabled",
     "retry_after_of",
-    "same_origin",
     "system_random",
     "timing_override",
     "type_text",

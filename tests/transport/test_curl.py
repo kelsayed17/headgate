@@ -180,6 +180,36 @@ def test_the_curl_cffi_internals_the_transport_overrides_or_reads_exist(owner: o
     assert hasattr(owner, name), f"curl_cffi no longer has {name}; AsyncCurlTransport relies on it"
 
 
+@pytest.mark.parametrize("value", [True, 1])
+def test_curl_following_redirects_itself_is_refused(sessions: list[_Session], value: object) -> None:
+    """Refuse ``CurlOpt.FOLLOWLOCATION``: curl would follow a redirect below every hook, the credential guard too."""
+    with pytest.raises(ValueError, match="FOLLOWLOCATION"):
+        _transport(sessions, curl_options={CurlOpt.FOLLOWLOCATION: value})
+    assert sessions == []
+
+
+def test_curl_told_not_to_follow_redirects_is_accepted(sessions: list[_Session]) -> None:
+    """Accept a ``CurlOpt.FOLLOWLOCATION`` that says what the transport does anyway: follow nothing."""
+    _, session = _transport(sessions, curl_options={CurlOpt.FOLLOWLOCATION: False})
+    assert session.init["curl_options"][CurlOpt.FOLLOWLOCATION] is False
+
+
+async def test_each_send_reads_the_body_stream_again(sessions: list[_Session]) -> None:
+    """Read the body from the request's stream on every send, so a one-shot body sent twice fails, as on the wire."""
+
+    async def body() -> AsyncIterator[bytes]:
+        yield b"a"
+        yield b"b"
+
+    transport, session = _transport(sessions)
+    request = httpx2.Request("POST", _URL, content=body())
+    await transport.handle_async_request(request)
+
+    with pytest.raises(httpx2.StreamConsumed):
+        await transport.handle_async_request(request)
+    assert [call["data"] for call in session.calls] == [b"ab"]
+
+
 def test_the_trust_store_is_certifis_whatever_the_environment_says(sessions: list[_Session]) -> None:
     """Verify TLS against certifi's bundle, which no environment variable can replace, as ``trust_env=False`` promises.
 
@@ -501,8 +531,9 @@ class _Server(ThreadingHTTPServer):
 class _Handler(BaseHTTPRequestHandler):
     """Serve the paths the real-curl tests need, over keep-alive HTTP/1.1.
 
-    ``/gzip`` is a gzip-encoded body; ``/endless`` a body that never ends; ``/late-head`` waits before an endless body's
-    head; ``/late-body`` and ``/stall`` send the head, then wait (``/stall`` after one chunk) until the test is over.
+    ``/gzip`` is a gzip-encoded body; ``/endless`` a body that never ends; ``/redirect`` a 302 to ``/ok``;
+    ``/late-head`` waits before an endless body's head; ``/late-body`` and ``/stall`` send the head, then wait
+    (``/stall`` after one chunk) until the test is over.
     """
 
     protocol_version = "HTTP/1.1"
@@ -525,8 +556,10 @@ class _Handler(BaseHTTPRequestHandler):
         release = cast("_Server", self.server).release
         if self.path == "/late-head":
             release.wait(_LATE)
-        self.send_response(200)
-        if self.path == "/ok":
+        self.send_response(httpx2.codes.FOUND if self.path == "/redirect" else httpx2.codes.OK)
+        if self.path in {"/ok", "/redirect"}:
+            if self.path == "/redirect":
+                self.send_header("Location", "/ok")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -668,3 +701,10 @@ class TestRealCurl:
                     break
                 await r.aclose()
         assert r.is_closed
+
+    async def test_a_redirect_comes_back_to_the_stack_unfollowed(self, server: str) -> None:
+        """Return a redirect as it came, so headgate's own redirect handling and the credential guard see the hop."""
+        transport = AsyncCurlTransport(impersonate="chrome")
+        async with httpx2.AsyncClient(transport=transport) as client:
+            response = await client.get(f"{server}/redirect")
+        assert (response.status_code, response.headers["location"]) == (httpx2.codes.FOUND, "/ok")

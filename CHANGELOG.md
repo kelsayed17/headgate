@@ -8,6 +8,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `CassetteFilter(replaying=True)`, for replaying a cassette (`record_mode="none"`): a token mint fails the test with
+  an `AssertionError` saying to seed the auth. A mint is never recorded, so vcrpy let an unseeded one reach the
+  network, with the auth's secret.
 - `Body`, the union of `EncodedBody`, `Json`, `Form`, `Multipart` and `Raw`, the body classes a call's `body=` takes.
   `Raw(...).replayable` and `Multipart(...).replayable` say whether a retry or a 307/308 redirect can send the body
   again: not for a `Raw` async iterable, nor a `Multipart` holding a file that cannot be rewound.
@@ -137,6 +140,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A cached call is answered only by an entry stored for the same `Accept`, so a CSV and a JSON of one URL no longer
+  answer each other. A request with a `Range` goes to the network, since no whole stored body answers it.
+- Under `Partition.SHARED`, a call that sends `Authorization` (or a cookie, or a declared credential) is never answered
+  by a stored entry that varies on it. An anonymous call's answer was served to an authenticated one.
 - A send that waits for its rate-budget turn while a hedge starts beside it records its connection and the bytes it
   writes into its own attempt. They went into the hedge's attempt, whichever send wrote them.
 - A problem+json error body with an extension nested hundreds of levels deep, about 1 KB, raised a raw
@@ -309,8 +316,24 @@ change the public API; such changes are listed under **Changed** and **Removed**
   that can be sent again (bytes, a factory, a rewindable `files=` upload) is still re-sent after a 401 re-mint; a
   one-shot stream's 401 reaches the caller as `AuthError`, and the next call mints a new token.
 
+- `AsyncCurlTransport` reads a request's body from its stream on every send, as httpx2's own transport does. It read
+  the body once and sent that copy again, so a one-shot body sent a second time was not refused.
+- `FakeTransport.calls` logs a snapshot of each send, so a request changed between attempts shows each attempt's own
+  headers; it logged the one live request object, so every attempt showed the last one's. A reply function is given
+  the snapshot.
+- `FakeTransport` reads a request's body from its stream on every send, as a network transport does. It read the body
+  once and served that copy again, so a one-shot body sent twice went unnoticed in tests.
+- `check_codec` refuses a codec that reads a numeric string (`"1"`) as an `int`. It caught only strings that are no
+  number.
+- `CassetteFilter` keeps credentials out of recorded responses too: it drops the headers it filters from requests,
+  besides `Set-Cookie`, and redacts the secret query values in a `Location` or `Content-Location`, such as a signed
+  download URL.
+
 ### Security
 
+- `AsyncCurlTransport(curl_options={CurlOpt.FOLLOWLOCATION: True})` raises `ValueError`. curl followed each redirect
+  itself, below every headgate hook, so the credential guard never saw the hop and a credential went to whatever
+  origin the redirect named. headgate follows redirects itself (`HttpOptions(follow_redirects=...)`).
 - `AsyncCurlTransport` verifies TLS against the Mozilla CA bundle `curl_cffi` installs. It took its trust store from
   `SSL_CERT_FILE`, `CURL_CA_BUNDLE` or `REQUESTS_CA_BUNDLE`, which a native transport ignores; pass `CurlOpt.CAINFO`
   in `curl_options` for a bundle of your own. libcurl still writes TLS session keys to the file `SSLKEYLOGFILE` names,
