@@ -399,7 +399,7 @@ async def test_a_pause_past_the_deadline_raises_at_once() -> None:
     with pytest.raises(BudgetPausedError) as raised:
         await budget.wait(_context(clock, deadline=_SHORT_DEADLINE))
 
-    assert (raised.value.retry_after, raised.value.status_code) == (_PAUSE, 503)
+    assert raised.value.retry_after == _PAUSE
     assert clock.sleeps == [], "a pause that cannot fit is never waited"
 
 
@@ -867,19 +867,6 @@ async def test_a_longer_pause_extends_a_running_one() -> None:
     budget.observe(_response(429, {"Retry-After": str(int(_LONG_DEADLINE))}), sent_at=clock())
 
     assert budget.pause_remaining() == _LONG_DEADLINE
-
-
-async def test_a_pause_ending_at_the_same_instant_keeps_the_status_that_asked_first() -> None:
-    """Keep the first status when a second pause would end at exactly the same instant."""
-    clock = TestClock()
-    budget = _budget(clock)
-    budget.observe(_response(429, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
-    budget.observe(_response(503, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
-
-    with pytest.raises(BudgetPausedError) as raised:
-        await budget.wait(_context(clock, deadline=_SHORT_DEADLINE))
-
-    assert raised.value.status_code == httpx2.codes.TOO_MANY_REQUESTS
 
 
 async def test_a_pause_exactly_as_long_as_the_time_left_is_waited() -> None:

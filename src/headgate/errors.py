@@ -243,7 +243,8 @@ class UpstreamStatusError(ClientError):
     """The upstream answered with a failure: a non-2xx that survived retries, or a refusal written in a 2xx body.
 
     ``status_code`` is the status the wire sent, or the endpoint's documented success status for a refusal written
-    inside a success body. It is never invented.
+    inside a success body. It is never invented, so it is ``None`` for the one refusal no response answered: a
+    :class:`RateLimitError` from the client's own rate budget, paused at the server's request past the call's deadline.
 
     ``code`` is the provider's own code where something named one (a reader's ``RefusedError``). The status ladder sets
     none, so an undeclared 4xx or 5xx carries ``code=None`` and its body only as the snippet in the message. An empty
@@ -263,7 +264,7 @@ class UpstreamStatusError(ClientError):
         self,
         message: str,
         *,
-        status_code: int,
+        status_code: int | None,
         code: str | None = None,
         body: str | None = None,
         problem: Problem | None = None,
@@ -273,13 +274,16 @@ class UpstreamStatusError(ClientError):
         self._status_code = status_code
         self._code = code
         self._problem = problem
-        tag = f"status={status_code}" if code is None else f"status={status_code}, code={code}"
+        tags = [f"status={status_code}"] if status_code is not None else []
+        if code is not None:
+            tags.append(f"code={code}")
+        tag = f" ({', '.join(tags)})" if tags else ""
         detail = "" if _is_absent(body) else f" — {body}"
-        super().__init__(f"{message} ({tag}){detail}", **details)
+        super().__init__(f"{message}{tag}{detail}", **details)
 
     @property
-    def status_code(self) -> int:
-        """The status the wire sent, or the endpoint's documented success status for a refusal in a success body."""
+    def status_code(self) -> int | None:
+        """The status the wire sent, the success status of a refusal in a success body, or ``None`` with no response."""
         return self._status_code
 
     @property

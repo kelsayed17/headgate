@@ -986,10 +986,11 @@ class AsyncBaseClient:
             msg = f"{site.method} {site.url}: never sent: {exc}"
             raise ClientTimeoutError(msg, **details) from None
         except BudgetPausedError as exc:
-            # Not the retry policy's call: the budget says when sending again will be admitted.
+            # Not the retry policy's call: the budget says when sending again will be admitted. The call got no
+            # response, so it carries no status, rather than the one the response that caused the pause had.
             details = self._site(prepared).details(retry_after=exc.retry_after)
             details["retryable"] = True
-            raise RateLimitError(str(exc), status_code=exc.status_code, **details) from None
+            raise RateLimitError(str(exc), status_code=None, **details) from None
         except httpx2.InvalidURL as exc:
             # A redirect joined past httpx2's length limit. Not an HTTPError, and not an origin failure.
             raise _invalid_url(exc, self._site(prepared)) from exc

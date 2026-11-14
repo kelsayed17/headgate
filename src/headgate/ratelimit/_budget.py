@@ -121,7 +121,6 @@ class Pacer:
         "_holes",
         "_in_flight",
         "_lock",
-        "_pause_status",
         "_paused_until",
         "_rate",
         "_shift",
@@ -159,7 +158,6 @@ class Pacer:
         self._adjusted_at = -math.inf
         self._decreased_at = -math.inf
         self._paused_until = -math.inf
-        self._pause_status = 0
         self._shift = 0.0
         self._turns: set[_Turn] = set()
         # Turns callers abandoned mid-queue, for the next callers to take (see _reserve).
@@ -262,7 +260,7 @@ class Pacer:
         with self._lock:
             now = self._clock()
             if pause is not None and now + pause > self._paused_until:
-                self._pause(now + pause, status_code=response.status_code)
+                self._pause(now + pause)
             self._adapt(response, feedback, now=now, sent_at=sent_at)
         return pause
 
@@ -344,10 +342,9 @@ class Pacer:
         turn.slept = timeline
         return due, PAUSED if turn.shift != self._shift else turn.reason
 
-    def _pause(self, until: float, *, status_code: int) -> None:
+    def _pause(self, until: float) -> None:
         """Pause until *until*, shifting the timeline so the earliest waiting turn falls due no sooner than that."""
         self._paused_until = until
-        self._pause_status = status_code
         self._holes.clear()
         if self._turns:
             first = min(turn.send for turn in self._turns) + self._shift
@@ -368,7 +365,7 @@ class Pacer:
     def _paused_error(self, pause: float) -> BudgetPausedError:
         """Build the error for a pause of *pause* seconds that outlasts a call's deadline."""
         msg = f"rate budget paused for {pause:.3g}s at the server's request, past the call's deadline"
-        return BudgetPausedError(msg, retry_after=pause, status_code=self._pause_status)
+        return BudgetPausedError(msg, retry_after=pause)
 
 
 def _send_time(turn: _Turn) -> float:

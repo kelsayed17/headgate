@@ -45,7 +45,8 @@ quote it when you contact the provider.
 
 `UpstreamStatusError` (and `AuthError`, `RateLimitError`) adds:
 
-- `status_code`: the status the wire sent, never invented. A refusal written in a 200 body carries 200;
+- `status_code`: the status the wire sent, never invented. A refusal written in a 200 body carries 200, and the rate
+  budget's own refusal, which no response answered, carries `None`, so code that orders it (`>=`) narrows it first;
 - `code`: the provider's own code, where a reader's `RefusedError` named one;
 - `problem`: the RFC 9457 problem detail, when the body was `application/problem+json` (`type`, `title`, `status`,
   `detail`, `instance`, and `extensions` read-only at any depth). The message then quotes its title and detail;

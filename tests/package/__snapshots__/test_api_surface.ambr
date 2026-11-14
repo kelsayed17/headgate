@@ -68,7 +68,7 @@
   '''
   module headgate.errors
   __all__ = ['AuthError', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'DecodeError', 'ErrorDetails', 'ForbiddenDestinationError', 'PageLimitError', 'Problem', 'RateLimitError', 'RefusedError', 'ResponseParseError', 'ResponseTooLargeError', 'TransportError', 'UpstreamStatusError']
-  class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+  class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
   class CircuitOpenError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class ClientConfigurationError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class ClientError(Exception)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
@@ -101,7 +101,7 @@
       field detail: str | None = None
       field instance: str | None = None
       field extensions: Mapping[str, object] = <factory>
-  class RateLimitError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+  class RateLimitError(UpstreamStatusError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
   class RefusedError(Exception)(message: 'str', *, code: 'str | None' = None, kind: 'type[UpstreamStatusError]' = <class 'headgate.errors.UpstreamStatusError'>) -> 'None'
       property code
       property kind
@@ -111,7 +111,7 @@
       property status_code
   class ResponseTooLargeError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class TransportError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  class UpstreamStatusError(ClientError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+  class UpstreamStatusError(ClientError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
       property code
       property problem
       property status_code
@@ -507,7 +507,7 @@
       def put(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def stream(self, url: 'CallUrl', *, method: 'Method' = 'GET', last_event_id: 'str | None' = None, **options: 'Unpack[StreamOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
       def with_options(self, **options: 'Unpack[ViewOptions]') -> 'Self'
-  class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+  class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
   class BearerAuth(StaticHeaderAuth)(token: 'str') -> 'None'
   type Body = EncodedBody | Json | Form | Multipart | Raw
   class BodyCursor(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
@@ -702,7 +702,7 @@
       property max_in_flight
       property pause_remaining
       property rate
-  class RateLimitError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+  class RateLimitError(UpstreamStatusError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
   class Raw(object)(content: 'RawContent') -> 'None'
       field content: RawContent
       property replayable
@@ -776,7 +776,7 @@
       field cache: HttpCache | None = None
       field idempotency: IdempotencyKeys | None = None
       field routes: tuple[Route, ...] = ()
-  class UpstreamStatusError(ClientError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+  class UpstreamStatusError(ClientError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
       property code
       property problem
       property status_code

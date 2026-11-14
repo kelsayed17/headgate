@@ -42,6 +42,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- **`UpstreamStatusError.status_code` is `int | None`, a type change that ty and pyright flag wherever it is
+  ordered.** A `RateLimitError` from the client's own rate budget, paused at the server's request past the call's
+  deadline, carries `status_code=None`, and its message has no status tag, since the call got no response. Before, it
+  carried the status of the earlier response that asked for the pause. A 429 or a refusal in a 200 body still carries
+  its status. Code that compares `status_code` with `<` or `>=` narrows it first (`if exc.status_code is not None`);
+  `==`, `in` and `match` need no change.
 - `retryable` has one meaning on every error: sending the call again later could succeed, and is safe as the call
   stands. `CircuitOpenError.retryable` is now `True`, with the cooldown left as `retry_after`, as the rate budget's
   own refusals already were. The recipe in `docs/errors.md` reschedules it rather than re-raising it.
