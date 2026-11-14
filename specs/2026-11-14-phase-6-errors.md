@@ -45,9 +45,10 @@ Phase 5 is being planned at the same time (the `hg-phase-3` session). Both phase
 
 - **`errors.py` and `_failures.py`.** Phase 5's rename changes the docstrings that name `AsyncBaseClient`. This phase changes the classes and `CallSite`. The overlap is text, not design.
 - **`_client.py`.** This phase changes only the `except` arms of `_exchange`, where the breaker and budget refusals are raised, and the two `_site` helpers. Phase 5 renames the class and changes its construction.
-- **`_core/_context.py`.** This phase adds the call's `sent` record to `CallContext`. Phase 5 makes a read-only `CallInfo` view of the context public.
+- **`_core/_context.py`.** This phase adds the call's `sent` record to `CallContext`. Phase 5 adds a `call_info()` function beside it, which reads the attempt and the time left. `CallInfo` stays in `_core`.
+- **`retry/_transport.py` and `ratelimit/_budget.py`.** This phase changes `_Sequence._send` and drops the budget's `_pause_status`. Phase 5 changes the retry ledger's lookup and `RateBudget.__init__`'s `timing=`. Both are nearby, but neither changes the other's lines.
 
-**Phase 6 lands first.** It is smaller, renames nothing, and adds no public module. Phase 5's rename then applies mechanically over it, and its public `CallInfo` can decide whether to show `sent` with the field already in place. The phase 5 planner has been asked to confirm. The answer is recorded in the PR before this plan is approved.
+**Phase 6 lands first.** It is smaller, renames nothing, and adds no public module. Phase 5's rename then applies mechanically over it, last, on top of these tests, and its `call_info()` can decide whether to show `sent` with the field already in place. The phase 5 planner agreed, and its plan (#96) recommends the same order.
 
 ## Public signatures after this phase
 
