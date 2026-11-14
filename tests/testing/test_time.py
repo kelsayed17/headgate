@@ -16,11 +16,10 @@ import httpx2
 import pytest
 
 import headgate.timing
-from headgate import Client, HttpOptions, Rate, RateBudget, RetryPolicy, TransportPolicy, nothing
+from headgate import Client, HttpOptions, Rate, RateBudget, RetryPolicy, TransportPolicy, UpstreamStatusError, nothing
 from headgate._core import Timing as CoreTiming
 from headgate._core import current_timing
 from headgate.breaker import BreakerRegistry, CircuitBreaker
-from headgate.errors import UpstreamStatusError
 from headgate.retry import Backoff, RetryBudget, RetryShare
 from headgate.testing import FakeTransport, TestClock, instant_retries
 from headgate.testing._time import _SETTLE_TURNS

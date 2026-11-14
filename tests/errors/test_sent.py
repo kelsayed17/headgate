@@ -24,18 +24,20 @@ from headgate import (
     CachedTokenAuth,
     Client,
     ClientError,
+    ClientTimeoutError,
     HttpOptions,
     Json,
     Minted,
     RetryPolicy,
     Timeouts,
+    TransportError,
     TransportPolicy,
     as_bytes,
     body_reader,
     nothing,
 )
 from headgate.breaker import BreakerRegistry
-from headgate.errors import CircuitOpenError, ClientTimeoutError, ResponseParseError, TransportError
+from headgate.errors import CircuitOpenError, ResponseParseError
 from headgate.retry import Backoff
 
 if TYPE_CHECKING:

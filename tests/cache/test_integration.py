@@ -20,11 +20,9 @@ import httpx2
 import pytest
 import time_machine
 
-from headgate import RequestOptions
+from headgate import HttpCache, Rate, RequestOptions
 from headgate._client import Client
-from headgate.cache import HttpCache
 from headgate.cache._transport import served_from_cache
-from headgate.ratelimit import Rate
 from tests.cache._helpers import CloseCountingStorage, series_rules, stamped_ttl, stub_client
 from tests.support.responses import RESPONSE
 

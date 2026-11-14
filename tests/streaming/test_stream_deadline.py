@@ -15,8 +15,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from headgate import Client, Timeouts, TransportPolicy
-from headgate.errors import ClientTimeoutError
+from headgate import Client, ClientTimeoutError, Timeouts, TransportPolicy
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable

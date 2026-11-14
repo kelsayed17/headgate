@@ -11,8 +11,9 @@ import httpcore2
 import httpx2
 import pytest
 
+from headgate import RetryPolicy
 from headgate._core import SendProgress
-from headgate.retry import RetryBudget, RetryPolicy, RetryShare
+from headgate.retry import RetryBudget, RetryShare
 from headgate.retry._budget import RetryLedger
 from headgate.retry._classify import Attempted, classify, refused_stream
 from headgate.testing import TestClock

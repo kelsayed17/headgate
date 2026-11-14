@@ -23,14 +23,25 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate import EncodedBody, Expect, Form, HttpOptions, Json, Multipart, Raw, TransportPolicy, Writer
+from headgate import (
+    AuthError,
+    EncodedBody,
+    Expect,
+    Form,
+    HttpOptions,
+    Json,
+    Multipart,
+    Rate,
+    Raw,
+    RetryPolicy,
+    TransportPolicy,
+    UpstreamStatusError,
+    Writer,
+)
 from headgate import msgspec as flavor
 from headgate._client import Client
 from headgate._responses import as_bytes, nothing
-from headgate.errors import AuthError, UpstreamStatusError
 from headgate.msgspec import reader
-from headgate.ratelimit import Rate
-from headgate.retry import RetryPolicy
 from tests.support.responses import RESPONSE
 
 _VALUE = 7

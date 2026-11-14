@@ -21,6 +21,7 @@ from headgate import (
     HttpOptions,
     Rate,
     RateBudget,
+    RateLimitError,
     RetryPolicy,
     Route,
     TransportPolicy,
@@ -29,7 +30,6 @@ from headgate import (
     nothing,
 )
 from headgate._core import CallContext
-from headgate.errors import RateLimitError
 from headgate.ratelimit._budgets import CALL_BUDGET
 from headgate.testing import budget_for
 from tests.cache._helpers import every_get_rules, stub_client

@@ -25,6 +25,7 @@ from headgate import (
     Expect,
     HttpOptions,
     IdempotencyKeys,
+    Rate,
     Reader,
     RetryPolicy,
     TransportPolicy,
@@ -34,7 +35,6 @@ from headgate import (
 from headgate.errors import PageLimitError
 from headgate.msgspec import reader, writer
 from headgate.pagination import BodyCursor, BodyOffset, Cursor, LinkHeader, NextUrl, Offset, PageRequest, WritingPager
-from headgate.ratelimit import Rate
 from headgate.retry import IDEMPOTENT_METHODS
 
 if TYPE_CHECKING:

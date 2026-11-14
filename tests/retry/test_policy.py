@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 import headgate.retry
-from headgate.retry import IDEMPOTENT_METHODS, RETRY_STATUSES, Backoff, Hedge, RetryPolicy, RetryShare
+from headgate import RetryPolicy
+from headgate.retry import IDEMPOTENT_METHODS, RETRY_STATUSES, Backoff, Hedge, RetryShare
 from headgate.timing import Timing
 
 if TYPE_CHECKING:

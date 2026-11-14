@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from headgate._options import Timeouts
-    from headgate.retry import RetryPolicy
+    from headgate.retry._policy import RetryPolicy
 
 __all__ = ["KEEP", "ROOT_DEFAULTS", "VIEW_KEYS", "Keep", "ViewDefaults", "ViewOptions"]
 

@@ -18,8 +18,7 @@ from headgate.retry._policy import (
     Backoff,
     Hedge,
     RetryBudget,
-    RetryPolicy,
     RetryShare,
 )
 
-__all__ = ["IDEMPOTENT_METHODS", "RETRY_STATUSES", "Backoff", "Hedge", "RetryBudget", "RetryPolicy", "RetryShare"]
+__all__ = ["IDEMPOTENT_METHODS", "RETRY_STATUSES", "Backoff", "Hedge", "RetryBudget", "RetryShare"]

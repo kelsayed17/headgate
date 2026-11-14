@@ -12,10 +12,9 @@ from __future__ import annotations
 
 import pytest
 
+from headgate import ClientError, Rate
 from headgate._client import Client
 from headgate._responses import as_bytes
-from headgate.errors import ClientError
-from headgate.ratelimit import Rate
 from tests.support.breakers import failures
 
 

@@ -11,7 +11,6 @@ Self-contained: it imports only ``httpx2``, the standard library and :mod:`headg
 
 from headgate._core import BreakerState
 from headgate.breaker._breaker import CircuitBreaker
-from headgate.breaker._policy import BreakerPolicy
 from headgate.breaker._registry import BreakerRegistry
 
-__all__ = ["BreakerPolicy", "BreakerRegistry", "BreakerState", "CircuitBreaker"]
+__all__ = ["BreakerRegistry", "BreakerState", "CircuitBreaker"]

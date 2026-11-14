@@ -17,9 +17,9 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, _auth
+from headgate import AuthError, Client, HttpOptions, TransportError, _auth
 from headgate._auth import AUTH_HOP, FRESH_TOKEN_S, CachedTokenAuth, Minted, failed_on_auth_hop
-from headgate.errors import AuthError, ClientConfigurationError, TransportError
+from headgate.errors import ClientConfigurationError
 from headgate.testing import TestClock
 from tests.support.responses import RESPONSE
 from tests.support.tokens import TEST_BEARER, premint

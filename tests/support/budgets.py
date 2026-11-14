@@ -20,8 +20,8 @@ import httpx2
 from headgate.ratelimit._transport import RateLimitTransport
 
 if TYPE_CHECKING:
+    from headgate import RateBudget
     from headgate._client import Client
-    from headgate.ratelimit import RateBudget
 
 
 def _is_stack_node(obj: object) -> bool:

@@ -14,16 +14,16 @@ from headgate import (
     HttpOptions,
     IdempotencyKeys,
     Json,
+    Rate,
     RateLimitError,
     RetryPolicy,
+    TransportError,
     TransportPolicy,
     UpstreamStatusError,
     body_reader,
     nothing,
 )
 from headgate._core import RetryScheduled, Timing, timing_override
-from headgate.errors import TransportError
-from headgate.ratelimit import Rate
 from headgate.retry import Backoff, RetryShare
 from headgate.testing import ConnectFail, DropMidBody, FaultyTransport, Respond, Slow, TestClock
 from tests.support.breakers import failures

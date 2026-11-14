@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate import Client, Expect, HttpOptions, TransportPolicy, as_bytes
-from headgate.cache import Fresh, HttpCache, NotModified, Validator, conditional
+from headgate import Client, Expect, HttpCache, HttpOptions, TransportPolicy, as_bytes
+from headgate.cache import Fresh, NotModified, Validator, conditional
 from tests.cache._helpers import every_get_rules
 
 if TYPE_CHECKING:

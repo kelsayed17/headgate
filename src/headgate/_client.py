@@ -127,9 +127,9 @@ from headgate.errors import (
 )
 from headgate.pagination import PageRequest, WritingPager
 from headgate.pagination._paginated import PageWalk, check_page_budget
-from headgate.ratelimit import Rate, RateBudget
-from headgate.ratelimit._budget import BudgetPausedError
+from headgate.ratelimit._budget import BudgetPausedError, RateBudget
 from headgate.ratelimit._budgets import CALL_BUDGET, Lane, PathBudgets
+from headgate.ratelimit._rate import Rate
 from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE
 from headgate.streaming._stream import OpenStream
 
@@ -144,9 +144,10 @@ if TYPE_CHECKING:
     from headgate._responses import ResponseCheck
     from headgate.breaker._breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
-    from headgate.cache import HttpCache
-    from headgate.pagination import Pager, Paginated
-    from headgate.retry import RetryPolicy
+    from headgate.cache._policy import HttpCache
+    from headgate.pagination import Pager
+    from headgate.pagination._paginated import Paginated
+    from headgate.retry._policy import RetryPolicy
     from headgate.streaming import Stream
 
 __all__ = ["Built", "Client", "Method", "built_with"]

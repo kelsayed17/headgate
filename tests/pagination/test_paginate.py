@@ -16,12 +16,11 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from headgate import Client, ClientError, Expect, HttpOptions, Reader, UpstreamStatusError
+from headgate import Client, ClientError, Expect, HttpOptions, Rate, Reader, UpstreamStatusError
 from headgate._client import _paired
 from headgate.errors import ForbiddenDestinationError, PageLimitError, ResponseParseError
 from headgate.msgspec import reader
 from headgate.pagination import Cursor, LinkHeader, NextUrl, Offset, PageNumber, PageRequest
-from headgate.ratelimit import Rate
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence

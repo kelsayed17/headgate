@@ -13,10 +13,8 @@ from __future__ import annotations
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, TransportPolicy, as_bytes
+from headgate import Client, HttpOptions, RetryPolicy, TransportPolicy, UpstreamStatusError, as_bytes
 from headgate._failures import body_snippet
-from headgate.errors import UpstreamStatusError
-from headgate.retry import RetryPolicy
 
 #: Codecs Python registers that are not text encodings.
 _NOT_TEXT = ["base64", "hex", "rot13", "zlib", "idna", "undefined", "no-such-charset"]

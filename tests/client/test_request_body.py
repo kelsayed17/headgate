@@ -17,8 +17,19 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import pytest
 
-from headgate import Client, EncodedBody, Form, HttpOptions, Json, Multipart, Rate, Raw, TransportPolicy, nothing
-from headgate.errors import UpstreamStatusError
+from headgate import (
+    Client,
+    EncodedBody,
+    Form,
+    HttpOptions,
+    Json,
+    Multipart,
+    Rate,
+    Raw,
+    TransportPolicy,
+    UpstreamStatusError,
+    nothing,
+)
 from tests.support.wire import Script
 
 if TYPE_CHECKING:

@@ -70,8 +70,8 @@ from headgate._responses import (
     nothing,
 )
 from headgate._view import ViewOptions
-from headgate.breaker import BreakerPolicy
-from headgate.cache import HttpCache
+from headgate.breaker._policy import BreakerPolicy
+from headgate.cache._policy import HttpCache
 from headgate.errors import (
     AuthError,
     ClientError,
@@ -80,11 +80,10 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
-from headgate.pagination import (
-    Paginated,
-)
-from headgate.ratelimit import Rate, RateBudget
-from headgate.retry import RetryPolicy
+from headgate.pagination._paginated import Paginated
+from headgate.ratelimit._budget import RateBudget
+from headgate.ratelimit._rate import Rate
+from headgate.retry._policy import RetryPolicy
 
 __all__ = [
     "DEFAULT_TIMEOUTS",

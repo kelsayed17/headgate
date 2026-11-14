@@ -11,10 +11,10 @@ import httpx2
 from hypothesis import given
 from hypothesis import strategies as st
 
-from headgate import Expect, nothing
+from headgate import Expect, RetryPolicy, nothing
 from headgate._codec import drop_none
 from headgate._core import retry_after_of
-from headgate.retry import Backoff, RetryPolicy
+from headgate.retry import Backoff
 
 #: The longest a backoff wait may be: the default ``Backoff.max_wait``.
 _MAX_WAIT = 5.0

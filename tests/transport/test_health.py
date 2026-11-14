@@ -17,9 +17,9 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage, Entry
 
+from headgate import HttpCache
 from headgate._core import OBSERVER_FAILURES
 from headgate.breaker import BreakerRegistry, BreakerState
-from headgate.cache import HttpCache
 from headgate.cache._transport import CACHE_DEGRADATIONS, CACHE_DEGRADED_EXT, ResilientCacheTransport
 from headgate.health import breaker_states, cache_degradations, observer_failures
 

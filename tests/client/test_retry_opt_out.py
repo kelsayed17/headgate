@@ -16,10 +16,9 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
+from headgate import Rate, UpstreamStatusError
 from headgate._client import Client
 from headgate._core import CallContext
-from headgate.errors import UpstreamStatusError
-from headgate.ratelimit import Rate
 from headgate.retry._policy import RETRY_POLICY, SEND_ONCE
 from tests.cache._helpers import stamped_ttl
 from tests.support.responses import RESPONSE

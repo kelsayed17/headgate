@@ -14,8 +14,18 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, QueryParamAuth, Rate, RetryPolicy, TransportPolicy, as_bytes, nothing
-from headgate.errors import TransportError, UpstreamStatusError
+from headgate import (
+    Client,
+    HttpOptions,
+    QueryParamAuth,
+    Rate,
+    RetryPolicy,
+    TransportError,
+    TransportPolicy,
+    UpstreamStatusError,
+    as_bytes,
+    nothing,
+)
 from headgate.events import AttemptFinished, CallFinished, CallInfo, CallStarted, Event
 from headgate.health import observer_failures
 from headgate.testing import FakeTransport, Reply, TestClock

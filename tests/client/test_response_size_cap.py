@@ -20,11 +20,10 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import Expect, HttpOptions
+from headgate import ClientError, Expect, HttpOptions, Rate
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
 from headgate._client import Client
-from headgate.errors import ClientError, ResponseTooLargeError
-from headgate.ratelimit import Rate
+from headgate.errors import ResponseTooLargeError
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:

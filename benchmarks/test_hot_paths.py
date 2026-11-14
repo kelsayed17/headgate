@@ -22,16 +22,15 @@ import msgspec
 import pytest
 from pydantic import BaseModel
 
+from headgate import Rate, RetryPolicy
 from headgate import msgspec as msgspec_flavor
 from headgate import pydantic as pydantic_flavor
 from headgate._core import SendProgress, retry_after_of
 from headgate._failures import CallSite, status_error
 from headgate._url import escape_segment, redact_secrets, render_path, sanitize_url
 from headgate.breaker import CircuitBreaker
-from headgate.ratelimit import Rate
 from headgate.ratelimit._budget import Pacer
 from headgate.ratelimit._budgets import Lane, PathBudgets
-from headgate.retry import RetryPolicy
 from headgate.retry._classify import Attempted, classify
 
 if TYPE_CHECKING:

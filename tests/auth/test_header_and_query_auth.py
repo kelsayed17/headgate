@@ -12,10 +12,9 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Unpack
 
-from headgate import Client
+from headgate import Client, Rate
 from headgate._auth import QueryParamAuth, StaticHeaderAuth
 from headgate._url import is_secret_param
-from headgate.ratelimit import Rate
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:

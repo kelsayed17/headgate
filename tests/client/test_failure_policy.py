@@ -12,19 +12,20 @@ from __future__ import annotations
 import httpx2
 import pytest
 
-from headgate import HttpOptions, TransportPolicy
-from headgate._client import Client
-from headgate.errors import (
+from headgate import (
     AuthError,
     ClientTimeoutError,
+    HttpOptions,
+    Rate,
     RateLimitError,
-    ResponseParseError,
+    RetryPolicy,
     TransportError,
+    TransportPolicy,
     UpstreamStatusError,
 )
+from headgate._client import Client
+from headgate.errors import ResponseParseError
 from headgate.msgspec import reader
-from headgate.ratelimit import Rate
-from headgate.retry import RetryPolicy
 
 _POLICY = TransportPolicy(retry=RetryPolicy(attempts=1))
 

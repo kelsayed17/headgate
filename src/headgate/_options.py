@@ -43,10 +43,11 @@ from headgate._core import (
     path_has_fragment,
 )
 from headgate._failures import DEFAULT_REQUEST_ID_HEADERS
-from headgate.breaker import BreakerPolicy
+from headgate.breaker._policy import BreakerPolicy
 from headgate.cache._policy import HttpCache
-from headgate.ratelimit import Rate, RateBudget
-from headgate.retry import RetryPolicy
+from headgate.ratelimit._budget import RateBudget
+from headgate.ratelimit._rate import Rate
+from headgate.retry._policy import RetryPolicy
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable

@@ -14,10 +14,9 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Client, HttpCache, HttpOptions, RateLimitError, TransportPolicy
+from headgate import Client, HttpCache, HttpOptions, Rate, RateBudget, RateLimitError, TransportPolicy
 from headgate._core import AttemptFinished, CallFinished, RateLimited, Timing
 from headgate.cache._transport import CACHE_DEGRADATIONS
-from headgate.ratelimit import Rate, RateBudget
 from headgate.testing import TestClock
 from tests.support.breakers import failures
 from tests.support.events import Recorder

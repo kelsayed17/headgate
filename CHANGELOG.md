@@ -78,6 +78,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- **Each top-level name is exported from the top level only.** `RetryPolicy`, `Rate`, `RateBudget`, `BreakerPolicy`,
+  `HttpCache` and `Paginated` are no longer re-exported by `headgate.retry`, `headgate.ratelimit`, `headgate.breaker`,
+  `headgate.cache` and `headgate.pagination`: write `from headgate import RetryPolicy`, since
+  `from headgate.retry import RetryPolicy` raises `ImportError`. The six top-level errors, `ClientError`,
+  `TransportError`, `ClientTimeoutError`, `UpstreamStatusError`, `AuthError` and `RateLimitError`, leave
+  `headgate.errors.__all__`: `from headgate.errors import ClientError` still works at run time, since the module
+  defines them, but type checkers and the docs now point to `headgate.ClientError`.
 - A `params=` value no query parameter can carry raises `TypeError` naming the parameter, before anything is sent,
   rather than going out as its Python `repr` (`filter=%7B%27a%27%3A+1%7D`). The refused shapes are:
   - a mapping (`dict`, or any other `Mapping`);

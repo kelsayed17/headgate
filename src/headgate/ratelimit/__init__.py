@@ -11,7 +11,6 @@ layer that spends the budgets is the client's own, in this package's private mod
 Self-contained: it imports only ``httpx2``, the standard library and :mod:`headgate._core`.
 """
 
-from headgate.ratelimit._budget import RateBudget
-from headgate.ratelimit._rate import Adaptive, Rate
+from headgate.ratelimit._rate import Adaptive
 
-__all__ = ["Adaptive", "Rate", "RateBudget"]
+__all__ = ["Adaptive"]

@@ -18,19 +18,22 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import MAX_MINT_RESPONSE_BYTES, CachedTokenAuth, Client, HttpOptions, Minted, Timeouts, TransportPolicy
-from headgate._responses import as_bytes, nothing
-from headgate.errors import (
+from headgate import (
+    MAX_MINT_RESPONSE_BYTES,
     AuthError,
-    ClientConfigurationError,
+    CachedTokenAuth,
+    Client,
     ClientTimeoutError,
-    DecodeError,
-    ResponseParseError,
-    ResponseTooLargeError,
+    HttpOptions,
+    Minted,
+    RetryPolicy,
+    Timeouts,
     TransportError,
+    TransportPolicy,
     UpstreamStatusError,
 )
-from headgate.retry import RetryPolicy
+from headgate._responses import as_bytes, nothing
+from headgate.errors import ClientConfigurationError, DecodeError, ResponseParseError, ResponseTooLargeError
 from headgate.testing import FakeTransport
 from tests.support.breakers import failures
 

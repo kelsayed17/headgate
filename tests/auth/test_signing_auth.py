@@ -14,11 +14,21 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import Client, HttpCache, HttpOptions, Json, Next, RetryPolicy, SigningAuth, TransportPolicy
+from headgate import (
+    AuthError,
+    Client,
+    HttpCache,
+    HttpOptions,
+    Json,
+    Next,
+    Rate,
+    RateBudget,
+    RetryPolicy,
+    SigningAuth,
+    TransportPolicy,
+)
 from headgate._core import CredentialStamper, Timing
 from headgate._url import is_secret_param
-from headgate.errors import AuthError
-from headgate.ratelimit import Rate, RateBudget
 from headgate.retry import Hedge
 from headgate.testing import TestClock, instant_retries
 from tests.support.responses import RESPONSE

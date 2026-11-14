@@ -17,9 +17,8 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import CachedTokenAuth, Client, HttpOptions, Raw, SigningAuth
+from headgate import AuthError, CachedTokenAuth, Client, HttpOptions, Raw, SigningAuth
 from headgate._responses import nothing
-from headgate.errors import AuthError
 from tests.support.tokens import premint
 
 if TYPE_CHECKING:

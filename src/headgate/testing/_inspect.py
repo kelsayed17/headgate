@@ -18,7 +18,7 @@ from headgate._client import built_with
 if TYPE_CHECKING:
     from headgate import Client, HttpCache
     from headgate.breaker import BreakerRegistry
-    from headgate.ratelimit import RateBudget
+    from headgate.ratelimit._budget import RateBudget
 
 __all__ = ["breakers_of", "budget_for", "cache_of"]
 

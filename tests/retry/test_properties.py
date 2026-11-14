@@ -24,8 +24,9 @@ import httpx2
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from headgate import RetryPolicy
 from headgate._core import CallContext, CallInfo
-from headgate.retry import IDEMPOTENT_METHODS, Backoff, RetryBudget, RetryPolicy, RetryShare
+from headgate.retry import IDEMPOTENT_METHODS, Backoff, RetryBudget, RetryShare
 from headgate.retry._tracking import SendTrackingTransport
 from headgate.retry._transport import RetryTransport
 from headgate.testing import (

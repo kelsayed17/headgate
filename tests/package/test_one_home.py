@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import re
 from collections import defaultdict
+from pathlib import Path
 
 import pytest
 
 import headgate
+import headgate.errors
 
 
 def _public_modules() -> list[str]:
@@ -43,3 +46,43 @@ def test_the_pagers_and_the_finer_errors_are_not_at_the_top_level(name: str) -> 
     """Leave a pager to ``headgate.pagination`` and an error outside the six to ``headgate.errors``."""
     assert not hasattr(headgate, name)
     assert name not in headgate.__all__
+
+
+@pytest.mark.parametrize(
+    ("module_name", "name"),
+    [
+        ("headgate.retry", "RetryPolicy"),
+        ("headgate.ratelimit", "Rate"),
+        ("headgate.ratelimit", "RateBudget"),
+        ("headgate.breaker", "BreakerPolicy"),
+        ("headgate.cache", "HttpCache"),
+        ("headgate.pagination", "Paginated"),
+    ],
+)
+def test_a_top_level_name_is_not_re_exported_by_its_subpackage(module_name: str, name: str) -> None:
+    """Hold no such attribute, so importing the name from the subpackage that re-exported it raises ``ImportError``."""
+    module = importlib.import_module(module_name)
+    assert not hasattr(module, name)
+    assert name not in module.__all__
+
+
+@pytest.mark.parametrize("name", ["ClientError", "TransportError", "UpstreamStatusError", "RateLimitError"])
+def test_a_top_level_error_is_defined_in_errors_but_exported_from_the_top_level(name: str) -> None:
+    """Keep the error importable from ``headgate.errors``, its defining module, but list it in ``headgate`` only."""
+    assert getattr(headgate.errors, name) is getattr(headgate, name)
+    assert name not in headgate.errors.__all__
+    assert name in headgate.__all__
+
+
+def test_the_errors_guide_names_each_errors_one_home() -> None:
+    """List every exported error class in the errors guide's import table, beside its module."""
+    guide = (Path(__file__).parents[2] / "docs" / "errors.md").read_text()
+    listed = dict(re.findall(r"^\| `(\w+)` \| `(headgate(?:\.errors)?)` \|$", guide, re.MULTILINE))
+    exported = {
+        name: module.__name__
+        for module in (headgate, headgate.errors)
+        for name in module.__all__
+        if isinstance(error := getattr(module, name), type) and issubclass(error, Exception)
+    }
+
+    assert listed == exported

@@ -130,7 +130,8 @@ which runs on the decoded value and returns a refusal or `None`:
 ```python
 import msgspec
 
-from headgate.errors import RateLimitError, RefusedError
+from headgate.errors import RefusedError
+from headgate import RateLimitError
 from headgate.msgspec import reader
 
 

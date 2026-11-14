@@ -20,13 +20,14 @@ from headgate import (
     BearerAuth,
     CachedTokenAuth,
     Client,
+    HttpCache,
     HttpOptions,
     Minted,
     QueryParamAuth,
     StaticHeaderAuth,
     TransportPolicy,
 )
-from headgate.cache import HttpCache, Partition
+from headgate.cache import Partition
 from headgate.cache._credentials import CALLER_CREDENTIALS, CallerCredentials, CredentialScope, mark_caller_credentials
 from headgate.cache._transport import served_from_cache
 from tests.cache._helpers import series_rules

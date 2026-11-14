@@ -2,11 +2,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.breaker]
   '''
   module headgate.breaker
-  __all__ = ['BreakerPolicy', 'BreakerRegistry', 'BreakerState', 'CircuitBreaker']
-  class BreakerPolicy(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0, registry: 'BreakerRegistry | None' = None) -> 'None'
-      field failure_threshold: int = 5
-      field recovery_timeout: float = 60.0
-      field registry: BreakerRegistry | None = None
+  __all__ = ['BreakerRegistry', 'BreakerState', 'CircuitBreaker']
   class BreakerRegistry(object)(*, max_hosts: 'int' = 1024, timing: 'Timing | None' = None) -> 'None'
       def bind(self, *, failure_threshold: 'int', recovery_timeout: 'float') -> 'None'
       def breaker_for(self, origin: 'httpx2.Origin | httpx2.URL | str', *, failure_threshold: 'int', recovery_timeout: 'float') -> 'CircuitBreaker'
@@ -30,19 +26,10 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.cache]
   '''
   module headgate.cache
-  __all__ = ['Fresh', 'HttpCache', 'NotModified', 'Partition', 'Validator', 'conditional']
+  __all__ = ['Fresh', 'NotModified', 'Partition', 'Validator', 'conditional']
   class Fresh(Generic)(value: 'T', validator: 'Validator') -> 'None'
       field value: T
       field validator: Validator
-  class HttpCache(object)(*, storage: 'AsyncBaseStorage', ttl: 'float | None' = None, partition: 'Partition' = <Partition.CREDENTIAL: 'credential'>, methods: 'Iterable[str] | None' = None, paths: 'Iterable[str | re.Pattern[str]] | None' = None, statuses: 'Iterable[int] | None' = None) -> 'None'
-      field storage: AsyncBaseStorage
-      field ttl: float | None = None
-      field partition: Partition = <Partition.CREDENTIAL: 'credential'>
-      field methods: Iterable[str] | None = None
-      field paths: Iterable[str | re.Pattern[str]] | None = None
-      field statuses: Iterable[int] | None = None
-      def caches_request(self, method: 'str', path: 'str') -> 'bool'
-      def stores_status(self, status: 'int') -> 'bool'
   class NotModified(object)(validator: 'Validator') -> 'None'
       field validator: Validator
   class Partition(Enum)(*values)
@@ -68,20 +55,9 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.errors]
   '''
   module headgate.errors
-  __all__ = ['AuthError', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'DecodeError', 'ErrorDetails', 'ForbiddenDestinationError', 'PageLimitError', 'Problem', 'RateLimitError', 'RefusedError', 'ResponseParseError', 'ResponseTooLargeError', 'TransportError', 'UpstreamStatusError']
-  class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+  __all__ = ['CircuitOpenError', 'ClientConfigurationError', 'DecodeError', 'ErrorDetails', 'ForbiddenDestinationError', 'PageLimitError', 'Problem', 'RefusedError', 'ResponseParseError', 'ResponseTooLargeError']
   class CircuitOpenError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class ClientConfigurationError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  class ClientError(Exception)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-      property attempts
-      property method
-      property request_id
-      property retry_after
-      property retryable
-      property sent
-      property source
-      property url
-  class ClientTimeoutError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class DecodeError(Exception)(no signature)
   class ErrorDetails(dict)(no signature)
       key source: str | None (optional)
@@ -102,7 +78,6 @@
       field detail: str | None = None
       field instance: str | None = None
       field extensions: Mapping[str, object] = <factory>
-  class RateLimitError(UpstreamStatusError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
   class RefusedError(Exception)(message: 'str', *, code: 'str | None' = None, kind: 'type[UpstreamStatusError]' = <class 'headgate.errors.UpstreamStatusError'>) -> 'None'
       property code
       property kind
@@ -111,11 +86,6 @@
       property content_type
       property status_code
   class ResponseTooLargeError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  class TransportError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  class UpstreamStatusError(ClientError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
-      property code
-      property problem
-      property status_code
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.events]
@@ -222,7 +192,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.pagination]
   '''
   module headgate.pagination
-  __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageNumber', 'PageRequest', 'Pager', 'Paginated', 'WritingPager', 'parse_link_header']
+  __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageNumber', 'PageRequest', 'Pager', 'WritingPager', 'parse_link_header']
   class BodyCursor(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
@@ -299,9 +269,6 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Iterable[I]'
-  class Paginated(Protocol)(*args, **kwargs)
-      def collect(self, *, max_items: 'int | None' = None) -> 'list[I]'
-      def pages(self) -> 'AsyncIterator[P]'
   class WritingPager(Pager, ABC, Generic)(*args, **kwargs)
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
@@ -338,32 +305,17 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.ratelimit]
   '''
   module headgate.ratelimit
-  __all__ = ['Adaptive', 'Rate', 'RateBudget']
+  __all__ = ['Adaptive']
   class Adaptive(object)(*, decrease: 'float' = 0.5, increase: 'float' = 0.1, min_rate: 'float' = 0.1) -> 'None'
       field decrease: float = 0.5
       field increase: float = 0.1
       field min_rate: float = 0.1
-  class Rate(object)(requests: 'float', period: 'float') -> 'None'
-      field requests: float
-      field period: float
-      property burst
-      property interval
-      classmethod per_hour(cls, requests: 'float') -> 'Rate'
-      classmethod per_minute(cls, requests: 'float') -> 'Rate'
-      classmethod per_second(cls, requests: 'float') -> 'Rate'
-  class RateBudget(object)(rate: 'Rate', *, max_in_flight: 'int | None' = None, adaptive: 'Adaptive | None' = Adaptive(decrease=0.5, increase=0.1, min_rate=0.1), timing: 'Timing | None' = None) -> 'None'
-      property adaptive
-      property effective_rate
-      property in_flight
-      property max_in_flight
-      property pause_remaining
-      property rate
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.retry]
   '''
   module headgate.retry
-  __all__ = ['IDEMPOTENT_METHODS', 'RETRY_STATUSES', 'Backoff', 'Hedge', 'RetryBudget', 'RetryPolicy', 'RetryShare']
+  __all__ = ['IDEMPOTENT_METHODS', 'RETRY_STATUSES', 'Backoff', 'Hedge', 'RetryBudget', 'RetryShare']
   IDEMPOTENT_METHODS = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'})
   RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
   class Backoff(object)(*, factor: 'float' = 0.5, max_wait: 'float' = 5.0) -> 'None'
@@ -378,17 +330,6 @@
       def refund(self) -> 'None'
       property share
       def try_spend(self) -> 'bool'
-  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryShare | RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
-      field attempts: int = 3
-      field methods: frozenset[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'})
-      field statuses: frozenset[int] = frozenset({408, 425, 429, 500, 502, 503, 504})
-      field backoff: Backoff = <factory>
-      field max_retry_after: float = 30.0
-      field budget: RetryShare | RetryBudget | None = <factory>
-      field respect_should_retry: bool = True
-      field hedge: Hedge | None = None
-      field min_attempt_time: float = 0.05
-      def wait_after(self, retry_after: 'float | None', retry: 'int', draw: 'float') -> 'float'
   class RetryShare(object)(*, ratio: 'float' = 0.2, min_per_second: 'float' = 10.0, window: 'float' = 10.0) -> 'None'
       field ratio: float = 0.2
       field min_per_second: float = 10.0

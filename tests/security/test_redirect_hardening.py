@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
     from tests.security._servers import Answer, Seen
 
-from headgate.ratelimit import Rate
+from headgate import Rate
 
 
 async def test_a_downgrade_is_raised_as_the_redirect() -> None:

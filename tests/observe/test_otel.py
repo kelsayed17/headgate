@@ -21,9 +21,9 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import SpanContext, SpanKind, StatusCode, format_span_id, format_trace_id
 
-from headgate import HttpOptions, QueryParamAuth, TransportPolicy, nothing
+from headgate import HttpOptions, QueryParamAuth, TransportError, TransportPolicy, UpstreamStatusError, nothing
 from headgate._user_agent import headgate_version
-from headgate.errors import ResponseParseError, TransportError, UpstreamStatusError
+from headgate.errors import ResponseParseError
 from headgate.events import AttemptFinished, CallFinished, CallInfo, CallStarted, RetryScheduled
 from headgate.msgspec import reader
 from headgate.otel import OpenTelemetryObserver

@@ -13,12 +13,8 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage
 
-from headgate import Client, HttpOptions, Route, TransportPolicy
+from headgate import Client, HttpCache, HttpOptions, Rate, RetryPolicy, Route, TransportPolicy, UpstreamStatusError
 from headgate._core import CallContext, check_fragment, path_has_fragment, url_path
-from headgate.cache import HttpCache
-from headgate.errors import UpstreamStatusError
-from headgate.ratelimit import Rate
-from headgate.retry import RetryPolicy
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:

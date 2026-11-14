@@ -42,22 +42,16 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 __all__ = [
-    "AuthError",
     "CircuitOpenError",
     "ClientConfigurationError",
-    "ClientError",
-    "ClientTimeoutError",
     "DecodeError",
     "ErrorDetails",
     "ForbiddenDestinationError",
     "PageLimitError",
     "Problem",
-    "RateLimitError",
     "RefusedError",
     "ResponseParseError",
     "ResponseTooLargeError",
-    "TransportError",
-    "UpstreamStatusError",
 ]
 
 

@@ -24,9 +24,9 @@ from hishel import AsyncSqliteStorage
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from headgate import Client, HttpOptions, StaticHeaderAuth, TransportPolicy
+from headgate import Client, HttpCache, HttpOptions, StaticHeaderAuth, TransportPolicy
 from headgate._core import CredentialStamper
-from headgate.cache import HttpCache, Partition
+from headgate.cache import Partition
 from headgate.cache._credentials import CredentialScope, credential_scope
 from headgate.cache._transport import served_from_cache
 from headgate.errors import ClientConfigurationError
