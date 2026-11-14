@@ -112,14 +112,14 @@ Every row is a **Changed** or **Removed** entry in the CHANGELOG with this repla
 | `PageOptions` | `CallOptions` | `ImportError` |
 | one size cap for the whole client | `max_response_bytes=` on the call, when one call needs another | — |
 
-Two meanings change without an error: an explicit `retry=None` and an explicit `cache_ttl=None`. Each used to mean "no override" and now means "off". So the CHANGELOG entry for each one opens with it, in bold, and gives the search that finds an affected call: `grep -rnE "(retry|cache_ttl)=(None|[a-z_]+)\b"`. A forwarding wrapper (`retry=retry`) whose own default is `None` is the usual case. The fix is to type the wrapper on `**options: Unpack[CallOptions]` and forward `**options`, which is what this phase makes possible.
+Two meanings change without an error: an explicit `retry=None` and an explicit `cache_ttl=None`. Each used to mean "no override" and now means "off". For `cache_ttl=None`, "off" means the same as `HttpCache(ttl=None)` does today: no headgate lifetime, so the entry is served until the storage evicts it. headgate's cache is TTL-only and ignores the response's own cache headers by design (`cache/_policy.py`: `Cache-Control: max-age`, `Expires` and even `no-store`). So a call's `cache_ttl=None` can keep an entry past the server's `max-age`, as a client-wide `ttl=None` already can. The CHANGELOG entry says so in those words, so nobody reads "no limit" as "the server's limit". So the CHANGELOG entry for each one opens with it, in bold, and gives the search that finds an affected call: `grep -rnE "(retry|cache_ttl)=(None|[a-z_]+)\b"`. A forwarding wrapper (`retry=retry`) whose own default is `None` is the usual case. The fix is to type the wrapper on `**options: Unpack[CallOptions]` and forward `**options`, which is what this phase makes possible.
 
 ## Decisions this plan makes
 
 The design leaves these to the builder, or does not settle them. Each is the planner's call, made by the maintainer's rule: the cleanest design, even where it breaks things.
 
 - **This phase applies 4.2's call-level "off" now**, as design 3.1 says ("Their values follow 4.2"). A `TypedDict` makes leaving an option out real absence, so the call and view `None` can mean off at once. The policy-level and route-level halves stay in phase 4. Until then, a call's `retry=None` maps to `NO_RETRY` internally.
-- **The runtime refuses a keyword it does not know.** A closed `TypedDict` catches a stray keyword for a type-checked caller only. At runtime `**options` swallows it, so today `post(url, jsno=...)` sends a POST with no body. After this phase, the same would happen silently to every untyped `post(url, json=...)`. So every verb, `stream`, `paginate` and `with_options` checks `options.keys()` against its bag's keys (`__optional_keys__`, computed once per bag) before anything else, and raises `TypeError: post() got an unexpected keyword argument 'json'`. For a keyword this phase removed, the message adds its replacement from the Migration table, for example `: write body=Json(value)`. The check is one `frozenset` comparison per call. The benchmarks in `benchmarks/` must show no regression on the verb path.
+- **The runtime refuses a keyword it does not know.** A closed `TypedDict` catches a stray keyword for a type-checked caller only. At runtime `**options` swallows it, so today `post(url, jsno=...)` sends a POST with no body. After this phase, the same would happen silently to every untyped `post(url, json=...)`. So every verb, `stream`, `paginate` and `with_options` checks `options.keys()` against its bag's keys (`__optional_keys__`, read once per bag at import time into a module-level `frozenset`) before anything else, and raises `TypeError: post() got an unexpected keyword argument 'json'`. For a keyword this phase removed, the message adds its replacement from the Migration table, for example `: write body=Json(value)`. The check is one `frozenset` comparison per call. The benchmarks in `benchmarks/` must show no regression on the verb path.
 - **Kind checks at the call** (design 7's rule, started by #54) for the options this phase moves, each through `check_kind`:
   - `retry=` takes a `RetryPolicy` or `None`, and a `bool` gets the Migration table's message.
   - `follow_redirects=` takes a `bool`.
@@ -131,7 +131,7 @@ The design leaves these to the builder, or does not settle them. Each is the pla
 - **`Multipart(files, fields={})`**, files first, because the files are what make a body multipart. The design writes `Multipart(fields, files)`. Its 3.3 table is amended to match, in Task 1.
 - **`Raw.replayable` and `Multipart.replayable` are read-only properties derived from the value.** They are not constructor arguments: a caller cannot make an async iterator replayable, and a second spelling of the same fact would be two ways to say one thing.
   - `Raw`: `bytes` and a factory are `True`. Any other async iterable is `False`, as `request_content` decides today.
-  - `Multipart`: `False` when any file value is a file object that the write-safety fix treats as one-shot (one that is not `seekable()`). The rule moves from `_client.py` onto the class unchanged. If the fix merged with a different rule, this property follows the fix.
+  - `Multipart`: returns `files_replayable(self.files)`, the helper the write-safety fix adds to `_request_body.py` (`False` when a file value is a file object that cannot be rewound). The property calls the helper and does not copy its rule, so there is one rule in one place.
   - `EncodedBody`, `Json` and `Form` are always bytes in memory, so they have no property.
   - `_prepare` stamps `REPLAYABLE_BODY` from this one fact, and the write-safety fix's stream refusal and hedge rule read `REPLAYABLE_BODY` as they already do. Phase 3 adds no other path that decides replayability.
 - **`body=None` is no body**, the same as leaving it out. A body has nothing to inherit, so absence and `None` agree. `None` stays allowed so that a wrapper can forward an optional body.
@@ -145,7 +145,7 @@ The design leaves these to the builder, or does not settle them. Each is the pla
 
 These six cases are not covered by the design's own examples and are the most likely to bite users. Each line gets a test in the task named.
 
-1. **The two silent meaning changes.** A call's explicit `retry=None` on a view with a `RetryPolicy` sends once, while the same call without `retry` takes the view's policy. A call's explicit `cache_ttl=None` on a cache with `ttl=60` stores an entry that is still served after 61 seconds of `TestClock`, while the same call without `cache_ttl` stores one that has expired by then. Covered in Task 2.
+1. **The two silent meaning changes.** A call's explicit `retry=None` on a view with a `RetryPolicy` sends once, while the same call without `retry` takes the view's policy. A call's explicit `cache_ttl=None` on a cache with `ttl=60` stores an entry that is still served after 61 seconds of `TestClock`, while the same call without `cache_ttl` stores one that has expired by then. A third case pins the cache's existing TTL-only rule under the new spelling: a `cache_ttl=None` entry whose response said `Cache-Control: max-age=1` is still served after 61 seconds, exactly as an entry of a `HttpCache(ttl=None)` client is. Covered in Task 2.
 2. **Every removed keyword fails before anything is sent.** On each verb, `json=`, `data=`, `content=` and `files=` raise `TypeError` with their replacement, and the fake transport records no request. On `paginate`, `body=` and `json=` do the same, before the pager's `first()` runs. On a call or a view, `retry=True`, `retry=False` and `follow_redirects=None` do too. Covered in Tasks 2, 4 and 5.
 3. **Forwarding type-checks.** A wrapper `async def fetch(self, url: LiteralString, **options: Unpack[CallOptions])` forwards `**options` to `get`, `post` and `paginate` with ty exit code 0. Forwarding `**options: Unpack[RequestOptions]` to `stream` is a type error, because `cache_ttl` is not a stream option. Covered in Task 2.
 4. **The per-call cap is the call's cap at both layers, in both directions.** Each case runs without a cache and with one:
@@ -211,12 +211,12 @@ These six cases are not covered by the design's own examples and are the most li
 - [ ] **Step 2:** Run them. Expected: FAIL.
 - [ ] **Step 3:** Implement as in **Files**.
 - [ ] **Step 4:** Run every gate and update the API snapshot. Expected diff: the verbs lose three named parameters, `PageOptions` goes, `CallOptions` and `headgate.streaming.StreamOptions` arrive, and `ViewOptions` changes.
-- [ ] **Step 5:** CHANGELOG under **Changed**, with the two silent rows first, in bold, and the grep. Under **Removed**: `PageOptions`, and `retry=True`. Commit: `Move retry, follow_redirects and cache_ttl into the call options`.
+- [ ] **Step 5:** CHANGELOG under **Changed**, with the two silent rows first, in bold, and the grep. The `cache_ttl=None` entry says that it removes headgate's lifetime and that the cache still ignores the response's cache headers, as the Migration section words it. Under **Removed**: `PageOptions`, and `retry=True`. Commit: `Move retry, follow_redirects and cache_ttl into the call options`.
 
 ### Task 3: `max_response_bytes` per call (#57)
 
 **Files:**
-- Modify: `src/headgate/_body.py`: add the `MAX_RESPONSE_BYTES` slot beside `read_capped`, which owns the cap (or in `headgate._core`, if `cache/` cannot import `_body.py`). It is a `Slot[int]`, as `RETRY_POLICY` is in `retry/_policy.py`.
+- Modify: add the `MAX_RESPONSE_BYTES` slot, a `Slot[int]`, next to the stream `Slot` that the fix for the cache on the stream path puts on the call's context, wherever that fix lands it. That fix also edits `_body.py`'s `_rebuilt`, so rebase on it before starting this task.
 - Modify: `src/headgate/_client.py`:
   - `CallOptions` gains `max_response_bytes: int`.
   - `_prepare` checks it and puts it on the context.
@@ -244,7 +244,7 @@ These six cases are not covered by the design's own examples and are the most li
 - Modify: `src/headgate/_client.py`:
   - `RequestOptions.body: Body | None` replaces the five keys.
   - `_prepare` matches the body once: `EncodedBody` gives content and `Content-Type`, `Json` gives `json=`, `Form` gives `data=`, `Multipart` gives `files=` with `data=`, and `Raw` gives `content=`. `REPLAYABLE_BODY` comes from `.replayable`.
-  - The write-safety fix's `files=` replayability rule moves onto `Multipart.replayable`.
+  - `_prepare` stops calling `files_replayable` itself and reads `Multipart.replayable`, which calls it.
   - The `RequestOptions` docstring.
 - Modify: `src/headgate/__init__.py`: export `Body`, `Json`, `Form`, `Multipart` and `Raw`.
 - Modify: `src/headgate/msgspec.py` and `src/headgate/pydantic.py`: the `to_builtins` docstrings say `body=Json(...)`.
