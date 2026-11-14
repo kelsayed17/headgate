@@ -23,8 +23,10 @@ ladder as a verb, except that:
   bounded by the read timeout; wrap the block in `asyncio.timeout` to bound the whole body.
 - **a retry covers opening only.** A failure while the body arrives raises `TransportError` or `ClientTimeoutError`
   from the iteration, after the chunks before it were delivered. Resuming is the caller's decision.
-- **the origin's breaker spans the whole block**: a network failure mid-body counts against the origin, even when the
-  block catches it, and a clean exit with no such failure as a success.
+- **the origin's breaker is told of the answer at the response head**, before the block is entered, so a stream that
+  is the half-open breaker's probe closes it then, not when the block exits. A 4xx counts as the origin answering, as
+  it does for a verb. A network failure mid-body then counts against the origin as one more failure, even when the
+  block catches it.
 - **an exception the block raises that is not a `ClientError` is the caller's own**, even an `OSError` or an httpx2
   error: it propagates unchanged, the breaker is charged nothing for it, and `CallFinished` reports the status the
   stream opened with and no error.
