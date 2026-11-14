@@ -210,7 +210,8 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
     :param default_headers: let the profile supply the browser's headers (and drop httpx2's) instead of sending none.
     :param curl_options: extra libcurl options, e.g. ``{CurlOpt.FRESH_CONNECT: True}`` to open a new connection per
         request for hosts that fingerprint a reused one. Values are whatever libcurl takes for the option (``curl_cffi``
-        annotates them as ``str``, which is narrower than what it accepts).
+        annotates them as ``str``, which is narrower than what it accepts). ``CurlOpt.FOLLOWLOCATION`` is refused with a
+        ``ValueError``: curl would follow a redirect below every hook, so headgate follows them itself.
     :param max_connections: concurrent curl handles; a request beyond them waits for one, with no pool timeout.
     """
 
@@ -227,6 +228,12 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
         # `""` overrides a `NO_PROXY` the environment sets, as `"*"` overrides its `HTTP_PROXY`.
         # The CA bundle is set per request after the ones `curl_cffi` takes from the environment.
         given = curl_options or {}
+        if given.get(CurlOpt.FOLLOWLOCATION):
+            msg = (
+                "curl_options must not set CurlOpt.FOLLOWLOCATION: curl would follow a redirect below every hook, "
+                "the credential guard included; headgate follows redirects itself (HttpOptions(follow_redirects=...))"
+            )
+            raise ValueError(msg)
         options: dict[CurlOpt, Any] = {
             CurlOpt.NOPROXY: "" if CurlOpt.PROXY in given else "*",
             CurlOpt.CAINFO: certifi.where(),
@@ -250,7 +257,11 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
         if method is None:
             msg = f"curl cannot send an HTTP {request.method} request"
             raise httpx2.UnsupportedProtocol(msg, request=request)
-        await request.aread()
+        # Read from the stream on every send, as a native transport does: `aread()` would keep the first read and send
+        # it again, hiding a one-shot body sent twice.
+        # shortcut: the body counts as written before curl connects, so an unkeyed POST that never connected is not
+        # retried; stream it to curl once curl_cffi's read-callback errors are tested to reach the caller.
+        body = b"".join([chunk async for chunk in cast("httpx2.AsyncByteStream", request.stream)])
         if self._default_headers:
             for name, value in _httpx_default_headers():
                 if request.headers.get(name) == value:
@@ -261,7 +272,7 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
             response = await self._session.request(
                 method=method,
                 url=str(request.url),
-                data=request.content,
+                data=body,
                 headers=request.headers.raw,
                 timeout=_curl_timeout(request.extensions.get("timeout", {})),
                 stream=True,

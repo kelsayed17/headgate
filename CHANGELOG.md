@@ -303,6 +303,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   that can be sent again (bytes, a factory, a rewindable `files=` upload) is still re-sent after a 401 re-mint; a
   one-shot stream's 401 reaches the caller as `AuthError`, and the next call mints a new token.
 
+- `AsyncCurlTransport` reads a request's body from its stream on every send, as httpx2's own transport does. It read
+  the body once and sent that copy again, so a one-shot body sent a second time was not refused.
 - `FakeTransport.calls` logs a snapshot of each send, so a request changed between attempts shows each attempt's own
   headers; it logged the one live request object, so every attempt showed the last one's. A reply function is given
   the snapshot.
@@ -316,6 +318,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Security
 
+- `AsyncCurlTransport(curl_options={CurlOpt.FOLLOWLOCATION: True})` raises `ValueError`. curl followed each redirect
+  itself, below every headgate hook, so the credential guard never saw the hop and a credential went to whatever
+  origin the redirect named. headgate follows redirects itself (`HttpOptions(follow_redirects=...)`).
 - `AsyncCurlTransport` verifies TLS against the Mozilla CA bundle `curl_cffi` installs. It took its trust store from
   `SSL_CERT_FILE`, `CURL_CA_BUNDLE` or `REQUESTS_CA_BUNDLE`, which a native transport ignores; pass `CurlOpt.CAINFO`
   in `curl_options` for a bundle of your own. libcurl still writes TLS session keys to the file `SSLKEYLOGFILE` names,
