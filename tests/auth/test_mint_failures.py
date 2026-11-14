@@ -503,3 +503,21 @@ async def test_a_token_response_refused_by_its_length_closes_its_stream() -> Non
         await _call(_FlowReadsJson(), handle)
 
     assert body.closed
+
+
+async def test_a_mint_hops_network_failure_names_the_token_endpoint_not_the_api_call() -> None:
+    """Report a ``mint_flow`` hop that cannot connect as the token endpoint's failure, named for the auth class.
+
+    httpx2 raises the hop's error outside the auth flow, so the client maps it, as a mint's failure, not the call's.
+    """
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/token":
+            return _refused(request)
+        return httpx2.Response(httpx2.codes.OK)
+
+    with pytest.raises(TransportError) as raised:
+        await _call(_FlowReadsJson(), handle)
+
+    assert str(raised.value) == f"[_FlowReadsJson] POST https://{_API_HOST}/token (token mint): connection refused"
+    assert failures(_API_HOST) == 0

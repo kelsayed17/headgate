@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import CachedTokenAuth, HttpOptions, SigningAuth
+from headgate import CachedTokenAuth, HttpOptions, Raw, SigningAuth
 from headgate._responses import nothing
 from headgate.errors import AuthError
 from headgate.ratelimit import UNLIMITED
@@ -137,7 +137,7 @@ async def test_a_token_auth_streams_a_one_shot_upload_and_does_not_re_send_it() 
     network = _Network(large=False)
     async with _client(auth, network) as client:
         with pytest.raises(AuthError):
-            await client.post("orders", content=_upload(), expect=nothing)
+            await client.post("orders", body=Raw(_upload()), expect=nothing)
         with pytest.raises(AuthError):
             await client.get("orders", expect=nothing)
 
@@ -150,7 +150,7 @@ async def test_a_token_auth_re_sends_a_body_built_by_a_factory_in_full() -> None
     """Re-send a factory's body after the re-mint, built afresh, since it can be sent again."""
     network = _Network(final=httpx2.codes.OK)
     async with _client(premint(_Minting(), "stale"), network) as client:
-        await client.post("orders", content=_upload, expect=nothing)
+        await client.post("orders", body=Raw(_upload), expect=nothing)
 
     assert network.sent == [b"part-1,part-2", b"part-1,part-2"]
 
@@ -179,7 +179,7 @@ async def test_concurrent_one_shot_uploads_rejected_together_each_reach_the_call
     network = _HoldsAnswers(2)
     async with _client(auth, network) as client:
         results = await asyncio.gather(
-            *(client.post("orders", content=_upload(), expect=nothing) for _ in range(2)), return_exceptions=True
+            *(client.post("orders", body=Raw(_upload()), expect=nothing) for _ in range(2)), return_exceptions=True
         )
 
     assert [type(result) for result in results] == [AuthError, AuthError]

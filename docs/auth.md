@@ -102,8 +102,8 @@ it:
   re-minted: a 401 on it is a permissions problem, which reaches the caller as the `AuthError` it is. Nor is a token
   re-minted for a 401 to a request sent without it, such as a call to an origin you do not trust, where the credential
   guard withheld it. The re-sent 401's body is dropped unread, and the call's body is re-sent only if it can be: a
-  one-shot stream (`content=` an async iterable) is streamed as it is produced, never held in memory, so its 401
-  reaches the caller and the next call mints a new token. Pass `content=` a factory to have it re-sent.
+  one-shot stream (`body=Raw(...)` of an async iterable) is streamed as it is produced, never held in memory, so its
+  401 reaches the caller and the next call mints a new token. Give `Raw` a factory to have it re-sent.
 
 The exchange is one of two methods. `mint_token()` makes it on a client of its own and returns `(token, lifetime)`:
 

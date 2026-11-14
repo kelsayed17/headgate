@@ -37,7 +37,7 @@ import httpx2
 
 from headgate._body import read_capped
 from headgate._core import CallContext, Slot, origin_text
-from headgate._failures import CallSite, loggable_url, mint_error, shorten
+from headgate._failures import CallSite, loggable_url, mint_error, shorten, transport_error
 from headgate._url import redact_secrets, register_secret_params
 from headgate.errors import ClientConfigurationError, ClientError
 from headgate.retry._policy import REPLAYABLE_BODY
@@ -59,12 +59,16 @@ __all__ = [
     "SigningAuth",
     "StaticHeaderAuth",
     "failed_on_auth_hop",
+    "mint_hop_failure",
 ]
 
 #: The request extension marking a request an auth flow yields to acquire a credential, as opposed to the call's own
 #: request. :class:`CachedTokenAuth` sets it on every request its :meth:`~CachedTokenAuth.mint_flow` yields. A fixture
 #: recorder can read it to skip the hop, which is not the endpoint's answer.
 AUTH_HOP = "headgate.auth_hop"
+
+#: The request extension naming the auth class whose mint flow yielded the request, for :func:`mint_hop_failure`.
+_MINTED_BY: Final = "headgate.minted_by"
 
 #: True on a call's context while its :class:`CachedTokenAuth` waits for the mint lock or mints under it, so the call's
 #: deadline passing then is not charged to the API origin's breaker: the time went to the credential host. A raise or
@@ -156,6 +160,19 @@ def _identity(pairs: Iterable[tuple[str, str]]) -> bytes:
     return bytes(encoded)
 
 
+def mint_hop_failure(exc: httpx2.HTTPError | OSError) -> ClientError | None:
+    """Return the ``ClientError`` a network failure on a mint flow's hop means, or ``None`` for any other failure.
+
+    httpx2 raises a hop's network failure outside the auth flow, so the client maps it here: as the token endpoint's
+    failure, named for the auth class and the hop's request, never the API call's.
+    """
+    if not (isinstance(exc, httpx2.RequestError) and failed_on_auth_hop(exc)):
+        return None
+    request = exc.request
+    source = str(request.extensions.get(_MINTED_BY, "token mint"))
+    return transport_error(exc, CallSite(source, request.method, f"{loggable_url(str(request.url))} (token mint)"))
+
+
 def failed_on_auth_hop(exc: BaseException) -> bool:
     """Return whether *exc* was raised by a request an auth flow yielded (see :data:`AUTH_HOP`), not the call's own.
 
@@ -216,15 +233,15 @@ async def _read_hop(response: httpx2.Response, source: str) -> httpx2.Response:
     return response
 
 
-def _prepare_hop(hop: httpx2.Request, call: httpx2.Request) -> None:
-    """Mark *hop*, a request a mint flow yielded for *call*, as an auth hop, and give it the call's timeouts.
+def _prepare_hop(hop: httpx2.Request, call: httpx2.Request, source: str) -> None:
+    """Mark *hop*, a request a mint flow yielded for *call*, as *source*'s auth hop, and give it the call's timeouts.
 
     The marks are :data:`AUTH_HOP` and the :data:`~headgate.security.CHAIN_ORIGIN` the credential guard trusts for the
     hop. A hop that sets no ``timeout`` extension of its own takes the call's: a request built by hand has none, and a
     token host that never answered would hold the call, and the mint's lock, until the deadline. Either way the hop's
     timeouts are cut to the time the call's deadline leaves.
     """
-    extensions = {**hop.extensions, AUTH_HOP: True, CHAIN_ORIGIN: origin_text(hop.url.origin)}
+    extensions = {**hop.extensions, AUTH_HOP: True, _MINTED_BY: source, CHAIN_ORIGIN: origin_text(hop.url.origin)}
     timeout = call.extensions.get("timeout")
     if "timeout" not in extensions and isinstance(timeout, dict):
         extensions["timeout"] = dict(timeout)
@@ -501,9 +518,11 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     :func:`~headgate._failures.mint_error`): an exception the mint code raises (a ``ConnectError`` on its own client,
     a ``raise_for_status()``, an unreadable token response) becomes the ``ClientError`` it means, named for this auth
     class and the token endpoint, chained to the original. It is raised from the auth flow, so the API host's circuit
-    breaker records nothing for it. A hop :meth:`mint_flow` yields travels the owning client's stack and fails as any
-    request there does; reading its response (bounded by :data:`MAX_MINT_RESPONSE_BYTES`) fails through the same
-    mapping, so a body that is too large is ``ResponseTooLargeError`` and a dropped connection ``TransportError``.
+    breaker records nothing for it. A hop :meth:`mint_flow` yields travels the owning client's stack; a network
+    failure there is reported the same way, as ``TransportError`` naming this auth class and the hop's endpoint
+    (:func:`mint_hop_failure`), and reading its response (bounded by :data:`MAX_MINT_RESPONSE_BYTES`) fails through
+    the same mapping, so a body that is too large is ``ResponseTooLargeError`` and a dropped connection
+    ``TransportError``.
     """
 
     #: The headers :meth:`attach` sets. A subclass whose :meth:`attach` sets others declares them here.
@@ -734,7 +753,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
                         try:
                             step = await self._mint_step(anext(mint))
                             while isinstance(step, httpx2.Request):
-                                _prepare_hop(step, request)
+                                _prepare_hop(step, request, type(self).__name__)
                                 hop_response = yield step
                                 hop_response = await self._mint_step(_read_hop(hop_response, type(self).__name__))
                                 step = await self._mint_step(mint.asend(hop_response))

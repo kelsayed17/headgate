@@ -266,6 +266,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   try the mint again, one after another, so a token host that was down cost one timeout per queued call.
 - A token refresh that fails inside `refresh_margin` sends the held token, which has not expired yet, instead of
   failing the call.
+- A `mint_flow` hop that fails on the network (a refused connection, a timeout) is reported as the token mint's
+  `TransportError`, named for the auth class and the token endpoint. It was reported as the API call's, naming the
+  call's URL.
 - Under a headgate client, `CachedTokenAuth` no longer reads a streamed upload into memory before sending it. A body
   that can be sent again (bytes, a factory, a rewindable `files=` upload) is still re-sent after a 401 re-mint; a
   one-shot stream's 401 reaches the caller as `AuthError`, and the next call mints a new token.
