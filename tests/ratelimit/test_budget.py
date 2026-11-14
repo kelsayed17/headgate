@@ -780,7 +780,7 @@ def test_path_budgets_pick_the_first_matching_rule_and_default_otherwise() -> No
 
 def test_an_escaped_slash_in_a_value_does_not_pick_another_paths_rule() -> None:
     """Keep a ``%2F`` a t-string value escaped inside its segment, so ``/files/exports%2Fq3`` is not ``/exports``."""
-    budgets = PathBudgets(default=Rate.per_second(1000), rules=[RateRule("/exports", Rate.per_second(1))])
+    budgets = PathBudgets(default=Rate.per_second(1000), lanes=[Lane("/exports", Rate.per_second(1), sets_rate=True)])
     assert budgets.for_request(httpx2.Request("GET", "https://x/files/exports%2Fq3")) is budgets.default
     assert budgets.for_request(httpx2.Request("GET", "https://x/v1/exports/q3")) is not budgets.default
 

@@ -18,7 +18,7 @@ from headgate._core import CallContext, check_fragment, path_has_fragment, url_p
 from headgate.cache import HttpCache
 from headgate.errors import UpstreamStatusError
 from headgate.ratelimit import Rate
-from headgate.retry import NO_RETRY, RetryPolicy
+from headgate.retry import RetryPolicy
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
@@ -95,7 +95,7 @@ async def test_an_escaped_slash_in_a_value_does_not_pick_another_paths_route() -
     client = StubClient(
         base_url="https://x.example",
         rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=RetryPolicy(attempts=2), routes=(Route("/exports", retry=NO_RETRY),)),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=2), routes=(Route("/exports", retry=None),)),
         http=HttpOptions(transport=wire),
     )
     name = "exports/q3"

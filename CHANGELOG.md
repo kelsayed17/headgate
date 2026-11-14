@@ -180,7 +180,7 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `X-RateLimit-Reset` already was.
 - `Rate` refuses an infinite request count, and one so small that the spacing between requests overflows, with
   `ValueError`. Either turned every send time into NaN, which paced nothing.
-- Rate rules, `Route`s and the cache's `paths` fragments no longer match a `/` inside a t-string value: the path is
+- `Route`s and the cache's `paths` fragments no longer match a `/` inside a t-string value: the path is
   split into segments before they are decoded, so `t"/files/{name}"` with `name="exports/q3"` sends
   `/files/exports%2Fq3`, which is not an `/exports` request. A regular expression in the cache's `paths` still
   searches the decoded path.
