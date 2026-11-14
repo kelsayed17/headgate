@@ -140,6 +140,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A hedge that loses while it is still above the rate budget, in a middleware that awaits before it sends, gives its
+  retry budget back. The send it raced reached the rate budget meanwhile and marked the hedge as sent, so every such
+  call kept one retry, and enough of them drained the budget: later calls could neither hedge nor retry.
 - A rate budget hands a turn a caller abandoned in the middle of the queue (a cancelled call, or a deadline passing
   while it waited) to the next caller to arrive, while that turn's time is still ahead. The turn used to stay in the
   schedule unused, so a budget with callers giving up sent fewer requests than its rate.

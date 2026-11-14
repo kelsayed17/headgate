@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import asyncio
 import gzip
-from typing import TYPE_CHECKING, Final, override
+from typing import TYPE_CHECKING, ClassVar, Final, override
 
 import httpx2
 import pytest
 
+from headgate import HttpOptions, TransportPolicy
 from headgate._core import (
     BREAKER_GATE,
     BudgetBacklogError,
@@ -28,14 +29,18 @@ from headgate._core import (
     Emitter,
     RetryScheduled,
 )
+from headgate.ratelimit import Rate
 from headgate.retry import Backoff, Hedge, RetryBudget, RetryPolicy
 from headgate.retry._tracking import head_size
 from headgate.retry._transport import RetryTransport
 from headgate.testing import FaultyTransport, Respond, TestClock
+from tests.support.clients import StubClient
+from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
 
+    from headgate import Next
     from headgate._core import Event
 
 #: The most of a failed response's body the retry layer keeps through a wait.
@@ -774,3 +779,48 @@ def _observed(clock: TestClock, observer: _Events) -> httpx2.Request:
     request = httpx2.Request("GET", "https://api.test/orders")
     CallContext(CallInfo(method="GET", url="orders"), clock=clock, emitter=Emitter((observer,))).attach(request)
     return request
+
+
+class _SlowToSend:
+    """A middleware that holds each call's first send a moment and its hedge for good, counting the sends it sees."""
+
+    credential_headers: ClassVar = frozenset[str]()
+    credential_params: ClassVar = frozenset[str]()
+
+    def __init__(self) -> None:
+        """Start with no sends seen."""
+        self.sends: list[int] = []
+        self._never = asyncio.Event()
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        """Hold the first send past the hedge's start; never let the hedge through."""
+        attempt = CallContext.of(request).attempt
+        self.sends.append(attempt)
+        if attempt == 1:
+            await asyncio.sleep(0.01)
+        else:
+            await self._never.wait()
+        return await call_next(request)
+
+
+async def test_a_hedge_cancelled_before_it_was_sent_gives_its_retry_budget_back() -> None:
+    """Refund a hedge that lost while still in a middleware, so the next call may hedge too.
+
+    The budget holds one retry. Its first send, held in the middleware while the hedge began, must not mark the
+    hedge's attempt as sent when it reaches the rate budget.
+    """
+    middleware = _SlowToSend()
+    client = StubClient(
+        base_url="https://hedged.example",
+        rate=Rate.per_second(1000),
+        policy=TransportPolicy(
+            retry=RetryPolicy(hedge=Hedge(after=0.001), budget=RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0))
+        ),
+        http=HttpOptions(
+            transport=httpx2.MockTransport(lambda request: httpx2.Response(200, content=b"{}", request=request)),
+            middleware=(middleware,),
+        ),
+    )
+    for _ in range(2):
+        await client.get("x", expect=RESPONSE)
+    assert middleware.sends == [1, 2, 1, 2], "each call hedges: the first call's hedge gave its budget back"

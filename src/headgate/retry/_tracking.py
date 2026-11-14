@@ -12,8 +12,8 @@ current attempt's :class:`~headgate._core.SendProgress` from two sources:
   the wire);
 * a counting wrapper around the request's body stream, which counts each body chunk as the transport takes it.
 
-The attempt a send belongs to is the one the retry layer named for it (:data:`SENDING`), not whichever attempt the
-call began last: a hedge begun while an earlier send waited its rate-budget turn must not take that send's facts.
+The attempt a send belongs to is the one the retry layer named for it (:data:`~headgate._core.SENDING`), not whichever
+attempt the call began last: a hedge begun while an earlier send waited its rate-budget turn must not take its facts.
 
 The wrapper also keeps a one-shot body (``REPLAYABLE_BODY`` is ``False``) from going out twice, whichever layer asks:
 httpcore2's pool, which moves a request a GOAWAY proved unprocessed to a new connection and reads its body again, or
@@ -27,23 +27,18 @@ the retry layer falls back to judging by the exception's type.
 
 from __future__ import annotations
 
-from contextvars import ContextVar
 from typing import TYPE_CHECKING, Final, override
 
 import httpx2
 
-from headgate._core import CallContext, SendProgress, Slot
+from headgate._core import CallContext, SendProgress, Slot, progress_of
 from headgate.retry._policy import REPLAYABLE_BODY
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
 
-__all__ = ["SENDING", "BodyNotReplayableError", "SendTrackingTransport", "progress_of"]
-
-#: The call and attempt progress the current task is sending for, set by the retry layer around each send. Every
-#: hedge sends in a task of its own, so each sees its own attempt here, while the call's ``progress`` is the latest.
-SENDING: Final = ContextVar[tuple[CallContext, SendProgress] | None]("headgate_sending", default=None)
+__all__ = ["BodyNotReplayableError", "SendTrackingTransport"]
 
 #: The request extension httpcore2 calls with each step of a send.
 _TRACE: Final = "trace"
@@ -116,12 +111,6 @@ def _tracer(request: httpx2.Request, progress: SendProgress, chained: _Trace | N
             await chained(name, info)
 
     return trace
-
-
-def progress_of(context: CallContext) -> SendProgress:
-    """Return the progress of the attempt this task sends for *context* (:data:`SENDING`), else its latest attempt's."""
-    sending = SENDING.get()
-    return sending[1] if sending is not None and sending[0] is context else context.progress
 
 
 class SendTrackingTransport(httpx2.AsyncBaseTransport):
