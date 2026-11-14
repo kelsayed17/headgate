@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Literal, Self, Unpack, overload
 
 import httpx2
 
-from headgate._auth import MINTING, failed_on_auth_hop
+from headgate._auth import MINTING, failed_on_auth_hop, mint_hop_failure
 from headgate._body import read_capped, read_head
 from headgate._call_options import (
     BODY_HINTS,
@@ -1003,6 +1003,8 @@ class AsyncBaseClient:
 
     def _network_failure(self, prepared: _Prepared, verdict: Verdict, exc: httpx2.HTTPError | OSError) -> ClientError:
         """Charge the network failure *exc* to the origin on *verdict*, and return the ``ClientError`` it becomes."""
+        if (mint_failure := mint_hop_failure(exc)) is not None:
+            return mint_failure
         if _network_failure_charges_origin(exc):
             verdict.mark_failed()
         return transport_error(exc, self._site(prepared))
