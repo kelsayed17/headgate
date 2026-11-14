@@ -29,13 +29,13 @@ For a provider that signs every request with a long-lived key: a JWT bound to th
 signature over a timestamp and the body. A subclass supplies the signer, `sign(request)`, and declares what it sets;
 the base class gives it:
 
-- **every attempt signed afresh**, inside the retry layer. Each attempt is signed as it leaves the
-  [middleware](configuration.md#middleware) layer: after the last middleware and before the credential guard, the cache
-  and any rate-limit wait. A retry or a hedge carries a signature of its own, so a short-lived one (a timestamp checked
-  to 30 s) does not expire across the backoff. A rate-limit wait can still follow the signature, so a short-lived one
-  can age under a long backlog. The signature is applied before the
-  [credential guard](security.md#credentials-stay-on-your-origin) runs, so a redirect hop to an origin you do not
-  trust goes out without it;
+- **every send signed afresh**, inside the retry layer. Each attempt is signed as it leaves the rate budget: after the
+  last [middleware](configuration.md#middleware), the cache and the rate-limit wait, just before it goes to the network.
+  A retry or a hedge carries a signature of its own, and so does a request that queued behind a tight budget, so a
+  short-lived one (a timestamp checked to 30 s) expires neither across the backoff nor in the queue. A cache hit is
+  not signed, since it is not sent. The signature is applied before the
+  [credential guard](security.md#credentials-stay-on-your-origin) runs again, so a redirect hop to an origin you do
+  not trust goes out without it;
 - **the body, read**, so the signature can cover `request.content`;
 - **a caller's signature left alone.** A request that already carries any of the signed headers or parameters is sent
   as it is, on every attempt;
@@ -157,9 +157,11 @@ endpoint. The API host's breaker records nothing for it.
 ### Other credential shapes
 
 - `attach(request, token)` decides how a token is put on a request (`Authorization: Bearer` by default). A subclass
-  that overrides it declares the headers it sets in `token_headers`, or the class definition fails: an undeclared
-  header would follow a request anywhere.
-- `skips(request)` says a request needs no token (by default, one that already carries a token header).
+  that overrides it declares the headers it sets in `token_headers` and the query parameters in `token_params` (for a
+  provider that takes `?access_token=`), not both empty, or the class definition fails: an undeclared credential would
+  follow a request anywhere. The parameters are withheld from untrusted origins like the headers, a 401 to a request
+  carrying one re-mints, and error messages redact them.
+- `skips(request)` says a request needs no token (by default, one that already carries a token header or parameter).
 - `seed(token, lifetime)` caches a token obtained elsewhere, such as one restored from storage or a test's fixed bearer.
 - `CachedTokenAuth[TokenT]` is generic in the token's type, `str` by default.
 - `credential_identity()` names the long-lived credential for the cache partition. By default each instance is its own

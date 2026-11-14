@@ -17,8 +17,9 @@ auth flow yields. On any of them addressed elsewhere it removes:
   the hop's origin, since the jar scopes the cookies it stores to their domains; a ``Cookie`` header set explicitly
   (client-wide or on the call) is not the jar's, and stays off.
 * every header the client sets on all its requests (``HttpOptions.headers``), where a static key is often configured,
-  except ``User-Agent`` and the content negotiation headers (``Accept``, ``Accept-Encoding``, ``Accept-Language``):
-  those name the client and the format it wants, never a caller, and the request would be malformed without them.
+  except ``User-Agent``, ``Content-Type`` and the content negotiation headers (``Accept``, ``Accept-Encoding``,
+  ``Accept-Language``): those name the client, the body and the format it wants, never a caller, and the request would
+  be malformed without them.
 * the same, for every header a view sets (``with_options(headers=...)``), and for every header the call set itself
   (``headers=``) on a hop addressed to another origin than the one the call named: a redirect, or a later page of a
   walk, whose URL the server chose (:class:`~headgate._core.ExplicitHeaders`). A call that names another origin's URL
@@ -61,7 +62,7 @@ if TYPE_CHECKING:
 
     from headgate._options import HttpOptions
 
-__all__ = ["CHAIN_ORIGIN", "CredentialGuard"]
+__all__ = ["CHAIN_ORIGIN", "CredentialGuard", "check_names"]
 
 #: The request extension holding the origin (as :func:`~headgate._core.origin_text`) a hop chain may carry credentials
 #: to besides the trusted ones. An auth flow sets it on each request it yields; httpx2 hands a request's extensions to
@@ -71,9 +72,20 @@ CHAIN_ORIGIN: Final = "headgate.chain_origin"
 #: The headers withheld from an untrusted origin whatever the client's auth declares.
 _ALWAYS_WITHHELD: Final = frozenset({"authorization", "proxy-authorization", "cookie"})
 
-#: The client-wide headers still sent to an untrusted origin: they name the client and the format it wants, never a
-#: caller. Lower case.
-_NEVER_CREDENTIALS: Final = frozenset({"user-agent", "accept", "accept-encoding", "accept-language"})
+#: The client-wide headers still sent to an untrusted origin: they name the client, the body and the format it wants,
+#: never a caller. Lower case.
+_NEVER_CREDENTIALS: Final = frozenset({"user-agent", "content-type", "accept", "accept-encoding", "accept-language"})
+
+
+def check_names(owner: str, **declared: object) -> None:
+    """Raise ``TypeError`` unless every value in *declared* is a frozenset of names (``str``), naming *owner*.
+
+    A bare ``str`` iterates as its letters, so ``credential_headers = "x-api-key"`` would withhold no real header.
+    """
+    for attribute, names in declared.items():
+        if not (isinstance(names, frozenset) and all(isinstance(name, str) for name in names)):
+            msg = f"{owner}.{attribute} must be a frozenset of names, not {type(names).__name__}"
+            raise TypeError(msg)
 
 
 class CredentialGuard:
@@ -96,14 +108,21 @@ class CredentialGuard:
     ) -> None:
         """Trust *base_url*'s origin and *http*'s ``trusted_origins``; withhold *auth*'s credentials and *http*'s.
 
-        *http*'s are each header in its ``headers`` but ``User-Agent`` and the content negotiation headers, and what
-        each of its ``middleware`` declares. *cookie_jar* is the jar the client keeps, if any, whose cookies for the
-        hop's origin replace a withheld ``Cookie``.
+        *http*'s are each header in its ``headers`` but ``User-Agent``, ``Content-Type`` and the content negotiation
+        headers, and what each of its ``middleware`` declares. *cookie_jar* is the jar the client keeps, if any, whose
+        cookies for the hop's origin replace a withheld ``Cookie``.
+
+        :raises TypeError: for an *auth* whose declarations are not frozensets of names.
         """
         headers = set(_ALWAYS_WITHHELD)
         headers.update({name.lower() for name in http.headers} - _NEVER_CREDENTIALS)
         params = frozenset[str]()
         if isinstance(auth, CredentialStamper):
+            check_names(
+                type(auth).__name__,
+                credential_headers=auth.credential_headers,
+                credential_params=auth.credential_params,
+            )
             headers.update(name.lower() for name in auth.credential_headers)
             params = auth.credential_params
         self._headers = frozenset(headers)

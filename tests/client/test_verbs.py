@@ -175,6 +175,27 @@ async def test_the_writers_content_type_wins_over_the_clients_default() -> None:
     assert from_a_view.headers.get_list("content-type") == ["application/cbor"]
 
 
+async def test_an_encoded_bodys_content_type_wins_over_the_clients_default() -> None:
+    """Send the type httpx2 encoded ``json=``, ``data=`` and ``files=`` with, so multipart keeps its boundary."""
+    wire = _Wire()
+    async with _defaulting(wire, {"Content-Type": "application/xml"}) as c:
+        await c.post("x", json={"a": 1}, expect=nothing)
+        await c.post("x", data={"a": "1"}, expect=nothing)
+        await c.post("x", files={"f": ("f.txt", b"hi")}, expect=nothing)
+        await c.post("x", content=b"<a/>", expect=nothing)
+        await c.post("x", json={"a": 1}, headers={"Content-Type": "application/vnd.api+json"}, expect=nothing)
+
+    json, form, multipart, content, explicit = (request.headers.get_list("content-type") for request in wire.sent)
+    assert (json, form, content, explicit) == (
+        ["application/json"],
+        ["application/x-www-form-urlencoded"],
+        ["application/xml"],
+        ["application/vnd.api+json"],
+    )
+    (boundary,) = (value.split("boundary=")[1] for value in multipart)
+    assert wire.sent[2].content.startswith(f"--{boundary}".encode())
+
+
 async def test_a_declarations_headers_win_over_the_clients_defaults_but_not_the_calls() -> None:
     """Send ``Expect.headers`` over the client's default headers, and keep one the call set itself."""
     wire = _Wire()

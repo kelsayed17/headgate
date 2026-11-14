@@ -46,15 +46,18 @@ policy = TransportPolicy(cache=cache)
 - **Stored on accept.** A response the rules allow is written to storage only once the call's `expect=` reader has
   accepted it. A call whose reader raises stores nothing, so the cache never serves an answer the client refused:
   a refusal inside a 200 that a reader's `refuse` catches, an undecodable body, an undeclared status. A
-  declared non-2xx (`Expect(...).on(404, ...)`) is never stored, since `statuses` names 2xx only. A `stream()` has no
-  reader, so passing its head checks accepts it. A write that fails then never fails the call, which keeps its answer;
-  it is counted as a degradation when the storage raises it (see [storage faults](#storage-faults)). Until then,
+  declared non-2xx (`Expect(...).on(404, ...)`) is never stored, since `statuses` names 2xx only. A write that fails
+  never fails the call, which keeps its answer; it is counted as a degradation when the storage raises it (see
+  [storage faults](#storage-faults)), or when it is still running at the call's deadline, which bounds it. Until then,
   hishel's `caching` report on the response says `stored: False`.
-- **`ttl`** is the client's default lifetime in seconds; a call's `cache_ttl=` overrides it.
+- **A `stream()` is never buffered.** It is served from a hit, but a miss goes up as it arrives and is not stored. A
+  POST, or any request the rules do not name, goes to the network unread and unshared.
+- **`ttl`** is the client's default lifetime in seconds; a call's `cache_ttl=` overrides it. Either must be a positive
+  finite number: anything else raises before the call is sent.
 - **TTL, not revalidation.** An entry is served until its lifetime ends and is never revalidated with the origin. For
   revalidation, use [conditional reads](#conditional-reads).
 - The body is held up to `HttpOptions.max_response_bytes`, and a body past it raises `ResponseTooLargeError` as it would
-  uncached. A body past the cap is not stored, not even for a `stream()`.
+  uncached. A body past the cap is not stored.
 
 ## Partitions
 
@@ -83,6 +86,10 @@ opt-in for public data: every client on the storage sees every entry, whatever i
 entries apart there: a query parameter with a well-known secret name that the auth does not declare, by its value,
 since `/config?key=theme` and `?key=locale` are different resources.
 
+Under either partition, a client that refuses private hosts (`SecurityOptions(allow_private_hosts=False)`) has entries
+of its own, so it is never served what a client allowed private hosts fetched from an internal address on the same
+storage.
+
 ## Credentials are never stored
 
 hishel persists the request with each entry, so it is handed a view of the request without `Authorization`,
@@ -98,14 +105,14 @@ it.
 
 hishel has no request coalescing, so an identical GET arriving while the first is still being fetched would miss too.
 headgate makes it wait and gives it a copy of the first one's response (a hit, a miss or a degraded fetch). Identical
-means the same URL, every header, the same timeouts, the same retry policy and the same cache lifetime; the timeouts compared are the ones the
-call asked for, including value-changing middleware overrides, not the ones its deadline cut, so calls with different
+means the same URL, every header but a tracer's (OpenTelemetry's `traceparent`, say), the same timeouts, the same
+retry policy and the same cache lifetime; the timeouts compared are the ones the call asked for, including value-changing middleware overrides, not the ones its deadline cut, so calls with different
 time left can still share. A timeout in a known phase is not passed on only when the first request's deadline shortened
 that phase: each waiting request then fetches its own. If a timeout does not identify its phase, any deadline-shortened
 phase still triggers that handoff. Other network failures fail every waiting request from the one attempt, each with
 its own copy of the error, and each caller's retry layer then retries (and shares again). Only the request that fetched
 counts toward the [breaker](breaker.md). A body past the size cap is not held, so each waiting request fetches its own.
-POSTs are never shared.
+POSTs, streams and GETs the rules do not name are never shared, and a hedge never waits on its own call's first send.
 
 ## Storage faults
 

@@ -92,18 +92,20 @@ async def test_only_a_status_the_cache_names_is_stored(
     assert answers == [b"partial", second], "the second call was a hit only when the 203 was stored"
 
 
-async def test_a_stream_is_stored_once_its_head_is_accepted(storage: AsyncSqliteStorage) -> None:
-    """Store a stream's response when it opens: a stream has no reader, so passing the head checks accepts it."""
+async def test_a_stream_is_never_stored_but_is_served_from_a_hit(storage: AsyncSqliteStorage) -> None:
+    """Store no stream's miss, since its body is never held, but serve a stream from what a verb stored."""
     network = _Provider(_ANSWER)
     client = stub_client(transport=network, cache=HttpCache(**every_get_rules(), storage=storage))
     try:
         async with client.stream("reading") as stream:
             assert [chunk async for chunk in stream.aiter_bytes()] == [_ANSWER]
         assert await client.get("reading", expect=as_bytes) == _ANSWER
+        async with client.stream("reading") as stream:
+            assert [chunk async for chunk in stream.aiter_bytes()] == [_ANSWER]
     finally:
         await client.aclose()
 
-    assert network.sent == 1
+    assert network.sent == len(("the stream's miss", "the verb's miss")), "the second stream was a hit"
 
 
 class _CountingStorage(FaultyStorage):
