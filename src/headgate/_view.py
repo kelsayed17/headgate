@@ -3,20 +3,24 @@
 
 """The defaults a view made by :meth:`~headgate.AsyncBaseClient.with_options` lays over its client's calls.
 
-A view is the same client with different defaults for its calls: extra headers, a retry policy and a deadline (its
-timeouts lie over the client's directly, through ``Timeouts.over``). :class:`ViewDefaults` holds them, and the client
-consults it where it applies a call's own options, so the precedence is the call's, then the view's, then the route's,
-then the policy's.
+A view is the same client with different defaults for its calls: extra headers, a retry policy, a deadline and a
+redirect choice (its timeouts lie over the client's directly, through ``Timeouts.over``). :class:`ViewDefaults` holds
+them, and the client consults it where it applies a call's own options, so the precedence is the call's, then the
+view's, then the route's, then the policy's.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import TYPE_CHECKING, Final, Literal, TypedDict
+from typing import TYPE_CHECKING, Final, Literal
 
 import httpx2
 
+# A closed TypedDict (PEP 728) refuses a keyword it does not name, so a stray or misspelled option is a type error.
+from typing_extensions import TypedDict
+
+from headgate._call_options import check_overrides
 from headgate._options import check_deadline
 from headgate.retry import NO_RETRY
 
@@ -26,26 +30,33 @@ if TYPE_CHECKING:
     from headgate._options import Timeouts
     from headgate.retry import RetryPolicy
 
-__all__ = ["KEEP", "ROOT_DEFAULTS", "Keep", "ViewDefaults", "ViewOptions"]
+__all__ = ["KEEP", "ROOT_DEFAULTS", "VIEW_KEYS", "Keep", "ViewDefaults", "ViewOptions"]
 
 
-class ViewOptions(TypedDict, total=False):
+class ViewOptions(TypedDict, total=False, closed=True):
     """The defaults :meth:`~headgate.AsyncBaseClient.with_options` changes; an option left out keeps the outer one.
 
     * ``headers``: sent on every call of the view, over the client's; a call's ``headers=`` still wins a clash.
     * ``timeout``: :class:`~headgate.Timeouts` whose set phases replace the client's; the others are kept.
     * ``deadline``: seconds each call may take, or ``None`` for no deadline.
-    * ``retry``: ``False`` sends once, a :class:`~headgate.RetryPolicy` replaces the client's, ``True`` restores it.
+    * ``retry``: a :class:`~headgate.RetryPolicy` that replaces the client's and its routes', or ``None`` to send each
+      call once. A call that should not take the view's is made on the client.
+    * ``follow_redirects``: ``False`` makes a redirect raise as its 3xx; ``True`` follows it.
     """
 
     headers: Mapping[str, str]
     timeout: Timeouts
     deadline: float | None
-    retry: bool | RetryPolicy
+    retry: RetryPolicy | None
+    follow_redirects: bool
+
+
+#: The keywords :class:`ViewOptions` names, read once.
+VIEW_KEYS: Final = frozenset(ViewOptions.__optional_keys__)
 
 
 class Keep(Enum):
-    """A view's deadline when it sets none, where ``None`` is itself a value (no deadline)."""
+    """A view's setting when it sets none, where ``None`` is itself a value (no deadline, or send once)."""
 
     KEEP = "keep"
 
@@ -56,14 +67,16 @@ KEEP: Final = Keep.KEEP
 
 @dataclass(frozen=True, slots=True)
 class ViewDefaults:
-    """What a view adds to each of its calls: ``headers`` under the call's own, and a ``deadline`` and ``retry``.
+    """What a view adds to each of its calls: ``headers`` under the call's own, a ``deadline``, ``retry`` and redirects.
 
-    ``headers`` is a tuple of pairs so the value stays immutable; ``deadline`` is ``KEEP`` when the view sets none.
+    ``headers`` is a tuple of pairs so the value stays immutable; every other setting is ``KEEP`` when the view sets
+    none. A view's ``retry=None`` is held as :data:`~headgate.retry.NO_RETRY`.
     """
 
     headers: tuple[tuple[str, str], ...] = ()
     deadline: float | Literal[Keep.KEEP] | None = KEEP
-    retry: RetryPolicy | None = None
+    retry: RetryPolicy | Literal[Keep.KEEP] = KEEP
+    follow_redirects: bool | Literal[Keep.KEEP] = KEEP
 
     def headers_for(self, call: Mapping[str, str] | None) -> Mapping[str, str] | httpx2.Headers | None:
         """Return the headers a call sends beyond the client's: the view's, then *call*'s, which win a clash."""
@@ -77,8 +90,11 @@ class ViewDefaults:
     def layered(self, options: ViewOptions) -> ViewDefaults:
         """Return these defaults with a further view's *options* laid over them; an option left out keeps a setting.
 
+        :raises TypeError: for a ``retry`` or ``follow_redirects`` of the wrong kind (see
+            :func:`~headgate._call_options.check_overrides`).
         :raises ValueError: for a deadline that is not positive and finite.
         """
+        check_overrides(options)
         changed = self
         if (headers := options.get("headers")) is not None:
             merged = httpx2.Headers(list(self.headers))
@@ -88,18 +104,12 @@ class ViewDefaults:
             deadline = options["deadline"]
             check_deadline(deadline)
             changed = replace(changed, deadline=deadline)
-        if (retry := options.get("retry")) is not None:
-            changed = replace(changed, retry=_retry_override(retry=retry))
+        if "retry" in options:
+            retry = options["retry"]
+            changed = replace(changed, retry=NO_RETRY if retry is None else retry)
+        if "follow_redirects" in options:
+            changed = replace(changed, follow_redirects=options["follow_redirects"])
         return changed
-
-
-def _retry_override(*, retry: bool | RetryPolicy) -> RetryPolicy | None:
-    """Return the retry policy a view's ``retry=`` installs: ``True`` is the client's own (no override)."""
-    if retry is True:
-        return None
-    if retry is False:
-        return NO_RETRY
-    return retry
 
 
 #: The defaults of a client that is not a view: nothing added.

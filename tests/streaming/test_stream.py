@@ -23,7 +23,7 @@ from headgate.errors import (
     UpstreamStatusError,
 )
 from headgate.ratelimit import Rate
-from headgate.streaming import Stream
+from headgate.streaming import DEFAULT_MAX_EVENT_SIZE, Stream
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
 
@@ -517,3 +517,70 @@ async def test_an_event_past_the_size_limit_names_the_limit_and_the_call() -> No
     error = raised.value
     assert str(error) == "[StubClient] server-sent event over 16 bytes from GET events"
     assert (error.method, error.url, error.request_id) == ("GET", "events", "req-7")
+
+
+# Lines: split as httpx2 splits them, bounded, and decoded without a raw error.
+
+#: Every line ending ``str.splitlines`` knows, a CRLF and a multi-byte character among them, and an unended last line.
+_LINES = "a\r\nb\rc\nd\x0be\x0cf\x1cg\x1dh\x1ei\x85j\u2028k\u2029l\r\rm\n\nnü".encode()
+
+
+async def _lines(*chunks: bytes, max_line_size: int | None = 1000, charset: str | None = None) -> list[str]:
+    """Return the lines a stream of *chunks* yields, with lines up to *max_line_size* characters."""
+    headers = None if charset is None else {"content-type": f"text/plain; charset={charset}"}
+    async with _client(_streaming(_Body(*chunks), headers)).stream("f") as stream:
+        return [line async for line in stream.aiter_lines(max_line_size=max_line_size)]
+
+
+async def _drain_lines(client: StubClient) -> None:
+    """Read every line of ``f`` from *client*, with the default line limit."""
+    async with client.stream("f") as stream:
+        async for _ in stream.aiter_lines():
+            pass
+
+
+async def test_lines_split_as_httpx2_splits_them_however_the_body_is_cut() -> None:
+    """Yield the lines httpx2 yields for a body with every line ending, however it is cut into two chunks."""
+    expected = [line async for line in httpx2.Response(200, content=_LINES).aiter_lines()]
+    for cut in range(len(_LINES) + 1):
+        assert await _lines(_LINES[:cut], _LINES[cut:]) == expected, cut
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [(b"x" * 20,), (b"x" * 10, b"x" * 10), (b"abc\n" + b"x" * 17 + b"\n",)],
+    ids=["unended", "unended-across-chunks", "ended"],
+)
+async def test_a_line_past_the_size_limit_is_refused(chunks: tuple[bytes, ...]) -> None:
+    """Refuse a line past ``max_line_size``, before it ends or once it has, naming the limit and the call."""
+    with pytest.raises(ResponseTooLargeError, match=r"^\[StubClient\] line over 16 characters from GET f"):
+        await _lines(*chunks, max_line_size=16)
+
+
+async def test_lines_of_exactly_the_size_limit_are_read() -> None:
+    """Read lines of exactly ``max_line_size`` characters, one held across chunks and a CR waiting for its LF."""
+    assert await _lines(b"abcd", b"\r", b"\nefgh\r", max_line_size=4) == ["abcd", "efgh"]
+
+
+async def test_lines_are_bounded_by_default() -> None:
+    """Refuse a line that never ends once it passes the default limit of 1 MiB."""
+    body = _Body(*(b"x" * 65536 for _ in range(DEFAULT_MAX_EVENT_SIZE // 65536 + 1)))
+    with pytest.raises(ResponseTooLargeError, match=f"line over {DEFAULT_MAX_EVENT_SIZE} characters"):
+        await _drain_lines(_client(_streaming(body)))
+
+
+async def test_lines_may_be_unbounded() -> None:
+    """Read a line of any length with ``max_line_size=None``."""
+    assert await _lines(b"x" * 5000, b"\n", max_line_size=None) == ["x" * 5000]
+
+
+@pytest.mark.parametrize("charset", ["base64", "rot13", "idna", "undefined"])
+async def test_lines_under_a_charset_that_decodes_no_text_are_utf_8(charset: str) -> None:
+    """Read lines as UTF-8 under a ``charset`` that is no text encoding, as no ``charset`` is."""
+    assert await _lines("café\n".encode(), charset=charset) == ["café"]
+
+
+async def test_a_body_its_charset_cannot_decode_is_unreadable() -> None:
+    """Raise ``ResponseParseError`` for a UTF-16 body without a byte order mark, which UTF-16 refuses."""
+    with pytest.raises(ResponseParseError, match=r"^\[StubClient\] unreadable 200 body for GET f: 'utf-16' codec"):
+        await _lines(b"h\x00i\x00\n\x00", charset="utf-16")
