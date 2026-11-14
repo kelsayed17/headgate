@@ -28,8 +28,9 @@ if TYPE_CHECKING:
 __all__ = ["DEFAULT_MAX_RESPONSE_BYTES", "read_capped", "read_head"]
 
 #: Ceiling on a single **decompressed** response body, in bytes. httpx2 has no body-size ceiling of its own
-#: (``httpx2.Limits`` caps connections only), and a ~500 KB gzipped body can expand to 524 MB. Raise it per client
-#: with ``max_response_bytes=``, or use ``stream()`` for a body too large to hold.
+#: (``httpx2.Limits`` caps connections only), and a ~500 KB gzipped body can expand to 524 MB. Set it per client with
+#: ``HttpOptions(max_response_bytes=)``, raise or lower it for one call with that call's ``max_response_bytes=``, or
+#: use ``stream()`` for a body too large to hold.
 DEFAULT_MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 
 #: Headers describing the on-the-wire encoding, dropped from a rebuilt response because its body is already decoded.

@@ -10,7 +10,7 @@ import gzip
 import httpx2
 import pytest
 
-from headgate import HttpOptions, Rate, TransportPolicy, as_bytes, nothing
+from headgate import Form, HttpOptions, Rate, TransportPolicy, as_bytes, nothing
 from headgate.errors import TransportError, UpstreamStatusError
 from headgate.retry import NO_RETRY
 from headgate.testing import FakeTransport, Respond, UnmatchedRequestError
@@ -68,8 +68,8 @@ async def test_a_reply_function_sees_the_request_and_may_be_async() -> None:
     fake = FakeTransport().reply("POST", "/v1/echo", echo).reply("POST", "/v1/shout", shout)
     client = _client(fake)
 
-    assert await client.post("echo", expect=as_bytes, data={"a": "b"}) == b"a=b"
-    assert await client.post("shout", expect=as_bytes, data={"a": "b"}) == b"A=B"
+    assert await client.post("echo", expect=as_bytes, body=Form({"a": "b"})) == b"a=b"
+    assert await client.post("shout", expect=as_bytes, body=Form({"a": "b"})) == b"A=B"
 
 
 async def test_a_reply_function_can_fail_the_network() -> None:
