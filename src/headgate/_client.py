@@ -1273,13 +1273,16 @@ def _query_value(key: str, value: object) -> _QueryValue:
 
     :raises TypeError: for a value in :data:`_NESTED`, naming *key* and the value's type.
     """
+    if isinstance(value, str | int | float | bool | None):
+        return value
+    # Checked only past the common case, since an ABC's isinstance check costs more than the native ones.
     if isinstance(value, _NESTED):
         msg = (
             "params= takes a str, int, float, bool or None for each value, or a list or tuple of them (got"
             f" {type(value).__name__} under {key!r}): encode a nested value into text first, such as with json.dumps"
         )
         raise TypeError(msg)
-    return value if isinstance(value, str | int | float | bool | None) else str(value)
+    return str(value)
 
 
 def _encoded_type(request: httpx2.Request, body: Lowered) -> str | None:
