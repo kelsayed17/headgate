@@ -19,8 +19,9 @@ from headgate import BreakerPolicy, ClientError, HttpOptions, RetryPolicy, Trans
 from headgate.breaker import BreakerState
 from headgate.events import RetryScheduled
 from headgate.retry import Hedge, RetryShare
-from headgate.testing import FakeTransport, TestClock, isolated_breakers
+from headgate.testing import FakeTransport, TestClock
 from tests.integration._support import BASE, client
+from tests.support.breakers import registry_of
 from tests.support.events import Recorder
 
 _HEDGE = Hedge(after=0.5)
@@ -76,8 +77,9 @@ async def test_a_hedged_call_is_charged_to_the_breaker_once() -> None:
     policy = TransportPolicy(
         retry=RetryPolicy(attempts=2, hedge=_HEDGE), breaker=BreakerPolicy(failure_threshold=len(("a", "b")))
     )
-    with clock.install(), isolated_breakers() as registry:
+    with clock.install():
         built = client(fake, policy=policy)
+    registry = registry_of(built)
 
     with pytest.raises(ClientError, match="hedge"):
         await built.get("x", expect=nothing)
@@ -103,8 +105,9 @@ async def test_a_hedge_losers_failure_is_not_charged_when_the_call_succeeds() ->
     clock = TestClock()
     fake = FakeTransport().reply("GET", "/v1/x", first_fails_after_the_hedge, hedge_answers)
     policy = TransportPolicy(retry=RetryPolicy(hedge=_HEDGE), breaker=BreakerPolicy(failure_threshold=1))
-    with clock.install(), isolated_breakers() as registry:
+    with clock.install():
         built = client(fake, policy=policy)
+    registry = registry_of(built)
 
     await built.get("x", expect=nothing)
 

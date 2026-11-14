@@ -13,11 +13,10 @@ import pytest
 from headgate import BreakerPolicy, HttpOptions, Json, TransportPolicy
 from headgate._responses import nothing
 from headgate.breaker import BreakerState
-from headgate.breaker._registry import DEFAULT_REGISTRY
 from headgate.errors import ClientError, TransportError
 from headgate.ratelimit import Rate
 from headgate.retry import RetryPolicy
-from tests.support.breakers import failures, has_breaker
+from tests.support.breakers import failures, has_breaker, registry_of
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
@@ -35,10 +34,10 @@ def _redirecting_to(location: str) -> httpx2.MockTransport:
     return httpx2.MockTransport(handler)
 
 
-def _open_breaker() -> None:
-    """Trip the test host's breaker for the default policy: its threshold's worth of recorded failures."""
+def _open_breaker(client: StubClient) -> None:
+    """Trip *client*'s breaker for the test host, built for the default policy: its threshold's worth of failures."""
     policy = BreakerPolicy()
-    breaker = DEFAULT_REGISTRY.breaker_for(
+    breaker = registry_of(client).breaker_for(
         f"https://{_HOST}", failure_threshold=policy.failure_threshold, recovery_timeout=policy.recovery_timeout
     )
     for _ in range(policy.failure_threshold):
@@ -61,8 +60,8 @@ async def test_an_absolute_url_keys_the_breaker_on_its_own_host() -> None:
     )
     with pytest.raises(ClientError):
         await client.get("https://other.example/x", expect=RESPONSE)
-    assert failures("other.example") == 1
-    assert not has_breaker(_HOST)
+    assert failures(client, "other.example") == 1
+    assert not has_breaker(client, _HOST)
 
 
 async def test_a_protocol_relative_path_keys_the_breaker_on_the_host_it_reaches() -> None:
@@ -88,8 +87,8 @@ async def test_a_protocol_relative_path_keys_the_breaker_on_the_host_it_reaches(
     with pytest.raises(ClientError):
         await client.get("//other.example/x", expect=RESPONSE)
     assert reached == [_HOST]
-    assert failures(_HOST) == 1
-    assert not has_breaker("other.example")
+    assert failures(client, _HOST) == 1
+    assert not has_breaker(client, "other.example")
 
 
 # --- A redirect to a bad URL ---
@@ -105,7 +104,7 @@ async def test_an_unparsable_redirect_location_is_a_transport_failure_of_the_hos
     )
     with pytest.raises(TransportError, match="Invalid URL in location header"):
         await client.get("start", expect=RESPONSE)
-    assert failures(_HOST) == 1
+    assert failures(client, _HOST) == 1
 
 
 async def test_a_redirect_whose_joined_url_is_too_long_is_a_client_error_not_a_host_failure() -> None:
@@ -125,7 +124,7 @@ async def test_a_redirect_whose_joined_url_is_too_long_is_a_client_error_not_a_h
     with pytest.raises(ClientError, match="invalid URL") as caught:
         await client.get("start", expect=RESPONSE)
     assert not isinstance(caught.value, TransportError)
-    assert failures(_HOST) == 0
+    assert failures(client, _HOST) == 0
 
 
 # --- The request is built before the breaker is asked ---
@@ -134,10 +133,10 @@ async def test_a_redirect_whose_joined_url_is_too_long_is_a_client_error_not_a_h
 async def test_with_the_breaker_open_a_url_the_join_rejects_is_still_an_invalid_url() -> None:
     """Name a URL the base-URL join rejects as what it is, not hide it behind ``circuit breaker open``."""
     httpx2.URL("b" * 65_536)  # precondition: parses alone, so only the base-URL join can reject it
-    _open_breaker()
     client = StubClient(
         rate=Rate.per_second(2), base_url=f"https://{_HOST}", policy=TransportPolicy(retry=RetryPolicy(attempts=1))
     )
+    _open_breaker(client)
     with pytest.raises(ClientError, match="invalid URL") as caught:
         await client.get("b" * 65_536, expect=RESPONSE)
     assert not isinstance(caught.value, TransportError)
@@ -145,9 +144,9 @@ async def test_with_the_breaker_open_a_url_the_join_rejects_is_still_an_invalid_
 
 async def test_with_the_breaker_open_an_unencodable_body_raises_as_itself() -> None:
     """Fail to encode a body the same way with the breaker open: encoding is part of building the request."""
-    _open_breaker()
     client = StubClient(
         rate=Rate.per_second(2), base_url=f"https://{_HOST}", policy=TransportPolicy(retry=RetryPolicy(attempts=1))
     )
+    _open_breaker(client)
     with pytest.raises(TypeError, match="JSON serializable"):
         await client.post("x", expect=nothing, body=Json(object()))

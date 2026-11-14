@@ -8,6 +8,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `headgate.testing.breakers_of(client)`, the `BreakerRegistry` a client's breakers live in, or `None` for a client
+  without a breaker.
+- `BreakerRegistry.bind(failure_threshold=, recovery_timeout=)`, which fixes the thresholds of every breaker the
+  registry holds, and a `repr` naming each origin's state.
 - `RetryShare`, the frozen share of traffic retries may add, from which each client builds a budget of its own.
 - `headgate.call_info(request)`, a middleware's read-only view of its call: a `headgate.events.CallView` holding the
   call's `CallInfo` (its route template among it), its `attempt` and the seconds `remaining` before its deadline,
@@ -48,6 +52,19 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- **Each client keeps its breakers to itself.** A client given no registry builds one of its own, so one client's
+  failures no longer open a breaker another client is refused by. This changes behavior without an error: clients that
+  relied on pooling their failures against an upstream must now be given one registry:
+
+  ```python
+  shared = BreakerRegistry()
+  policy = TransportPolicy(breaker=BreakerPolicy(registry=shared))
+  ```
+
+  `BreakerPolicy(registry=)` defaults to `None`, the client's own. A registry keys a breaker by origin alone and fixes
+  its thresholds the first time a client binds it: a client whose `BreakerPolicy` asks for other thresholds is refused
+  with `ValueError` when it is built, instead of getting a second breaker for the origin.
+  `headgate.health.breaker_states(registry)` takes the registry to report on.
 - `RetryBudget(ratio=..., min_per_second=..., window=...)` as a policy value is `RetryShare(...)`, with the same
   fields and the same per-client meaning: a client keeps one budget per distinct share, spent by its calls, views and
   routes. `RetryBudget` is now live shared state, as `RateBudget` is: `RetryBudget(share, *, timing=None)`, and every
@@ -174,6 +191,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Removed
 
+- `headgate.breaker.DEFAULT_REGISTRY`, the process-wide registry: pass one `BreakerRegistry` to the clients that share
+  it. `headgate.testing.isolated_breakers()`: each client's breakers are already its own; read them with
+  `breakers_of(client)`.
 - `RateRule` and `TransportPolicy.rate_limits`: write `Route(fragment, rate=...)` in `routes=`.
 - `headgate.retry.NO_RETRY`: write `retry=None`. `headgate.ratelimit.UNLIMITED`: leave `rate=` out, or write
   `rate=None`.

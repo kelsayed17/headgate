@@ -91,7 +91,7 @@ async def test_a_client_reports_its_failures_to_the_shared_breaker(httpx2_mock: 
     )
     with pytest.raises(UpstreamStatusError):
         await client.get("x", expect=RESPONSE)
-    assert failures("api.example") == 1
+    assert failures(client, "api.example") == 1
 
 
 # --- Construction ---
@@ -304,7 +304,7 @@ async def test_circuit_breaker_resets_on_success(httpx2_mock: HTTPXMock) -> None
         await client.get("x", expect=RESPONSE)
     httpx2_mock.add_response(url="https://api.example/x", json={"ok": True})
     await client.get("x", expect=RESPONSE)
-    assert failures("api.example") == 0
+    assert failures(client, "api.example") == 0
 
 
 class _HopAuth(CachedTokenAuth):
@@ -333,7 +333,7 @@ async def test_a_failed_auth_hop_is_not_charged_to_the_called_host() -> None:
     )
     with pytest.raises(TransportError, match="credential host down"):
         await client.get("x", expect=nothing)
-    assert failures("api.example") == 0
+    assert failures(client, "api.example") == 0
 
 
 # --- Request bodies ---

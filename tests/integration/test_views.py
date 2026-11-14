@@ -27,7 +27,7 @@ from headgate import (
 from headgate.events import RateLimited
 from headgate.ratelimit import Rate
 from headgate.retry import RetryShare
-from headgate.testing import FakeTransport, TestClock, isolated_breakers
+from headgate.testing import FakeTransport, TestClock
 from headgate.timing import Timing
 from tests.integration._support import client
 from tests.support.events import Recorder
@@ -80,8 +80,7 @@ async def test_a_view_is_refused_by_a_breaker_its_client_opened() -> None:
     """Refuse the view's call without sending it once the client's failure opened the origin's breaker."""
     fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
     policy = TransportPolicy(retry=None, breaker=BreakerPolicy(failure_threshold=1))
-    with isolated_breakers():
-        built = client(fake, policy=policy)
+    built = client(fake, policy=policy)
     view = built.with_options(headers={"X-View": "v"})
 
     with pytest.raises(UpstreamStatusError):

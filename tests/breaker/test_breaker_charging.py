@@ -81,7 +81,7 @@ async def test_a_429_is_not_a_host_failure() -> None:
     client = _client(lambda _request: httpx2.Response(429))
     with pytest.raises(RateLimitError):
         await client.get("x", expect=RESPONSE)
-    assert failures(_HOST) == 0
+    assert failures(client, _HOST) == 0
 
 
 async def test_a_5xx_is_a_host_failure() -> None:
@@ -89,23 +89,25 @@ async def test_a_5xx_is_a_host_failure() -> None:
     client = _client(lambda _request: httpx2.Response(502))
     with pytest.raises(UpstreamStatusError):
         await client.get("x", expect=RESPONSE)
-    assert failures(_HOST) == 1
+    assert failures(client, _HOST) == 1
 
 
 @pytest.mark.parametrize("exc", [httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2.PoolTimeout])
 async def test_a_local_failure_is_not_a_host_failure(exc: type[httpx2.TransportError]) -> None:
     """Charge nothing for a failure our own side made: the origin never had a say."""
+    client = _client(_raising(exc))
     with pytest.raises(ClientError):
-        await _client(_raising(exc)).get("x", expect=RESPONSE)
-    assert failures(_HOST) == 0
+        await client.get("x", expect=RESPONSE)
+    assert failures(client, _HOST) == 0
 
 
 @pytest.mark.parametrize("exc", [httpx2.ConnectError, httpx2.ReadTimeout, httpx2.RemoteProtocolError])
 async def test_a_network_failure_is_a_host_failure(exc: type[httpx2.TransportError]) -> None:
     """Charge a failure the origin's side of the wire produced."""
+    client = _client(_raising(exc))
     with pytest.raises(ClientError):
-        await _client(_raising(exc)).get("x", expect=RESPONSE)
-    assert failures(_HOST) == 1
+        await client.get("x", expect=RESPONSE)
+    assert failures(client, _HOST) == 1
 
 
 # --- Transitions as events ---

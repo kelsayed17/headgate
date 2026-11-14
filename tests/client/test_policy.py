@@ -20,13 +20,13 @@ from headgate import HttpOptions, Route, TransportPolicy
 from headgate._client import AsyncBaseClient
 from headgate._core import policy_is_disabled
 from headgate._responses import nothing
-from headgate.breaker._registry import DEFAULT_REGISTRY
-from headgate.errors import TransportError, UpstreamStatusError
+from headgate.errors import UpstreamStatusError
 from headgate.policy import policy_disabled
 from headgate.ratelimit import Rate
 from headgate.ratelimit._budget import Pacer
 from headgate.ratelimit._rate import UNPACED
 from headgate.retry import RetryPolicy
+from headgate.testing import breakers_of
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -37,9 +37,6 @@ _HOST = "example.test"
 _RATE = Rate.per_second(2.0)
 _RULE_RATE = Rate.per_second(8.0)
 _MAX_ATTEMPTS = 3
-
-#: More consecutive failures than any breaker threshold, so the loop that opens one always terminates.
-_ENOUGH_FAILURES = 50
 
 
 class _Wire:
@@ -81,18 +78,6 @@ async def _sends_for_a_503(client_factory: Callable[[_Wire], _Client]) -> int:
     return wire.sends
 
 
-async def _open_the_breaker() -> None:
-    """Fail a normally built client against the host until the shared breaker refuses it."""
-    failing = _Client(_Wire(httpx2.codes.SERVICE_UNAVAILABLE))
-    for _ in range(_ENOUGH_FAILURES):
-        if any(breaker.refusing for breaker in DEFAULT_REGISTRY):
-            return
-        with pytest.raises(UpstreamStatusError):
-            await failing.get("x", expect=nothing)
-    msg = "the breaker never opened"
-    raise AssertionError(msg)
-
-
 def _built_off(wire: _Wire) -> _Client:
     with policy_disabled():
         return _Client(wire)
@@ -101,17 +86,10 @@ def _built_off(wire: _Wire) -> _Client:
 class TestPolicyOff:
     """With ``policy_disabled()`` around construction, a client keeps none of its transport policy."""
 
-    async def test_an_open_breaker_does_not_refuse_it(self) -> None:
-        """Check that a policy-off client is not refused by a breaker another client opened on the same host.
-
-        Not recording failures is not enough: the registry is shared, so a client that still read it would be refused.
-        """
-        await _open_the_breaker()
-        with pytest.raises(TransportError, match="circuit"):
-            await _Client(_Wire(httpx2.codes.OK)).get("x", expect=nothing)
-        wire = _Wire(httpx2.codes.OK)
-        await _built_off(wire).get("x", expect=nothing)
-        assert wire.sends == 1
+    def test_it_keeps_no_breaker(self) -> None:
+        """Check that a policy-off client has no breaker to record in or be refused by, not merely one never tripped."""
+        assert breakers_of(_Client(_Wire(httpx2.codes.OK))) is not None, "control: a normally built client has one"
+        assert breakers_of(_built_off(_Wire(httpx2.codes.OK))) is None
 
     async def test_retries_are_zero_not_merely_instant(self) -> None:
         """Check that policy-off removes the retries themselves, not just the backoff between them."""

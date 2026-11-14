@@ -505,7 +505,7 @@ async def test_one_shared_upstream_failure_is_one_breaker_failure(
 
     assert all(isinstance(result, raised) for result in results), results
     assert network.calls == 1
-    assert failures("example.test") == 1
+    assert failures(client, "example.test") == 1
 
 
 async def test_gets_whose_timeouts_the_deadline_cut_still_share(storage: AsyncSqliteStorage) -> None:

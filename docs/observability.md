@@ -103,9 +103,9 @@ A `User-Agent` in `HttpOptions(headers=...)` replaces it entirely.
 
 ## Health snapshots
 
-`headgate.health` reads the process-wide state that says something is degraded, as fresh copies a metrics callback can
-poll:
+`headgate.health` reads the state that says something is degraded, as fresh copies a metrics callback can poll:
 
-- `breaker_states(registry=...)`: a `BreakerSnapshot(state, refusing)` per origin, of the shared registry by default;
+- `breaker_states(registry)`: a `BreakerSnapshot(state, refusing)` per origin, of the registry you pass (the one your
+  clients share through `BreakerPolicy(registry=...)`);
 - `cache_degradations()`: per host, how many requests found the cache broken and went to the network;
 - `observer_failures()`: per observer class, how many events its `notify` raised on.

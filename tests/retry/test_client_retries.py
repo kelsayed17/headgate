@@ -164,11 +164,12 @@ async def test_a_whole_retry_sequence_counts_once_toward_the_breaker() -> None:
     """Charge one failure to the host's breaker for a call that failed on every attempt."""
     network = FaultyTransport(schedule=[Respond(503)] * _ATTEMPTS)
 
+    client = _client(network)
     with pytest.raises(UpstreamStatusError):
-        await _client(network).get("series", expect=nothing)
+        await client.get("series", expect=nothing)
 
     assert len(network.calls) == _ATTEMPTS
-    assert failures(_HOST) == 1
+    assert failures(client, _HOST) == 1
 
 
 async def test_the_budget_is_shared_by_every_call_of_a_client() -> None:

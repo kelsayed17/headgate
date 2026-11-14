@@ -5,20 +5,21 @@ with nothing private patched. Two seams make that possible:
 
 - **the network** is `HttpOptions(transport=...)`. Have the client accept a transport and pass it through, as the
   [examples](https://github.com/kelsayed17/headgate/tree/main/examples) do: `CatalogClient(api_key, transport=fake)`;
-- **time and breaker state** are read when a client is **constructed**, from context variables the kit's context
-  managers set. Build the client inside them; entering one around a client that already exists changes nothing.
+- **time** is read when a client is **constructed**, from a context variable the kit's context managers set. Build the
+  client inside them; entering one around a client that already exists changes nothing. Breaker state needs no seam:
+  each client keeps its own.
 
 ```python
 from collections.abc import Iterator
 
 import pytest
 
-from headgate.testing import FakeTransport, Respond, instant_retries, isolated_breakers
+from headgate.testing import FakeTransport, Respond, instant_retries
 
 
 @pytest.fixture
 def catalog() -> Iterator[CatalogClient]:
-    with instant_retries(), isolated_breakers():
+    with instant_retries():
         yield CatalogClient("test-key", transport=FakeTransport().reply("GET", "/v1/series/GDP", Respond(json=GDP)))
 ```
 
@@ -73,11 +74,11 @@ reading.
 `instant_retries()` leaves the clock as it is (the real one, or a `TestClock`) and makes every wait return at once, so a
 mocked failure is retried exactly as production retries it, without the backoff.
 
-## Isolated breakers
+## Breakers
 
-`isolated_breakers()` gives the clients built in its block a fresh `BreakerRegistry` (and yields it), so failures in one
-test open no breaker in the next. Assert on it with `headgate.health.breaker_states(registry)`. A client configured
-with a registry of its own keeps it.
+Each client keeps its breakers in a `BreakerRegistry` of its own, unless its `BreakerPolicy` names one to share, so
+failures in one test open no breaker in the next. `breakers_of(client)` returns that registry (or `None` for a client
+without a breaker); assert on it with `headgate.health.breaker_states(registry)`.
 
 ## What a client was built with
 

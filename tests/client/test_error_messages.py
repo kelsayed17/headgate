@@ -324,7 +324,7 @@ async def test_a_response_check_that_raises_is_treated_like_one_that_returns() -
 
     assert caught.value.status_code == httpx2.codes.FOUND
     assert caught.value.code == "KEY"
-    assert failures(_HOST) == 0
+    assert failures(client, _HOST) == 0
 
 
 async def test_a_response_check_that_raises_on_a_stream_is_treated_like_one_that_returns() -> None:

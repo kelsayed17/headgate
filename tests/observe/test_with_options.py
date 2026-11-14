@@ -23,7 +23,7 @@ from headgate import (
 )
 from headgate.errors import CircuitOpenError, ClientTimeoutError, UpstreamStatusError
 from headgate.policy import policy_disabled
-from headgate.testing import FakeTransport, isolated_breakers
+from headgate.testing import FakeTransport
 from tests.observe._support import BASE, RATE, client
 from tests.support.clients import StubClient
 
@@ -192,8 +192,7 @@ async def test_a_view_shares_the_breakers() -> None:
     """Refuse a view's call once the client's own calls opened the host's breaker."""
     fake = FakeTransport().reply("GET", "/v1/x", 503)
     policy = TransportPolicy(retry=None, breaker=BreakerPolicy(failure_threshold=1))
-    with isolated_breakers():
-        root = client(fake, policy=policy)
+    root = client(fake, policy=policy)
     with pytest.raises(UpstreamStatusError):
         await root.get("x", expect=nothing)
     with pytest.raises(CircuitOpenError):

@@ -29,7 +29,7 @@ from headgate.errors import ClientError
 from headgate.otel import OpenTelemetryObserver
 from headgate.ratelimit import Rate
 from headgate.retry import Backoff, Hedge
-from headgate.testing import FakeTransport, TestClock, isolated_breakers
+from headgate.testing import FakeTransport, TestClock
 from headgate.timing import Timing, current_timing, timing_override
 from tests.cache._helpers import FaultyStorage, every_get_rules
 from tests.observe._support import client
@@ -122,8 +122,7 @@ async def _cache_degraded(observers: tuple[Observer, ...], storage: AsyncSqliteS
 async def _breaker_opening(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) -> None:
     """Fail once, opening the host's breaker, then make a call it refuses."""
     policy = TransportPolicy(retry=RetryPolicy(attempts=1), breaker=BreakerPolicy(failure_threshold=1))
-    with isolated_breakers():
-        built = client(FakeTransport().reply("GET", "/v1/x", 503), *observers, policy=policy)
+    built = client(FakeTransport().reply("GET", "/v1/x", 503), *observers, policy=policy)
     await _call(built, times=2)
 
 

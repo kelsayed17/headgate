@@ -103,7 +103,7 @@ async def test_a_pause_past_the_deadline_raises_rate_limit_error_without_sending
     assert (error.attempts, getattr(error, "__notes__", [])) == (0, []), "an attempt never sent is no attempt"
     assert "past the call's deadline" in str(error)
     assert server.received == 1, "the refused call never reached the server"
-    assert failures(_HOST) == 0, "neither the 429 nor the local refusal is a host failure"
+    assert failures(client, _HOST) == 0, "neither the 429 nor the local refusal is a host failure"
 
 
 async def test_a_call_the_paused_budget_refuses_reports_no_attempt() -> None:

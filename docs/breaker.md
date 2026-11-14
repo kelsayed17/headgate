@@ -50,11 +50,18 @@ mint), or while the auth waits for or makes a token mint (a re-mint after a 401 
 
 ## Sharing and keying
 
-Breakers live in a `BreakerRegistry`, by default one the whole process shares. Every client
-whose `BreakerPolicy` names the same registry and the same thresholds shares an origin's breaker, so two clients of one
-upstream cannot each spend a full quota of failures against it. A client that asks for other thresholds gets a breaker
-of its own for that origin, with exactly the thresholds it asked for, rather than whichever thresholds the first client
-to call happened to set.
+Breakers live in a `BreakerRegistry`. A client builds one of its own, so its failures open no other client's breakers;
+there is no process-wide registry. Clients that should pool their failures against an upstream, so that two clients of
+it cannot each spend a full quota of failures, are given one registry: `BreakerPolicy(registry=shared)`. A registry
+keys a breaker by origin and fixes its thresholds the first time a client binds it, so every breaker it holds trips as
+each client sharing it expects. A client whose policy asks for other thresholds is refused with `ValueError` when it is
+built:
+
+```text
+this BreakerRegistry's breakers trip after 3 failures with a 30s cooldown, so a client with
+BreakerPolicy(failure_threshold=5, recovery_timeout=60) cannot share it: give that client the same thresholds, or a
+registry of its own
+```
 
 ```python
 from headgate import BreakerPolicy, TransportPolicy
@@ -68,16 +75,16 @@ no_breaker = TransportPolicy(breaker=None)
 A registry is thread-safe (clients on different event loops and threads can share it) and bounded: past `max_hosts`
 breakers (default 1024) it drops the least recently used closed one, or, when every breaker is open or half-open, the
 least recently used of all. `TransportPolicy(breaker=None)` turns the breaker off; such a client never reads a registry,
-so it is not refused by a breaker another client opened.
+so it is not refused by a breaker a client sharing one opened.
 
 ## Watching it
 
 Every transition a call causes is a `BreakerChanged` event (origin, previous and new state, failure count, and the
 call); a state is a `BreakerState`, a string enum of `closed`, `open` and `half_open`.
-`headgate.health.breaker_states()` returns a snapshot per origin of the shared registry (pass `registry=` for another),
-with `refusing` alongside `state`: an open breaker whose cooldown has elapsed still reads open until a call takes the
-probe, so `refusing` is what says whether a call made now would be turned away. Where clients with different thresholds
-keep several breakers for one origin, the snapshot reports the most degraded. See [observability](observability.md).
+`headgate.health.breaker_states(registry)` returns a snapshot per origin of the registry you pass (the one your clients
+share), with `refusing` alongside `state`: an open breaker whose cooldown has elapsed still reads open until a call
+takes the probe, so `refusing` is what says whether a call made now would be turned away. See
+[observability](observability.md).
 
-In tests, `headgate.testing.isolated_breakers()` gives the clients built in its block a fresh registry, so no breaker
-state crosses between tests. See [testing](testing.md).
+In tests, no breaker state crosses between tests, since each client keeps its own; `headgate.testing.breakers_of(client)`
+returns the registry a client's breakers live in. See [testing](testing.md).

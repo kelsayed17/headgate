@@ -60,7 +60,7 @@ async def test_the_policy_deadline_bounds_a_call_that_hangs() -> None:
     error = raised.value
     assert (error.method, error.url, error.attempts) == ("GET", "series", 1)
     assert error.retryable is False
-    assert failures(_HOST) == 1, "the host never answered the attempt the deadline cut off"
+    assert failures(client, _HOST) == 1, "the host never answered the attempt the deadline cut off"
 
 
 async def test_a_route_deadline_applies_to_its_paths() -> None:

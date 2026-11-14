@@ -593,7 +593,7 @@ async def test_a_storage_fault_while_an_unheld_body_streams_is_a_value_free_tran
     assert read_error.__cause__ is None, "the backend's own error is not chained"
     assert read_error.__suppress_context__
     assert host_untested(read_error)
-    assert failures("x") == 0
+    assert failures(client, "x") == 0
 
 
 def test_an_unmarked_response_or_error_is_host_evidence() -> None:
