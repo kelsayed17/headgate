@@ -470,3 +470,54 @@ async def test_a_hop_that_sets_its_own_timeouts_keeps_them() -> None:
     timeouts = await _hop_timeouts(_OneHop({"timeout": _HOP_TIMEOUTS}), deadline=None)
 
     assert timeouts == _HOP_TIMEOUTS
+
+
+class _Tracked(httpx2.AsyncByteStream):
+    """A token response body that records whether it was closed."""
+
+    def __init__(self) -> None:
+        """Open."""
+        self.closed = False
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"{}"
+
+    @override
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+async def test_a_token_response_refused_by_its_length_closes_its_stream() -> None:
+    """Close a hop's network stream refused by its ``Content-Length`` unread, or its pooled connection leaks."""
+    body = _Tracked()
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/token":
+            return httpx2.Response(
+                httpx2.codes.OK, stream=body, headers={"Content-Length": str(MAX_MINT_RESPONSE_BYTES + 1)}
+            )
+        return httpx2.Response(httpx2.codes.OK)
+
+    with pytest.raises(ResponseTooLargeError, match=r"\(token mint\)"):
+        await _call(_FlowReadsJson(), handle)
+
+    assert body.closed
+
+
+async def test_a_mint_hops_network_failure_names_the_token_endpoint_not_the_api_call() -> None:
+    """Report a ``mint_flow`` hop that cannot connect as the token endpoint's failure, named for the auth class.
+
+    httpx2 raises the hop's error outside the auth flow, so the client maps it, as a mint's failure, not the call's.
+    """
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/token":
+            return _refused(request)
+        return httpx2.Response(httpx2.codes.OK)
+
+    with pytest.raises(TransportError) as raised:
+        await _call(_FlowReadsJson(), handle)
+
+    assert str(raised.value) == f"[_FlowReadsJson] POST https://{_API_HOST}/token (token mint): connection refused"
+    assert failures(_API_HOST) == 0
