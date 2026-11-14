@@ -143,7 +143,13 @@ def build_transport_stack(
         layer = MiddlewareTransport(transport=layer, middleware=(), guard=credentials.guard, signer=signer)
     layer = RateLimitTransport(budgets=budgets, transport=layer)
     if (cache := policy.cache) is not None:
-        scope = credential_scope(cache, credentials.auth, middleware=http.middleware, headers=http.headers)
+        scope = credential_scope(
+            cache,
+            credentials.auth,
+            middleware=http.middleware,
+            headers=http.headers,
+            guarded=not http.security.allow_private_hosts,
+        )
         layer = ResilientCacheTransport(layer, cache, max_body_bytes=http.max_response_bytes, scope=scope)
     if http.middleware:
         layer = MiddlewareTransport(transport=layer, middleware=http.middleware, guard=credentials.guard, signer=None)

@@ -87,6 +87,47 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A one-shot `content=` stream is never sent twice below the retry layer either. When an HTTP/2 GOAWAY moved the
+  request to a new connection, an async-iterable file went out empty and the server processed an empty POST, and an
+  async generator raised a raw `httpx2.StreamConsumed`. The second read is now refused, and the call raises
+  `TransportError`.
+- A `files=` upload of a file that cannot be rewound, such as a pipe or a socket, is sent once, like a one-shot
+  `content=` stream. A retry or a followed 307 or 308 sent it again with an empty file. A file object counts as
+  rewindable only if it is a regular file on disk or an in-memory file that can seek.
+- A hedge sends its own copy of an in-memory body, and a streamed or multipart body is never hedged. A middleware that
+  read `request.content` failed every hedged call with `RequestNotRead`, and two sends read one file at once.
+- An empty or blank idempotency key is refused: `idempotency_key=""`, or an `IdempotencyKeys` factory returning one,
+  raises `ValueError`. An empty `Idempotency-Key` header no longer makes a POST retryable.
+- A `stream()` that became the half-open breaker's probe settles it at its response head. It used to hold the probe
+  until its block exited, so every other call to that origin, from every client sharing the registry, was refused
+  with `CircuitOpenError` for as long as the stream was read. A network failure mid-body now counts as one ordinary
+  failure.
+- A call admitted before its origin's breaker opened no longer changes the breaker when it finishes, even after the
+  probe has closed it again, and its retries are refused once the cooldown elapses. Such a call failing late used to
+  open the recovered breaker for another full cooldown, and its retries reached the origin beside the probe.
+- A breaker transition listener (an observer of `BreakerChanged`) that raises when the probe is taken no longer leaves
+  the breaker refusing every call forever.
+- The call's deadline passing while `CachedTokenAuth` re-mints a token after a 401, or waits for another call's mint,
+  is no longer charged to the API origin's breaker. Five such calls opened it for the whole process.
+- A response a middleware answers itself, without sending the request, is no longer charged to the origin's breaker.
+- `stream()` charges the breaker as a verb does: a stream that opens with a 4xx or a `response_check` refusal counts as
+  the origin answering, and a network `TimeoutError` while reading the error's body is a transport failure rather than
+  "deadline exceeded". A `ClientError` another call raises inside a stream's block is no longer reported as the
+  stream's error, nor given the stream's notes.
+- A cached client no longer buffers a `stream()`, a POST, or a request its `HttpCache` rules do not name: each goes to
+  the network and up as it arrives, unshared. A server-sent event stream's block was entered only once the body ended
+  or 32 MiB arrived. A stream is still served from a hit, but a stream's miss is no longer stored.
+- On a cached client, a hedge sends its own request instead of waiting on its call's first send of the same GET.
+- A cache write still running at a verb's deadline is dropped and counted in `cache_degradations()`; the call returns
+  by its deadline. It ran on past it.
+- A response header holding raw UTF-8 (`Content-Disposition: attachment; filename="café.csv"`) is handed up as sent.
+  Every buffered call raised `UnicodeEncodeError`, and on a cached client a `Set-Cookie` beside it did too.
+- Identical GETs share one download with `OpenTelemetryObserver` installed: its per-call trace headers no longer keep
+  them apart.
+- A client that refuses private hosts has cache entries of its own, so it is never served a body that another client
+  on the same storage fetched from an internal address.
+- A per-call `cache_ttl=` that is not a positive finite number raises `ValueError`, and one that is not a number
+  `TypeError`, before the call is sent. `nan` was stored forever, and `"60"` was counted as a storage fault.
 - A view's headers (`with_options(headers=...)`) partition the cache, as `HttpOptions(headers=...)` does. Two views
   with different `X-Api-Key` values on one client were served each other's cached entries.
 - A view's headers are withheld from untrusted origins, as client-wide ones are, and a call's own `headers=` from a

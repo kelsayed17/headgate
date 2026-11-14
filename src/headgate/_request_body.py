@@ -10,10 +10,13 @@ and their ``Content-Type``. A hand-written writer is a plain function returning 
 A streamed body is either replayable or not, and the retry layer has to know which: a stream given as an iterable is
 consumed by the first send, so the call is marked non-replayable (:data:`~headgate.retry.REPLAYABLE_BODY`) and never
 re-sent; a stream given as a factory is built afresh, by calling the factory once, each time the request is sent.
+A ``files=`` upload is replayable unless one of its files is a file object that cannot be rewound, such as a pipe.
 """
 
 from __future__ import annotations
 
+import os
+import stat
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import IO, override
@@ -27,6 +30,7 @@ __all__ = [
     "UploadFiles",
     "Writer",
     "check_one_body",
+    "files_replayable",
     "request_content",
 ]
 
@@ -103,6 +107,28 @@ def request_content(body: Body | None) -> tuple[bytes | AsyncIterable[bytes] | N
         )
         raise TypeError(msg)
     return _Replayed(body), True
+
+
+def _rewinds(file: IO[bytes]) -> bool:
+    """Return whether *file* can be read again from its start: a regular file, or an in-memory one that can seek.
+
+    A descriptor is judged by its type, not by ``seekable()``: on Windows a pipe reports itself seekable, though
+    seeking it rewinds nothing.
+    """
+    try:
+        descriptor = file.fileno()
+    except OSError:  # io.UnsupportedOperation: no descriptor, such as a BytesIO
+        return file.seekable()
+    return stat.S_ISREG(os.fstat(descriptor).st_mode)
+
+
+def files_replayable(files: UploadFiles | None) -> bool:
+    """Return whether every file in *files* can be read again: bytes, text, a regular file or an in-memory one."""
+    if files is None:
+        return True
+    values = files.values() if isinstance(files, Mapping) else (value for _, value in files)
+    contents = (value[1] if isinstance(value, tuple) else value for value in values)
+    return all(isinstance(content, bytes | str) or _rewinds(content) for content in contents)
 
 
 def check_one_body(

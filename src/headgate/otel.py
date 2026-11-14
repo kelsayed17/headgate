@@ -61,6 +61,7 @@ except ImportError as exc:
 
 from headgate._core import CallContext, CallFinished, CallInfo, CallStarted
 from headgate._user_agent import headgate_version
+from headgate.cache._transport import TRACE_HEADERS
 
 if TYPE_CHECKING:
     import httpx2
@@ -226,6 +227,8 @@ class OpenTelemetryObserver:
         A request of no call this observer saw (an auth flow's token mint, a client that has this as middleware but
         not as an observer) carries the caller's current context instead, if there is one.
         """
+        # Named for the cache, which leaves them out of what identical GETs must agree on to share a download.
+        request.extensions[TRACE_HEADERS] = self._propagator.fields
         call = CallContext.find(request)
         live = None if call is None else self._live.get(call.info.call_id)
         if live is None:

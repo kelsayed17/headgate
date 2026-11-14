@@ -12,6 +12,12 @@ current attempt's :class:`~headgate._core.SendProgress` from two sources:
   the wire);
 * a counting wrapper around the request's body stream, which counts each body chunk as the transport takes it.
 
+The wrapper also keeps a one-shot body (``REPLAYABLE_BODY`` is ``False``) from going out twice, whichever layer asks:
+httpcore2's pool, which moves a request a GOAWAY proved unprocessed to a new connection and reads its body again, or
+any layer above that sends the request again. The second pass raises :class:`BodyNotReplayableError` instead of
+sending the body empty. An in-memory body (``httpx2.ByteStream``, such as one an auth flow buffered) can always be
+read again, so it is never refused.
+
 A transport that neither calls the trace nor reads the body stream (a custom or test transport) reports nothing, and
 the retry layer falls back to judging by the exception's type.
 """
@@ -22,14 +28,15 @@ from typing import TYPE_CHECKING, Final, override
 
 import httpx2
 
-from headgate._core import CallContext
+from headgate._core import CallContext, Slot
+from headgate.retry._policy import REPLAYABLE_BODY
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
     from headgate._core import SendProgress
 
-__all__ = ["SendTrackingTransport"]
+__all__ = ["BodyNotReplayableError", "SendTrackingTransport"]
 
 #: The request extension httpcore2 calls with each step of a send.
 _TRACE: Final = "trace"
@@ -43,6 +50,9 @@ _HEAD_STEP: Final = "send_request_headers.started"
 #: Bytes an HTTP/1.1 head spends around each header line (``": "`` and CRLF), and around the request line.
 _LINE_OVERHEAD: Final = 4
 
+#: Set on a call's context once its one-shot body has been read, so no later send reads it again.
+_BODY_READ: Final = Slot[bool]("one_shot_body_read")
+
 type _Trace = Callable[[str, dict[str, object]], Awaitable[None]]
 
 
@@ -53,16 +63,29 @@ def head_size(request: httpx2.Request) -> int:
     return size + sum(len(name) + len(value) + _LINE_OVERHEAD for name, value in request.headers.raw)
 
 
-class _CountingStream(httpx2.AsyncByteStream):
-    """A request body stream that counts each chunk into the attempt's progress as the transport takes it."""
+class BodyNotReplayableError(httpx2.TransportError):
+    """A layer below the retry layer asked for a one-shot request body a second time, which was refused."""
 
-    def __init__(self, stream: httpx2.AsyncByteStream, progress: SendProgress) -> None:
+
+class _CountingStream(httpx2.AsyncByteStream):
+    """A request body stream that counts each chunk into the attempt's progress as the transport takes it.
+
+    Given the call's *one_shot* context, it refuses to be read once the call's body already was.
+    """
+
+    def __init__(self, stream: httpx2.AsyncByteStream, progress: SendProgress, one_shot: CallContext | None) -> None:
         """Count the chunks of *stream* into *progress*."""
         self._stream = stream
         self._progress = progress
+        self._one_shot = one_shot
 
     @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
+        if (context := self._one_shot) is not None:
+            if context.get(_BODY_READ) is not None:
+                msg = "the request body is a one-shot stream, so it cannot be sent again"
+                raise BodyNotReplayableError(msg)
+            context.put(_BODY_READ, value=True)
         async for chunk in self._stream:
             self._progress.add_sent(len(chunk))
             yield chunk
@@ -104,7 +127,8 @@ class SendTrackingTransport(httpx2.AsyncBaseTransport):
         stream = request.stream
         chained = request.extensions.get(_TRACE)
         if isinstance(stream, httpx2.AsyncByteStream):
-            request.stream = _CountingStream(stream, progress)
+            one_shot = context.get(REPLAYABLE_BODY) is False and not isinstance(stream, httpx2.ByteStream)
+            request.stream = _CountingStream(stream, progress, context if one_shot else None)
         request.extensions[_TRACE] = _tracer(request, progress, chained)
         try:
             return await self._transport.handle_async_request(request)
