@@ -8,6 +8,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `max_response_bytes=` on a call (#57) raises or lowers the client's body cap for that call alone, as `timeout=` and
+  `deadline=` already can: higher for one large file on a host whose other files are small, lower for an endpoint that
+  should stay small. It is checked as a positive `int`. A cached client holds the body up to the call's cap, so the
+  entry is stored, and every read of an entry is checked against the cap of the call reading it. `stream()` takes no
+  cap, since its body is never buffered.
 - `CallOptions`, the TypedDict of every per-call option but the body, which every verb and `paginate()` take, and
   `headgate.streaming.StreamOptions`, the options of `stream()`. `with_options(follow_redirects=...)` sets a view's
   redirect choice, and is refused on a client with a `response_check`, as each of its calls would be.

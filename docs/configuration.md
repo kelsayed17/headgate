@@ -57,7 +57,7 @@ How requests are sent and responses read.
 | `timeout` | `Timeouts()` | per-phase timeouts; a phase left unset takes its default |
 | `follow_redirects` | `True` | the client's default; a call can override it |
 | `max_redirects` | `5` | the hop limit, auth-flow hops included |
-| `max_response_bytes` | 32 MiB | the cap on a buffered body, counted after decompression; `stream()` is uncapped |
+| `max_response_bytes` | 32 MiB | the cap on a buffered body, counted after decompression; a call's own `max_response_bytes=` replaces it for that call; `stream()` is uncapped |
 | `response_check` | `None` | a check of every final response; requires `follow_redirects=False` |
 | `security` | `SecurityOptions()` | where requests and credentials may go: see below |
 | `ssl_context` | `None` | TLS for the default transport: a private CA, mutual TLS, pinning |
@@ -183,6 +183,7 @@ await client.get(
     headers={"Accept-Language": "en"},
     timeout=Timeouts(read=5.0),  # the phases it sets replace the view's or the client's
     deadline=10.0,  # seconds for this call, or None for none
+    max_response_bytes=256 * 1024 * 1024,  # this call's body cap, over HttpOptions.max_response_bytes
 )
 ```
 
@@ -197,8 +198,9 @@ even past `no-store`, as an entry of `HttpCache(ttl=None)` is.
 
 The options are typed, so a wrapper can forward them with every key checked. `CallOptions` is the TypedDict of every
 per-call option but the body, which every verb and `paginate()` take; `RequestOptions` is a verb's (`CallOptions` plus
-the body); `headgate.streaming.StreamOptions` is `stream()`'s (`RequestOptions` less `cache_ttl`); and `ViewOptions` is
-what `with_options()` takes. A wrapper typed on them forwards every option at once:
+the body); `headgate.streaming.StreamOptions` is `stream()`'s (`RequestOptions` less `cache_ttl` and
+`max_response_bytes`); and `ViewOptions` is what `with_options()` takes. A wrapper typed on them forwards every option
+at once:
 
 ```python
 async def fetch(self, url: LiteralString, **options: Unpack[CallOptions]) -> Series:

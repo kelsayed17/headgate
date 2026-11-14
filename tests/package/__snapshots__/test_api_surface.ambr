@@ -555,6 +555,7 @@
       key follow_redirects: bool (optional)
       key idempotency_key: str (optional)
       key cache_ttl: float | None (optional)
+      key max_response_bytes: int (optional)
   class CircuitOpenError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class ClientConfigurationError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class ClientError(Exception)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
@@ -710,6 +711,7 @@
       key follow_redirects: bool (optional)
       key idempotency_key: str (optional)
       key cache_ttl: float | None (optional)
+      key max_response_bytes: int (optional)
       key body: EncodedBody (optional)
       key json: object (optional)
       key data: Mapping[str, object] (optional)

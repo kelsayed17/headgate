@@ -41,7 +41,7 @@ async def _check(path: Path, body: str) -> tuple[int | None, str]:
 
 
 async def test_a_wrapper_forwards_the_call_options(tmp_path: Path) -> None:
-    """Forward ``**options: Unpack[CallOptions]`` to a verb and to ``paginate``, and to ``stream`` but for one key."""
+    """Forward ``**options: Unpack[CallOptions]`` to a verb and to ``paginate``."""
     code, out = await _check(
         tmp_path,
         """
@@ -57,8 +57,8 @@ async def test_a_wrapper_forwards_the_call_options(tmp_path: Path) -> None:
     assert code == 0, out
 
 
-async def test_stream_options_leave_out_the_cache_lifetime(tmp_path: Path) -> None:
-    """Refuse forwarding a verb's options to ``stream``, whose options have no ``cache_ttl``."""
+async def test_stream_options_leave_out_what_a_stream_never_buffers(tmp_path: Path) -> None:
+    """Refuse forwarding a verb's options to ``stream``, which takes no ``cache_ttl`` or ``max_response_bytes``."""
     code, out = await _check(
         tmp_path,
         """
@@ -69,9 +69,9 @@ async def test_stream_options_leave_out_the_cache_lifetime(tmp_path: Path) -> No
     )
 
     assert code != 0, out
-    assert out.count("error[") == 1, out
-    assert "unknown-argument" in out, out
+    assert out.count("error[unknown-argument]") == len(("cache_ttl", "max_response_bytes")), out
     assert "Argument `cache_ttl` does not match" in out, out
+    assert "Argument `max_response_bytes` does not match" in out, out
 
 
 async def test_the_old_override_values_do_not_type_check(tmp_path: Path) -> None:

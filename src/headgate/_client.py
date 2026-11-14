@@ -101,7 +101,14 @@ from headgate.breaker import CircuitBreaker
 from headgate.breaker._breaker import BreakerOpenError
 from headgate.breaker._registry import NO_BREAKER
 from headgate.breaker._scope import scoped_registry
-from headgate.cache._transport import STREAMED, host_untested, served_from_cache, stamp_ttl, store_accepted
+from headgate.cache._transport import (
+    MAX_RESPONSE_BYTES,
+    STREAMED,
+    host_untested,
+    served_from_cache,
+    stamp_ttl,
+    store_accepted,
+)
 from headgate.errors import (
     CircuitOpenError,
     ClientError,
@@ -248,7 +255,7 @@ class AsyncBaseClient:
     * ``ForbiddenDestinationError``: a hop the SSRF guard refused (``SecurityOptions(allow_private_hosts=False)``), or
       a token mint's hop redirected off its origin;
     * ``ResponseParseError``: a 2xx body the reader could not read;
-    * ``ResponseTooLargeError``: a body past ``HttpOptions.max_response_bytes``.
+    * ``ResponseTooLargeError``: a body past the call's ``max_response_bytes``, else ``HttpOptions.max_response_bytes``.
 
     There is no ``None`` return except from a reader that returns it (:data:`~headgate._responses.nothing`): every
     undeclared non-2xx raises, a 404 included. A non-2xx the provider documents as an answer is declared with
@@ -648,6 +655,9 @@ class AsyncBaseClient:
         check_overrides(call.options)
         spec: Expect[T] = _expectation(expect)
         prepared = self._prepare(call)
+        cap = call.options.get("max_response_bytes")
+        if cap is not None:
+            prepared.context.put(MAX_RESPONSE_BYTES, cap)
         explicit = self._view.headers_for(call.options.get("headers"))
         _stamp_headers(prepared.request, explicit, spec.headers)
         if spec.accept is not None:
@@ -655,7 +665,7 @@ class AsyncBaseClient:
         async with self._reported(prepared):
             async with self._deadline(prepared), self._exchange(prepared) as (streamed, _):
                 announce_deprecation(prepared.context, streamed)
-                resp = await read_capped(streamed, self._max_response_bytes, self._site(prepared))
+                resp = await read_capped(streamed, cap or self._max_response_bytes, self._site(prepared))
             answer = self._dispatch(resp, spec, self._site(prepared))
             # Only now that the reader accepted it may a cached miss be stored.
             await store_accepted(resp)

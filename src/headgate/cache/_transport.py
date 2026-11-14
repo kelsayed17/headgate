@@ -75,6 +75,7 @@ __all__ = [
     "CACHE_DEGRADATIONS",
     "CACHE_DEGRADED_EXT",
     "HOST_UNTESTED",
+    "MAX_RESPONSE_BYTES",
     "STREAMED",
     "TRACE_HEADERS",
     "CacheStorageError",
@@ -343,6 +344,9 @@ async def store_accepted(response: httpx2.Response) -> None:
 
 #: Marks a call opened as a stream, which this layer hands up as it arrives: never read ahead, shared or stored.
 STREAMED = Slot[bool]("streamed")
+
+#: A call's own ``max_response_bytes``, which this layer holds a body up to in place of the client's cap.
+MAX_RESPONSE_BYTES = Slot[int]("max_response_bytes")
 
 #: The request extension naming the headers a tracer stamps on each attempt (OpenTelemetry's ``traceparent``, say),
 #: which differ on every call and so are left out of what identical GETs must agree on to share a download.
@@ -765,10 +769,16 @@ class ResilientCacheTransport(AsyncCacheTransport):
         if streamed:
             return live, None
         try:
-            return await _buffer_up_to(live, self._max_body_bytes, sources=(live,))
+            return await _buffer_up_to(live, self._cap_for(request), sources=(live,))
         except BaseException:
             await _close_quietly(live)
             raise
+
+    def _cap_for(self, request: httpx2.Request) -> int:
+        """Return how much of *request*'s body this layer holds: its call's ``max_response_bytes``, else its own."""
+        context = CallContext.find(request)
+        cap = None if context is None else context.get(MAX_RESPONSE_BYTES)
+        return self._max_body_bytes if cap is None else cap
 
     async def _fetch_cached(self, request: httpx2.Request, *, streamed: bool) -> tuple[httpx2.Response, bytes | None]:
         """Fetch *request* through hishel, closing every response it abandons when anything goes wrong."""
@@ -789,7 +799,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
             if streamed and not served_from_cache(response):
                 held, body = _replayed(response, [], response.aiter_raw(), sources), None
             else:
-                held, body = await _buffer_up_to(response, self._max_body_bytes, sources=sources)
+                held, body = await _buffer_up_to(response, self._cap_for(request), sources=sources)
         except BaseException:
             await _close_quietly(response, *call.handed_up)
             raise

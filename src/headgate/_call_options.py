@@ -54,9 +54,10 @@ class _EveryCall(TypedDict, total=False):
 
 
 class _Buffered(_EveryCall, total=False):
-    """The options of a request whose response is read whole: every request's, plus its cache lifetime."""
+    """The options of a request whose response is read whole: every request's, plus its cache lifetime and size cap."""
 
     cache_ttl: float | None
+    max_response_bytes: int
 
 
 class _Bodies(TypedDict, total=False):
@@ -89,6 +90,9 @@ class CallOptions(_Buffered, total=False, closed=True):
       response's own cache headers, ``Cache-Control: max-age`` and ``no-store`` included.
     * ``idempotency_key``: the idempotency key this call carries on every attempt, under the policy's
       ``IdempotencyKeys`` header (``Idempotency-Key`` by default).
+    * ``max_response_bytes``: the cap on this call's body, counted after decompression, in place of
+      ``HttpOptions.max_response_bytes``: higher for one large file, or lower for an endpoint that should stay small. A
+      cached client holds the body up to it too.
     """
 
 
@@ -110,7 +114,7 @@ class RequestOptions(_Buffered, _Bodies, total=False, closed=True):
 class StreamOptions(_EveryCall, _Bodies, total=False, closed=True):
     """The per-call options of :meth:`~headgate.AsyncBaseClient.stream`: :class:`~headgate.RequestOptions` but two.
 
-    A stream is never buffered, so it takes no ``cache_ttl``; the rest are a verb's.
+    A stream is never buffered, so it takes no ``cache_ttl`` and no ``max_response_bytes``; the rest are a verb's.
     """
 
 
@@ -143,12 +147,13 @@ def check_options(
 
 
 def check_overrides(options: Mapping[str, object]) -> None:
-    """Check the kind of each override in *options*: ``retry``, ``follow_redirects`` and ``cache_ttl``.
+    """Check the kind of each override in *options*: ``retry``, ``follow_redirects``, ``cache_ttl`` and the size cap.
 
     :raises TypeError: for a ``retry`` that is neither a ``RetryPolicy`` nor ``None`` (``True`` and ``False``
         included, with what to write instead), a ``follow_redirects`` that is not a ``bool`` and a ``cache_ttl`` that
-        is neither a number nor ``None``.
-    :raises ValueError: for a ``cache_ttl`` that is not positive and finite.
+        is neither a number nor ``None``, and a ``max_response_bytes`` that is not an ``int`` (a ``bool`` included).
+    :raises ValueError: for a ``cache_ttl`` that is not positive and finite, and a ``max_response_bytes`` that is not
+        positive.
     """
     if "retry" in options:
         retry = options["retry"]
@@ -168,3 +173,11 @@ def check_overrides(options: Mapping[str, object]) -> None:
     if isinstance(ttl, int | float) and not (ttl > 0 and math.isfinite(ttl)):
         msg = f"cache_ttl must be a positive finite number of seconds, or None (got {ttl})"
         raise ValueError(msg)
+    if "max_response_bytes" in options:
+        cap = options["max_response_bytes"]
+        if isinstance(cap, bool) or not isinstance(cap, int):
+            # No kind at all, so check_kind refuses a bool too, in its own words.
+            check_kind("max_response_bytes", cap, (), "a number of bytes, an int")
+        elif cap <= 0:
+            msg = f"max_response_bytes must be > 0 (got {cap})"
+            raise ValueError(msg)
