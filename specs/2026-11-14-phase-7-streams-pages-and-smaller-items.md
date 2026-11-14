@@ -133,10 +133,9 @@ The design leaves these to the builder, or does not settle them. Each is the pla
   - `check_timeout_fits` never refuses it, because no limit under a deadline is the deadline.
   - `fit_timeouts` still cuts it to the time left for a verb, as it cuts an unset phase.
   - The design's 7 is amended in Task 1.
-- **A stream's read timeout is neither checked nor cut.** The design says only that it is not checked against the deadline. Cutting it is what makes a quiet stream fail.
-  - `fit_timeouts` cuts every phase to the time left when an attempt starts. So a stream opened with `deadline=5` reads with at most a 5 s read timeout, long after the deadline stopped applying.
-  - A stream call's context is marked `streamed`, and `fit_timeouts` leaves its read phase as requested. Its `connect`, `write` and `pool` phases are still cut, because they belong to opening.
-  - Waiting for the response head is bounded by the call's deadline timer, which `stream()` already runs until the head checks pass. So an uncut read cannot make opening outlast the deadline.
+- **A stream's read timeout is not checked against its deadline.** (Amended while implementing.) The plan also had `fit_timeouts` stop cutting a stream's read phase, but that turned out to be unneeded.
+  - The test for a stream outliving its deadline while chunks keep coming passed on `main` before any change. Once an attempt has returned, the retry layer restores the request's own timeouts, and httpx2 reads the body against them. Only the wait for the head is cut, and the call's deadline timer bounds that wait anyway.
+  - What a user hit was the per-call check refusing `stream(..., deadline=5, timeout=Timeouts(read=60))`. Task 4 lifts that check for a stream's read phase. `fit_timeouts` is unchanged.
   - A policy whose `timeout` is longer than its `deadline` is still refused at construction. That check is about the verbs, and a stream that needs a longer read passes it per call or uses `events()`.
 - **`events()` is `stream()` with two defaults, not a new kind of object.** It returns the same `Stream` context manager, so `aiter_events()`, `last_event_id` and `retry` are where they already are.
   - It sends a GET.
@@ -162,7 +161,7 @@ These cases are not covered by the design's own examples and are the most likely
 
 1. **A quiet stream outlives its deadline.**
    - Against a loopback server, `stream(..., deadline=0.2, timeout=Timeouts(read=2.0))` reads a body whose chunks are 0.5 s apart to the end.
-   - Before this change it raised `ClientTimeoutError` at the first gap.
+   - Before this change it raised `ValueError` at the call, because the read timeout was longer than the deadline. A stream on the default read timeout already outlived its deadline, and a test now pins that.
    - A server that never sends the head still fails at the deadline.
 
    Covered in Task 4.
@@ -246,10 +245,9 @@ These cases are not covered by the design's own examples and are the most likely
 ### Task 4: A stream's read timeout is the stream's
 
 **Files:**
-- Modify: `src/headgate/_core/_context.py`: `CallContext.streamed`, and `fit_timeouts` leaves the read phase of a streamed call as requested.
-- Modify: `src/headgate/_client.py`: `_prepare` marks a stream call's context, and skips `read` in its per-call `check_timeout_fits`.
+- Modify: `src/headgate/_client.py`: `_prepare(streamed=True)` marks a stream call's context (the cache's existing `STREAMED` slot), and skips `read` in its per-call `check_timeout_fits`.
 - Modify: `docs/streaming.md` and `docs/deadlines.md`. Both say plainly that once the response head arrives, only the per-read timeout bounds a stream, and that wrapping the block in `asyncio.timeout` bounds the whole stream. (Asked for in review.)
-- Test: `tests/streaming/` (a loopback server sending spaced chunks) and `tests/core/test_context.py`. One test shows a stream outliving its `deadline=` for as long as chunks keep coming. (Asked for in review.)
+- Test: `tests/streaming/test_stream_deadline.py` (a loopback server sending spaced chunks). One test shows a stream outliving its `deadline=` for as long as chunks keep coming. (Asked for in review.)
 
 - [ ] **Step 1: Write the failing tests** for Review Focus 1.
 - [ ] **Step 2:** Run them. Expected: FAIL at the first gap.

@@ -65,7 +65,7 @@ def test_the_defaults_are_the_documented_ones() -> None:
     """Retry the idempotent methods on 408, 425, 429 and the transient 5xx, under a ratio budget."""
     policy = RetryPolicy()
 
-    assert policy.methods == IDEMPOTENT_METHODS == frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
+    assert policy.methods == IDEMPOTENT_METHODS == frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE", "QUERY"})
     assert policy.statuses == RETRY_STATUSES == frozenset({408, 425, 429, 500, 502, 503, 504})
     assert policy.budget == RetryShare(ratio=0.2, min_per_second=10, window=10.0)
     assert policy.hedge is None

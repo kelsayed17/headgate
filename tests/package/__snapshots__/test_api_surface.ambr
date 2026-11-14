@@ -222,7 +222,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.pagination]
   '''
   module headgate.pagination
-  __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageLimit', 'PageNumber', 'PageRequest', 'Pager', 'Paginated', 'WritingPager', 'parse_link_header']
+  __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageNumber', 'PageRequest', 'Pager', 'Paginated', 'WritingPager', 'parse_link_header']
   class BodyCursor(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
@@ -279,9 +279,6 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class PageLimit(object)(max_pages: 'int', on_limit: "Literal['raise', 'stop']" = 'raise') -> 'None'
-      field max_pages: int
-      field on_limit: Literal['raise', 'stop'] = 'raise'
   class PageNumber(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', more: 'Callable[[P], bool]', param: 'str' = 'page', start: 'int' = 1, write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field more: Callable[[P], bool]
@@ -367,7 +364,7 @@
   '''
   module headgate.retry
   __all__ = ['IDEMPOTENT_METHODS', 'RETRY_STATUSES', 'Backoff', 'Hedge', 'RetryBudget', 'RetryPolicy', 'RetryShare']
-  IDEMPOTENT_METHODS = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'})
+  IDEMPOTENT_METHODS = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'})
   RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
   class Backoff(object)(*, factor: 'float' = 0.5, max_wait: 'float' = 5.0) -> 'None'
       field factor: float = 0.5
@@ -381,9 +378,9 @@
       def refund(self) -> 'None'
       property share
       def try_spend(self) -> 'bool'
-  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryShare | RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
+  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryShare | RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
       field attempts: int = 3
-      field methods: frozenset[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'})
+      field methods: frozenset[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'})
       field statuses: frozenset[int] = frozenset({408, 425, 429, 500, 502, 503, 504})
       field backoff: Backoff = <factory>
       field max_retry_after: float = 30.0
@@ -526,7 +523,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['DEFAULT_TIMEOUTS', 'MAX_MINT_RESPONSE_BYTES', 'AuthError', 'BearerAuth', 'Body', 'BodyCursor', 'BodyOffset', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CircuitOpenError', 'Client', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Codec', 'Cursor', 'DecodeError', 'EncodedBody', 'Expect', 'ForbiddenDestinationError', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'LinkHeader', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'NextUrl', 'Offset', 'PageLimit', 'PageLimitError', 'PageNumber', 'Paginated', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_json', 'body_reader', 'call_info', 'decode_with', 'event_stream', 'nothing', 'reader_for', 'writer_for']
+  __all__ = ['DEFAULT_TIMEOUTS', 'MAX_MINT_RESPONSE_BYTES', 'AuthError', 'BearerAuth', 'Body', 'BodyCursor', 'BodyOffset', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CircuitOpenError', 'Client', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Codec', 'Cursor', 'DecodeError', 'EncodedBody', 'Expect', 'ForbiddenDestinationError', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'LinkHeader', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'NextUrl', 'Offset', 'PageLimitError', 'PageNumber', 'Paginated', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_json', 'body_reader', 'call_info', 'decode_with', 'event_stream', 'nothing', 'reader_for', 'writer_for']
   DEFAULT_TIMEOUTS = Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)
   MAX_MINT_RESPONSE_BYTES = 1048576
   class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
@@ -578,17 +575,19 @@
       key cache_ttl: float | None (optional)
       key max_response_bytes: int (optional)
   class CircuitOpenError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  class Client(object)(*, base_url: 'str', rate: 'Rate | RateBudget | None' = None, auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryShare(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), timeout=Timeouts(connect=None, read=None, write=None, pool=None), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=None), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, response_check=None, security=SecurityOptions(trusted_origins=frozenset(), block_private_hosts=False, resolver=None), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')), observers: 'Sequence[Observer]' = (), middleware: 'Sequence[Middleware]' = ()) -> 'None'
+  class Client(object)(*, base_url: 'str', rate: 'Rate | RateBudget | None' = None, auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryShare(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), timeout=Timeouts(connect=None, read=None, write=None, pool=None), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=None), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, response_check=None, security=SecurityOptions(trusted_origins=frozenset(), block_private_hosts=False, resolver=None), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')), observers: 'Sequence[Observer]' = (), middleware: 'Sequence[Middleware]' = ()) -> 'None'
       def aclose(self) -> 'None'
       def delete(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
+      def events(self, url: 'CallUrl', *, last_event_id: 'str | None' = None, **options: 'Unpack[StreamOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
       def get(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def head(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def head(self, url: 'CallUrl', **options: 'Unpack[RequestOptions]') -> 'None'
-      def paginate(self, url: 'CallUrl', *, expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, None]', limit: 'PageLimit | None' = None, **options: 'Unpack[CallOptions]') -> 'Paginated[P, I]'
-      def paginate(self, url: 'CallUrl', *, query: 'B | None', expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, B]', limit: 'PageLimit | None' = None, **options: 'Unpack[CallOptions]') -> 'Paginated[P, I]'
+      def paginate(self, url: 'CallUrl', *, expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, None]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
+      def paginate(self, url: 'CallUrl', *, query: 'B | None', expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, B]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
       def patch(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def post(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def put(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
+      def query(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def stream(self, url: 'CallUrl', *, method: 'Method' = 'GET', last_event_id: 'str | None' = None, **options: 'Unpack[StreamOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
       def with_options(self, **options: 'Unpack[ViewOptions]') -> 'Self'
   class ClientConfigurationError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
@@ -664,7 +663,7 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  type Method = Literal['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']
+  type Method = Literal['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'QUERY']
   class Middleware(CredentialCarrier, Protocol)(*args, **kwargs)
       def __call__(self, request: 'httpx2.Request', call_next: 'Next') -> 'httpx2.Response'
   class Minted(Generic)(token: 'TokenT', lifetime: 'float') -> 'None'
@@ -693,9 +692,6 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class PageLimit(object)(max_pages: 'int', on_limit: "Literal['raise', 'stop']" = 'raise') -> 'None'
-      field max_pages: int
-      field on_limit: Literal['raise', 'stop'] = 'raise'
   class PageLimitError(ClientError)(message: 'str', *, pages: 'int', **details: 'Unpack[ErrorDetails]') -> 'None'
       property pages
   class PageNumber(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', more: 'Callable[[P], bool]', param: 'str' = 'page', start: 'int' = 1, write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
@@ -761,9 +757,9 @@
       property content_type
       property status_code
   class ResponseTooLargeError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryShare | RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
+  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryShare | RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
       field attempts: int = 3
-      field methods: frozenset[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'})
+      field methods: frozenset[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'})
       field statuses: frozenset[int] = frozenset({408, 425, 429, 500, 502, 503, 504})
       field backoff: Backoff = <factory>
       field max_retry_after: float = 30.0

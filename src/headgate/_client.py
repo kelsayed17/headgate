@@ -32,10 +32,13 @@ import asyncio
 import contextlib
 import copy
 import functools
+import math
+from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Literal, Self, Unpack, cast, final, overload
+from typing import TYPE_CHECKING, Final, Literal, Self, Unpack, cast, final, overload
 
 import httpx2
 
@@ -86,6 +89,7 @@ from headgate._failures import (
 from headgate._options import (
     KEYED_METHODS,
     HttpOptions,
+    Timeouts,
     TransportPolicy,
     check_deadline,
     check_hooks,
@@ -122,7 +126,7 @@ from headgate.errors import (
     RefusedError,
 )
 from headgate.pagination import PageRequest, WritingPager
-from headgate.pagination._paginated import PageWalk
+from headgate.pagination._paginated import PageWalk, check_page_budget
 from headgate.ratelimit import Rate, RateBudget
 from headgate.ratelimit._budget import BudgetPausedError
 from headgate.ratelimit._budgets import CALL_BUDGET, Lane, PathBudgets
@@ -130,7 +134,7 @@ from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOM
 from headgate.streaming._stream import OpenStream
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Callable, Sequence
     from types import TracebackType
 
     from headgate._core import Observer, Timing
@@ -141,13 +145,13 @@ if TYPE_CHECKING:
     from headgate.breaker._breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
     from headgate.cache import HttpCache
-    from headgate.pagination import PageLimit, Pager, Paginated
+    from headgate.pagination import Pager, Paginated
     from headgate.retry import RetryPolicy
     from headgate.streaming import Stream
 
 __all__ = ["Built", "Client", "Method", "built_with"]
 
-type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]
+type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "QUERY"]
 """The HTTP methods a client sends: one verb each, and :meth:`Client.stream`'s ``method``."""
 
 #: A query value httpx2 encodes itself.
@@ -155,6 +159,9 @@ type _QueryValue = str | int | float | bool | None
 
 #: How much of a refused or failed streamed response is read, for the ``ClientError``'s body snippet.
 _STREAM_ERROR_HEAD_BYTES = 4096
+
+#: The media type ``events()`` asks for.
+_EVENT_STREAM: Final = "text/event-stream"
 
 #: Network errors that say nothing of the origin's health, so its breaker is not charged with them: a request httpx2
 #: refused to write, a scheme it cannot speak, our own connection pool running out of connections, and a redirect chain
@@ -456,6 +463,21 @@ class Client:
         call = _Call("POST", url, options)
         return await self._request(call, expect)
 
+    async def query[T](
+        self,
+        url: CallUrl,
+        *,
+        expect: Reader[T] | Expect[T],
+        **options: Unpack[RequestOptions],
+    ) -> T:
+        """Send a QUERY, the safe and idempotent method that carries a body, and read the reply through *expect*.
+
+        It takes a ``body=`` as :meth:`post` does. Being idempotent, it is re-sent after any retryable failure and may
+        be hedged, as a GET is; it is never cached. See :class:`Client`.
+        """
+        call = _Call("QUERY", url, options)
+        return await self._request(call, expect)
+
     async def put[T](
         self,
         url: CallUrl,
@@ -522,8 +544,9 @@ class Client:
         * a 2xx is the only success: there is no ``expect=``, and a 3xx raises unless redirects are followed;
         * the client's ``response_check`` runs on the response head, before the block is entered;
         * the deadline bounds opening the stream (every attempt, backoff and the head checks), not reading it, since
-          the caller's pace of iteration decides how long the body takes. Each read is bounded by the read timeout;
-          to bound the whole body, wrap the block in ``asyncio.timeout``;
+          the caller's pace of iteration decides how long the body takes. Once the head has arrived, only the read
+          timeout bounds each read, so a call's read timeout may be longer than its deadline; to bound the whole
+          stream, wrap the block in ``asyncio.timeout``;
         * a retry covers opening only; a failure while the body arrives raises ``TransportError`` or
           ``ClientTimeoutError`` from the iteration;
         * the origin's circuit breaker is told of the answer at the response head, before the block is entered, so a
@@ -549,6 +572,30 @@ class Client:
             options["headers"] = headers
         return self._streamed(_Call(method, url, options))
 
+    def events(
+        self, url: CallUrl, *, last_event_id: str | None = None, **options: Unpack[StreamOptions]
+    ) -> contextlib.AbstractAsyncContextManager[Stream]:
+        """Open a server-sent event stream: a :meth:`stream` GET asking for ``text/event-stream``, with no read limit.
+
+        ``async with client.events("feed") as stream:`` then ``async for event in stream.aiter_events():``. It sends
+        ``Accept: text/event-stream`` unless the call's own ``headers=`` name an ``Accept``, and gives each read no
+        timeout (``math.inf``) unless the call's ``timeout=`` sets ``read``, since an event stream may be quiet for
+        minutes. The deadline bounds opening it, as for any stream. ``last_event_id=`` resumes after an event, as on
+        :meth:`stream`.
+        """
+        headers = httpx2.Headers(options.get("headers"))
+        headers.setdefault("Accept", _EVENT_STREAM)
+        timeout = options.get("timeout")
+        options = options.copy()
+        options["headers"] = headers
+        if timeout is None:
+            options["timeout"] = Timeouts(read=math.inf)
+        else:
+            check_kind("timeout", timeout, Timeouts, "a Timeouts, such as Timeouts(read=5.0)")
+            if timeout.read is None:
+                options["timeout"] = replace(timeout, read=math.inf)
+        return self.stream(url, last_event_id=last_event_id, **options)
+
     @overload
     def paginate[P, I](
         self,
@@ -556,9 +603,10 @@ class Client:
         *,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, None],
-        limit: PageLimit | None = None,
+        max_pages: int | None = None,
+        on_limit: Literal["raise", "stop"] = "raise",
         **options: Unpack[CallOptions],
-    ) -> Paginated[P, I]: ...
+    ) -> Paginated[I, P]: ...
     @overload
     def paginate[P, I, B](
         self,
@@ -567,9 +615,10 @@ class Client:
         query: B | None,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, B],
-        limit: PageLimit | None = None,
+        max_pages: int | None = None,
+        on_limit: Literal["raise", "stop"] = "raise",
         **options: Unpack[CallOptions],
-    ) -> Paginated[P, I]: ...
+    ) -> Paginated[I, P]: ...
     def paginate[P, I, B](
         self,
         url: CallUrl,
@@ -577,9 +626,10 @@ class Client:
         query: B | None = None,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, B],
-        limit: PageLimit | None = None,
+        max_pages: int | None = None,
+        on_limit: Literal["raise", "stop"] = "raise",
         **options: Unpack[CallOptions],
-    ) -> Paginated[P, I]:
+    ) -> Paginated[I, P]:
         """Return the pages *pages* follows from *url*, each read through *expect*, iterated lazily.
 
         ``async for item in client.paginate(...)`` yields the items of each page in turn; ``.pages()`` yields the
@@ -595,21 +645,24 @@ class Client:
         sends the value as JSON, so it must be builtins. A page with a body is then a :meth:`post` in every respect: in
         particular it is re-sent only when that is safe, unless ``retry=`` says otherwise.
 
-        *limit* is a page budget (:class:`~headgate.PageLimit`): at most ``max_pages`` pages are fetched. When more
-        would follow, the walk raises :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or
-        with ``on_limit="stop"`` ends there. A walk that ends within the budget is unaffected.
+        *max_pages* is a page budget: at most that many pages are fetched. When more would follow, the walk raises
+        :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or with ``on_limit="stop"`` ends
+        there. A walk that ends within the budget is unaffected. The walk is a ``Paginated[I, P]``: its items first.
 
-        :raises ValueError: for a walk its pager refuses (:meth:`~headgate.pagination.Pager.first` runs here, once),
+        :raises ValueError: for a ``max_pages`` below 1, an ``on_limit`` that is neither ``"raise"`` nor ``"stop"``,
+            ``on_limit="stop"`` without ``max_pages``, a walk its pager refuses
+            (:meth:`~headgate.pagination.Pager.first` runs here, once),
             and for a first page with a body and an idempotency key (``idempotency_key=``, or the policy's header in
             ``headers=``, a view's or the client's), as one key on pages with different bodies would have the server
             replay the first page's answer. A later page with a body is held to the same rule, and raises from the
             iteration.
-        :raises TypeError: for a keyword no call option names, ``body=`` and ``json=`` included (a walk's body is
-            ``query=``), and for an ``expect=`` that is neither a :class:`~headgate.Reader` nor an ``Expect``, before
-            the pager runs.
+        :raises TypeError: for a keyword no call option names, ``body=``, ``json=`` and ``limit=`` included (a walk's
+            body is ``query=``, its page budget ``max_pages=``), for a ``max_pages`` that is not an ``int``, and for an
+            ``expect=`` that is neither a :class:`~headgate.Reader` nor an ``Expect``, before the pager runs.
         """
         check_options("paginate", options, CALL_KEYS, _WALK_HINTS)
         check_overrides(options)
+        check_page_budget(max_pages, on_limit)
         spec: Expect[P] = _expectation(expect)
         call_options = options.copy()
         # How a body is sent is the walk's: the pager's writer encodes every page's, whatever request the pager returns.
@@ -646,7 +699,7 @@ class Client:
             body = Json(request.body) if write is None else write(request.body)
             return await self.post(request.url, expect=paired, body=body, **page_options)
 
-        return PageWalk(fetch, pages, first, source=self._source, limit=limit)
+        return PageWalk(fetch, pages, first, source=self._source, max_pages=max_pages, on_limit=on_limit)
 
     def _one_key_for_every_page(self, options: CallOptions) -> bool:
         """Return whether every call made with *options* sends one fixed idempotency key.
@@ -709,8 +762,7 @@ class Client:
         ``ClientError`` is raised inside the report, as the call's error; any other exception after it, so the call
         reports the exchange it was.
         """
-        prepared = self._prepare(call)
-        prepared.context.put(STREAMED, value=True)
+        prepared = self._prepare(call, streamed=True)
         own: Exception | None = None
         async with self._reported(prepared):
             try:
@@ -759,8 +811,10 @@ class Client:
 
     # Preparing the request.
 
-    def _prepare(self, call: _Call) -> _Prepared:
-        """Build *call*'s request and stamp its context on it.
+    def _prepare(self, call: _Call, *, streamed: bool = False) -> _Prepared:
+        """Build *call*'s request and stamp its context on it; a *streamed* call's context says so (``STREAMED``).
+
+        A stream's own read timeout may be longer than its deadline, which bounds only opening the stream.
 
         Raises ``ValueError`` for a t-string value no path segment can hold, for a call that would follow redirects
         on a client with a ``response_check``, for a ``deadline=`` that is not positive and finite and for a ``Json``
@@ -812,8 +866,11 @@ class Client:
         route_options = {} if route_policy is None else route_policy.options
         deadline = self._deadline_of(call, route_options)
         if (timeout := options.get("timeout")) is not None:
-            check_timeout_fits(timeout, deadline)
+            # Its kind was checked building the request (httpx_timeout), so a stream's is a Timeouts here.
+            check_timeout_fits(replace(timeout, read=None) if streamed else timeout, deadline)
         context = CallContext(info, clock=self._timing.clock, deadline_after=deadline, emitter=self._emitter)
+        if streamed:
+            context.put(STREAMED, value=True)
         context.follow_redirects = follow
         self._stamp_route(context, call, route_options, path)
         if not body.replayable:
@@ -1195,17 +1252,37 @@ def _registry_of(policy: TransportPolicy, timing: Timing) -> BreakerRegistry | N
 
 
 def _query_pairs(params: Mapping[str, object]) -> list[tuple[str, _QueryValue]]:
-    """Flatten *params* into the ``(key, value)`` pairs httpx2 encodes, exactly as httpx2 flattens a mapping."""
+    """Flatten *params* into the ``(key, value)`` pairs httpx2 encodes, exactly as httpx2 flattens a mapping.
+
+    :raises TypeError: for a value no query parameter can carry (see :data:`_NESTED`), before anything is sent.
+    """
     pairs: list[tuple[str, _QueryValue]] = []
     for key, value in params.items():
         items = value if isinstance(value, list | tuple) else (value,)
-        pairs.extend((key, _query_value(item)) for item in items)
+        pairs.extend((key, _query_value(key, item)) for item in items)
     return pairs
 
 
-def _query_value(value: object) -> _QueryValue:
-    """Return *value* if httpx2 encodes it natively, else its ``str()``, which is what httpx2 would send."""
-    return value if isinstance(value, str | int | float | bool | None) else str(value)
+#: The values a query parameter cannot carry: a container, whose ``str()`` is its Python ``repr``, and raw bytes. A
+#: list or tuple of scalars repeats its key; one inside another is refused.
+_NESTED: Final = (Mapping, AbstractSet, bytes, bytearray, memoryview, list, tuple)
+
+
+def _query_value(key: str, value: object) -> _QueryValue:
+    """Return *value* if httpx2 encodes it natively, else its ``str()``, which is what a ``UUID`` or an ``Enum`` means.
+
+    :raises TypeError: for a value in :data:`_NESTED`, naming *key* and the value's type.
+    """
+    if isinstance(value, str | int | float | bool | None):
+        return value
+    # Checked only past the common case, since an ABC's isinstance check costs more than the native ones.
+    if isinstance(value, _NESTED):
+        msg = (
+            "params= takes a str, int, float, bool or None for each value, or a list or tuple of them (got"
+            f" {type(value).__name__} under {key!r}): encode a nested value into text first, such as with json.dumps"
+        )
+        raise TypeError(msg)
+    return str(value)
 
 
 def _encoded_type(request: httpx2.Request, body: Lowered) -> str | None:

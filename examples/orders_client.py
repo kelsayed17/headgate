@@ -158,7 +158,7 @@ class OrdersClient:
         """Cancel the order *order_id*."""
         await self._http.delete(t"orders/{order_id}", expect=nothing)
 
-    def orders(self, *, status: str) -> Paginated[list[Order], Order]:
+    def orders(self, *, status: str) -> Paginated[Order]:
         """Return the orders in *status*, a page of 100 at a time."""
         query = {"status": status, "per_page": 100}
         return self._http.paginate("orders", expect=reader(list[Order]), pages=ORDER_PAGES, params=query)

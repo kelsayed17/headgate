@@ -87,7 +87,7 @@ class GitHub:
         """Return the repository *owner*/*name*, or ``None`` when it does not exist or the token cannot see it."""
         return await self._http.get(t"repos/{owner}/{name}", expect=REPOSITORY_OR_NONE)
 
-    def open_issues(self, owner: str, name: str) -> Paginated[list[Issue], Issue]:
+    def open_issues(self, owner: str, name: str) -> Paginated[Issue]:
         """Return the open issues (and pull requests) of *owner*/*name*, 100 a page, fetched as they are iterated."""
         params = {"state": "open", "per_page": 100}
         return self._http.paginate(t"repos/{owner}/{name}/issues", expect=ISSUES, pages=ISSUE_PAGES, params=params)
@@ -254,7 +254,7 @@ class CatalogClient:
         """Return the series *series_id*, or ``None`` when the API answers 404."""
         return await self._http.get(t"series/{series_id}", expect=SERIES_OR_NONE)
 
-    def releases(self) -> Paginated[ReleasePage, Release]:
+    def releases(self) -> Paginated[Release]:
         """Return every release, fetched a page at a time as the iteration reaches it."""
         return self._http.paginate("releases", expect=reader(ReleasePage), pages=RELEASE_PAGES)
 ```
@@ -385,7 +385,7 @@ Every option, its validation and the precedence of call, view, route and policy:
 
 ## Per-call options
 
-Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`) takes the URL, `expect=` (on `head`, `nothing` unless
+Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`, `query`) takes the URL, `expect=` (on `head`, `nothing` unless
 given), and optionally `retry=` (a `RetryPolicy`, or `None` to send once), `follow_redirects=`, `cache_ttl=`,
 `timeout=`, `deadline=`, `idempotency_key=`, `max_response_bytes=`, and the request options `params=`, `headers=` and
 `body=` (what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`); an option left out takes the view's or

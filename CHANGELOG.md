@@ -8,6 +8,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `Client.query(url, *, expect, body=..., ...)` sends the QUERY method, which is safe and idempotent like a GET and
+  carries a body like a POST. QUERY joins `IDEMPOTENT_METHODS`, so it is retried after any retryable failure and
+  may be hedged. It is never cached. `Method` gains `"QUERY"`, and an OpenTelemetry span for one is named `QUERY`.
+- `Client.events(url, ...)` opens a server-sent event stream. It is `stream()` of a GET that sends
+  `Accept: text/event-stream` and gives each read no time limit, unless the call's own `headers=` or `timeout=` say
+  otherwise. It takes `last_event_id=` and every other option `stream()` takes.
 - `headgate.testing.fake_network(transport)`: every `Client` built in its block sends on *transport* in place of the
   network, even one an SDK gave a transport of its own, so an SDK need not forward `transport=` for its tests. Only the
   network is replaced: the SDK's rate budget, cache, retries and breaker run over it.
@@ -72,6 +78,27 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- A `params=` value no query parameter can carry raises `TypeError` naming the parameter, before anything is sent,
+  rather than going out as its Python `repr` (`filter=%7B%27a%27%3A+1%7D`). The refused shapes are:
+  - a mapping (`dict`, or any other `Mapping`);
+  - a set or `frozenset` (any `AbstractSet`);
+  - `bytes`, `bytearray` or `memoryview`;
+  - a list or tuple inside a list or tuple.
+
+  Encode such a value into text first, with `json.dumps` or the API's own format. A list or tuple of scalars still
+  repeats its key, and a scalar httpx2 does not encode itself (a `UUID`, a `Decimal`, an `Enum` member, a `date`) is
+  still sent as its `str()`.
+- **`Paginated[I, P = object]` names the item type first.** Write `-> Paginated[Issue]` for a walk of issues, or
+  `-> Paginated[Issue, IssuePage]` where the pages matter, in place of `Paginated[IssuePage, Issue]`. A type
+  checker flags the old order wherever the page and item types differ.
+- `paginate(max_pages=..., on_limit=...)` replaces `limit=PageLimit(...)`, which collided with every API's `limit`
+  query parameter. Write `max_pages=10` for `limit=PageLimit(10)`, and `max_pages=10, on_limit="stop"` for
+  `limit=PageLimit(10, on_limit="stop")`. `limit=` raises `TypeError`. `on_limit="stop"` without `max_pages` raises
+  `ValueError`. A `max_pages` that is not an `int` (a `bool` included) raises `TypeError`, and one below 1 raises
+  `ValueError`, before anything is sent.
+- A `stream()` call's own read timeout may be longer than its deadline, which bounds only opening the stream. Once
+  the head has arrived, only the per-read timeout bounds a stream, and `asyncio.timeout` around the block bounds the
+  whole of it. `stream(..., deadline=5, timeout=Timeouts(read=60))` used to raise `ValueError`.
 - **`AsyncBaseClient` is `Client`, which an SDK holds rather than inherits from.** `Client` is final: subclassing it
   raises `TypeError`. Write
 
@@ -245,6 +272,7 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Removed
 
+- `PageLimit`, from `headgate` and `headgate.pagination`: pass `max_pages=` and `on_limit=` to `paginate`.
 - `headgate.breaker.DEFAULT_REGISTRY`, the process-wide registry: pass one `BreakerRegistry` to the clients that share
   it. `headgate.testing.isolated_breakers()`: each client's breakers are already its own; read them with
   `breakers_of(client)`.

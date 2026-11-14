@@ -18,7 +18,7 @@ _PRELUDE = dedent(
     from typing import LiteralString, Unpack
 
     from headgate import CallOptions, RequestOptions, nothing
-    from headgate.pagination import NextUrl
+    from headgate.pagination import NextUrl, Paginated
     from headgate import Client
 
     PAGES = NextUrl[None, object](items=lambda _page: (), next=lambda _page: None)
@@ -88,3 +88,19 @@ async def test_the_old_override_values_do_not_type_check(tmp_path: Path) -> None
 
     assert code != 0, out
     assert out.count("error[invalid-argument-type]") == len(("True", "False", "None", "the view's False")), out
+
+
+async def test_a_walk_names_its_items_first_and_its_page_type_only_when_it_matters(tmp_path: Path) -> None:
+    """Accept ``Paginated[object]`` and ``Paginated[object, None]`` for a walk, and refuse the page type first."""
+    code, out = await _check(
+        tmp_path,
+        """
+        items: Paginated[object] = c.paginate(url, expect=nothing, pages=PAGES)
+        both: Paginated[object, None] = c.paginate(url, expect=nothing, pages=PAGES, max_pages=2, on_limit="stop")
+        flipped: Paginated[None, object] = c.paginate(url, expect=nothing, pages=PAGES)
+        """,
+    )
+
+    assert code != 0, out
+    assert out.count("error[") == 1, out
+    assert "flipped" in out, out

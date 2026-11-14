@@ -48,8 +48,16 @@ A deadline that cuts off an attempt already on the network is a timeout of the o
 [circuit breaker](breaker.md#what-counts) counts it as a failure; one that passes before the send counts nothing.
 
 For [`stream()`](streaming.md) the deadline bounds opening the stream (every attempt, backoff and the head checks), not
-reading it: the caller's pace of iteration decides how long the body takes. Wrap the block in `asyncio.timeout` to
-bound the whole body.
+reading it: the caller's pace of iteration decides how long the body takes. **Once the response head has arrived, only
+the per-read timeout bounds a stream**: each read waits at most `Timeouts.read`, and a stream that keeps sending runs
+past its deadline for as long as it does. So a stream's own `timeout=Timeouts(read=...)` may be longer than its
+deadline. To bound the whole stream, wrap the block in `asyncio.timeout`:
+
+```python
+async with asyncio.timeout(600), client.stream("export.csv") as stream:
+    async for chunk in stream.aiter_bytes():
+        sink.write(chunk)
+```
 
 ## Timeouts
 

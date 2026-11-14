@@ -21,8 +21,9 @@ except that:
   bounded head of its body in the error. A 3xx raises unless redirects are followed.
 - **the body is never buffered and never capped**, and the response is closed when the block exits, read to the end or
   not.
-- **the deadline bounds opening the stream** (every attempt, backoff and the head checks), not reading it. Each read is
-  bounded by the read timeout; wrap the block in `asyncio.timeout` to bound the whole body.
+- **the deadline bounds opening the stream** (every attempt, backoff and the head checks), not reading it. Once the
+  response head has arrived, only the per-read timeout bounds the stream, so a stream's own read timeout may be longer
+  than its deadline. Wrap the block in `asyncio.timeout` to bound the whole stream.
 - **a retry covers opening only.** A failure while the body arrives raises `TransportError` or `ClientTimeoutError`
   from the iteration, after the chunks before it were delivered. Resuming is the caller's decision.
 - **the origin's breaker is told of the answer at the response head**, before the block is entered, so a stream that
@@ -46,14 +47,19 @@ and `aiter_events()`.
 ## Server-sent events
 
 ```python
-async with client.stream("events", headers={"Accept": "text/event-stream"}) as stream:
+async with client.events("feed") as stream:
     async for event in stream.aiter_events():
         handle(event.event, event.data)
     resume_from = stream.last_event_id
 
-async with client.stream("events", last_event_id=resume_from) as stream:
+async with client.events("feed", last_event_id=resume_from) as stream:
     ...
 ```
+
+`client.events(url, ...)` is `stream()` of a GET with two defaults: it sends `Accept: text/event-stream` unless your
+`headers=` name an `Accept`, and each read has no time limit (`math.inf`) unless your `timeout=` sets `read`, since an
+event stream may be quiet for minutes. The deadline bounds opening it, as for any stream, and `asyncio.timeout` around
+the block bounds the whole of it. It takes every option `stream()` does.
 
 `aiter_events(max_event_size=1 MiB)` parses each event as soon as its blank line arrives, by the WHATWG grammar, into
 an `httpx2.ServerSentEvent`: `event`, `data` (multi-line joined), `id` and the `retry` its block named. The body is

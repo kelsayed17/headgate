@@ -52,8 +52,9 @@ __all__ = [
     "is_keyed",
 ]
 
-#: The methods RFC 9110 defines as idempotent that the client sends: re-sent after any retryable failure.
-IDEMPOTENT_METHODS: Final = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
+#: The idempotent methods the client sends, re-sent after any retryable failure: the ones RFC 9110 defines as
+#: idempotent, and QUERY, which its specification defines as safe and idempotent.
+IDEMPOTENT_METHODS: Final = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE", "QUERY"})
 
 #: The statuses re-sent by default: request timeout, too early (RFC 8470), rate limited, and the transient 5xx.
 RETRY_STATUSES: Final = frozenset({408, 425, 429, 500, 502, 503, 504})

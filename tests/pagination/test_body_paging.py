@@ -31,7 +31,6 @@ from headgate import (
     LinkHeader,
     NextUrl,
     Offset,
-    PageLimit,
     PageLimitError,
     Reader,
     RetryPolicy,
@@ -345,9 +344,7 @@ async def test_a_walk_of_posts_past_its_page_limit_raises_naming_the_post() -> N
     """Raise ``PageLimitError`` for the POST once the budget is spent with pages to come."""
     api = _Api(_endless)
     first = Query(kind="a", limit=1)
-    paginated = api.client().paginate(
-        "search", query=first, expect=reader(Page), pages=QUERY_CURSOR, limit=PageLimit(_BUDGET)
-    )
+    paginated = api.client().paginate("search", query=first, expect=reader(Page), pages=QUERY_CURSOR, max_pages=_BUDGET)
 
     items: list[int] = []
     with pytest.raises(PageLimitError) as raised:
@@ -361,8 +358,9 @@ async def test_a_walk_of_posts_can_stop_quietly_at_its_page_limit() -> None:
     """End the walk at the budget with ``on_limit="stop"``, as a runaway backstop that does not raise."""
     api = _Api(_endless)
     first = Query(kind="a", limit=1)
-    limit = PageLimit(_BUDGET, on_limit="stop")
-    paginated = api.client().paginate("search", query=first, expect=reader(Page), pages=QUERY_CURSOR, limit=limit)
+    paginated = api.client().paginate(
+        "search", query=first, expect=reader(Page), pages=QUERY_CURSOR, max_pages=_BUDGET, on_limit="stop"
+    )
 
     assert [item.id async for item in paginated] == list(range(_BUDGET))
     assert len(api.sent) == _BUDGET
