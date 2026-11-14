@@ -34,6 +34,7 @@ names.
 | `attempts` | how many sends the call made, retries and followed redirects included |
 | `retryable` | whether the call's `RetryPolicy` would re-send after this outcome: a status in its `statuses` or a network failure, and only when sending again is safe for the method (see [retries](retries.md#what-retryable-means)) |
 | `retry_after` | the seconds the upstream (or an open breaker, or a paused budget) asked to wait, or `None` |
+| `sent` | whether any byte of the call can have reached the network, by any send, retry or followed redirect: `False` only when none can have, so the call is safe to send again whatever its method; `True` when some may have, so a write may have been processed; `None` on an error no client call raised. A token mint's own requests never count |
 | notes | one line per attempt, and the reason the retries stopped (see [retries](retries.md#attempt-history)) |
 
 An error your own code raises takes these attributes, the notes aside, as optional keywords:

@@ -145,9 +145,9 @@ The design leaves these to the builder or does not settle them. Each is the plan
   | `UpstreamStatusError`, `AuthError`, `RateLimitError` from a response | the retry policy's verdict on the status | `True` |
   | `RateLimitError` from the rate budget's pause past the deadline | `True`, `retry_after` = the pause left | `False` |
   | `ClientTimeoutError` from the rate budget's turn past the deadline | `True`, `retry_after` = until the turn | `False` |
-  | `CircuitOpenError` | `True` (was `False`), `retry_after` = the cooldown left | `False` |
+  | `CircuitOpenError` | `True` (was `False`), `retry_after` = the cooldown left | as recorded: `False`, since the breaker refuses before the first send |
   | `TransportError`, `ClientTimeoutError` from the network or the deadline | the retry policy's verdict | as recorded (below) |
-  | `ForbiddenDestinationError` | `False`: the same hop is refused again | `False` |
+  | `ForbiddenDestinationError` | `False`: the same hop is refused again | as recorded: `False` unless an earlier hop was sent |
   | `ResponseTooLargeError`, `ResponseParseError` | `False`: the same body comes back | `True` |
   | `ClientConfigurationError` | `False` | as recorded |
   | `PageLimitError` | `False` | `None`: no send failed |
@@ -157,7 +157,10 @@ The design leaves these to the builder or does not settle them. Each is the plan
   - It is `False` only when headgate knows that no byte left. That covers every attempt that obtained a connection and wrote nothing, failed with a `NEVER_SENT_ERRORS` type, was refused by the breaker, the budget or the SSRF guard, or was withdrawn by the rate budget.
   - Otherwise it is `True`. That includes a custom transport that reports no progress and raised anything else, since a wrong `False` is the one answer that could make a caller send a write twice.
   - It covers the whole call: the first send, its retries, its hedges and its followed redirects. It does not cover a `CachedTokenAuth` mint hop. The hop is another request, marked `AUTH_HOP`, and the failure of the call's own request is what the attribute describes.
-- **One place records `sent`.** The retry layer already holds each attempt's result and its `SendProgress` and judges "nothing was sent" for the classifier (`_classify._nothing_sent`). After every attempt, `_Sequence._send` calls `CallContext.mark_sent()` when that judgment is "something may have been". `CallContext.sent` is the call-level record. `SendProgress` stays per attempt, as #91 made it.
+- **One place records `sent`, and one place reports it.** The retry layer already holds each attempt's result and its `SendProgress` and judges "nothing was sent" for the classifier (now `_classify.nothing_sent`). After every attempt, `_Sequence._send` calls `CallContext.mark_sent()` when that judgment is "something may have been". `CallContext.sent` is the call-level record. `SendProgress` stays per attempt, as #91 made it.
+  - Every `ClientError` that leaves a call passes through `_reported`, which already adds the call's notes to it. That is also where it takes the call's `sent`, whichever layer raised it: the network, the breaker, the budget, a token mint, or a middleware.
+  - So no error builder threads `sent` through, and a failed mint shared with the calls waiting behind it (#86) still reports each waiting call's own `sent`, because each waiting call raises its own copy.
+  - A mint request never touches the call's record, because it is sent with a call context of its own. (Amended while implementing. The plan first had `CallSite` carry `sent`, which would have missed the mint's errors.)
 - **`status_code: int | None` on `UpstreamStatusError`, not a new class.** The design wants the budget's refusal to carry `None`. A subclass cannot widen its parent's `int` to `int | None` (ty rejects the override), so the field is widened where it is declared.
   - The alternative was to raise the budget's refusal as a class outside `UpstreamStatusError`. A caller who backs off on `except RateLimitError` would then miss it, and the two refusals that mean "slow down" would need two `except` arms.
   - `None` appears only for that one refusal, which is documented. `status_code` is otherwise never invented, as today.
@@ -227,8 +230,7 @@ These cases are not covered by the design's own examples and are the most likely
 - Modify: `src/headgate/_core/_context.py`: `CallContext.mark_sent()` and the read-only `CallContext.sent: bool`.
 - Modify: `src/headgate/retry/_classify.py`: expose the "nothing was sent" judgment (today `_nothing_sent`) as `nothing_sent(progress, result)`. A response means something was sent.
 - Modify: `src/headgate/retry/_transport.py`: `_Sequence._send` marks the context after each attempt, unless the request is an `AUTH_HOP` or the rate budget withdrew the attempt.
-- Modify: `src/headgate/_failures.py`: `CallSite.sent`, and `details()` puts it into `ErrorDetails`.
-- Modify: `src/headgate/_client.py`: `_site` reads `context.sent`. The breaker, budget and SSRF-guard arms pass `sent=False`.
+- Modify: `src/headgate/_client.py`: `_reported` gives every `ClientError` leaving the call the call's `sent`.
 - Modify: `src/headgate/errors.py`: `ErrorDetails.sent`, `ClientError.sent`, and the module docstring's table.
 - Modify: `docs/errors.md`: the attribute table gains `sent`, with its three values.
 - Test: `tests/client/test_error_details.py`, `tests/retry/test_tracking.py` (for the loopback cases), `tests/auth/test_mint_failures.py`.

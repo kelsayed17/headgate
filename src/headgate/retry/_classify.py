@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from headgate._core import SendProgress
     from headgate.retry._policy import RetryPolicy
 
-__all__ = ["Attempted", "Verdict", "classify", "refused_stream"]
+__all__ = ["Attempted", "Verdict", "classify", "nothing_sent", "refused_stream"]
 
 #: The HTTP/2 error code a server resets a stream with when it did no processing on it (RFC 9113 §7).
 _REFUSED_STREAM: Final = 0x7
@@ -90,13 +90,20 @@ class Attempted:
     progress: SendProgress
 
 
-def _nothing_sent(progress: SendProgress, exc: Exception) -> bool:
-    """Return whether no byte of the request was written: from the reported progress, else from the exception type."""
-    if progress.bytes_sent:
+def nothing_sent(progress: SendProgress, result: httpx2.Response | Exception | None) -> bool:
+    """Return whether no byte of an attempt can have been written, given its *progress* and *result*.
+
+    An answer proves the request was written. Otherwise the reported progress decides: a byte written, or a connection
+    that wrote none. A transport that reports nothing is judged by the exception's type (``NEVER_SENT_ERRORS``), and an
+    attempt cut short (*result* ``None``, the send cancelled) by whether it was handed to the network at all.
+    """
+    if isinstance(result, httpx2.Response) or progress.bytes_sent:
         return False
     if progress.connected:
         return True
-    return isinstance(exc, NEVER_SENT_ERRORS)
+    if result is None:
+        return not progress.dispatched
+    return isinstance(result, NEVER_SENT_ERRORS)
 
 
 def _should_retry(response: httpx2.Response, policy: RetryPolicy) -> bool | None:
@@ -128,7 +135,7 @@ def _classify_error(exc: Exception, attempted: Attempted, policy: RetryPolicy) -
         return Verdict(failure=True, retryable=False, reason=reason)
     if refused_stream(exc):
         return Verdict(failure=True, retryable=True, reason="REFUSED_STREAM")
-    safe = attempted.method in policy.methods or attempted.keyed or _nothing_sent(attempted.progress, exc)
+    safe = attempted.method in policy.methods or attempted.keyed or nothing_sent(attempted.progress, exc)
     return Verdict(failure=True, retryable=safe, reason=reason)
 
 

@@ -8,6 +8,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `ClientError.sent`: whether any byte of the failed call can have reached the network. It is `False` only when no
+  byte can have, so the call is safe to send again whatever its method. It is `True` when some may have, so a write
+  may have been processed, and `None` on an error no client call raised. It covers every send, retry and followed
+  redirect of the call, and never a token mint's own requests.
 - `CassetteFilter(replaying=True)`, for replaying a cassette (`record_mode="none"`): a token mint fails the test with
   an `AssertionError` saying to seed the auth. A mint is never recorded, so vcrpy let an unseeded one reach the
   network, with the auth's secret.

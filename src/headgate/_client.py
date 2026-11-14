@@ -884,7 +884,11 @@ class AsyncBaseClient:
 
     @contextlib.asynccontextmanager
     async def _reported(self, prepared: _Prepared) -> AsyncGenerator[None]:
-        """Emit ``CallStarted`` and, on the way out, ``CallFinished``; add the call's notes to a ``ClientError``."""
+        """Emit ``CallStarted`` and, on the way out, ``CallFinished``; add the call's notes to a ``ClientError``.
+
+        A ``ClientError`` leaving the call takes the call's :attr:`~headgate.errors.ClientError.sent`, whichever layer
+        raised it, since what a caller needs to know is whether the call's own request can have left.
+        """
         context = prepared.context
         if context.observed:
             context.emit(CallStarted(call=context.info))
@@ -898,6 +902,8 @@ class AsyncBaseClient:
                 vars(exc)[_REPORTED] = True
                 for note in context.notes:
                     exc.add_note(note)
+                # What the call's own request sent, whichever layer raised the error: a token mint, a middleware.
+                vars(exc)["_sent"] = context.sent
             raise
         finally:
             if context.observed:

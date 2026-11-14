@@ -79,7 +79,8 @@ class ErrorDetails(TypedDict, total=False):
     ``source`` names the client that raised it. ``url`` is sanitized and bounded. ``attempts`` counts the call's sends;
     ``retryable`` says whether the call's retry policy would re-send after the outcome that raised the error (a status
     in its ``statuses`` or a network failure, and only when sending again is safe for the method); ``retry_after`` is
-    the delay the upstream asked for, in seconds.
+    the delay the upstream asked for, in seconds; ``sent`` says whether any byte of the call can have reached the
+    network.
     """
 
     source: str | None
@@ -89,6 +90,7 @@ class ErrorDetails(TypedDict, total=False):
     attempts: int | None
     retryable: bool
     retry_after: float | None
+    sent: bool | None
 
 
 class ClientError(Exception):
@@ -96,7 +98,7 @@ class ClientError(Exception):
 
     ``source`` names the originating client and prefixes the message as ``[source]``. Subclasses distinguish failure
     modes so callers can branch on them. The read-only attributes :attr:`source`, :attr:`method`, :attr:`url`,
-    :attr:`request_id`, :attr:`attempts`, :attr:`retryable` and :attr:`retry_after` describe the call (see
+    :attr:`request_id`, :attr:`attempts`, :attr:`retryable`, :attr:`retry_after` and :attr:`sent` describe the call (see
     :class:`ErrorDetails`); each is ``None`` (``retryable``: ``False``) when the raiser did not know it. Every attribute
     of every error is read-only, so what an error says about a call cannot be rewritten after it is raised.
     """
@@ -110,6 +112,7 @@ class ClientError(Exception):
         self._attempts = details.get("attempts")
         self._retryable = details.get("retryable", False)
         self._retry_after = details.get("retry_after")
+        self._sent = details.get("sent")
         super().__init__(message if _is_absent(source) else f"[{source}] {message}")
 
     @property
@@ -146,6 +149,15 @@ class ClientError(Exception):
     def retry_after(self) -> float | None:
         """The seconds the upstream (or an open breaker) asked the caller to wait before sending again."""
         return self._retry_after
+
+    @property
+    def sent(self) -> bool | None:
+        """Whether any byte of the call can have reached the network, by any send of it, its redirects included.
+
+        ``False`` only when no byte left: every send was refused or failed before it wrote anything. ``True`` when some
+        may have, so a write may have been processed. ``None`` on an error no client call raised.
+        """
+        return self._sent
 
     @override
     def __reduce__(self) -> tuple[_ClientErrorRebuild, _ClientErrorState]:
