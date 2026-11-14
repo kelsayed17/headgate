@@ -15,7 +15,6 @@ import pytest
 
 from headgate import (
     BreakerPolicy,
-    CircuitOpenError,
     HttpOptions,
     RateBudget,
     RateLimitError,
@@ -24,6 +23,7 @@ from headgate import (
     UpstreamStatusError,
     nothing,
 )
+from headgate.errors import CircuitOpenError
 from headgate.events import RateLimited
 from headgate.ratelimit import Rate
 from headgate.retry import RetryShare

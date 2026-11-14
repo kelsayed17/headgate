@@ -639,11 +639,12 @@ class Client:
         (:class:`~headgate.CallOptions`) apply to every page, as they do to one :meth:`get` (or :meth:`post`).
 
         A walk of POSTs passes its body as ``query=``: the raw value the pager rewrites page by page (a
-        :class:`~headgate.BodyCursor` or :class:`~headgate.BodyOffset` needs the value, not its bytes), ``None`` for
-        none. The pager's ``write`` (a flavor's ``writer``, see :class:`~headgate.pagination.WritingPager`) encodes it
-        for each page, since the writer belongs to the endpoint, like the reader and the pager; a pager without one
-        sends the value as JSON, so it must be builtins. A page with a body is then a :meth:`post` in every respect: in
-        particular it is re-sent only when that is safe, unless ``retry=`` says otherwise.
+        :class:`~headgate.pagination.BodyCursor` or :class:`~headgate.pagination.BodyOffset` needs the value, not its
+        bytes), ``None`` for none. The pager's ``write`` (a flavor's ``writer``, see
+        :class:`~headgate.pagination.WritingPager`) encodes it for each page, since the writer belongs to the endpoint,
+        like the reader and the pager; a pager without one sends the value as JSON, so it must be builtins. A page
+        with a body is then a :meth:`post` in every respect: in particular it is re-sent only when that is safe,
+        unless ``retry=`` says otherwise.
 
         *max_pages* is a page budget: at most that many pages are fetched. When more would follow, the walk raises
         :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or with ``on_limit="stop"`` ends

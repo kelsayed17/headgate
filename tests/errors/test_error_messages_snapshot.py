@@ -28,7 +28,6 @@ from headgate import (
     ClientError,
     HttpOptions,
     Json,
-    Problem,
     RateLimitError,
     Reader,
     RetryPolicy,
@@ -38,7 +37,7 @@ from headgate import (
     nothing,
 )
 from headgate.breaker import BreakerRegistry
-from headgate.errors import RefusedError
+from headgate.errors import Problem, RefusedError
 from headgate.testing import TestClock
 from headgate.timing import Timing, current_timing, timing_override
 from tests.support.wire import Script

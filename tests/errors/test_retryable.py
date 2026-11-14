@@ -23,7 +23,6 @@ from headgate import (
     ClientError,
     HttpOptions,
     Json,
-    Offset,
     SecurityOptions,
     TransportPolicy,
     UpstreamStatusError,
@@ -41,6 +40,7 @@ from headgate.errors import (
     ResponseParseError,
     ResponseTooLargeError,
 )
+from headgate.pagination import Offset
 from headgate.retry import Backoff, RetryPolicy
 
 if TYPE_CHECKING:

@@ -22,7 +22,6 @@ from headgate import (
     Expect,
     HttpOptions,
     IdempotencyKeys,
-    LinkHeader,
     Minted,
     Rate,
     RetryPolicy,
@@ -32,6 +31,7 @@ from headgate import (
     nothing,
 )
 from headgate.msgspec import decode, reader, writer
+from headgate.pagination import LinkHeader
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable

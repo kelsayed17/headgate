@@ -151,7 +151,8 @@ from typing import Self
 
 import msgspec
 
-from headgate import BearerAuth, Client, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
+from headgate import BearerAuth, Client, Expect, HttpOptions, Rate, RateBudget, nothing
+from headgate.pagination import LinkHeader
 from headgate.msgspec import reader
 
 

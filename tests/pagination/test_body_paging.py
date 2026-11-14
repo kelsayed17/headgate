@@ -18,28 +18,22 @@ import msgspec
 import pytest
 
 from headgate import (
-    BodyCursor,
-    BodyOffset,
     CallOptions,
     Client,
     ClientError,
-    Cursor,
     EncodedBody,
     Expect,
     HttpOptions,
     IdempotencyKeys,
-    LinkHeader,
-    NextUrl,
-    Offset,
-    PageLimitError,
     Reader,
     RetryPolicy,
     TransportPolicy,
     UpstreamStatusError,
     Writer,
 )
+from headgate.errors import PageLimitError
 from headgate.msgspec import reader, writer
-from headgate.pagination import PageRequest, WritingPager
+from headgate.pagination import BodyCursor, BodyOffset, Cursor, LinkHeader, NextUrl, Offset, PageRequest, WritingPager
 from headgate.ratelimit import Rate
 from headgate.retry import IDEMPOTENT_METHODS
 

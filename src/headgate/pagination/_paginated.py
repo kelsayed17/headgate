@@ -74,7 +74,7 @@ class Paginated[I, P = object](Protocol):
     A page that leads back to a request already made (a cursor or next URL that repeats) raises ``ClientError``
     instead of looping forever; the requests made are remembered for that, as a digest per page of its URL (as written
     and as sent), query and, for a POST, the bytes its pager's ``write`` encodes the body to, or the ``repr`` of a body
-    of builtins sent as JSON. An :class:`~headgate.Offset`, :class:`~headgate.PageNumber` or
+    of builtins sent as JSON. An :class:`~headgate.pagination.Offset`, :class:`~headgate.pagination.PageNumber` or
     :class:`~headgate.pagination.BodyOffset` walk builds each request from the last, so a server that ignores its
     paging would send the same page forever: a page with items whose body repeats an earlier page's raises
     ``ClientError`` too. At most :data:`REMEMBERED_PAGES` of each are remembered, the oldest forgotten first. A walk

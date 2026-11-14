@@ -272,6 +272,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Removed
 
+- The pagers and the finer errors from `headgate`: each has one home now. Import `BodyCursor`, `BodyOffset`, `Cursor`,
+  `LinkHeader`, `NextUrl`, `Offset` and `PageNumber` from `headgate.pagination`, and `CircuitOpenError`,
+  `ClientConfigurationError`, `DecodeError`, `ForbiddenDestinationError`, `PageLimitError`, `ResponseParseError`,
+  `ResponseTooLargeError` and `Problem` from `headgate.errors`. `from headgate import Cursor` raises `ImportError`.
 - `PageLimit`, from `headgate` and `headgate.pagination`: pass `max_pages=` and `on_limit=` to `paginate`.
 - `headgate.breaker.DEFAULT_REGISTRY`, the process-wide registry: pass one `BreakerRegistry` to the clients that share
   it. `headgate.testing.isolated_breakers()`: each client's breakers are already its own; read them with

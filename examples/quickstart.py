@@ -12,8 +12,9 @@ from typing import TYPE_CHECKING, Self
 
 import msgspec
 
-from headgate import BearerAuth, Client, Cursor, Expect, Rate, nothing
+from headgate import BearerAuth, Client, Expect, Rate, nothing
 from headgate.msgspec import reader
+from headgate.pagination import Cursor
 
 if TYPE_CHECKING:
     from headgate import Paginated

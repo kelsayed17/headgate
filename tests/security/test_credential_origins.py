@@ -18,9 +18,7 @@ import pytest
 from headgate import (
     CachedTokenAuth,
     Client,
-    ForbiddenDestinationError,
     HttpOptions,
-    LinkHeader,
     Minted,
     QueryParamAuth,
     Raw,
@@ -29,7 +27,9 @@ from headgate import (
     TransportPolicy,
 )
 from headgate._core import CredentialStamper
+from headgate.errors import ForbiddenDestinationError
 from headgate.msgspec import reader
+from headgate.pagination import LinkHeader
 from headgate.security._credentials import CHAIN_ORIGIN, CredentialGuard
 from tests.security._web import BASE, Web
 from tests.support.responses import RESPONSE

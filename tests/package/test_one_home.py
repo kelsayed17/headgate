@@ -36,3 +36,10 @@ def test_no_object_is_exported_from_two_public_modules() -> None:
             homes[id(getattr(module, name))].append(f"{module_name}.{name}")
 
     assert not sorted(where for where in homes.values() if len(where) > 1)
+
+
+@pytest.mark.parametrize("name", ["Cursor", "LinkHeader", "Offset", "ResponseParseError", "PageLimitError", "Problem"])
+def test_the_pagers_and_the_finer_errors_are_not_at_the_top_level(name: str) -> None:
+    """Leave a pager to ``headgate.pagination`` and an error outside the six to ``headgate.errors``."""
+    assert not hasattr(headgate, name)
+    assert name not in headgate.__all__

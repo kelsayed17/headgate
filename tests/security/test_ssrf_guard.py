@@ -16,18 +16,10 @@ from typing import TYPE_CHECKING, Final, override
 import httpx2
 import pytest
 
-from headgate import (
-    BreakerPolicy,
-    Client,
-    ForbiddenDestinationError,
-    HttpOptions,
-    RetryPolicy,
-    SecurityOptions,
-    TransportError,
-    TransportPolicy,
-)
+from headgate import BreakerPolicy, Client, HttpOptions, RetryPolicy, SecurityOptions, TransportError, TransportPolicy
 from headgate.breaker import BreakerRegistry
 from headgate.curl import AsyncCurlTransport
+from headgate.errors import ForbiddenDestinationError
 from headgate.ratelimit import Rate
 from tests.security._servers import serving
 from tests.security._web import BASE, Web
