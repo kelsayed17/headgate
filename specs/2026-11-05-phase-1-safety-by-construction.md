@@ -1,5 +1,7 @@
 # Phase 1: Safety by construction — Implementation Plan
 
+Status: done · merged in #56.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the safe spelling the only one that type-checks for URLs, and the only one that runs for request signing and middleware credentials.
