@@ -35,7 +35,7 @@ What "off" means:
 * ``TransportPolicy(breaker=None)``: the client never reads a breaker registry, so it cannot be refused by a breaker
   another client opened on the same host.
 * a budget that paces nothing, enforced where a budget is built, so it also covers the budgets a client's
-  ``rate_limits`` rules build, and a shared ``RateBudget`` passed in.
+  routes build from ``rate=``, and a shared ``RateBudget`` passed in.
 """
 
 from headgate._core import policy_disabled

@@ -4,7 +4,7 @@
 """Per-attempt middleware: caller code that sees, and may change, every request each time it is sent.
 
 :class:`MiddlewareTransport` sits inside the retry layer and above the cache (see :mod:`headgate._stack`), so a
-middleware runs once per attempt. Middleware run in the order ``HttpOptions(middleware=...)`` lists them, the first
+middleware runs once per attempt. Middleware run in the order the client's ``middleware=`` lists them, the first
 outermost; each calls ``call_next`` to continue, or returns a response of its own to stop there. A signature that must
 be fresh on every attempt belongs in a :class:`~headgate.SigningAuth`, not a middleware: a second
 :class:`MiddlewareTransport`, with no middleware, signs each attempt with it below the rate budget, after its wait, and

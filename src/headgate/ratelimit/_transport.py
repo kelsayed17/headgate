@@ -4,7 +4,7 @@
 """The rate-limit layer: the bottom of every client's policy stack, spending a budget on each request it sends.
 
 Below the cache, a cache hit returns above it and spends nothing; below retry, every re-send passes through it and
-spends its own turn. A client's ``rate_limits`` rules give a matching URL path a budget of its own
+spends its own turn. A call's route gives a matching URL path a budget of its own when it sets ``rate=``
 (:class:`~headgate.ratelimit.PathBudgets`).
 
 A budget with ``max_in_flight`` counts a request until its response body is closed, not until the response head

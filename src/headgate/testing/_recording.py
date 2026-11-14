@@ -18,7 +18,7 @@ The recipe, with pytest-recording::
     def vcr_config() -> dict[str, object]:
         return CASSETTES.vcr_config()
 
-and ``HttpOptions(middleware=(CASSETTES,))`` on the client under test. A skipped mint is not replayed, so seed the
+and ``middleware=(CASSETTES,)`` on the client under test. A skipped mint is not replayed, so seed the
 auth with a token when replaying (``CachedTokenAuth.seed``), and build the filter with ``replaying=True`` then: an
 unseeded mint fails the test instead of reaching the network.
 
