@@ -36,7 +36,7 @@ async def _resolve(host: str, _port: int) -> Sequence[str]:
     return [_ADDRESSES[host]]
 
 
-_GUARDED = HttpOptions(security=SecurityOptions(allow_private_hosts=False, resolver=_resolve))
+_GUARDED = HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=_resolve))
 
 
 async def test_a_stream_to_a_private_address_is_refused() -> None:

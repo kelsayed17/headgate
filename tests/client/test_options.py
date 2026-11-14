@@ -463,7 +463,7 @@ async def test_a_calls_retry_policy_wins_over_its_route() -> None:
 def test_the_security_options_have_safe_defaults() -> None:
     """Trust no extra origin and allow private hosts until configured."""
     options = HttpOptions()
-    assert options.security == SecurityOptions(trusted_origins=frozenset(), allow_private_hosts=True, resolver=None)
+    assert options.security == SecurityOptions(trusted_origins=frozenset(), block_private_hosts=False, resolver=None)
 
 
 class _CountingNetwork(httpx2.AsyncBaseTransport):
@@ -618,8 +618,8 @@ _WRONG_KINDS: Final[list[tuple[Callable[[], object], str]]] = [
     (lambda: HttpOptions(proxy=cast("Any", 8080)), r"^proxy= takes a proxy URL, or None"),
     (lambda: HttpOptions(user_agent=cast("Any", 1)), r"^user_agent= takes a product token, or None"),
     (lambda: HttpOptions(cookies=cast("Any", "yes")), r"^cookies= takes a bool"),
-    (lambda: SecurityOptions(allow_private_hosts=cast("Any", "no")), r"^allow_private_hosts= takes a bool"),
-    (lambda: SecurityOptions(allow_private_hosts=False, resolver=cast("Any", "8.8.8.8")), r"^resolver= takes a resol"),
+    (lambda: SecurityOptions(block_private_hosts=cast("Any", "no")), r"^block_private_hosts= takes a bool"),
+    (lambda: SecurityOptions(block_private_hosts=True, resolver=cast("Any", "8.8.8.8")), r"^resolver= takes a resol"),
     (lambda: IdempotencyKeys(header=cast("Any", 1)), r"^header= takes a header name"),
     (lambda: IdempotencyKeys(factory=cast("Any", "uuid")), r"^factory= takes a function returning a fresh key"),
     (lambda: StubClient(base_url=cast("Any", None)), r"^base_url= takes the API root"),
@@ -667,3 +667,11 @@ def test_a_one_shot_iterator_of_names_is_refused() -> None:
     """Refuse an iterator where names go, since reading it to check it would leave nothing to keep."""
     with pytest.raises(TypeError, match=r"^request_id_headers= takes a tuple of header names.*\(got generator\)$"):
         HttpOptions(request_id_headers=cast("Any", (name for name in ("x-trace-id",))))
+
+
+def test_the_ssrf_guard_is_switched_on_by_block_private_hosts() -> None:
+    """Refuse the old double negative, ``allow_private_hosts=``, and keep the guard off unless asked for."""
+    old: dict[str, Any] = {"allow_private_hosts": False}
+    with pytest.raises(TypeError, match="allow_private_hosts"):
+        SecurityOptions(**old)
+    assert SecurityOptions().block_private_hosts is False

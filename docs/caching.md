@@ -88,7 +88,7 @@ opt-in for public data: every client on the storage sees every entry, whatever i
 entries apart there: a query parameter with a well-known secret name that the auth does not declare, by its value,
 since `/config?key=theme` and `?key=locale` are different resources.
 
-Under either partition, a client that refuses private hosts (`SecurityOptions(allow_private_hosts=False)`) has entries
+Under either partition, a client that refuses private hosts (`SecurityOptions(block_private_hosts=True)`) has entries
 of its own, so it is never served what a client allowed private hosts fetched from an internal address on the same
 storage.
 

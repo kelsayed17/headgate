@@ -302,7 +302,7 @@ async def test_a_guarded_client_is_never_served_an_unguarded_clients_entry(
     guarded = StubClient(
         base_url="https://x",
         policy=TransportPolicy(cache=cache),
-        http=HttpOptions(security=SecurityOptions(allow_private_hosts=False, resolver=_Names(x="10.0.0.5"))),
+        http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=_Names(x="10.0.0.5"))),
     )
     async with unguarded, guarded:
         assert await unguarded.get("series", expect=as_bytes) == NETWORK_BODY

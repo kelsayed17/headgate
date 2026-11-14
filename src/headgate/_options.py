@@ -438,27 +438,27 @@ class SecurityOptions:
 
     * ``trusted_origins``: origins besides ``base_url``'s that credentials may be sent to (``"https://host[:port]"``);
       every other origin gets the request without them (see :mod:`headgate.security`).
-    * ``allow_private_hosts``: ``False`` turns on the SSRF guard: a request to a host that is, or resolves to, an
+    * ``block_private_hosts``: ``True`` turns on the SSRF guard: a request to a host that is, or resolves to, an
       address that is not globally routable raises :class:`~headgate.errors.ForbiddenDestinationError`, on every hop,
       and the default transport connects only to the address it checked. It cannot be combined with
       ``HttpOptions.proxy``, since a proxy resolves the target itself; over a custom ``HttpOptions.transport`` every hop
       is checked but not pinned.
     * ``resolver``: how the SSRF guard resolves names (:data:`~headgate.security.Resolver`), the event loop's
-      ``getaddrinfo`` by default; only with ``allow_private_hosts=False``.
+      ``getaddrinfo`` by default; only with ``block_private_hosts=True``.
     """
 
     trusted_origins: frozenset[str] = frozenset()
-    allow_private_hosts: bool = True
+    block_private_hosts: bool = False
     resolver: Resolver | None = None
 
     def __post_init__(self) -> None:
         """Refuse a value of the wrong kind and a resolver without the SSRF guard, and normalize the trusted origins."""
         check_names("trusted_origins", self.trusted_origins, "a frozenset of origins, such as {'https://cdn.example'}")
-        check_kind("allow_private_hosts", self.allow_private_hosts, bool, "a bool")
+        check_kind("block_private_hosts", self.block_private_hosts, bool, "a bool")
         if self.resolver is not None:
             check_callable("resolver", self.resolver, "a resolver function, or None")
-        if self.allow_private_hosts and self.resolver is not None:
-            msg = "resolver= is used only by the SSRF guard, so it needs allow_private_hosts=False"
+        if not self.block_private_hosts and self.resolver is not None:
+            msg = "resolver= is used only by the SSRF guard, so it needs block_private_hosts=True"
             raise ValueError(msg)
         object.__setattr__(self, "trusted_origins", frozenset(map(_normalized_origin, self.trusted_origins)))
 
@@ -549,8 +549,8 @@ class HttpOptions:
 
     def _check_guard(self) -> None:
         """Refuse the SSRF guard with a proxy, which would resolve the target past it."""
-        if not self.security.allow_private_hosts and self.proxy is not None:
-            msg = "allow_private_hosts=False cannot be combined with proxy=: the proxy resolves the target itself"
+        if self.security.block_private_hosts and self.proxy is not None:
+            msg = "block_private_hosts=True cannot be combined with proxy=: the proxy resolves the target itself"
             raise ValueError(msg)
 
     def _check_transport(self) -> None:

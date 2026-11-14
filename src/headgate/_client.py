@@ -261,7 +261,7 @@ class AsyncBaseClient:
       quota refusal a reader found inside a 2xx;
     * ``UpstreamStatusError``: a 5xx that survived retries, a status the call did not declare, or a refusal carrying
       the status it arrived with (401/403 become ``AuthError``);
-    * ``ForbiddenDestinationError``: a hop the SSRF guard refused (``SecurityOptions(allow_private_hosts=False)``), or
+    * ``ForbiddenDestinationError``: a hop the SSRF guard refused (``SecurityOptions(block_private_hosts=True)``), or
       a token mint's hop redirected off its origin;
     * ``ResponseParseError``: a 2xx body the reader could not read;
     * ``ResponseTooLargeError``: a body past the call's ``max_response_bytes``, else ``HttpOptions.max_response_bytes``.

@@ -89,7 +89,7 @@ requests and credentials may go:
 | Field | Default | |
 | --- | --- | --- |
 | `trusted_origins` | `frozenset()` | origins besides `base_url`'s that may receive credentials |
-| `allow_private_hosts` | `True` | `False` turns on the SSRF guard |
+| `block_private_hosts` | `False` | `True` turns on the SSRF guard |
 | `resolver` | `None` | how the SSRF guard resolves names; only with the guard on |
 
 `ssl_context`, `limits` and `proxy` configure the default transport, so passing any of them with `transport=` is a

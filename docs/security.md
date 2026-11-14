@@ -9,7 +9,7 @@ headgate makes the safe behavior the default and loosening it explicit.
 | --- | --- | --- |
 | :lucide-key-round: a credential sent to another host by a redirect or a link | [withholds it on every hop](#credentials-stay-on-your-origin) to an origin you did not trust | trust more origins with `trusted_origins=` |
 | :lucide-arrow-down-to-line: an https page redirecting to plain http | [refuses the redirect](#redirects) | always on |
-| :lucide-server-crash: a URL that reaches your internal network (SSRF) | [refuses private addresses](#the-ssrf-guard), with DNS pinning, once you turn the guard on | `allow_private_hosts=False` turns it on |
+| :lucide-server-crash: a URL that reaches your internal network (SSRF) | [refuses private addresses](#the-ssrf-guard), with DNS pinning, once you turn the guard on | `block_private_hosts=True` turns it on |
 | :lucide-folder-tree: a value like `../admin` rewriting the path | [escapes each value](#paths-built-from-values) as one segment | `{value:raw}` for a pre-built fragment |
 | :lucide-eye-off: a token printed in a log or error | [redacts it](#redaction) as `***` in every error and event | always on |
 | :lucide-package-x: a proxy or `.netrc` picked up from the environment | [ignores the environment](#hermetic-by-default) | pass `proxy=` or `ssl_context=` explicitly |
@@ -100,7 +100,7 @@ such an auth unless told the data is public (see [caching](caching.md#partitions
 ## The SSRF guard
 
 A client that fetches URLs it did not write (webhooks, user-supplied links, cursors from a partner) sets
-`HttpOptions(security=SecurityOptions(allow_private_hosts=False))`. Every hop's host is resolved and refused, as
+`HttpOptions(security=SecurityOptions(block_private_hosts=True))`. Every hop's host is resolved and refused, as
 `ForbiddenDestinationError`, when any address it resolves to is not globally routable: loopback, private, link-local,
 IPv6 site-local, carrier-grade NAT, multicast, reserved or unspecified, with IPv4-mapped and NAT64 addresses judged by
 the IPv4 address they reach. Nothing is sent to a refused host, and the refusal is never retried or charged to a breaker.

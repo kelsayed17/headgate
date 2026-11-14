@@ -278,7 +278,7 @@ async def _forbidden_destination() -> None:
     async with StubClient(
         base_url="https://127.0.0.1:8443",
         policy=TransportPolicy(retry=None, breaker=None),
-        http=HttpOptions(transport=Script().transport(), security=SecurityOptions(allow_private_hosts=False)),
+        http=HttpOptions(transport=Script().transport(), security=SecurityOptions(block_private_hosts=True)),
     ) as client:
         await client.get("admin" + _KEYED_QUERY, expect=nothing)
 

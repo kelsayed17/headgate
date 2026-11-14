@@ -38,6 +38,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- `SecurityOptions(allow_private_hosts=False)` is `SecurityOptions(block_private_hosts=True)`, which says what it
+  turns on without a double negative. The guard is still off by default. `allow_private_hosts=` raises `TypeError`.
 - **A route's explicit `retry=None` now sends once, and its explicit `deadline=None` now sets no deadline.** Each
   meant "keep the policy's", and now means off, as a call's does: `Route` takes `**options: Unpack[RouteOptions]`, so
   leaving an option out inherits. Find them with `grep -rnE "Route\([^)]*(retry|deadline)=None"`, and leave the

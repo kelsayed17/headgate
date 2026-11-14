@@ -24,7 +24,7 @@ signs each send, so a request that waited for its turn is signed when it goes ou
 
 * request hooks: the credential guard (:class:`~headgate.security.CredentialGuard`, which also runs below the last
   middleware and below the signature, where what they stamp is visible), then, over a custom network
-  transport with ``SecurityOptions(allow_private_hosts=False)``, the SSRF guard's vetting
+  transport with ``SecurityOptions(block_private_hosts=True)``, the SSRF guard's vetting
   (:func:`~headgate.security.address_hook`); the default transport pins vetted addresses itself
   (:class:`~headgate.security.PinnedHTTPTransport`);
 * response hooks: the https-downgrade refusal, the refusal to re-send a one-shot body on a redirect, and the drop of a
@@ -162,7 +162,7 @@ def build_transport_stack(
             credentials.auth,
             middleware=credentials.middleware,
             headers=http.headers,
-            guarded=not http.security.allow_private_hosts,
+            guarded=http.security.block_private_hosts,
         )
         layer = ResilientCacheTransport(layer, cache, max_body_bytes=http.max_response_bytes, scope=scope)
     if middleware := credentials.middleware:
@@ -192,7 +192,7 @@ def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
 def _address_guard(http: HttpOptions) -> AddressGuard | None:
     """Return the SSRF guard *http* asks for, or ``None`` when it allows private hosts."""
     security = http.security
-    if security.allow_private_hosts:
+    if not security.block_private_hosts:
         return None
     return AddressGuard() if security.resolver is None else AddressGuard(security.resolver)
 

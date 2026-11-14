@@ -65,7 +65,7 @@ The transport behaves like a native httpx2 one wherever the layers above it can 
 * Closing a response before its body is read aborts the transfer, even a stalled one. ``curl_cffi``'s own ``aclose``
   waits for the whole body to arrive into an unbounded queue, which would defeat headgate's response size cap.
 
-**The SSRF guard** (``SecurityOptions(allow_private_hosts=False)``) vets every hop's host before this transport sends
+**The SSRF guard** (``SecurityOptions(block_private_hosts=True)``) vets every hop's host before this transport sends
 it, but cannot pin the connection to the address it vetted, because curl resolves the name itself. Pinning would take
 ``CURLOPT_RESOLVE`` per request, and ``curl_cffi`` 0.16 sets libcurl options only session-wide, after the handle is
 taken from the pool (an ``await``, so a per-request value would race between concurrent requests), and a resolve entry
