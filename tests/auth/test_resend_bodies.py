@@ -20,7 +20,6 @@ import pytest
 from headgate import CachedTokenAuth, HttpOptions, Raw, SigningAuth
 from headgate._responses import nothing
 from headgate.errors import AuthError
-from headgate.ratelimit import UNLIMITED
 from tests.support.clients import StubClient
 from tests.support.tokens import premint
 
@@ -108,7 +107,6 @@ def _nothing_produced() -> None:
 def _client(auth: httpx2.Auth, network: _Network) -> StubClient:
     return StubClient(
         base_url=_BASE,
-        rate=UNLIMITED,
         auth=auth,
         http=HttpOptions(transport=network, max_response_bytes=_CAP),
     )
