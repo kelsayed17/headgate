@@ -31,6 +31,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- A walk of POSTs takes its body as `paginate(query=value)`, where it took `body=value` (encoded by the pager's
+  `write=`) or `json=value` (builtins): the pager's `write=` encodes the value when it has one, and without one the
+  value is sent as JSON. So `body=` means one thing everywhere, the request body. `paginate(body=...)` and
+  `paginate(json=...)` raise `TypeError` naming `query=`, before the pager runs. The two `ValueError`s that tied a
+  keyword to a pager having or lacking `write=` are gone, since the pager now decides; a fixed idempotency key on a
+  walk of POSTs is still refused.
 - A request body is one keyword, `body=`, whose value says what it is: `json=value` is `body=Json(value)`,
   `data=fields` is `body=Form(fields)`, `files=files, data=fields` is `body=Multipart(files, fields)`, and
   `content=raw` is `body=Raw(raw)`; `body=` an `EncodedBody` from a writer is unchanged. The old keywords raise

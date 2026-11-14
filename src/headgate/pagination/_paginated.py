@@ -60,8 +60,9 @@ class Paginated[P, I](Protocol):
 
     A page that leads back to a request already made (a cursor or next URL that repeats) raises ``ClientError``
     instead of looping forever; the requests made are remembered for that, one key per page (its URL, query and, for a
-    POST, the bytes its pager's ``write`` encodes the body to, or the ``repr`` of a ``json=`` body's builtins). A walk
-    with a :class:`PageLimit` fetches at most its ``max_pages``, then raises ``PageLimitError`` or stops, as it says.
+    POST, the bytes its pager's ``write`` encodes the body to, or the ``repr`` of a body of builtins sent as JSON). A
+    walk with a :class:`PageLimit` fetches at most its ``max_pages``, then raises ``PageLimitError`` or stops, as it
+    says.
     """
 
     def __aiter__(self) -> AsyncIterator[I]:

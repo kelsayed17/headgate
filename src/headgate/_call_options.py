@@ -30,13 +30,12 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BODY_HINTS",
+    "CALL_KEYS",
     "REQUEST_KEYS",
     "STREAM_KEYS",
-    "WALK_KEYS",
     "CallOptions",
     "RequestOptions",
     "StreamOptions",
-    "WalkOptions",
     "check_options",
     "check_overrides",
 ]
@@ -111,13 +110,6 @@ class StreamOptions(_EveryCall, _Bodies, total=False, closed=True):
     """
 
 
-class WalkOptions[B](_Buffered, total=False, closed=True):
-    """What :meth:`~headgate.AsyncBaseClient.paginate`'s implementation takes: the per-page options, and the body."""
-
-    body: B
-    json: B
-
-
 #: What to write for each body keyword a verb or ``stream()`` took before ``body=`` said what a body is.
 BODY_HINTS: Final = {
     "json": "write body=Json(value)",
@@ -127,9 +119,9 @@ BODY_HINTS: Final = {
 }
 
 #: The keywords each bag names, read once, for :func:`check_options`.
+CALL_KEYS: Final = frozenset(CallOptions.__optional_keys__)
 REQUEST_KEYS: Final = frozenset(RequestOptions.__optional_keys__)
 STREAM_KEYS: Final = frozenset(StreamOptions.__optional_keys__)
-WALK_KEYS: Final = frozenset(WalkOptions.__optional_keys__)
 
 
 def check_options(

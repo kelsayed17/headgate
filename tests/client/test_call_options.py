@@ -170,7 +170,7 @@ async def test_a_streams_last_event_id_joins_the_calls_own_headers() -> None:
 
 async def test_paginate_refuses_a_request_body_with_its_reason() -> None:
     """Refuse a body option no pager can rewrite on ``paginate``, naming the ones a walk takes."""
-    message = r"^paginate\(\) got an unexpected keyword argument 'data': a walk of POSTs sends body= or json=$"
+    message = r"^paginate\(\) got an unexpected keyword argument 'data': a walk's body is query=, the value its pager"
     form: dict[str, Any] = {"data": {"a": 1}}
     with pytest.raises(TypeError, match=message):
         _client(Script()).paginate("orders", expect=nothing, pages=_ONE_PAGE, **form)

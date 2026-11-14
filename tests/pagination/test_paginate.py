@@ -148,7 +148,7 @@ async def test_a_walk_does_not_go_through_methods_a_subclass_may_rename() -> Non
     gets = [item.id async for item in client.paginate("items", expect=reader(Page), pages=pages)]
     query: dict[str, object] = {}
     posting = Cursor[Page, Item, dict[str, object]](items=items_of, next=cursor_of, param="after")
-    posts = [item.id async for item in client.paginate("items", json=query, expect=reader(Page), pages=posting)]
+    posts = [item.id async for item in client.paginate("items", query=query, expect=reader(Page), pages=posting)]
     assert gets == posts == [1, 2, 3, 4]
 
 
@@ -533,7 +533,9 @@ def test_a_body_no_pager_can_rewrite_is_refused(body: dict[str, Any]) -> None:
     """Refuse a form, raw or multipart body: a walk's body is ``json=``, or ``body=`` with ``write=``."""
     client = _Api(_by_cursor).client()
     name = next(iter(body))
-    with pytest.raises(TypeError, match=rf"argument '{name}': a walk of POSTs sends body= or json=$"):
+    with pytest.raises(
+        TypeError, match=rf"argument '{name}': a walk's body is query=, the value its pager rewrites for each page$"
+    ):
         client.paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of), **body)
 
 
