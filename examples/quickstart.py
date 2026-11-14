@@ -88,7 +88,7 @@ class CatalogClient:
         """Return the series *series_id*, or ``None`` when the API answers 404."""
         return await self._http.get(t"series/{series_id}", expect=SERIES_OR_NONE)
 
-    def releases(self) -> Paginated[ReleasePage, Release]:
+    def releases(self) -> Paginated[Release]:
         """Return every release, fetched a page at a time as the iteration reaches it."""
         return self._http.paginate("releases", expect=reader(ReleasePage), pages=RELEASE_PAGES)
 

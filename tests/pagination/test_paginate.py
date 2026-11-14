@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, assert_type
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, assert_type, cast
 
 import httpx2
 import msgspec
@@ -26,7 +26,6 @@ from headgate import (
     LinkHeader,
     NextUrl,
     Offset,
-    PageLimit,
     PageLimitError,
     PageNumber,
     Reader,
@@ -670,7 +669,7 @@ async def test_an_empty_page_can_be_walked_past(strategy: Callable[..., Pager[Pa
 async def test_a_walk_past_its_page_limit_raises_with_what_it_fetched() -> None:
     """Raise ``PageLimitError`` once the budget is spent with pages to come, after yielding the pages it allowed."""
     api = _Api(_endless)
-    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
+    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), max_pages=_BUDGET)
     items = aiter(paginated)
 
     allowed = [(await anext(items)).id for _ in range(_BUDGET)]
@@ -684,28 +683,27 @@ async def test_a_walk_past_its_page_limit_raises_with_what_it_fetched() -> None:
     assert (raised.value.method, raised.value.url) == ("GET", "items")
     assert str(raised.value) == (
         f"[api.test] pagination reached its limit of {_BUDGET} pages with more to come (items); the result is"
-        " incomplete. Raise PageLimit.max_pages, or set on_limit='stop' to end the walk there"
+        " incomplete. Raise max_pages=, or set on_limit='stop' to end the walk there"
     )
 
 
 async def test_a_limit_on_a_template_url_raises_without_naming_it() -> None:
     """Raise past the limit on a templated URL, without naming the URL."""
     client = _Api(_endless).client()
-    paginated = client.paginate(t"items/{'x'}", expect=reader(Page), pages=_cursor(), limit=PageLimit(1))
+    paginated = client.paginate(t"items/{'x'}", expect=reader(Page), pages=_cursor(), max_pages=1)
     with pytest.raises(PageLimitError) as raised:
         _ = [page async for page in paginated.pages()]
     assert (raised.value.method, raised.value.url) == ("GET", None)
     assert str(raised.value) == (
         "[api.test] pagination reached its limit of 1 pages with more to come; the result is incomplete."
-        " Raise PageLimit.max_pages, or set on_limit='stop' to end the walk there"
+        " Raise max_pages=, or set on_limit='stop' to end the walk there"
     )
 
 
 async def test_a_walk_can_stop_quietly_at_its_page_limit() -> None:
     """End the walk at the budget with ``on_limit="stop"``, for a caller that wants only the first pages."""
     api = _Api(_endless)
-    limit = PageLimit(_BUDGET, on_limit="stop")
-    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), limit=limit)
+    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), max_pages=_BUDGET, on_limit="stop")
 
     assert [item.id async for item in paginated] == list(range(_BUDGET))
     assert len(api.sent) == _BUDGET
@@ -720,25 +718,36 @@ async def test_a_walk_that_ends_exactly_at_its_limit_is_complete() -> None:
             "items",
             expect=reader(Page),
             pages=Cursor(items=items_of, next=cursor_of, param="after"),
-            limit=PageLimit(3),
+            max_pages=3,
         )
     )
     assert [item.id async for item in paginated] == [1, 2, 3, 4]
 
 
 @pytest.mark.parametrize(
-    ("build", "message"),
+    ("budget", "error", "message"),
     [
-        (lambda: PageLimit(0), "max_pages must be >= 1 (got 0)"),
-        (lambda: PageLimit(max_pages=True), "max_pages must be >= 1 (got True)"),
-        (lambda: replace(PageLimit(5), on_limit="truncate"), "on_limit must be 'raise' or 'stop' (got 'truncate')"),
+        ({"max_pages": 0}, ValueError, "max_pages= takes None or an int of at least 1 (got 0)"),
+        ({"max_pages": True}, TypeError, "max_pages= takes None or an int of at least 1 (got bool)"),
+        ({"max_pages": 5, "on_limit": "truncate"}, ValueError, "on_limit= takes 'raise' or 'stop' (got 'truncate')"),
+        ({"on_limit": "stop"}, ValueError, "on_limit='stop' says what happens at max_pages=, so it needs one"),
     ],
-    ids=["zero", "a-bool", "unknown-outcome"],
+    ids=["zero", "a-bool", "unknown-outcome", "stop-without-a-budget"],
 )
-def test_a_bad_page_limit_is_refused(build: Callable[[], object], message: str) -> None:
-    """Refuse a budget below one page, a ``bool`` passed as a count, and an outcome that does not exist."""
-    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
-        build()
+def test_a_bad_page_budget_is_refused_before_anything_is_sent(
+    budget: dict[str, Any], error: type[Exception], message: str
+) -> None:
+    """Refuse a budget below one page, a ``bool`` count, an outcome that does not exist, and a stop with no budget."""
+    api = _Api(_endless)
+    with pytest.raises(error, match=f"^{re.escape(message)}$"):
+        api.client().paginate("items", expect=reader(Page), pages=_cursor(), **budget)
+    assert api.sent == []
+
+
+def test_the_removed_limit_keyword_is_refused() -> None:
+    """Refuse ``limit=``, which ``max_pages=`` and ``on_limit=`` replace, as any unknown option is."""
+    with pytest.raises(TypeError, match="limit"):
+        _Api(_endless).client().paginate("items", expect=reader(Page), pages=_cursor(), **cast("Any", {"limit": 1}))
 
 
 async def test_collect_returns_every_item_in_order() -> None:
@@ -787,7 +796,7 @@ async def test_collect_of_no_items_sends_nothing() -> None:
 async def test_collect_within_the_page_limit_raises_nothing() -> None:
     """Return the items when they are all collected before the page budget is spent, though more pages follow."""
     api = _Api(_endless)
-    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
+    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), max_pages=_BUDGET)
     assert [item.id for item in await paginated.collect(max_items=_BUDGET)] == list(range(_BUDGET))
     assert len(api.sent) == _BUDGET
 
@@ -795,7 +804,7 @@ async def test_collect_within_the_page_limit_raises_nothing() -> None:
 async def test_collect_past_the_page_limit_raises() -> None:
     """Propagate ``PageLimitError`` when the budget is spent before the walk or *max_items* is done."""
     api = _Api(_endless)
-    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
+    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), max_pages=_BUDGET)
     with pytest.raises(PageLimitError):
         await paginated.collect(max_items=_BUDGET + 1)
     assert len(api.sent) == _BUDGET
@@ -812,7 +821,7 @@ async def test_collect_refuses_a_bad_count(max_items: int) -> None:
 
 
 #: A page budget that only ends a walk the loop check failed to end.
-_BACKSTOP = PageLimit(max_pages=10)
+_BACKSTOP = 10
 
 
 async def test_an_offset_walk_the_server_does_not_page_raises_at_the_repeated_page() -> None:
@@ -824,7 +833,9 @@ async def test_an_offset_walk_the_server_does_not_page_raises_at_the_repeated_pa
     api = _Api(answer)
     pages = Offset(items=items_of, page_size=2)
     with pytest.raises(ClientError, match="pagination loop") as raised:
-        _ = [item async for item in api.client().paginate("items", expect=reader(Page), pages=pages, limit=_BACKSTOP)]
+        _ = [
+            item async for item in api.client().paginate("items", expect=reader(Page), pages=pages, max_pages=_BACKSTOP)
+        ]
 
     assert len(api.sent) == len(("first", "repeated"))
     assert str(raised.value) == (
@@ -842,7 +853,9 @@ async def test_a_numbered_walk_the_server_does_not_page_raises_at_the_repeated_p
     api = _Api(answer)
     pages = PageNumber(items=items_of, more=has_next)
     with pytest.raises(ClientError, match="page 2 repeats an earlier page's body"):
-        _ = [item async for item in api.client().paginate("items", expect=reader(Page), pages=pages, limit=_BACKSTOP)]
+        _ = [
+            item async for item in api.client().paginate("items", expect=reader(Page), pages=pages, max_pages=_BACKSTOP)
+        ]
 
     assert len(api.sent) == len(("first", "repeated"))
 

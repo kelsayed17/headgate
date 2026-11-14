@@ -124,7 +124,7 @@ from headgate.errors import (
     RefusedError,
 )
 from headgate.pagination import PageRequest, WritingPager
-from headgate.pagination._paginated import PageWalk
+from headgate.pagination._paginated import PageWalk, check_page_budget
 from headgate.ratelimit import Rate, RateBudget
 from headgate.ratelimit._budget import BudgetPausedError
 from headgate.ratelimit._budgets import CALL_BUDGET, Lane, PathBudgets
@@ -143,7 +143,8 @@ if TYPE_CHECKING:
     from headgate.breaker._breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
     from headgate.cache import HttpCache
-    from headgate.pagination import PageLimit, Pager, Paginated
+    from headgate.pagination import Pager, Paginated
+    from headgate.pagination._paginated import OnLimit
     from headgate.retry import RetryPolicy
     from headgate.streaming import Stream
 
@@ -586,9 +587,10 @@ class Client:
         *,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, None],
-        limit: PageLimit | None = None,
+        max_pages: int | None = None,
+        on_limit: OnLimit = "raise",
         **options: Unpack[CallOptions],
-    ) -> Paginated[P, I]: ...
+    ) -> Paginated[I, P]: ...
     @overload
     def paginate[P, I, B](
         self,
@@ -597,9 +599,10 @@ class Client:
         query: B | None,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, B],
-        limit: PageLimit | None = None,
+        max_pages: int | None = None,
+        on_limit: OnLimit = "raise",
         **options: Unpack[CallOptions],
-    ) -> Paginated[P, I]: ...
+    ) -> Paginated[I, P]: ...
     def paginate[P, I, B](
         self,
         url: CallUrl,
@@ -607,9 +610,10 @@ class Client:
         query: B | None = None,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, B],
-        limit: PageLimit | None = None,
+        max_pages: int | None = None,
+        on_limit: OnLimit = "raise",
         **options: Unpack[CallOptions],
-    ) -> Paginated[P, I]:
+    ) -> Paginated[I, P]:
         """Return the pages *pages* follows from *url*, each read through *expect*, iterated lazily.
 
         ``async for item in client.paginate(...)`` yields the items of each page in turn; ``.pages()`` yields the
@@ -625,21 +629,24 @@ class Client:
         sends the value as JSON, so it must be builtins. A page with a body is then a :meth:`post` in every respect: in
         particular it is re-sent only when that is safe, unless ``retry=`` says otherwise.
 
-        *limit* is a page budget (:class:`~headgate.PageLimit`): at most ``max_pages`` pages are fetched. When more
-        would follow, the walk raises :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or
-        with ``on_limit="stop"`` ends there. A walk that ends within the budget is unaffected.
+        *max_pages* is a page budget: at most that many pages are fetched. When more would follow, the walk raises
+        :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or with ``on_limit="stop"`` ends
+        there. A walk that ends within the budget is unaffected. The walk is a ``Paginated[I, P]``: its items first.
 
-        :raises ValueError: for a walk its pager refuses (:meth:`~headgate.pagination.Pager.first` runs here, once),
+        :raises ValueError: for a ``max_pages`` below 1, an ``on_limit`` that is neither ``"raise"`` nor ``"stop"``,
+            ``on_limit="stop"`` without ``max_pages``, a walk its pager refuses
+            (:meth:`~headgate.pagination.Pager.first` runs here, once),
             and for a first page with a body and an idempotency key (``idempotency_key=``, or the policy's header in
             ``headers=``, a view's or the client's), as one key on pages with different bodies would have the server
             replay the first page's answer. A later page with a body is held to the same rule, and raises from the
             iteration.
-        :raises TypeError: for a keyword no call option names, ``body=`` and ``json=`` included (a walk's body is
-            ``query=``), and for an ``expect=`` that is neither a :class:`~headgate.Reader` nor an ``Expect``, before
-            the pager runs.
+        :raises TypeError: for a keyword no call option names, ``body=``, ``json=`` and ``limit=`` included (a walk's
+            body is ``query=``, its page budget ``max_pages=``), for a ``max_pages`` that is not an ``int``, and for an
+            ``expect=`` that is neither a :class:`~headgate.Reader` nor an ``Expect``, before the pager runs.
         """
         check_options("paginate", options, CALL_KEYS, _WALK_HINTS)
         check_overrides(options)
+        check_page_budget(max_pages, on_limit)
         spec: Expect[P] = _expectation(expect)
         call_options = options.copy()
         # How a body is sent is the walk's: the pager's writer encodes every page's, whatever request the pager returns.
@@ -676,7 +683,7 @@ class Client:
             body = Json(request.body) if write is None else write(request.body)
             return await self.post(request.url, expect=paired, body=body, **page_options)
 
-        return PageWalk(fetch, pages, first, source=self._source, limit=limit)
+        return PageWalk(fetch, pages, first, source=self._source, max_pages=max_pages, on_limit=on_limit)
 
     def _one_key_for_every_page(self, options: CallOptions) -> bool:
         """Return whether every call made with *options* sends one fixed idempotency key.

@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import hashlib
 from contextlib import aclosing
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Literal, Protocol, final
 
 import httpx2
 
+from headgate._core import check_int
 from headgate._failures import loggable_url, shorten
 from headgate._url import redact_secrets
 from headgate.errors import ClientError, PageLimitError
@@ -23,9 +23,9 @@ if TYPE_CHECKING:
     from headgate._request_body import Writer
     from headgate.pagination._pager import Pager, PageRequest
 
-__all__ = ["REMEMBERED_PAGES", "PageLimit", "PageWalk", "Paginated", "Remembered"]
+__all__ = ["REMEMBERED_PAGES", "OnLimit", "PageWalk", "Paginated", "Remembered", "check_page_budget"]
 
-# shortcut: a cycle longer than 4096 pages goes undetected (a PageLimit still ends it); raise this if a real walk ever
+# shortcut: a cycle longer than 4096 pages goes undetected (max_pages= still ends it); raise this if a real walk ever
 # loops past it, at about 100 bytes of memory per page remembered.
 #: How many of the most recent pages a walk remembers to catch a loop: any loop a real server makes is far shorter.
 REMEMBERED_PAGES: Final = 4096
@@ -34,33 +34,36 @@ REMEMBERED_PAGES: Final = 4096
 _DIGEST_BYTES: Final = 16
 
 
-@dataclass(frozen=True, slots=True)
-class PageLimit:
-    """A page budget for :meth:`Client.paginate <headgate.Client.paginate>`: at most ``max_pages``.
+#: The outcomes ``on_limit=`` names: raise ``PageLimitError``, or end the walk.
+type OnLimit = Literal["raise", "stop"]
 
-    When the budget is spent with more pages to come, ``on_limit`` says what happens: ``"raise"`` (the default) raises
-    :class:`~headgate.errors.PageLimitError`, since the result is incomplete; ``"stop"`` ends the walk there, for a
-    caller that wants only the first pages. A walk that ends within the budget is unaffected.
+
+def check_page_budget(max_pages: int | None, on_limit: OnLimit) -> None:
+    """Refuse a page budget a walk cannot keep: a count below one page or not an ``int``, an unknown outcome, a stop.
+
+    :raises TypeError: for a *max_pages* that is not an ``int``, a ``bool`` included.
+    :raises ValueError: for a *max_pages* below 1, an *on_limit* that is neither ``"raise"`` nor ``"stop"``, and
+        ``on_limit="stop"`` without *max_pages*, which says what happens at a limit that does not exist.
     """
-
-    max_pages: int
-    on_limit: Literal["raise", "stop"] = "raise"
-
-    def __post_init__(self) -> None:
-        """Refuse a budget below one page, and an ``on_limit`` that is neither ``"raise"`` nor ``"stop"``."""
-        if isinstance(self.max_pages, bool) or self.max_pages < 1:
-            msg = f"max_pages must be >= 1 (got {self.max_pages!r})"
+    wanted = "None or an int of at least 1"
+    if max_pages is not None:
+        check_int("max_pages", max_pages, wanted)
+        if max_pages < 1:
+            msg = f"max_pages= takes {wanted} (got {max_pages})"
             raise ValueError(msg)
-        if self.on_limit not in {"raise", "stop"}:
-            msg = f"on_limit must be 'raise' or 'stop' (got {self.on_limit!r})"
-            raise ValueError(msg)
+    if on_limit not in {"raise", "stop"}:
+        msg = f"on_limit= takes 'raise' or 'stop' (got {on_limit!r})"
+        raise ValueError(msg)
+    if on_limit == "stop" and max_pages is None:
+        msg = "on_limit='stop' says what happens at max_pages=, so it needs one"
+        raise ValueError(msg)
 
 
 type Fetch[P, B] = Callable[[PageRequest[B]], Awaitable[tuple[P, httpx2.Response]]]
 """Fetches one page through the client, returning what the call's reader read and the response it read it from."""
 
 
-class Paginated[P, I](Protocol):
+class Paginated[I, P = object](Protocol):
     """The pages of a paginated endpoint and the items on them, fetched one page at a time as iteration reaches them.
 
     ``async for item in paginated`` yields every item; :meth:`pages` yields the pages themselves; :meth:`collect`
@@ -75,7 +78,11 @@ class Paginated[P, I](Protocol):
     :class:`~headgate.pagination.BodyOffset` walk builds each request from the last, so a server that ignores its
     paging would send the same page forever: a page with items whose body repeats an earlier page's raises
     ``ClientError`` too. At most :data:`REMEMBERED_PAGES` of each are remembered, the oldest forgotten first. A walk
-    with a :class:`PageLimit` fetches at most its ``max_pages``, then raises ``PageLimitError`` or stops, as it says.
+    with ``max_pages=`` fetches at most that many pages, then raises ``PageLimitError`` or, with ``on_limit="stop"``,
+    stops.
+
+    ``I`` is the item type and ``P`` the page type, which defaults to ``object``: ``Paginated[Issue]`` is a walk of
+    issues, and ``Paginated[Issue, IssuePage]`` names the pages :meth:`pages` yields too.
     """
 
     def __aiter__(self) -> AsyncIterator[I]:
@@ -95,7 +102,7 @@ class Paginated[P, I](Protocol):
 class PageWalk[P, I, B]:
     """The :class:`Paginated` :meth:`Client.paginate <headgate.Client.paginate>` builds."""
 
-    __slots__ = ("_fetch", "_first", "_items_of", "_limit", "_pager", "_source", "_write")
+    __slots__ = ("_fetch", "_first", "_items_of", "_max_pages", "_on_limit", "_pager", "_source", "_write")
 
     def __init__(
         self,
@@ -104,20 +111,23 @@ class PageWalk[P, I, B]:
         first: PageRequest[B],
         *,
         source: str,
-        limit: PageLimit | None = None,
+        max_pages: int | None = None,
+        on_limit: OnLimit = "raise",
     ) -> None:
         """Fetch pages with *fetch*, linked by *pager*, starting at *first*, for the client named *source*.
 
         *first* is the first page's request as the pager prepared it (its :meth:`~Pager.first`), so every iteration
         starts from it and the pager's refusals were raised when the walk was built.
 
-        *limit* is the walk's page budget, or ``None`` for none.
+        *max_pages* is the walk's page budget, or ``None`` for none, and *on_limit* what happens when it is spent with
+        pages to come, both checked by :func:`check_page_budget`.
         """
         self._fetch = fetch
         self._pager = pager
         self._first = first
         self._source = source
-        self._limit = limit
+        self._max_pages = max_pages
+        self._on_limit = on_limit
         # A page is remembered by the body it sends: the bytes the writer encodes, as the walk's fetch encodes them.
         self._write = pager.write if isinstance(pager, WritingPager) else None
         # The pagers whose next request is built from the last, not read from the page: only a page's body can tell
@@ -136,8 +146,8 @@ class PageWalk[P, I, B]:
         requests, bodies = Remembered(), Remembered()
         fetched = 0
         while request is not None:
-            if self._limit is not None and fetched == self._limit.max_pages:
-                if self._limit.on_limit == "stop":
+            if fetched == self._max_pages:
+                if self._on_limit == "stop":
                     return
                 raise self._limit_error(request, fetched)
             if not requests.add(_key(request, self._write)):
@@ -160,8 +170,8 @@ class PageWalk[P, I, B]:
         """Return every item of the walk, in order; with *max_items*, at most that many.
 
         The walk stops as soon as it has *max_items* items, so no page past the one that filled it is fetched, and
-        ``max_items=0`` sends no request. A :class:`PageLimit` applies as it does to iteration: a walk it cuts short
-        raises ``PageLimitError`` unless the items were all collected first.
+        ``max_items=0`` sends no request. A page budget (``max_pages=``) applies as it does to iteration: a walk it cuts
+        short raises ``PageLimitError`` unless the items were all collected first.
         """
         if max_items is not None and (isinstance(max_items, bool) or max_items < 0):
             msg = f"max_items must be None or >= 0 (got {max_items!r})"
@@ -188,7 +198,7 @@ class PageWalk[P, I, B]:
         where = "" if url is None else f" ({url})"
         msg = (
             f"pagination reached its limit of {fetched} pages with more to come{where}; the result is incomplete. "
-            "Raise PageLimit.max_pages, or set on_limit='stop' to end the walk there"
+            "Raise max_pages=, or set on_limit='stop' to end the walk there"
         )
         return PageLimitError(msg, pages=fetched, source=self._source, method=_method(request), url=url)
 

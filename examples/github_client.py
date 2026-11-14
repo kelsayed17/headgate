@@ -89,7 +89,7 @@ class GitHub:
         """Return the repository *owner*/*name*, or ``None`` when it does not exist or the token cannot see it."""
         return await self._http.get(t"repos/{owner}/{name}", expect=REPOSITORY_OR_NONE)
 
-    def open_issues(self, owner: str, name: str) -> Paginated[list[Issue], Issue]:
+    def open_issues(self, owner: str, name: str) -> Paginated[Issue]:
         """Return the open issues (and pull requests) of *owner*/*name*, 100 a page, fetched as they are iterated."""
         params = {"state": "open", "per_page": 100}
         return self._http.paginate(t"repos/{owner}/{name}/issues", expect=ISSUES, pages=ISSUE_PAGES, params=params)

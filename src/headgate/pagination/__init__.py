@@ -23,7 +23,7 @@ from headgate.pagination._pager import (
     PageRequest,
     WritingPager,
 )
-from headgate.pagination._paginated import PageLimit, Paginated
+from headgate.pagination._paginated import Paginated
 
 __all__ = [
     "BodyCursor",
@@ -33,7 +33,6 @@ __all__ = [
     "LinkHeader",
     "NextUrl",
     "Offset",
-    "PageLimit",
     "PageNumber",
     "PageRequest",
     "Pager",

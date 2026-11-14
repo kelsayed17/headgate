@@ -75,6 +75,14 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- **`Paginated[I, P = object]` names the item type first.** Write `-> Paginated[Issue]` for a walk of issues, or
+  `-> Paginated[Issue, IssuePage]` where the pages matter, in place of `Paginated[IssuePage, Issue]`. A type
+  checker flags the old order wherever the page and item types differ.
+- `paginate(max_pages=..., on_limit=...)` replaces `limit=PageLimit(...)`, which collided with every API's `limit`
+  query parameter. Write `max_pages=10` for `limit=PageLimit(10)`, and `max_pages=10, on_limit="stop"` for
+  `limit=PageLimit(10, on_limit="stop")`. `limit=` raises `TypeError`. `on_limit="stop"` without `max_pages` raises
+  `ValueError`. A `max_pages` that is not an `int` (a `bool` included) raises `TypeError`, and one below 1 raises
+  `ValueError`, before anything is sent.
 - A `stream()` call's own read timeout may be longer than its deadline, which bounds only opening the stream. Once
   the head has arrived, only the per-read timeout bounds a stream, and `asyncio.timeout` around the block bounds the
   whole of it. `stream(..., deadline=5, timeout=Timeouts(read=60))` used to raise `ValueError`.
@@ -251,6 +259,7 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Removed
 
+- `PageLimit`, from `headgate` and `headgate.pagination`: pass `max_pages=` and `on_limit=` to `paginate`.
 - `headgate.breaker.DEFAULT_REGISTRY`, the process-wide registry: pass one `BreakerRegistry` to the clients that share
   it. `headgate.testing.isolated_breakers()`: each client's breakers are already its own; read them with
   `breakers_of(client)`.

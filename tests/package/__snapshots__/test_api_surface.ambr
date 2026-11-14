@@ -222,7 +222,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.pagination]
   '''
   module headgate.pagination
-  __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageLimit', 'PageNumber', 'PageRequest', 'Pager', 'Paginated', 'WritingPager', 'parse_link_header']
+  __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageNumber', 'PageRequest', 'Pager', 'Paginated', 'WritingPager', 'parse_link_header']
   class BodyCursor(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
@@ -279,9 +279,6 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class PageLimit(object)(max_pages: 'int', on_limit: "Literal['raise', 'stop']" = 'raise') -> 'None'
-      field max_pages: int
-      field on_limit: Literal['raise', 'stop'] = 'raise'
   class PageNumber(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', more: 'Callable[[P], bool]', param: 'str' = 'page', start: 'int' = 1, write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field more: Callable[[P], bool]
@@ -526,7 +523,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['DEFAULT_TIMEOUTS', 'MAX_MINT_RESPONSE_BYTES', 'AuthError', 'BearerAuth', 'Body', 'BodyCursor', 'BodyOffset', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CircuitOpenError', 'Client', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Codec', 'Cursor', 'DecodeError', 'EncodedBody', 'Expect', 'ForbiddenDestinationError', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'LinkHeader', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'NextUrl', 'Offset', 'PageLimit', 'PageLimitError', 'PageNumber', 'Paginated', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_json', 'body_reader', 'call_info', 'decode_with', 'event_stream', 'nothing', 'reader_for', 'writer_for']
+  __all__ = ['DEFAULT_TIMEOUTS', 'MAX_MINT_RESPONSE_BYTES', 'AuthError', 'BearerAuth', 'Body', 'BodyCursor', 'BodyOffset', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CircuitOpenError', 'Client', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Codec', 'Cursor', 'DecodeError', 'EncodedBody', 'Expect', 'ForbiddenDestinationError', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'LinkHeader', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'NextUrl', 'Offset', 'PageLimitError', 'PageNumber', 'Paginated', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_json', 'body_reader', 'call_info', 'decode_with', 'event_stream', 'nothing', 'reader_for', 'writer_for']
   DEFAULT_TIMEOUTS = Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)
   MAX_MINT_RESPONSE_BYTES = 1048576
   class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
@@ -585,8 +582,8 @@
       def get(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def head(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def head(self, url: 'CallUrl', **options: 'Unpack[RequestOptions]') -> 'None'
-      def paginate(self, url: 'CallUrl', *, expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, None]', limit: 'PageLimit | None' = None, **options: 'Unpack[CallOptions]') -> 'Paginated[P, I]'
-      def paginate(self, url: 'CallUrl', *, query: 'B | None', expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, B]', limit: 'PageLimit | None' = None, **options: 'Unpack[CallOptions]') -> 'Paginated[P, I]'
+      def paginate(self, url: 'CallUrl', *, expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, None]', max_pages: 'int | None' = None, on_limit: 'OnLimit' = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
+      def paginate(self, url: 'CallUrl', *, query: 'B | None', expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, B]', max_pages: 'int | None' = None, on_limit: 'OnLimit' = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
       def patch(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def post(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def put(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
@@ -694,9 +691,6 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class PageLimit(object)(max_pages: 'int', on_limit: "Literal['raise', 'stop']" = 'raise') -> 'None'
-      field max_pages: int
-      field on_limit: Literal['raise', 'stop'] = 'raise'
   class PageLimitError(ClientError)(message: 'str', *, pages: 'int', **details: 'Unpack[ErrorDetails]') -> 'None'
       property pages
   class PageNumber(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', more: 'Callable[[P], bool]', param: 'str' = 'page', start: 'int' = 1, write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'

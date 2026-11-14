@@ -24,7 +24,7 @@ here is what a client is written with:
   :class:`Minted`, :data:`MAX_MINT_RESPONSE_BYTES`;
 * the policy values a client usually sets: :class:`RetryPolicy`, :class:`BreakerPolicy`, :class:`Rate`,
   :class:`RateBudget` and :class:`HttpCache`;
-* pages: :meth:`Client.paginate`'s :class:`Paginated`, its pagers and :class:`PageLimit`;
+* pages: :meth:`Client.paginate`'s :class:`Paginated` and its pagers;
 * the errors, all under :class:`ClientError`.
 
 Everything else lives once, in its layer's subpackage: the finer policy values (:mod:`headgate.retry`'s ``Backoff``,
@@ -95,7 +95,6 @@ from headgate.pagination import (
     LinkHeader,
     NextUrl,
     Offset,
-    PageLimit,
     PageNumber,
     Paginated,
 )
@@ -137,7 +136,6 @@ __all__ = [
     "Next",
     "NextUrl",
     "Offset",
-    "PageLimit",
     "PageLimitError",
     "PageNumber",
     "Paginated",

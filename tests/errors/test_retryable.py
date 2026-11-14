@@ -24,7 +24,6 @@ from headgate import (
     HttpOptions,
     Json,
     Offset,
-    PageLimit,
     SecurityOptions,
     TransportPolicy,
     UpstreamStatusError,
@@ -169,9 +168,7 @@ async def test_a_walk_past_its_page_limit_is_not_retryable_and_sent_nothing_of_i
     pages = Offset(items=lambda page: page, page_size=1)
 
     with pytest.raises(PageLimitError) as raised:
-        await client.paginate(
-            "orders", expect=body_reader(lambda body: [body]), pages=pages, limit=PageLimit(1)
-        ).collect()
+        await client.paginate("orders", expect=body_reader(lambda body: [body]), pages=pages, max_pages=1).collect()
 
     assert (raised.value.retryable, raised.value.sent) == (False, None)
 

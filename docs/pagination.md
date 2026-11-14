@@ -1,7 +1,9 @@
 # Pagination
 
-`client.paginate(url, *, expect, pages, query=None, limit=None, **options)` follows a paginated endpoint and returns a
-`Paginated[P, I]`: `async for` yields the items `I`, and `.pages()` yields the pages `P`. Each page is a GET through the
+`client.paginate(url, *, expect, pages, query=None, max_pages=None, on_limit="raise", **options)` follows a paginated
+endpoint and returns a `Paginated[I, P]`: `async for` yields the items `I`, and `.pages()` yields the pages `P`. The
+item type comes first, and the page type defaults to `object`, so a method that returns a walk of issues is annotated
+`-> Paginated[Issue]`, or `-> Paginated[Issue, IssuePage]` when its callers read the pages too. Each page is a GET through the
 whole stack (rate budget, retries, breaker, cache, credential rules), fetched only when the iteration reaches it. An
 endpoint whose query is a request body is walked with POSTs instead, given that body as `query=`: see
 [Walks of POSTs](#walks-of-posts).
@@ -50,13 +52,13 @@ both apply, a `PageLimitError` is raised only if the budget runs out before `max
 ## A page budget
 
 A walk ends at its last page, but a server bug, an unordered dataset or a too-broad filter can keep naming new pages
-for as long as you keep asking. `limit=PageLimit(max_pages)` bounds the walk:
+for as long as you keep asking. `max_pages=` bounds the walk:
 
 ```python
-from headgate import PageLimit, PageLimitError
+from headgate import PageLimitError
 from headgate.msgspec import reader
 
-orders = client.paginate("orders", expect=reader(Page), pages=ORDER_PAGES, limit=PageLimit(50))
+orders = client.paginate("orders", expect=reader(Page), pages=ORDER_PAGES, max_pages=50)
 try:
     async for order in orders:
         ...
@@ -68,7 +70,9 @@ except PageLimitError as exc:
   still to come. The pages within the budget were already yielded; `exc.pages` says how many. A caller cannot mistake
   a cut-short walk for a complete one.
 - **`on_limit="stop"`** ends the walk at the budget instead, for a caller that wants only the first pages:
-  `PageLimit(5, on_limit="stop")`.
+  `max_pages=5, on_limit="stop"`. It needs a `max_pages`, so `on_limit="stop"` alone raises `ValueError`.
+- `max_pages` is `None` (no budget) or an `int` of at least 1. A `bool` or another kind raises `TypeError`, and `0`
+  raises `ValueError`, before anything is sent.
 - A walk whose last page falls within the budget, or exactly on it, is unaffected.
 
 Set the budget where the client calls `paginate`, so every caller of that endpoint gets it.
