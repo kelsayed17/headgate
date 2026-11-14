@@ -68,6 +68,7 @@ from headgate._core import (
     check_kind,
     current_timing,
     policy_is_disabled,
+    url_path,
 )
 from headgate._deprecation import announce_deprecation
 from headgate._failures import (
@@ -325,7 +326,9 @@ class AsyncBaseClient:
         self._view = ROOT_DEFAULTS
         self._owns_pool = True
         credentials = Credentials.of(base_url=base_url, auth=auth, http=http)
-        budgets = PathBudgets(default=rate, rules=policy.rate_limits, timing=self._timing)
+        budgets = PathBudgets(
+            default=rate, rules=policy.rate_limits, timing=self._timing, origin=httpx2.URL(base_url).origin
+        )
         stack = build_transport_stack(budgets, policy, http, self._timing, credentials)
         self._http_client = build_http_client(base_url=base_url, credentials=credentials, http=http, transport=stack)
         vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client)
@@ -770,7 +773,7 @@ class AsyncBaseClient:
         # The absolute URL is for observers only (an OpenTelemetry span's url.full and server.address).
         full_url = sanitize_url(str(request.url)) if self._emitter.active else None
         info = CallInfo(method=call.method, url=log_url, route=route, full_url=full_url)
-        route_policy = match_route(self._policy.routes, request.url.path)
+        route_policy = match_route(self._policy.routes, url_path(request.url))
         deadline = self._deadline_of(call, route_policy)
         if (timeout := options.get("timeout")) is not None:
             check_timeout_fits(timeout, deadline)

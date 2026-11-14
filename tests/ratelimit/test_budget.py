@@ -29,7 +29,7 @@ from headgate.testing import TestClock
 from tests.support.events import Recorder
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Coroutine
+    from collections.abc import AsyncIterator, Callable, Coroutine
 
     from headgate._core import Clock
 
@@ -210,6 +210,124 @@ async def test_a_cancelled_waiter_behind_a_later_one_keeps_the_queue_intact() ->
     blocked.set()
     await second
     assert slept == [1.0, 2.0]
+
+
+def _blocking_sleep(
+    clock: TestClock, slept: list[float], blocked: asyncio.Event
+) -> Callable[[float], Coroutine[None, None, None]]:
+    """Return a sleep that records each wait in *slept*, waits for *blocked*, then moves *clock* on by the wait."""
+
+    async def sleep(seconds: float, /) -> None:
+        slept.append(seconds)
+        await blocked.wait()
+        clock.advance(seconds)
+
+    return sleep
+
+
+async def test_a_turn_abandoned_mid_queue_goes_to_the_next_caller() -> None:
+    """Give the next caller a turn abandoned behind a later one, so the budget sends no fewer requests than its rate."""
+    clock = TestClock()
+    blocked = asyncio.Event()
+    slept: list[float] = []
+    budget = Pacer(Rate.per_second(1), timing=Timing(clock=clock, sleep=_blocking_sleep(clock, slept, blocked)))
+    await budget.wait(_context(clock))
+    first = asyncio.create_task(budget.wait(_context(clock)))
+    second = asyncio.create_task(budget.wait(_context(clock)))
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    third = asyncio.create_task(budget.wait(_context(clock)))
+    fourth = asyncio.create_task(budget.wait(_context(clock)))
+    await asyncio.sleep(0)
+    blocked.set()
+    await asyncio.gather(second, third, fourth)
+    assert slept == [1.0, 2.0, 1.0, 3.0], "the third takes the abandoned turn; the fourth queues behind the second"
+
+
+async def test_turns_abandoned_at_the_tail_give_the_whole_tail_back() -> None:
+    """Give back every abandoned turn at the end of the queue, the ones abandoned earlier behind it included."""
+    clock = TestClock()
+    blocked = asyncio.Event()
+    slept: list[float] = []
+    budget = Pacer(Rate.per_second(1), timing=Timing(clock=clock, sleep=_blocking_sleep(clock, slept, blocked)))
+    await budget.wait(_context(clock))
+    first = asyncio.create_task(budget.wait(_context(clock)))
+    second = asyncio.create_task(budget.wait(_context(clock)))
+    await asyncio.sleep(0)
+    for task in (first, second):
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    blocked.set()
+    await budget.wait(_context(clock))
+    assert slept == [1.0, 2.0, 1.0]
+
+
+async def test_an_abandoned_turn_whose_time_has_passed_is_not_given_out() -> None:
+    """Pace a caller who arrives after an abandoned turn's time as the schedule says, not in the stale turn."""
+    clock = TestClock()
+    blocked = asyncio.Event()
+    slept: list[float] = []
+    budget = Pacer(Rate.per_second(1), timing=Timing(clock=clock, sleep=_blocking_sleep(clock, slept, blocked)))
+    await budget.wait(_context(clock))
+    first = asyncio.create_task(budget.wait(_context(clock)))
+    second = asyncio.create_task(budget.wait(_context(clock)))
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    clock.advance(1.5)
+    third = asyncio.create_task(budget.wait(_context(clock)))
+    await asyncio.sleep(0)
+    blocked.set()
+    await asyncio.gather(second, third)
+    assert slept == [1.0, 2.0, 1.5], "the third queues behind the second, at 3.0"
+
+
+async def test_a_pause_discards_abandoned_turns() -> None:
+    """Queue a caller arriving after a pause behind every waiting turn, not in a turn abandoned before the pause."""
+    clock = TestClock()
+    blocked = asyncio.Event()
+    slept: list[float] = []
+    budget = Pacer(Rate.per_second(1), timing=Timing(clock=clock, sleep=_blocking_sleep(clock, slept, blocked)))
+    await budget.wait(_context(clock))
+    first = asyncio.create_task(budget.wait(_context(clock)))
+    second = asyncio.create_task(budget.wait(_context(clock)))
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    budget.observe(_response(429, {"Retry-After": "5"}), sent_at=clock())
+    third = asyncio.create_task(budget.wait(_context(clock)))
+    await asyncio.sleep(0)
+    blocked.set()
+    await asyncio.gather(second, third)
+    assert slept[-1] > slept[1], "the third goes after the second, which the pause postponed"
+
+
+async def test_a_send_marks_its_own_attempt_dispatched_when_a_hedge_begins_during_its_wait() -> None:
+    """Mark the progress of the attempt that waited, not of a hedge begun meanwhile, which has not been sent."""
+    clock = TestClock()
+    blocked = asyncio.Event()
+    budget = RateBudget(Rate.per_second(1), timing=Timing(clock=clock, sleep=_blocking_sleep(clock, [], blocked)))
+    transport = RateLimitTransport(
+        budgets=PathBudgets(default=budget), transport=httpx2.MockTransport(lambda _: httpx2.Response(200))
+    )
+    context = _context(clock)
+    await pacer_of(budget).wait(context)
+    request = httpx2.Request("GET", "https://x/")
+    context.attach(request)
+    context.begin_attempt()
+    waited = context.progress
+    send = asyncio.create_task(transport.handle_async_request(request))
+    await asyncio.sleep(0)
+    context.begin_attempt()
+    hedge = context.progress
+    blocked.set()
+    await send
+    assert (waited.dispatched, hedge.dispatched) == (True, False)
 
 
 async def test_every_wait_is_reported_with_its_reason() -> None:
@@ -652,6 +770,28 @@ def test_path_budgets_pick_the_first_matching_rule_and_default_otherwise() -> No
     assert budgets.default not in {candles, api}
     assert budgets.for_request(httpx2.Request("GET", "https://x/api/candles?g=1")) is candles, "the first rule wins"
     assert budgets.for_request(httpx2.Request("GET", "https://x/ticker")) is budgets.default
+
+
+def test_an_escaped_slash_in_a_value_does_not_pick_another_paths_rule() -> None:
+    """Keep a ``%2F`` a t-string value escaped inside its segment, so ``/files/exports%2Fq3`` is not ``/exports``."""
+    budgets = PathBudgets(default=Rate.per_second(1000), rules=[RateRule("/exports", Rate.per_second(1))])
+    assert budgets.for_request(httpx2.Request("GET", "https://x/files/exports%2Fq3")) is budgets.default
+    assert budgets.for_request(httpx2.Request("GET", "https://x/v1/exports/q3")) is not budgets.default
+
+
+async def test_only_the_clients_own_origin_pauses_or_throttles_its_budget() -> None:
+    """Ignore a 429 from another origin (a redirect target, a token host); heed the same from the client's own."""
+    budget = RateBudget(Rate.per_second(10))
+    budgets = PathBudgets(default=budget, origin=httpx2.URL("https://api.example").origin)
+    refusing = httpx2.MockTransport(lambda _: httpx2.Response(429, headers={"Retry-After": "30"}))
+    layer = RateLimitTransport(budgets=budgets, transport=refusing)
+
+    await layer.handle_async_request(httpx2.Request("GET", "https://elsewhere.example/x"))
+    assert (budget.pause_remaining, budget.effective_rate) == (0.0, Rate.per_second(10))
+
+    await layer.handle_async_request(httpx2.Request("GET", "https://api.example:443/x"))
+    assert budget.pause_remaining > 0
+    assert budget.effective_rate.requests < budget.rate.requests
 
 
 def test_budgets_built_with_policy_off_are_private_and_unlimited() -> None:

@@ -30,7 +30,7 @@ from headgate._core._events import (
 )
 from headgate._core._kinds import check_kind, type_text
 from headgate._core._origin import origin_of, origin_text
-from headgate._core._paths import check_fragment, path_has_fragment
+from headgate._core._paths import check_fragment, path_has_fragment, path_segments, segments_hold, url_path
 from headgate._core._retry_after import parse_retry_after, retry_after_of
 from headgate._core._seams import (
     BREAKER_GATE,
@@ -95,10 +95,13 @@ __all__ = [
     "origin_text",
     "parse_retry_after",
     "path_has_fragment",
+    "path_segments",
     "policy_disabled",
     "policy_is_disabled",
     "retry_after_of",
+    "segments_hold",
     "system_random",
     "timing_override",
     "type_text",
+    "url_path",
 ]

@@ -22,6 +22,7 @@ import enum
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
+from urllib.parse import unquote
 
 import httpx2
 
@@ -127,6 +128,9 @@ class HttpCache:
     def caches_request(self, method: str, path: str) -> bool:
         """Return whether a request with *method* (in any case) and the URL path *path* goes through the cache.
 
+        *path* is the path as sent, percent-encoded (:func:`~headgate._core.url_path`): a fragment is matched segment by
+        segment, so an escaped ``/`` stays in its segment, and a pattern is searched in the decoded path, as written.
+
         ``methods`` left ``None`` means ``GET``, and ``paths`` left ``None`` any path; an empty collection matches
         nothing. Any other request is sent past the cache: never looked up, never stored.
         """
@@ -156,4 +160,4 @@ def _check_path(path: str | re.Pattern[str]) -> None:
 
 def _matches(path: str, rule: str | re.Pattern[str]) -> bool:
     """Return whether the URL path *path* holds the fragment *rule*, or contains a match of the pattern *rule*."""
-    return path_has_fragment(path, rule) if isinstance(rule, str) else rule.search(path) is not None
+    return path_has_fragment(path, rule) if isinstance(rule, str) else rule.search(unquote(path)) is not None

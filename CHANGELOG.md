@@ -140,6 +140,24 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A rate budget hands a turn a caller abandoned in the middle of the queue (a cancelled call, or a deadline passing
+  while it waited) to the next caller to arrive, while that turn's time is still ahead. The turn used to stay in the
+  schedule unused, so a budget with callers giving up sent fewer requests than its rate.
+- A `RateLimit` field whose `t` is a Unix time, which some servers send, pauses the budget until that time. It used to
+  be read as that many seconds and cut to the hour-long maximum. `t` is now told apart by size, as
+  `X-RateLimit-Reset` already was.
+- `Rate` refuses an infinite request count, and one so small that the spacing between requests overflows, with
+  `ValueError`. Either turned every send time into NaN, which paced nothing.
+- Rate rules, `Route`s and the cache's `paths` fragments no longer match a `/` inside a t-string value: the path is
+  split into segments before they are decoded, so `t"/files/{name}"` with `name="exports/q3"` sends
+  `/files/exports%2Fq3`, which is not an `/exports` request. A regular expression in the cache's `paths` still
+  searches the decoded path.
+- Only responses from the client's own origin (`base_url`'s) pause and throttle its rate budget. A 429 or a spent
+  quota from a redirect target, another origin's next page, a token host or an absolute URL on another origin paused
+  the shared budget for every client using it, for up to an hour. Those requests are still paced, and each call still
+  waits out its own `Retry-After`. A client always has an absolute `base_url`, so a client that calls absolute URLs
+  on several origins is paused and throttled by its `base_url` origin's responses alone.
+- A send that waited for its rate-budget turn while a hedge began marks its own attempt as sent, not the hedge's.
 - A cached call is answered only by an entry stored for the same `Accept`, so a CSV and a JSON of one URL no longer
   answer each other. A request with a `Range` goes to the network, since no whole stored body answers it.
 - Under `Partition.SHARED`, a call that sends `Authorization` (or a cookie, or a declared credential) is never answered
