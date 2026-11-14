@@ -314,23 +314,29 @@ class GitHub:
 
 ### 7. Streams, pages and smaller items
 
+(Amended with the phase 7 plan.)
+
 - **Streams.**
-  - A stream's read timeout is not checked against the deadline, which bounds only opening it.
-  - `Timeouts` gains a way to say "no limit" for a phase (`UNBOUNDED`); `None` keeps meaning "inherit".
+  - A stream's read timeout is neither checked against the deadline nor cut to it, since the deadline bounds only
+    opening the stream.
+  - `Timeouts` gains a way to say "no limit" for a phase: `math.inf`, which headgate already reads as "never" (a
+    `Minted` lifetime), rather than a new `UNBOUNDED` name. `None` keeps meaning "inherit".
   - `client.events(url, ...)` opens a server-sent-event stream with `Accept: text/event-stream` and no read limit.
 - **Pages.**
   - `Paginated[I, P = object]`, item type first, so a return annotation is `Paginated[Issue]`.
   - `paginate(max_pages=, on_limit=)` replaces `limit=PageLimit(...)`, which collided with every API's `limit` query
     parameter.
-  - `Offset(size_param=...)` sends the page size itself.
+  - `Offset(size_param=...)` sends the page size itself, or reads it from the caller's own query parameter when they
+    give one (#53).
   - Pager constructors that bind the page type from the reader (`Cursor.of(reader, ...)`), so a module-level pager
     written with lambdas keeps its item type, are left to the builder.
 - **QUERY.** httpx2 2.6 added the safe, idempotent QUERY method. headgate gains a `query()` verb, and QUERY joins the
   idempotent methods in `retry/_policy.py` and the known methods in `otel.py`.
 - **Kind checks.** Every option is checked for its kind at construction or at the call, with a `TypeError` naming the
   option (PR #54 started this). `paginate`'s limit is the known gap.
-- **Nested query values.** A nested `params` value (a mapping, a set, bytes) raises `TypeError` instead of being sent
-  as its Python `repr`.
+- **Nested query values.** A nested `params` value (a mapping, a set, bytes, or a sequence inside a sequence) raises
+  `TypeError` instead of being sent as its Python `repr`. A scalar httpx2 does not encode (a `UUID`, a `Decimal`) is
+  still sent as its `str()`.
 
 ### 8. The top level
 
