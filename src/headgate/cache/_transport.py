@@ -249,10 +249,10 @@ class _CacheCall:
     """One request's trip through hishel: what the layer below puts back, and what it hands up."""
 
     url: httpx2.URL
-    """The request's own URL, credentials included."""
+    """The request's own URL, credentials included: as it was sent, once the layer below has sent it."""
 
     headers: httpx2.Headers
-    """The request's own headers, credentials included."""
+    """The request's own headers, credentials included: as they were sent, once the layer below has sent them."""
 
     view_headers: httpx2.Headers
     """The headers hishel sees and stores, which a stored response's ``Vary`` is matched against."""
@@ -401,6 +401,8 @@ class _RestoreRequest(httpx2.AsyncBaseTransport):
         try:
             response = await self._inner.handle_async_request(request)
         finally:
+            # A SigningAuth below signs the query by replacing the URL: the caller gets the request as it was sent.
+            call.url, call.headers = request.url, request.headers
             # hishel records the entry's request from this same object once the send returns: give it the view back.
             request.url, request.headers = view
         call.handed_up.append(response)
@@ -698,20 +700,24 @@ class ResilientCacheTransport(AsyncCacheTransport):
         """Fetch *request* through the cache, or live when the storage fails: the response, and its body when held."""
         try:
             fetched = await self._fetch_cached(request)
-        except CacheStorageError as fault:
-            # Counted before the live fetch, so a fallback that then fails on the network too cannot hide the outage.
-            CACHE_DEGRADATIONS[request.url.host] += 1
-            _report(request, CacheOutcome.DEGRADED)
-            live = await self._live.handle_async_request(request)
-            # The query is dropped, since a key-in-the-URL provider carries its credential there.
-            live.extensions[CACHE_DEGRADED_EXT] = f"{request.url.copy_with(query=None, userinfo=b'')}: {fault}"[:240]
-            try:
-                return await _buffer_up_to(live, self._max_body_bytes, sources=(live,))
-            except BaseException:
-                await _close_quietly(live)
-                raise
-        _report(request, CacheOutcome.HIT if served_from_cache(fetched[0]) else CacheOutcome.MISS)
-        return fetched
+        except CacheStorageError as exc:
+            fault = exc
+        else:
+            _report(request, CacheOutcome.HIT if served_from_cache(fetched[0]) else CacheOutcome.MISS)
+            return fetched
+        # Outside the except block, so a live fetch that fails too does not carry the storage error (whose cause may
+        # name a DSN and its password) as its __context__.
+        # Counted before the live fetch, so a fallback that then fails on the network too cannot hide the outage.
+        CACHE_DEGRADATIONS[request.url.host] += 1
+        _report(request, CacheOutcome.DEGRADED)
+        live = await self._live.handle_async_request(request)
+        # The query is dropped, since a key-in-the-URL provider carries its credential there.
+        live.extensions[CACHE_DEGRADED_EXT] = f"{request.url.copy_with(query=None, userinfo=b'')}: {fault}"[:240]
+        try:
+            return await _buffer_up_to(live, self._max_body_bytes, sources=(live,))
+        except BaseException:
+            await _close_quietly(live)
+            raise
 
     async def _fetch_cached(self, request: httpx2.Request) -> tuple[httpx2.Response, bytes | None]:
         """Fetch *request* through hishel, closing every response it abandons when anything goes wrong."""

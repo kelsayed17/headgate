@@ -64,6 +64,21 @@ class _HeaderToken(CachedTokenAuth):
         request.headers["X-Token"] = token
 
 
+class _QueryToken(CachedTokenAuth):
+    """A token riding the query, as a provider taking ``?access_token=`` wants, declared in ``token_params``."""
+
+    token_headers: ClassVar = frozenset[str]()
+    token_params: ClassVar = frozenset({"access_token"})
+
+    @override
+    async def mint_token(self) -> tuple[str, float]:
+        raise NotImplementedError
+
+    @override
+    def attach(self, request: httpx2.Request, token: str) -> None:
+        request.url = request.url.copy_set_param("access_token", token)
+
+
 def _auths() -> list[httpx2.Auth]:
     """Return one of each auth, ready to stamp without a network exchange."""
     return [
@@ -71,10 +86,11 @@ def _auths() -> list[httpx2.Auth]:
         QueryParamAuth({"api_key": "k"}),
         premint(_Bearer()),
         premint(_HeaderToken()),
+        premint(_QueryToken()),
     ]
 
 
-_AUTH_IDS = ["static-header", "query-param", "bearer", "custom-header-token"]
+_AUTH_IDS = ["static-header", "query-param", "bearer", "custom-header-token", "query-token"]
 
 
 def _carries(request: httpx2.Request, auth: httpx2.Auth) -> set[str]:
@@ -84,8 +100,8 @@ def _carries(request: httpx2.Request, auth: httpx2.Auth) -> set[str]:
     return headers | {name for name in auth.credential_params if name in request.url.params}
 
 
-#: A key the server echoes into a redirect's ``Location``, as an open redirect that copies the query does.
-_ECHOED_KEY = "?api_key=k"
+#: Query credentials the server echoes into a redirect's ``Location``, as an open redirect that copies the query does.
+_ECHOED_KEY = "?api_key=k&access_token=t"
 
 
 @pytest.mark.parametrize("auth", _auths(), ids=_AUTH_IDS)
@@ -189,6 +205,19 @@ async def test_a_default_header_credential_is_withheld_from_a_foreign_origin() -
         await client.get("https://cdn.example/x", expect=RESPONSE)
 
     assert "Authorization" not in web.sent[0].headers
+
+
+async def test_a_body_keeps_its_content_type_on_a_foreign_origin() -> None:
+    """Send ``Content-Type`` to any origin, client-wide or a view's: it names the body, never a caller."""
+    web = Web()
+    http = HttpOptions(headers={"Content-Type": "application/json"})
+    async with web.client(http=http) as client:
+        await client.post("https://cdn.example/x", content=b"{}", expect=RESPONSE)
+        await client.with_options(headers={"Content-Type": "text/csv"}).post(
+            "https://cdn.example/x", content=b"a,b", expect=RESPONSE
+        )
+
+    assert [request.headers.get("content-type") for request in web.sent] == ["application/json", "text/csv"]
 
 
 def _cookie_client(sent: list[httpx2.Request], headers: dict[str, str] | None = None) -> StubClient:

@@ -74,8 +74,8 @@ that does not. A middleware runs inside the transport stack, after the request h
 the guard runs a second time below the last middleware, on every attempt of every hop, and removes what it declares
 from any hop not addressed to `base_url`'s origin or a trusted one. An auth flow's token host is not trusted for a
 middleware's credentials: the middleware did not choose it. A [`SigningAuth`](auth.md#signingauth) signs each attempt
-there too, after the last middleware and before that second pass, so its signature is withheld from an untrusted hop
-the same way.
+below the rate budget, and the guard runs once more after it, so its signature is withheld from an untrusted hop the
+same way.
 
 A third-party `httpx2.Auth` that is not a `CredentialStamper` and puts its credential in another header or in the query
 is not covered; declare the names to have them withheld. A cache refuses
@@ -146,7 +146,9 @@ Nothing headgate raises or reports carries a credential in clear:
   the upstream's own text.
 
 `QueryParamAuth` puts the key in the URL, and URLs are not secret to every tool: a tracing integration that records full
-request URLs records it. Exclude such hosts from URL capture, or prefer a header.
+request URLs records it. Exclude such hosts from URL capture, or prefer a header. httpx2's own `HTTP Request:` log line
+(INFO, on the `httpx2` logger) is redacted: importing headgate adds a filter to that logger that replaces the URL's
+secret values with `***`, so a key or a query signature does not reach an application's INFO log.
 
 ## Hermetic by default
 

@@ -96,6 +96,7 @@
     'message': '[_MintRejected] token mint failed for POST https://auth.example.test/token?client_secret=%2A%2A%2A (status=401) — invalid_client',
     'method': 'POST',
     'notes': list([
+      "from HTTPStatusError: Client error '401 Unauthorized' for url 'https://auth.example.test/token?client_secret=***' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401",
     ]),
     'problem': None,
     'request_id': None,
@@ -113,6 +114,7 @@
     'message': '[_MintUnreachable] POST https://auth.example.test/token?client_secret=%2A%2A%2A (token mint): connection refused',
     'method': 'POST',
     'notes': list([
+      'from ConnectError: connection refused',
     ]),
     'problem': None,
     'request_id': None,
@@ -130,6 +132,7 @@
     'message': "[_MintUnreadable] unreadable token response: 'access_token'",
     'method': None,
     'notes': list([
+      "from KeyError: 'access_token'",
     ]),
     'problem': None,
     'request_id': None,

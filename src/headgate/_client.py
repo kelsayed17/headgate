@@ -829,8 +829,9 @@ class AsyncBaseClient:
             )
         except httpx2.InvalidURL as exc:
             raise _invalid_url(exc, CallSite(self._source, call.method, log_url)) from exc
-        if body is not None:
-            _stamp_headers(request, self._view.headers_for(options.get("headers")), {"Content-Type": body.content_type})
+        content_type = body.content_type if body is not None else _encoded_type(request, options)
+        if content_type is not None:
+            _stamp_headers(request, self._view.headers_for(options.get("headers")), {"Content-Type": content_type})
         own = options.get("headers") or {}
         if self._view.headers or own:
             request.extensions[EXPLICIT_HEADERS] = ExplicitHeaders(
@@ -1160,6 +1161,21 @@ def _query_pairs(params: Mapping[str, object]) -> list[tuple[str, _QueryValue]]:
 def _query_value(value: object) -> _QueryValue:
     """Return *value* if httpx2 encodes it natively, else its ``str()``, which is what httpx2 would send."""
     return value if isinstance(value, str | int | float | bool | None) else str(value)
+
+
+def _encoded_type(request: httpx2.Request, options: RequestOptions) -> str | None:
+    """Return the ``Content-Type`` httpx2 encoded a ``json=``, ``data=`` or ``files=`` body with; ``None`` for others.
+
+    httpx2 sets it only under the client's default, so a client-wide ``Content-Type`` would replace it (and a multipart
+    body would lose its boundary).
+    """
+    if options.get("json") is not None:
+        return "application/json"
+    if not (bool(options.get("data")) or bool(options.get("files"))):
+        return None
+    # httpx2's multipart stream names its boundary; any other data= body is form-encoded.
+    multipart = getattr(request.stream, "content_type", None)
+    return multipart if isinstance(multipart, str) else "application/x-www-form-urlencoded"
 
 
 def _stamp_headers(request: httpx2.Request, explicit: Mapping[str, str] | None, headers: Mapping[str, str]) -> None:

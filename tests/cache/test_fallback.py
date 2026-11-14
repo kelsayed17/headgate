@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import sqlite3
+import traceback
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, override
 
@@ -235,6 +236,19 @@ async def test_a_network_failure_in_the_degraded_fetch_is_raised_and_closes_it(s
 
     assert len(network.urls) == 1
     assert network.streams[0].closed
+
+
+async def test_a_failed_degraded_fetch_does_not_carry_the_storage_error(storage: AsyncSqliteStorage) -> None:
+    """Raise the live fetch's own failure with no link to the storage fault, whose message may carry a DSN."""
+    faulty = FaultyStorage(
+        storage, sqlite3.OperationalError("unable to open postgres://admin:hunter2@db"), failing="get_entries"
+    )
+
+    with pytest.raises(httpx2.ReadError) as raised:
+        await cache_transport(faulty, _FlakyNetwork()).handle_async_request(httpx2.Request("GET", _URL))
+
+    assert raised.value.__context__ is None
+    assert "hunter2" not in "".join(traceback.format_exception(raised.value))
 
 
 class _RequestRuleBug(HttpCache):

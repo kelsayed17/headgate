@@ -6,8 +6,9 @@
 :class:`MiddlewareTransport` sits inside the retry layer and above the cache (see :mod:`headgate._stack`), so a
 middleware runs once per attempt. Middleware run in the order ``HttpOptions(middleware=...)`` lists them, the first
 outermost; each calls ``call_next`` to continue, or returns a response of its own to stop there. A signature that must
-be fresh on every attempt belongs in a :class:`~headgate.SigningAuth`, not a middleware: the same transport signs each
-attempt with it, after the last middleware and before the credential guard (see :data:`~headgate._auth.SIGNER_EXT`).
+be fresh on every attempt belongs in a :class:`~headgate.SigningAuth`, not a middleware: a second
+:class:`MiddlewareTransport`, with no middleware, signs each attempt with it below the rate budget, after its wait, and
+before the credential guard runs again (see :data:`~headgate._auth.SIGNER_EXT`).
 
 **Credentials a middleware adds stay on trusted origins**, because every middleware declares them. The client's
 credential guard (:class:`~headgate.security.CredentialGuard`) runs as a request hook, before the transport stack, so it
@@ -64,8 +65,9 @@ class MiddlewareTransport(httpx2.AsyncBaseTransport):
     """Run a request through *middleware*, in order, then the signer and *guard*, then the transport below.
 
     The signer is the client's own :class:`~headgate.SigningAuth`, if it has one. It signs each attempt of a request
-    its flow marked (:data:`~headgate._auth.SIGNER_EXT`) as the last middleware passes it on. ``aclose`` closes the
-    transport below.
+    its flow marked (:data:`~headgate._auth.SIGNER_EXT`) as the last middleware passes it on; the stack builds this
+    layer twice, once for the middleware and once, below the rate budget, for the signer (see :mod:`headgate._stack`).
+    ``aclose`` closes the transport below.
     """
 
     def __init__(
