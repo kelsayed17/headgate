@@ -84,7 +84,16 @@ def retry_after_of(response: httpx2.Response, *, now: float | None = None) -> fl
     header = headers.get("retry-after")
     if header is None:
         return None
-    served = _unix_time(headers.get("date", ""))
+    header = header.strip()
+    seconds = _decimal_seconds(header)
+    if seconds is not None:
+        return seconds
+    when = _unix_time(header)
+    if when is None:
+        return None
+    # The server's Date is read only for an HTTP-date, and only when sent: a failed parse raises, which costs.
+    date = headers.get("date")
+    served = None if date is None else _unix_time(date)
     if served is None:
         served = time.time() if now is None else now
-    return parse_retry_after(header, now=served)
+    return max(0.0, when - served)
