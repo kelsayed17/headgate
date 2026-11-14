@@ -17,8 +17,11 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import BearerAuth, CachedTokenAuth, QueryParamAuth, StaticHeaderAuth
+from headgate import BearerAuth, CachedTokenAuth, QueryParamAuth, SigningAuth, StaticHeaderAuth
 from headgate._core import CredentialStamper
+from headgate._url import is_secret_param
+from headgate.ratelimit import UNLIMITED
+from tests.support.clients import StubClient
 from tests.support.tokens import premint
 
 if TYPE_CHECKING:
@@ -245,3 +248,107 @@ async def test_a_bearer_auth_is_the_static_bearer_header() -> None:
     assert sent.headers["Authorization"] == "Bearer tok"
     assert auth.credential_headers == {"authorization"}
     assert auth.credential_identity() == StaticHeaderAuth({"Authorization": "Bearer tok"}).credential_identity()
+
+
+#: The query parameter :class:`_QueryToken` puts its token in, unique to this suite since it is registered as secret.
+_QUERY_PARAM = "headgate_test_access_token"
+
+
+class _QueryToken(_Bearer):
+    """A token riding the query (``?access_token=``), declared in ``token_params``."""
+
+    token_headers: ClassVar = frozenset[str]()
+    token_params: ClassVar = frozenset({_QUERY_PARAM})
+
+    @override
+    def attach(self, request: httpx2.Request, token: str) -> None:
+        request.url = request.url.copy_set_param(_QUERY_PARAM, token)
+
+
+async def test_a_query_token_is_declared_registered_as_secret_and_its_presence_skips() -> None:
+    """Report ``token_params`` as the credential parameters, redact them, and skip a request that already has one."""
+    auth = premint(_QueryToken())
+    request = httpx2.Request("GET", "https://api.example/x", params={_QUERY_PARAM: "mine"})
+    flow = auth.async_auth_flow(request)
+    sent = await anext(flow)
+    await flow.aclose()
+
+    assert (auth.credential_headers, auth.credential_params) == (frozenset(), {_QUERY_PARAM})
+    assert is_secret_param(_QUERY_PARAM)
+    assert sent.url.params.get_list(_QUERY_PARAM) == ["mine"]
+
+
+async def test_a_401_to_a_query_token_re_mints_once() -> None:
+    """Treat a 401 to a request carrying the token in its query as a rejection of that token, and re-mint."""
+
+    class _Minting(_QueryToken):
+        @override
+        async def mint_token(self) -> tuple[str, float]:
+            return "replacement", 3600.0
+
+    # A seeded token's age is unknown, so a 401 on it counts as staleness, not a permissions problem.
+    auth = premint(_Minting(), "seeded")
+    flow = auth.async_auth_flow(httpx2.Request("GET", "https://api.example/x"))
+    first = await anext(flow)
+    sent_first = first.url.params.get_list(_QUERY_PARAM)
+    second = await flow.asend(httpx2.Response(httpx2.codes.UNAUTHORIZED, request=first))
+    await flow.aclose()
+
+    assert (sent_first, second.url.params.get_list(_QUERY_PARAM)) == (["seeded"], ["replacement"])
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [{"token_headers": frozenset[str]()}, {"token_headers": frozenset[str](), "token_params": frozenset[str]()}],
+    ids=["no-headers", "nothing"],
+)
+def test_an_attach_that_declares_nothing_fails_when_the_class_is_defined(declaration: dict[str, object]) -> None:
+    """Refuse a custom ``attach`` whose class declares no header and no parameter: its token would go anywhere."""
+
+    def attach(_self: CachedTokenAuth, request: httpx2.Request, token: str) -> None:
+        request.url = request.url.copy_set_param("access_token", token)
+
+    with pytest.raises(TypeError, match="token_headers or token_params"):
+        type("_DeclaresNothing", (_Bearer,), {**declaration, "attach": attach})
+
+
+def _attach_key(_self: CachedTokenAuth, request: httpx2.Request, token: str) -> None:
+    request.headers["X-Api-Key"] = token
+
+
+def _sign_nothing(_self: SigningAuth, _request: httpx2.Request) -> None:
+    """Sign nothing: only the declarations matter."""
+
+
+@pytest.mark.parametrize(
+    "define",
+    [
+        lambda: type("_Misdeclared", (_Bearer,), {"attach": _attach_key, "token_headers": "x-api-key"}),
+        lambda: type("_Misdeclared", (_Bearer,), {"attach": _attach_key, "token_params": "api_key"}),
+        lambda: type("_Misdeclared", (SigningAuth,), {"sign": _sign_nothing, "signed_headers": "x-signature"}),
+        lambda: type("_Misdeclared", (SigningAuth,), {"sign": _sign_nothing, "signed_params": ["signature"]}),
+    ],
+    ids=["token-headers", "token-params", "signed-headers", "signed-params"],
+)
+def test_a_declaration_that_is_not_a_frozenset_of_names_fails_when_the_class_is_defined(
+    define: Callable[[], type],
+) -> None:
+    """Refuse a ``str`` (or a list) where a frozenset of names belongs: ``"x-api-key"`` is not one header name."""
+    with pytest.raises(TypeError, match="frozenset of names"):
+        define()
+
+
+class _StrStamper(httpx2.Auth):
+    """A third-party auth declaring its header as a bare ``str``, which iterates as single letters."""
+
+    credential_headers = "x-api-key"
+    credential_params = frozenset[str]()
+
+    def credential_identity(self) -> bytes:
+        return b"k"
+
+
+def test_a_client_refuses_an_auth_whose_declaration_is_not_a_frozenset_of_names() -> None:
+    """Refuse, when the client is built, a ``CredentialStamper`` whose declarations would withhold the wrong names."""
+    with pytest.raises(TypeError, match="frozenset of names"):
+        StubClient(base_url="https://api.example", rate=UNLIMITED, auth=_StrStamper())

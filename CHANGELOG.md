@@ -15,6 +15,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   can read JSON without a codec. It is typed `object`, and reads strict RFC 8259 JSON as `headgate.msgspec`'s reader
   does: a body that is not UTF-8, `NaN`, `Infinity`, a number out of range and a lone surrogate are each a
   `DecodeError` naming the position, never the input.
+- `CachedTokenAuth.token_params`, for a provider that takes the token in the query (`?access_token=`): a subclass
+  whose `attach` sets a query parameter declares it here, as `token_headers` declares headers.
 
 ### Changed
 
@@ -185,6 +187,17 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - A deadline message wrote a long elapsed time in scientific notation (`1.23e+03s`).
 - Every call left its context in a reference cycle (through the retry verdict's judge), so what it allocated was
   freed only at the next garbage collection, raising the memory a stream of calls held at its peak.
+- A `SigningAuth` signs each attempt after the rate-limit wait, just before it is sent. It signed before the wait, so
+  a request queued behind a tight budget went out with an old signature: at 1 request a second against a server that
+  refuses signatures older than 30 seconds, a third of 45 concurrent calls took a 401 and spent their budget twice.
+- A client-wide `Content-Type` no longer replaces the one `json=`, `data=` or `files=` encodes the body with. A
+  multipart upload lost its boundary and could not be parsed. A call's own `headers=` still wins.
+- `Content-Type` is sent to an untrusted origin. A client-wide or view `Content-Type` was withheld there, so the body
+  went out with no type.
+- A credential declaration that is not a frozenset of names is refused with a `TypeError`: `token_headers`,
+  `token_params`, `signed_headers` and `signed_params` when the class is defined, and an auth's `credential_headers`
+  and `credential_params` when the client is built. A bare `str` (`"x-api-key"`) iterates as its letters, so the
+  guard and the cache withheld single letters instead of the header.
 
 ### Security
 
@@ -194,6 +207,17 @@ change the public API; such changes are listed under **Changed** and **Removed**
   pattern now makes one full attempt per word, in linear time, and redacts exactly the pairs it did before.
 - A password with a bare `@` in it (`https://user:p@ss@host/`) is redacted whole from an error message. The redaction
   of a URL's userinfo in free text stopped at the first `@` and left the rest of the password in the message.
+- A `CachedTokenAuth` whose `attach` put the token in the query had no way to declare it, so the token reached any
+  origin a redirect or a next-page link named, and a 401 never re-minted. Such a subclass declares `token_params`; a
+  custom `attach` whose class declares no header and no parameter fails when it is defined.
+- httpx2's own `HTTP Request:` log line (INFO, `httpx2` logger) printed the URL as sent, a `QueryParamAuth` key or a
+  `SigningAuth` query signature included. Importing headgate adds a filter to that logger that redacts the URL, as
+  every error message is redacted. headgate still writes no log records of its own.
+- A failed token mint is raised without a cause. It chained httpx2's own error, whose message names the token URL
+  unredacted, so a traceback or `logger.exception` logged a `client_secret` in the URL. A note names the original
+  error's type and its redacted message instead.
+- When the cache storage failed and the live fetch that replaced it failed too, the live error carried the storage
+  error as its context, and a traceback printed the backend's message, which can hold a DSN and its password.
 
 ## [0.11.0] - 2026-11-02
 
