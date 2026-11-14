@@ -19,7 +19,7 @@ import msgspec
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from headgate import CachedTokenAuth, HttpOptions, Minted, Reader, Timeouts, TransportPolicy
+from headgate import CachedTokenAuth, Form, HttpOptions, Json, Minted, Reader, Timeouts, TransportPolicy
 from headgate import pydantic as pydantic_flavor
 from headgate._auth import AUTH_HOP, StaticHeaderAuth
 from headgate._client import AsyncBaseClient
@@ -356,7 +356,7 @@ async def test_json_body_kwarg_rides_through_with_content_type(httpx2_mock: HTTP
     """Check that ``json=`` builtins are serialized by httpx2 and stamped with the JSON content type."""
     httpx2_mock.add_response(url="https://api.example/o", json={"ok": True})
     client = StubClient(rate=_RATE, base_url="https://api.example")
-    await client.post("o", expect=RESPONSE, json=_order_json())
+    await client.post("o", expect=RESPONSE, body=Json(_order_json()))
     req = httpx2_mock.get_requests()[0]
     assert req.headers["content-type"] == "application/json"
     assert json.loads(req.content) == {"orderSide": "buy"}
@@ -366,7 +366,9 @@ async def test_json_body_content_type_is_overridable(httpx2_mock: HTTPXMock) -> 
     """Check that an explicit caller ``Content-Type`` wins over the one ``json=`` stamps."""
     httpx2_mock.add_response(url="https://api.example/o", json={})
     client = StubClient(rate=_RATE, base_url="https://api.example")
-    await client.post("o", expect=RESPONSE, json=_order_json(), headers={"Content-Type": "application/vnd.api+json"})
+    await client.post(
+        "o", expect=RESPONSE, body=Json(_order_json()), headers={"Content-Type": "application/vnd.api+json"}
+    )
     req = httpx2_mock.get_requests()[0]
     assert req.headers["content-type"] == "application/vnd.api+json"
 
@@ -376,7 +378,7 @@ async def test_json_body_does_not_mutate_caller_headers(httpx2_mock: HTTPXMock) 
     httpx2_mock.add_response(url="https://api.example/o", json={})
     client = StubClient(rate=_RATE, base_url="https://api.example")
     caller_headers: dict[str, str] = {"X-Custom": "1"}
-    await client.post("o", expect=RESPONSE, json=_order_json(), headers=caller_headers)
+    await client.post("o", expect=RESPONSE, body=Json(_order_json()), headers=caller_headers)
     assert caller_headers == {"X-Custom": "1"}
 
 
@@ -391,7 +393,7 @@ async def test_a_form_body_rides_data() -> None:
     client = StubClient(
         rate=_RATE, base_url="https://api.example", http=HttpOptions(transport=httpx2.MockTransport(handler))
     )
-    await client.post("o", expect=nothing, data={"side": "buy"})
+    await client.post("o", expect=nothing, body=Form({"side": "buy"}))
     assert seen == [b"side=buy"]
 
 

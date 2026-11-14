@@ -26,9 +26,10 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from headgate._options import Timeouts
-    from headgate._request_body import Body, EncodedBody, UploadFiles
+    from headgate._request_body import Body
 
 __all__ = [
+    "BODY_HINTS",
     "REQUEST_KEYS",
     "STREAM_KEYS",
     "WALK_KEYS",
@@ -61,13 +62,9 @@ class _Buffered(_EveryCall, total=False):
 
 
 class _Bodies(TypedDict, total=False):
-    """A request's body options."""
+    """A request's body."""
 
-    body: EncodedBody
-    json: object
-    data: Mapping[str, object]
-    content: Body
-    files: UploadFiles
+    body: Body | None
 
 
 class CallOptions(_Buffered, total=False, closed=True):
@@ -99,15 +96,11 @@ class CallOptions(_Buffered, total=False, closed=True):
 class RequestOptions(_Buffered, _Bodies, total=False, closed=True):
     """The per-call options a verb takes beyond its URL and ``expect=``: :class:`CallOptions`, plus the body.
 
-    * ``body``: an :class:`~headgate.EncodedBody` a flavor's ``writer`` wrote (``body=NEW_ORDER(order)``), sent
-      with its ``Content-Type`` unless ``headers=`` (the call's or its view's, not the client's defaults) sets one. It
-      combines with no other body option.
-    * ``json`` / ``data``: a JSON body of builtins (a codec's ``to_builtins`` builds one) or a form body.
-    * ``content``: a raw body: ``bytes``; an async iterable of ``bytes``, streamed once, so the call is never re-sent
-      and a redirect that asks for the body again is not followed; or a callable returning one, called once for each
-      send, so the call stays retryable. It combines with no other body option.
-    * ``files``: a multipart body, as httpx2 takes it (``{"name": file}``, or ``(filename, file, content_type)``
-      tuples), with ``data=`` as its form fields.
+    * ``body``: a :data:`~headgate.Body`, whose class says how it is sent: an :class:`~headgate.EncodedBody` a
+      flavor's ``writer`` wrote (``body=NEW_ORDER(order)``), :class:`~headgate.Json`, :class:`~headgate.Form`,
+      :class:`~headgate.Multipart` or :class:`~headgate.Raw`; ``None`` is no body. An ``EncodedBody`` or a ``Json``
+      is sent with its ``Content-Type`` unless ``headers=`` (the call's or its view's, not the client's defaults) sets
+      one.
     """
 
 
@@ -124,6 +117,14 @@ class WalkOptions[B](_Buffered, total=False, closed=True):
     body: B
     json: B
 
+
+#: What to write for each body keyword a verb or ``stream()`` took before ``body=`` said what a body is.
+BODY_HINTS: Final = {
+    "json": "write body=Json(value)",
+    "data": "write body=Form(fields), or body=Multipart(files, fields) with files",
+    "content": "write body=Raw(content)",
+    "files": "write body=Multipart(files, fields)",
+}
 
 #: The keywords each bag names, read once, for :func:`check_options`.
 REQUEST_KEYS: Final = frozenset(RequestOptions.__optional_keys__)

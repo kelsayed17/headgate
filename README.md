@@ -383,8 +383,9 @@ Every option, its validation and the precedence of call, view, route and policy:
 
 Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`) takes the URL, `expect=` (on `head`, `nothing` unless
 given), and optionally `retry=` (a `RetryPolicy`, or `None` to send once), `follow_redirects=`, `cache_ttl=`,
-`timeout=`, `deadline=`, `idempotency_key=`, and the request options `params=`, `headers=`, `body=` (what a flavor's
-`writer` wrote), `json=`, `data=`, `content=` and `files=`; an option left out takes the view's or the client's.
+`timeout=`, `deadline=`, `idempotency_key=`, `max_response_bytes=`, and the request options `params=`, `headers=` and
+`body=` (what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`); an option left out takes the view's or
+the client's.
 `client.with_options(headers=..., timeout=..., deadline=..., retry=..., follow_redirects=...)` returns a view with other
 defaults that shares the pool, the budgets and the breakers; the client it came from owns the pool.
 

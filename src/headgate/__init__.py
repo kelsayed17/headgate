@@ -16,7 +16,8 @@ here is what a client is written with:
   :data:`ResponseCheck`;
 * codecs: :class:`Codec`, and :func:`reader_for`, :func:`writer_for` and :func:`decode_with`, which build a reader, a
   writer and a decode on any codec;
-* request bodies: :class:`EncodedBody` and :data:`Writer`;
+* request bodies: :data:`Body`, one of :class:`Json`, :class:`Form`, :class:`Multipart`, :class:`Raw` and a
+  :data:`Writer`'s :class:`EncodedBody`;
 * auth: :class:`BearerAuth`, :class:`StaticHeaderAuth`, :class:`QueryParamAuth`, :class:`SigningAuth`,
   :class:`CachedTokenAuth`,
   :class:`Minted`, :data:`MAX_MINT_RESPONSE_BYTES`;
@@ -54,7 +55,7 @@ from headgate._options import (
     Timeouts,
     TransportPolicy,
 )
-from headgate._request_body import EncodedBody, Writer
+from headgate._request_body import Body, EncodedBody, Form, Json, Multipart, Raw, Writer
 from headgate._responses import (
     Expect,
     Reader,
@@ -104,6 +105,7 @@ __all__ = [
     "AsyncBaseClient",
     "AuthError",
     "BearerAuth",
+    "Body",
     "BodyCursor",
     "BodyOffset",
     "BreakerPolicy",
@@ -119,13 +121,16 @@ __all__ = [
     "EncodedBody",
     "Expect",
     "ForbiddenDestinationError",
+    "Form",
     "HttpCache",
     "HttpOptions",
     "IdempotencyKeys",
+    "Json",
     "LinkHeader",
     "Method",
     "Middleware",
     "Minted",
+    "Multipart",
     "Next",
     "NextUrl",
     "Offset",
@@ -139,6 +144,7 @@ __all__ = [
     "RateBudget",
     "RateLimitError",
     "RateRule",
+    "Raw",
     "Reader",
     "RequestOptions",
     "ResponseCheck",

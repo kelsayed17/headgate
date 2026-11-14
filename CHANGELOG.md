@@ -8,6 +8,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `Body`, the union of `EncodedBody`, `Json`, `Form`, `Multipart` and `Raw`, the body classes a call's `body=` takes.
+  `Raw(...).replayable` and `Multipart(...).replayable` say whether a retry or a 307/308 redirect can send the body
+  again: not for a `Raw` async iterable, nor a `Multipart` holding a file that cannot be rewound.
 - `max_response_bytes=` on a call (#57) raises or lowers the client's body cap for that call alone, as `timeout=` and
   `deadline=` already can: higher for one large file on a host whose other files are small, lower for an endpoint that
   should stay small. It is checked as a positive `int`. A cached client holds the body up to the call's cap, so the
@@ -28,6 +31,14 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- A request body is one keyword, `body=`, whose value says what it is: `json=value` is `body=Json(value)`,
+  `data=fields` is `body=Form(fields)`, `files=files, data=fields` is `body=Multipart(files, fields)`, and
+  `content=raw` is `body=Raw(raw)`; `body=` an `EncodedBody` from a writer is unchanged. The old keywords raise
+  `TypeError` naming the replacement, before anything is sent, on every verb and `stream()`. A call has one body, so
+  the `ValueError`s for two that conflict are gone. `Json` is encoded as `json=` was, except that `Json(None)` sends
+  `null` where `json=None` sent no body. A `Raw` content that is no body (a `str`, a `bytearray`, a list) raises
+  `TypeError` when the `Raw` is built, and a `body=` that is no `Body` (bare `bytes`, a `dict`) raises `TypeError`
+  naming it.
 - **A call's explicit `retry=None` now sends once; it used to mean "take the view's or the client's policy".**
   `retry` is a call option now, where leaving it out inherits and `None` is off. A forwarding wrapper whose own
   default is `None` (`retry=retry`) is the usual case: type it on `**options: Unpack[CallOptions]` and forward

@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, assert_type, cast
+from typing import TYPE_CHECKING, Any, assert_type
 
 import httpx2
 import msgspec
@@ -29,7 +29,6 @@ from headgate import (
     PageLimitError,
     PageNumber,
     Reader,
-    RequestOptions,
     ResponseParseError,
     UpstreamStatusError,
 )
@@ -526,16 +525,16 @@ async def test_a_repeating_cursor_on_a_template_url_raises() -> None:
 
 
 #: One request body of each kind no pager can rewrite.
-_BODIES: list[RequestOptions] = [{"data": {}}, {"content": b"x"}, {"files": {"f": b"x"}}]
+_BODIES: list[dict[str, Any]] = [{"data": {}}, {"content": b"x"}, {"files": {"f": b"x"}}]
 
 
 @pytest.mark.parametrize("body", _BODIES, ids=["data", "content", "files"])
-def test_a_body_no_pager_can_rewrite_is_refused(body: RequestOptions) -> None:
+def test_a_body_no_pager_can_rewrite_is_refused(body: dict[str, Any]) -> None:
     """Refuse a form, raw or multipart body: a walk's body is ``json=``, or ``body=`` with ``write=``."""
     client = _Api(_by_cursor).client()
     name = next(iter(body))
     with pytest.raises(TypeError, match=rf"argument '{name}': a walk of POSTs sends body= or json=$"):
-        client.paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of), **cast("dict[str, Any]", body))
+        client.paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of), **body)
 
 
 @pytest.mark.parametrize(

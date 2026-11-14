@@ -42,6 +42,7 @@ import httpx2
 from headgate._auth import MINTING, failed_on_auth_hop
 from headgate._body import read_capped, read_head
 from headgate._call_options import (
+    BODY_HINTS,
     REQUEST_KEYS,
     STREAM_KEYS,
     WALK_KEYS,
@@ -92,7 +93,7 @@ from headgate._options import (
     match_route,
     reject_upstream_httpx,
 )
-from headgate._request_body import check_one_body, files_replayable, request_content
+from headgate._request_body import Json, lowered
 from headgate._responses import Expect, Reader, accepts, nothing
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
@@ -132,7 +133,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
     from headgate._options import Route
-    from headgate._request_body import Writer
+    from headgate._request_body import Lowered, Writer
     from headgate._responses import ResponseCheck
     from headgate.breaker._breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
@@ -499,7 +500,7 @@ class AsyncBaseClient:
 
         The request goes out when the block is entered.
         """
-        check_options("stream", options, STREAM_KEYS)
+        check_options("stream", options, STREAM_KEYS, BODY_HINTS)
         check_overrides(options)
         if bool(last_event_id):
             # Merged case-insensitively, so it replaces a Last-Event-ID however headers= spelled it.
@@ -619,7 +620,9 @@ class AsyncBaseClient:
             if refusal is not None:
                 raise ValueError(refusal)
             if write is None:
-                return await AsyncBaseClient.post(self, request.url, expect=paired, json=request.body, **page_options)
+                return await AsyncBaseClient.post(
+                    self, request.url, expect=paired, body=Json(request.body), **page_options
+                )
             return await AsyncBaseClient.post(
                 self, request.url, expect=paired, body=write(request.body), **page_options
             )
@@ -651,7 +654,7 @@ class AsyncBaseClient:
 
         See :meth:`_dispatch` for how the last three read the body.
         """
-        check_options(call.method.lower(), call.options, REQUEST_KEYS)
+        check_options(call.method.lower(), call.options, REQUEST_KEYS, BODY_HINTS)
         check_overrides(call.options)
         spec: Expect[T] = _expectation(expect)
         prepared = self._prepare(call)
@@ -738,8 +741,8 @@ class AsyncBaseClient:
         """Build *call*'s request and stamp its context on it.
 
         Raises ``ValueError`` for a t-string value no path segment can hold, for a call that would follow redirects
-        on a client with a ``response_check``, for a ``deadline=`` that is not positive and finite and for body options
-        that do not combine; ``TypeError`` for a ``content=`` that is no body; and ``ClientError`` for a URL httpx2
+        on a client with a ``response_check``, for a ``deadline=`` that is not positive and finite and for a ``Json``
+        body JSON cannot carry; ``TypeError`` for a ``body=`` that is no ``Body``; and ``ClientError`` for a URL httpx2
         cannot parse.
         """
         if isinstance(call.url, Template):
@@ -754,28 +757,21 @@ class AsyncBaseClient:
             msg = f"{self._source} has a response_check=, so no call may follow redirects"
             raise ValueError(msg)
         params = options.get("params")
-        files = options.get("files")
-        body = options.get("body")
-        check_one_body(
-            body=body, content=options.get("content"), json=options.get("json"), data=options.get("data"), files=files
-        )
-        content, replayable = (body.content, True) if body is not None else request_content(options.get("content"))
-        replayable = replayable and files_replayable(files)
+        body = lowered(options.get("body"))
         try:
             request = self._http_client.build_request(
                 call.method,
                 url,
                 params=None if params is None else _query_pairs(params),
                 headers=self._view.headers_for(options.get("headers")),
-                json=options.get("json"),
-                data=options.get("data"),
-                content=content,
-                files=files,
+                data=body.data,
+                content=body.content,
+                files=body.files,
                 timeout=httpx_timeout(self._timeout, options.get("timeout")),
             )
         except httpx2.InvalidURL as exc:
             raise _invalid_url(exc, CallSite(self._source, call.method, log_url)) from exc
-        content_type = body.content_type if body is not None else _encoded_type(request, options)
+        content_type = body.content_type if body.content_type is not None else _encoded_type(request, body)
         if content_type is not None:
             _stamp_headers(request, self._view.headers_for(options.get("headers")), {"Content-Type": content_type})
         own = options.get("headers") or {}
@@ -796,8 +792,8 @@ class AsyncBaseClient:
         context.follow_redirects = follow
         if (retry := self._retry_of(call, route_policy)) is not None:
             context.put(RETRY_POLICY, retry)
-        if not replayable:
-            context.put(REPLAYABLE_BODY, replayable)
+        if not body.replayable:
+            context.put(REPLAYABLE_BODY, value=False)
         self._stamp_idempotency_key(request, context, options.get("idempotency_key"))
         # The cache transport only setdefaults the client's own TTL, so a per-call TTL stamped here wins.
         if "cache_ttl" in options:
@@ -1127,15 +1123,13 @@ def _query_value(value: object) -> _QueryValue:
     return value if isinstance(value, str | int | float | bool | None) else str(value)
 
 
-def _encoded_type(request: httpx2.Request, options: RequestOptions) -> str | None:
-    """Return the ``Content-Type`` httpx2 encoded a ``json=``, ``data=`` or ``files=`` body with; ``None`` for others.
+def _encoded_type(request: httpx2.Request, body: Lowered) -> str | None:
+    """Return the ``Content-Type`` httpx2 encoded a ``Form`` or ``Multipart`` body with; ``None`` for others.
 
     httpx2 sets it only under the client's default, so a client-wide ``Content-Type`` would replace it (and a multipart
     body would lose its boundary).
     """
-    if options.get("json") is not None:
-        return "application/json"
-    if not (bool(options.get("data")) or bool(options.get("files"))):
+    if not (bool(body.data) or bool(body.files)):
         return None
     # httpx2's multipart stream names its boundary; any other data= body is form-encoded.
     multipart = getattr(request.stream, "content_type", None)
