@@ -11,6 +11,8 @@
 
 **Tech Stack:** Python 3.14, httpx2 2.16, ty, ruff, pytest, syrupy (API snapshot).
 
+**Status:** approved by the lead, with two conditions folded into Task 4 (the errors table in `docs/errors.md`, and the CHANGELOG wording for the six errors) and one into Task 5 (every public name of the fault steps is re-exported from `headgate.testing`).
+
 **Spec:** `specs/2026-11-05-public-api-redesign-design.md`, section 8. Phases 1–7a have merged: #56, #60, #85, #94, #100 and #101 for phases 1–5, #97 for phase 6, #99 for 7a. This plan assumes phase 7b has merged too (see **Coordination with phase 7b**).
 
 ## Global Constraints
@@ -180,19 +182,20 @@ These cases are the most likely to bite users. Each gets a test in the task name
 **Files:**
 - Modify: `src/headgate/retry/__init__.py`, `ratelimit/__init__.py`, `breaker/__init__.py`, `cache/__init__.py` and `pagination/__init__.py`: drop each name the table puts at the top level, import and `__all__` both.
 - Modify: `src/headgate/errors.py`: drop the six top-level errors from `__all__`. The module docstring says they are exported from `headgate`.
+- Modify: `docs/errors.md`: it opens with a table of every error class and the one module to import it from (`headgate` for the six, `headgate.errors` for the rest). A test checks that the table lists every `ClientError` subclass either module exports, each with the module whose `__all__` holds it.
 - Modify: every import of those names from their subpackage, as in Task 3 (148 imports in 87 files on `main` today, most of them `Rate` and `RetryPolicy` in tests). Source modules inside `headgate` import from the private module that defines the name (`headgate.retry._policy`), never from the top level, to keep the import graph acyclic.
 - Test: the `ImportError` cases for this task (Review Focus 2).
 
 - [ ] **Step 1:** Write the failing tests.
 - [ ] **Step 2:** Make the change, then the import pass. Run every gate, and update the API snapshot.
-- [ ] **Step 3:** CHANGELOG under **Changed**: each name is imported from `headgate` only, with the list. Commit: `Export each top-level name from the top level only`.
+- [ ] **Step 3:** CHANGELOG under **Changed**: each name is imported from `headgate` only, with the list. The entry for the six errors says that `from headgate.errors import ClientError` still works at run time, but type checkers and the docs now point to `headgate.ClientError`. Commit: `Export each top-level name from the top level only`.
 
 ### Task 5: `Timeouts.DEFAULT`, a private mint cap, and one home for the fault steps
 
 **Files:**
 - Modify: `src/headgate/_options.py`: `DEFAULT_TIMEOUTS` becomes `Timeouts.DEFAULT`, a `ClassVar` assigned after the class. Every reader of it follows.
 - Modify: `src/headgate/_auth.py`: `_MAX_MINT_RESPONSE_BYTES`.
-- Move: `src/headgate/testing/faults.py` to `src/headgate/testing/_faults.py`. `headgate.testing`, `tests/retry/test_faults.py` and `docs/mutation-testing.md`'s file paths follow.
+- Move: `src/headgate/testing/faults.py` to `src/headgate/testing/_faults.py`. `headgate.testing`, `tests/retry/test_faults.py` and `docs/mutation-testing.md`'s file paths follow. Every name in `_faults.__all__` stays in `headgate.testing.__all__` (all of them are today), and a test checks it.
 - Modify: `docs/configuration.md` (the default timeouts), `docs/auth.md` (the cap's value), `docs/testing.md`.
 - Test: Review Focus 2's remaining cases, and Review Focus 3. Remove Task 2's `xfail` mark.
 
