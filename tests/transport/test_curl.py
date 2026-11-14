@@ -21,7 +21,9 @@ import anysqlite
 import certifi
 import httpx2
 import pytest
-from curl_cffi import CurlECode, CurlHttpVersion, CurlOpt
+from curl_cffi import AsyncCurl, CurlECode, CurlHttpVersion, CurlOpt
+from curl_cffi.requests import AsyncSession
+from curl_cffi.requests import Response as CurlResponse
 from curl_cffi.requests.exceptions import RequestException
 from hishel import AsyncSqliteStorage
 from hishel.httpx2 import AsyncCacheTransport
@@ -156,6 +158,26 @@ def test_the_session_ignores_the_ambient_proxy_keeps_no_cookie_and_follows_no_re
     assert session.init["trust_env"] is False
     assert session.init["discard_cookies"] is True
     assert session.init["impersonate"] == "chrome"
+
+
+@pytest.mark.parametrize(
+    ("owner", "name"),
+    [
+        pytest.param(AsyncSession, "pop_curl", id="AsyncSession.pop_curl"),
+        pytest.param(AsyncSession, "release_curl", id="AsyncSession.release_curl"),
+        pytest.param(AsyncSession, "acurl", id="AsyncSession.acurl"),
+        pytest.param(AsyncSession(), "pool", id="AsyncSession().pool"),
+        pytest.param(AsyncSession(), "debug", id="AsyncSession().debug"),
+        pytest.param(AsyncCurl, "remove_handle", id="AsyncCurl.remove_handle"),
+        pytest.param(CurlResponse(), "astream_task", id="Response().astream_task"),
+    ],
+)
+def test_the_curl_cffi_internals_the_transport_overrides_or_reads_exist(owner: object, name: str) -> None:
+    """Fail by name when a ``curl_cffi`` release renames an internal the transport relies on.
+
+    A renamed hook would not raise: the override would go uncalled, and the fix it carries would silently stop working.
+    """
+    assert hasattr(owner, name), f"curl_cffi no longer has {name}; AsyncCurlTransport relies on it"
 
 
 def test_the_trust_store_is_certifis_whatever_the_environment_says(sessions: list[_Session]) -> None:

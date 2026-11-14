@@ -50,7 +50,8 @@ The transport behaves like a native httpx2 one wherever the layers above it can 
   replaces; a ``CurlOpt.CAINFO`` in ``curl_options`` does. libcurl itself still writes the TLS session keys to the file
   ``SSLKEYLOGFILE`` names, when that variable is set.
 * A request the retry layer would not send again (a method outside the call's idempotent ones, without an idempotency
-  key) goes out on a fresh connection, because libcurl re-sends a request whose reused connection died unanswered.
+  key) goes out on a fresh connection, because libcurl re-sends a request whose reused connection died unanswered. A
+  ``CurlOpt.FRESH_CONNECT`` in ``curl_options`` is applied after it and wins: ``False`` there lets libcurl re-send.
 * The response is returned at its head, before any body byte, and a call cancelled before then removes its transfer.
 * curl decompresses the body itself and exposes no raw one (``curl_cffi`` issue 438). The response therefore carries no
   ``Content-Encoding`` or ``Content-Length``: its stream already holds the decoded bytes, so httpx2 picks its identity

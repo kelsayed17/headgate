@@ -37,7 +37,8 @@ dependencies = [
 [project.optional-dependencies]
 msgspec = ["msgspec>=0.22.0"]
 pydantic = ["pydantic>=2.14.1"]
-curl = ["curl_cffi>=0.16.3"]
+# The transport reads its CA bundle path from certifi; the floor is what curl_cffi 0.16.3 requires.
+curl = ["certifi>=2024.2.2", "curl_cffi>=0.16.3"]
 otel = ["opentelemetry-api>=1.45.1"]
 # hishel's own extra for its async storages: AsyncSqliteStorage imports anysqlite.
 cache = ["hishel[async]>=2.0.0"]
