@@ -134,7 +134,9 @@ class Timeouts:
 
     A phase left ``None`` takes its value from the layer beneath: a call's from its view's or its client's, and a
     client's from :data:`DEFAULT_TIMEOUTS` (connect 10 s, read 30 s, write 10 s, pool 15 s). So
-    ``timeout=Timeouts(read=300.0)`` lengthens the read timeout and keeps every other phase as it was.
+    ``timeout=Timeouts(read=300.0)`` lengthens the read timeout and keeps every other phase as it was. A phase set to
+    ``math.inf`` has no limit of its own: under a deadline it gets the time the deadline leaves, as a phase with no
+    limit does in httpx2.
     """
 
     connect: float | None = None
@@ -187,8 +189,21 @@ def _client_timeout(client: Timeouts) -> httpx2.Timeout:
 
 
 def _as_httpx(resolved: Timeouts) -> httpx2.Timeout:
-    """Return *resolved*, every phase set, as an ``httpx2.Timeout``."""
-    return httpx2.Timeout(connect=resolved.connect, read=resolved.read, write=resolved.write, pool=resolved.pool)
+    """Return *resolved*, every phase set, as an ``httpx2.Timeout``, a phase with no limit (``math.inf``) as ``None``.
+
+    Every phase is set here, so ``None`` means no limit to httpx2, never "inherit".
+    """
+    return httpx2.Timeout(
+        connect=_limit(resolved.connect),
+        read=_limit(resolved.read),
+        write=_limit(resolved.write),
+        pool=_limit(resolved.pool),
+    )
+
+
+def _limit(seconds: float | None) -> float | None:
+    """Return *seconds* as httpx2 takes a phase's limit: ``None`` for no limit."""
+    return None if seconds == math.inf else seconds
 
 
 def check_timeout_fits(timeout: Timeouts, deadline: float | None) -> None:
@@ -204,7 +219,8 @@ def check_timeout_fits(timeout: Timeouts, deadline: float | None) -> None:
     if deadline is None:
         return
     for name, limit in _set_phases(timeout):
-        if limit > deadline:
+        # No limit under a deadline is the deadline, which cuts it as it cuts a phase left unset.
+        if deadline < limit < math.inf:
             msg = (
                 f"{name} timeout {limit:g}s is longer than the {deadline:g}s deadline it runs under, so it can never "
                 f"take effect: raise the deadline (TransportPolicy(deadline=...) or deadline=), or lower the timeout"

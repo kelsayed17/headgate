@@ -10,11 +10,14 @@ shorter than the timeouts stays valid, since cutting them is what it is for.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
+import httpx2
 import pytest
 
 from headgate import HttpOptions, RequestOptions, Timeouts, TransportPolicy, nothing
+from headgate._options import DEFAULT_TIMEOUTS, httpx_timeout
 from headgate.testing import FakeTransport
 from tests.support.clients import StubClient
 
@@ -96,3 +99,49 @@ async def test_a_calls_timeout_that_fits_is_sent(options: RequestOptions) -> Non
     """Send a call whose timeout fits its own deadline, and one that only shortens the deadline."""
     client = _client()
     await client.get("x", expect=nothing, **options)
+
+
+#: A read with no limit of its own.
+_NO_READ_LIMIT = Timeouts(read=math.inf)
+#: A deadline shorter than every default timeout.
+_SHORT = 5.0
+
+
+def test_no_limit_reaches_httpx2_as_none() -> None:
+    """Hand httpx2 ``None`` for a phase set to ``math.inf``, and keep the other phases."""
+    timeout = httpx_timeout(_NO_READ_LIMIT)
+
+    assert timeout.read is None
+    assert timeout.connect == DEFAULT_TIMEOUTS.connect
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(lambda: _client(timeout=_NO_READ_LIMIT, deadline=_SHORT), id="a-client"),
+        pytest.param(lambda: _client(deadline=_SHORT).with_options(timeout=_NO_READ_LIMIT), id="a-view"),
+    ],
+)
+def test_no_limit_fits_any_deadline(build: Callable[[], object]) -> None:
+    """Accept no limit under a deadline: the deadline is then the limit."""
+    build()
+
+
+async def test_no_limit_under_a_deadline_is_cut_to_the_time_left() -> None:
+    """Send a call's unlimited read with the time its deadline leaves, as an unset phase is sent."""
+    seen: list[object] = []
+
+    def record(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request.extensions["timeout"]["read"])
+        return httpx2.Response(200)
+
+    client = StubClient(
+        base_url="https://api.example.test",
+        policy=TransportPolicy(deadline=_SHORT),
+        http=HttpOptions(transport=httpx2.MockTransport(record)),
+    )
+    await client.get("x", expect=nothing, timeout=_NO_READ_LIMIT)
+
+    (read,) = seen
+    assert isinstance(read, float)
+    assert 0 < read <= _SHORT
