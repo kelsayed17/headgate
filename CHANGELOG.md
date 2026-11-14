@@ -8,6 +8,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `CassetteFilter(replaying=True)`, for replaying a cassette (`record_mode="none"`): a token mint fails the test with
+  an `AssertionError` saying to seed the auth. A mint is never recorded, so vcrpy let an unseeded one reach the
+  network, with the auth's secret.
 - `Stream.retry` and `EventParser.retry`: the reconnection time the server last set with an SSE `retry:` field, kept
   across events as the WHATWG spec says, including a `retry:` sent in a block of its own. `Event.retry` is unchanged:
   the field in that event's own block.
@@ -212,6 +215,17 @@ change the public API; such changes are listed under **Changed** and **Removed**
   timeout, past the call's deadline.
 - An explicit `CurlOpt.PROXY` in `AsyncCurlTransport(curl_options=...)` is used for every host. The transport's
   `NOPROXY="*"`, which keeps the environment's proxy out, bypassed it too; a `CurlOpt.NOPROXY` of your own is kept.
+
+- `FakeTransport.calls` logs a snapshot of each send, so a request changed between attempts shows each attempt's own
+  headers; it logged the one live request object, so every attempt showed the last one's. A reply function is given
+  the snapshot.
+- `FakeTransport` reads a request's body from its stream on every send, as a network transport does. It read the body
+  once and served that copy again, so a one-shot body sent twice went unnoticed in tests.
+- `check_codec` refuses a codec that reads a numeric string (`"1"`) as an `int`. It caught only strings that are no
+  number.
+- `CassetteFilter` keeps credentials out of recorded responses too: it drops the headers it filters from requests,
+  besides `Set-Cookie`, and redacts the secret query values in a `Location` or `Content-Location`, such as a signed
+  download URL.
 
 ### Security
 
