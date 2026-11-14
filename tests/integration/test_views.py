@@ -28,6 +28,7 @@ from headgate.events import RateLimited
 from headgate.ratelimit import Rate
 from headgate.retry import RetryBudget
 from headgate.testing import FakeTransport, TestClock, isolated_breakers
+from headgate.timing import Timing
 from tests.integration._support import client
 from tests.support.events import Recorder
 
@@ -59,7 +60,7 @@ async def test_a_view_waits_out_a_pause_its_client_was_asked_for() -> None:
     recorder = Recorder()
     limited = httpx2.Response(429, headers={"Retry-After": f"{_PAUSE:g}"})
     fake = FakeTransport().reply("GET", "/v1/client", limited).reply("GET", "/v1/view", 200)
-    budget = RateBudget(Rate.per_second(100), timing=clock.timing, wall_clock=clock)
+    budget = RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
     with clock.install():
         built = client(fake, rate=budget, policy=TransportPolicy(retry=None), http=HttpOptions(), observers=(recorder,))
     view = built.with_options(deadline=None)

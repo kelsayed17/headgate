@@ -39,6 +39,7 @@ from headgate.testing import (
     Slow,
     TestClock,
 )
+from headgate.timing import Timing
 
 if TYPE_CHECKING:
     from headgate.testing import Step
@@ -148,12 +149,11 @@ async def _run(scenario: _Scenario) -> _Run:
     timed = _Timed(network, clock)
     policy = RetryPolicy(
         attempts=scenario.attempts,
-        backoff=Backoff(jitter=lambda: scenario.jitter),
+        backoff=Backoff(),
         budget=RetryBudget(ratio=_RATIO, min_per_second=scenario.floor, window=_WINDOW, clock=_frozen),
     )
-    retry = RetryTransport(
-        transport=SendTrackingTransport(transport=timed), policy=policy, sleep=retry_sleep, clock=clock
-    )
+    timing = Timing(clock=clock, sleep=retry_sleep, random=lambda: scenario.jitter)
+    retry = RetryTransport(transport=SendTrackingTransport(transport=timed), policy=policy, timing=timing)
     request = httpx2.Request(
         scenario.method, "https://api.test/orders", json={"qty": 1}, extensions={"timeout": dict(_TIMEOUTS)}
     )

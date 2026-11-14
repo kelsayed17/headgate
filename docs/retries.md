@@ -73,9 +73,9 @@ The retry policy applies to each request the client sends: a followed redirect's
 Between attempts the layer waits `factor · 2^n · jitter` before retry *n* (full jitter: `jitter` is a uniform draw in
 `[0, 1)`), capped at `max_wait`. With the defaults that is up to 1 s before the first retry and up to 2 s before the
 second; *n* counts retries only, so a hedge sent beside an attempt does not lengthen the wait. The draw comes from the
-operating system's generator rather than `random`, so an application that seeds `random` does not synchronize its
-processes' retries. A failed response is read (a bounded head of its body) and closed before the wait, so no
-connection is held through it.
+client's `Timing.random`, by default the operating system's generator rather than `random`, so an application that
+seeds `random` does not synchronize its processes' retries; a test pins it with `TestClock(random=...)`. A failed
+response is read (a bounded head of its body) and closed before the wait, so no connection is held through it.
 
 ## Retry-After
 

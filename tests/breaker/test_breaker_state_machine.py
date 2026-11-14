@@ -19,6 +19,7 @@ from hypothesis.stateful import RuleBasedStateMachine, initialize, invariant, pr
 
 from headgate.breaker import BreakerState, CircuitBreaker
 from headgate.breaker._breaker import BreakerOpenError, Verdict
+from headgate.timing import Timing
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
@@ -60,7 +61,9 @@ class BreakerMachine(RuleBasedStateMachine):
         """Start with no breaker; :meth:`build` creates it."""
         super().__init__()
         self.clock = _Clock()
-        self.breaker = CircuitBreaker(failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN, clock=self.clock)
+        self.breaker = CircuitBreaker(
+            failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN, timing=Timing(clock=self.clock)
+        )
         self.open_calls: list[_Call] = []
         self.opened_at: float | None = None
         self.trips = 0

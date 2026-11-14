@@ -148,7 +148,7 @@ def test_retry_backoff_batch(benchmark: BenchmarkFixture) -> None:
     policy = RetryPolicy()
 
     def wait() -> float:
-        return policy.wait_after(retry_after_of(_DATED_503), 1)
+        return policy.wait_after(retry_after_of(_DATED_503), 1, 0.5)
 
     benchmark(_batched(wait))
 

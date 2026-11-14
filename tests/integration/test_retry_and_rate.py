@@ -16,6 +16,7 @@ from headgate import HttpOptions, RateBudget, nothing
 from headgate.events import RateLimited, RetryScheduled
 from headgate.ratelimit import Rate
 from headgate.testing import FakeTransport, TestClock
+from headgate.timing import Timing
 from tests.integration._support import client
 from tests.support.events import Recorder
 
@@ -30,7 +31,7 @@ async def _waits(limited: httpx2.Response) -> tuple[TestClock, Recorder]:
     """Make one call answered *limited* and then 200, on a test clock; return the clock and the call's events."""
     clock = TestClock()
     recorder = Recorder()
-    budget = RateBudget(Rate.per_second(100), timing=clock.timing, wall_clock=clock)
+    budget = RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
     fake = FakeTransport().reply("GET", "/v1/x", limited, 200)
     with clock.install():
         built = client(fake, rate=budget, http=HttpOptions(), observers=(recorder,))

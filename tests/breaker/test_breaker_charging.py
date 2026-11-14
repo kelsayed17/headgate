@@ -24,6 +24,7 @@ from headgate.breaker import BreakerRegistry
 from headgate.errors import ClientError, RateLimitError, UpstreamStatusError
 from headgate.ratelimit import Rate
 from headgate.testing import TestClock
+from headgate.timing import Timing
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
 from tests.support.events import Recorder
@@ -113,7 +114,7 @@ async def test_a_network_failure_is_a_host_failure(exc: type[httpx2.TransportErr
 async def test_every_transition_is_reported_once_by_the_call_that_caused_it() -> None:
     """Emit closed to open, open to half-open and half-open to open, then half-open to closed, each with its call."""
     clock = TestClock()
-    registry = BreakerRegistry(clock=clock)
+    registry = BreakerRegistry(timing=Timing(clock=clock))
     breaker = BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN, registry=registry)
     statuses = iter([503, 503, 503, 200])
     recorder = Recorder()
@@ -186,7 +187,7 @@ def _gated_client(wire: _GateReader, policy: TransportPolicy) -> StubClient:
 async def test_the_gate_opens_when_another_call_trips_the_breaker_mid_call() -> None:
     """Read false while the breaker admits, and true once a concurrent failure has opened it."""
     clock = TestClock()
-    registry = BreakerRegistry(clock=clock)
+    registry = BreakerRegistry(timing=Timing(clock=clock))
     breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=registry)
 
     def trip() -> None:
@@ -209,7 +210,7 @@ async def test_the_gate_stays_shut_for_a_call_from_before_the_trip() -> None:
     Its retries would otherwise reach the recovering origin beside the probe.
     """
     clock = TestClock()
-    registry = BreakerRegistry(clock=clock)
+    registry = BreakerRegistry(timing=Timing(clock=clock))
     breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=registry)
 
     def trip_and_cool_down() -> None:
@@ -228,7 +229,7 @@ async def test_the_gate_stays_shut_for_a_call_from_before_the_trip() -> None:
 async def test_the_probe_is_not_stopped_by_its_own_probe_slot() -> None:
     """Read false for the half-open breaker's probe, so its own retries are its one recovery test."""
     clock = TestClock()
-    registry = BreakerRegistry(clock=clock)
+    registry = BreakerRegistry(timing=Timing(clock=clock))
     breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=registry)
     failing = _gated_client(_GateReader(503), TransportPolicy(retry=None, breaker=breaker))
     with pytest.raises(UpstreamStatusError):

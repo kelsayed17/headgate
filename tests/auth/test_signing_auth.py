@@ -425,7 +425,7 @@ async def test_a_request_waiting_in_the_rate_queue_is_signed_when_it_leaves_it()
         ages.append(clock.now - float(request.headers["X-Signed-At"]))
         return httpx2.Response(200)
 
-    budget = RateBudget(Rate.per_second(1), timing=Timing(clock=clock, sleep=clock.sleep), wall_clock=clock)
+    budget = RateBudget(Rate.per_second(1), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
     with clock.install():
         client = StubClient(
             base_url=_BASE,

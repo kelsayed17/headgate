@@ -1,15 +1,15 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Time and randomness as parameters: the clock, the sleep and the random source every layer is handed.
+"""Time and randomness as parameters: the clocks, the sleep and the random source every layer is handed.
 
-Each layer that waits, measures or draws takes the function it needs as a parameter with a production default, so a
-test drives time instead of waiting for it. The three shapes are protocols over plain callables, so ``time.monotonic``,
-``asyncio.sleep`` and ``random.random`` satisfy them as they are.
+Each layer that waits, measures or draws takes them as one :class:`Timing`, so a test drives time instead of waiting
+for it, and pins a draw instead of hoping. The shapes are protocols over plain callables, so ``time.monotonic``,
+``time.time``, ``asyncio.sleep`` and ``random.random`` satisfy them as they are.
 
-``AsyncBaseClient`` reads the :class:`Timing` it hands its layers from :func:`current_timing` when it is built. A client
-class usually fixes its own options in ``super().__init__()`` and exposes none of them, so a test replaces the timing
-of the clients it builds with :func:`timing_override` instead of reaching into each one.
+Everything that takes a ``timing=`` (a client, a token auth, a shared budget or registry) reads :func:`current_timing`
+when it is built and none is given. A client class usually fixes its own options and exposes none of them, so a test
+replaces the timing of everything it builds with :func:`timing_override` instead of reaching into each one.
 """
 
 from __future__ import annotations
@@ -74,13 +74,21 @@ system_random: RandomSource = random.SystemRandom().random
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Timing:
-    """The clock and the sleep a client hands every layer it builds."""
+    """The clocks, the sleep and the random source a client, a token auth, a budget or a registry runs on.
+
+    * ``clock``: monotonic seconds, which every duration is measured on: deadlines, pacing, cooldowns, token lifetimes.
+    * ``sleep``: how a wait is waited.
+    * ``wall_clock``: Unix seconds, which a ``Retry-After`` date and a ``RateLimit`` epoch are read against.
+    * ``random``: the draw a backoff's jitter is made from.
+    """
 
     clock: Clock = field(default=time.monotonic)
     sleep: Sleep = field(default=asyncio_sleep)
+    wall_clock: Clock = field(default=time.time)
+    random: RandomSource = field(default=system_random)
 
 
-#: Production timing: ``time.monotonic`` and ``asyncio.sleep``.
+#: Production timing: ``time.monotonic``, ``asyncio.sleep``, ``time.time`` and the operating system's random draw.
 SYSTEM_TIMING = Timing()
 
 #: The timing clients built in this context take. A ``ContextVar`` so concurrent tasks cannot see each other's override.
@@ -88,13 +96,13 @@ _TIMING: ContextVar[Timing] = ContextVar("headgate_timing", default=SYSTEM_TIMIN
 
 
 def current_timing() -> Timing:
-    """Return the timing a client constructed right now takes."""
+    """Return the timing an object built right now with no ``timing=`` of its own takes."""
     return _TIMING.get()
 
 
 @contextmanager
 def timing_override(timing: Timing) -> Generator[None]:
-    """Build clients with *timing* instead of :data:`SYSTEM_TIMING`; only clients constructed inside the block."""
+    """Build with *timing* instead of :data:`SYSTEM_TIMING` everything constructed inside the block with none given."""
     token = _TIMING.set(timing)
     try:
         yield

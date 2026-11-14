@@ -27,6 +27,7 @@ from headgate.breaker import BreakerRegistry, CircuitBreaker
 from headgate.errors import ClientError, ClientTimeoutError, TransportError, UpstreamStatusError
 from headgate.ratelimit import Rate
 from headgate.testing import TestClock
+from headgate.timing import Timing
 from tests.support.clients import StubClient
 from tests.support.events import Recorder
 from tests.support.responses import RESPONSE
@@ -50,7 +51,7 @@ class _Breakers:
     def __init__(self, threshold: int) -> None:
         """Trip after *threshold* failures; admit a probe a minute later."""
         self.clock = TestClock()
-        registry = BreakerRegistry(clock=self.clock)
+        registry = BreakerRegistry(timing=Timing(clock=self.clock))
         self.policy = BreakerPolicy(failure_threshold=threshold, recovery_timeout=_COOLDOWN, registry=registry)
         self.breaker: CircuitBreaker = registry.breaker_for(
             _ORIGIN, failure_threshold=threshold, recovery_timeout=_COOLDOWN

@@ -170,7 +170,7 @@ def build_transport_stack(
     if observed:
         layer = AttemptTransport(transport=layer)
     retry = SEND_ONCE if policy.retry is None else policy.retry
-    return RetryTransport(transport=layer, policy=retry, sleep=timing.sleep, clock=timing.clock)
+    return RetryTransport(transport=layer, policy=retry, timing=timing)
 
 
 def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:

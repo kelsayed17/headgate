@@ -22,21 +22,20 @@ loops in different threads can share a registry; each breaker guards its own sta
 from __future__ import annotations
 
 import threading
-import time
 from collections import OrderedDict
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx2
 
-from headgate._core import BreakerState, origin_of, origin_text
+from headgate._core import BreakerState, current_timing, origin_of, origin_text
 from headgate.breaker._breaker import CircuitBreaker, Verdict
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator
     from contextlib import AbstractContextManager
 
-    from headgate._core import Clock
+    from headgate._core import Timing
     from headgate.breaker._breaker import TransitionListener
 
 __all__ = ["DEFAULT_MAX_HOSTS", "DEFAULT_REGISTRY", "NO_BREAKER", "Breaker", "BreakerRegistry"]
@@ -79,13 +78,13 @@ class BreakerRegistry:
     """The breakers of every origin its clients have called, built on first use. See the module docstring.
 
     Every client whose ``BreakerPolicy`` names the same registry shares its breakers. Reading the registry (``len``,
-    iteration, :meth:`breakers`) never builds one. *max_hosts* bounds how many it holds; *clock* is the monotonic clock
-    every breaker it builds reads.
+    iteration, :meth:`breakers`) never builds one. *max_hosts* bounds how many it holds; every breaker it builds runs
+    on *timing*, or, without one, on the timing current when the registry is built.
     """
 
-    __slots__ = ("_breakers", "_clock", "_lock", "_max_hosts")
+    __slots__ = ("_breakers", "_lock", "_max_hosts", "_timing")
 
-    def __init__(self, *, max_hosts: int = DEFAULT_MAX_HOSTS, clock: Clock = time.monotonic) -> None:
+    def __init__(self, *, max_hosts: int = DEFAULT_MAX_HOSTS, timing: Timing | None = None) -> None:
         """Start empty.
 
         :raises ValueError: for a *max_hosts* below one.
@@ -94,7 +93,7 @@ class BreakerRegistry:
             msg = f"max_hosts must be >= 1 (got {max_hosts})"
             raise ValueError(msg)
         self._max_hosts = max_hosts
-        self._clock = clock
+        self._timing = current_timing() if timing is None else timing
         self._lock = threading.Lock()
         self._breakers: OrderedDict[_Key, CircuitBreaker] = OrderedDict()
 
@@ -118,7 +117,7 @@ class BreakerRegistry:
                 self._breakers.move_to_end(key)
                 return breaker
             breaker = self._breakers[key] = CircuitBreaker(
-                failure_threshold=failure_threshold, recovery_timeout=recovery_timeout, name=name, clock=self._clock
+                failure_threshold=failure_threshold, recovery_timeout=recovery_timeout, name=name, timing=self._timing
             )
             if len(self._breakers) > self._max_hosts:
                 self._evict(keep=key)

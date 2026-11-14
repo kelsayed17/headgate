@@ -28,7 +28,6 @@ import copy
 import inspect
 import math
 import secrets
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Final, override
@@ -36,7 +35,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, override
 import httpx2
 
 from headgate._body import read_capped
-from headgate._core import CallContext, Slot, origin_text
+from headgate._core import CallContext, Slot, current_timing, origin_text
 from headgate._failures import CallSite, loggable_url, mint_error, shorten, transport_error
 from headgate._url import redact_secrets, register_secret_params
 from headgate.errors import ClientConfigurationError, ClientError
@@ -45,6 +44,8 @@ from headgate.security._credentials import CHAIN_ORIGIN, check_names
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable, Mapping
+
+    from headgate._core import Timing
 
 __all__ = [
     "AUTH_HOP",
@@ -93,7 +94,7 @@ FRESH_TOKEN_S = 60.0
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class _Held[T]:
-    """A cached token, with when it was minted, is due for a refresh and expires: ``time.monotonic()`` instants.
+    """A cached token, with when it was minted, is due for a refresh and expires: instants on the auth's clock.
 
     A monotonic clock is immune to wall-clock steps. ``minted_at`` is ``-inf`` for a token whose age is unknown.
     """
@@ -531,8 +532,13 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     #: them here.
     token_params: ClassVar[frozenset[str]] = frozenset[str]()
 
-    def __init__(self, *, refresh_margin: float = 120.0) -> None:
-        """Start with an empty cache that refreshes *refresh_margin* seconds before a token expires."""
+    def __init__(self, *, refresh_margin: float = 120.0, timing: Timing | None = None) -> None:
+        """Start with an empty cache that refreshes *refresh_margin* seconds before a token expires.
+
+        A token's lifetime runs on *timing*'s clock, or, without one, on the timing current when the auth is built
+        (:func:`headgate.timing.current_timing`), so one built inside ``TestClock.install()`` expires on the test clock.
+        """
+        self._clock = (current_timing() if timing is None else timing).clock
         self._identity = secrets.token_bytes(32)
         self._refresh_margin_s = refresh_margin
         self._held: _Held[TokenT] | None = None
@@ -666,13 +672,13 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         # A lifetime at or under the margin would read as due the moment it was cached, so every request would mint
         # again: refresh at half-life instead.
         margin = min(self._refresh_margin_s, lifetime / 2)
-        now = time.monotonic()
+        now = self._clock()
         self._held = _Held(token=token, minted_at=minted_at, due_at=now + lifetime - margin, expires_at=now + lifetime)
 
     def _usable(self, rejected: TokenT | None) -> TokenT | None:
         """Return the cached token unless it is absent, the one a 401 just rejected, or within the refresh margin."""
         held = self._held
-        if held is not None and held.token != rejected and time.monotonic() < held.due_at:
+        if held is not None and held.token != rejected and self._clock() < held.due_at:
             return held.token
         return None
 
@@ -682,7 +688,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         A refresh inside the margin that fails falls back to it: it still carries the authority it was minted with.
         """
         held = self._held
-        if held is not None and held.token != rejected and time.monotonic() < held.expires_at:
+        if held is not None and held.token != rejected and self._clock() < held.expires_at:
             return held.token
         return None
 
@@ -698,7 +704,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         a retry, and the cache hands it over without minting.
         """
         held = self._held
-        return held is not None and token == held.token and time.monotonic() - held.minted_at < FRESH_TOKEN_S
+        return held is not None and token == held.token and self._clock() - held.minted_at < FRESH_TOKEN_S
 
     def _carried(self, request: httpx2.Request) -> bool:
         """Return whether *request*, as it was sent, carried any of the headers or parameters the token rides on."""
@@ -767,7 +773,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
                     else:
                         self._failed = None
                         token = step.token
-                        self._cache(token, step.lifetime, minted_at=time.monotonic())
+                        self._cache(token, step.lifetime, minted_at=self._clock())
                     finally:
                         self._minting = False
             _mark_minting(context, minting=False)

@@ -8,6 +8,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `headgate.timing`, the one seam for time and randomness: `Timing(clock=, sleep=, wall_clock=, random=)`, its
+  protocols `Clock`, `Sleep` and `RandomSource`, and `current_timing()` and `timing_override()`. `Timing` gains a
+  `wall_clock`, for `Retry-After` dates and `RateLimit` epochs, and a `random` source, for the backoff's jitter.
 - `CassetteFilter(replaying=True)`, for replaying a cassette (`record_mode="none"`): a token mint fails the test with
   an `AssertionError` saying to seed the auth. A mint is never recorded, so vcrpy let an unseeded one reach the
   network, with the auth's secret.
@@ -38,6 +41,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- Every clock is one `timing=`, and `None` reads the current timing when the object is built:
+  - `BreakerRegistry(clock=c)` and `CircuitBreaker(clock=c)` are `timing=Timing(clock=c)`;
+  - `RateBudget(wall_clock=w)` is `timing=Timing(wall_clock=w)`;
+  - `Backoff(jitter=j)` is gone: the draw is the client's `Timing(random=j)`, and `Backoff.delay(retry, draw)` and
+    `RetryPolicy.wait_after(retry_after, retry, draw)` take it;
+  - `CachedTokenAuth(timing=)` is new.
 - `SecurityOptions(allow_private_hosts=False)` is `SecurityOptions(block_private_hosts=True)`, which says what it
   turns on without a double negative. The guard is still off by default. `allow_private_hosts=` raises `TypeError`.
 - **A route's explicit `retry=None` now sends once, and its explicit `deadline=None` now sets no deadline.** Each
@@ -171,6 +180,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- `TestClock.install()` reaches a `CachedTokenAuth`'s token lifetimes, a `RateBudget` shared between clients and a
+  `BreakerRegistry`'s cooldowns, each built in the block. They read `time.monotonic()` themselves, so a test had to
+  patch them. A `Retry-After` HTTP-date with no `Date` is read against the client's wall clock too.
 - A hedge that loses while it is still above the rate budget, in a middleware that awaits before it sends, gives its
   retry budget back. The send it raced reached the rate budget meanwhile and marked the hedge as sent, so every such
   call kept one retry, and enough of them drained the budget: later calls could neither hedge nor retry.

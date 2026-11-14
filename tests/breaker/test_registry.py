@@ -21,6 +21,7 @@ from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
 
 from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
 from headgate.breaker._registry import DEFAULT_MAX_HOSTS
+from headgate.timing import Timing
 
 #: A registry small enough for Hypothesis to fill, and more origins than it holds.
 _MAX = 3
@@ -130,7 +131,7 @@ class RegistryMachine(RuleBasedStateMachine):
         """Start with an empty registry on a hand-driven clock."""
         super().__init__()
         self.now = 0.0
-        self.registry = BreakerRegistry(max_hosts=_MAX, clock=lambda: self.now)
+        self.registry = BreakerRegistry(max_hosts=_MAX, timing=Timing(clock=lambda: self.now))
         self.last_built: CircuitBreaker | None = None
 
     @rule(origin=st.sampled_from(_ORIGINS), threshold=st.sampled_from((1, _THRESHOLD)))

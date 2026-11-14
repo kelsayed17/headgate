@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Final
 
 import httpx2
 
-from headgate._core import Clock, RandomSource, Slot, system_random
+from headgate._core import Clock, Slot
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -102,29 +102,30 @@ def _check_positive(name: str, value: float) -> None:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Backoff:
-    """Exponential backoff with full jitter: the wait before retry *n* is ``factor · 2^n`` times a ``jitter`` draw.
+    """Exponential backoff with full jitter: the wait before retry *n* is ``factor · 2^n`` times a uniform draw.
 
     ``max_wait`` caps every backoff wait; a ``Retry-After`` the response sends is waited exactly instead (see
-    :attr:`RetryPolicy.max_retry_after`). ``jitter`` returns a uniform draw in ``[0, 1)``; it is a parameter so a test
-    can replay a seeded sequence.
+    :attr:`RetryPolicy.max_retry_after`). The draw is the client's (``Timing.random``), so a test pins it there.
     """
 
     factor: float = 0.5
     max_wait: float = 5.0
-    jitter: RandomSource = field(default=system_random, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Refuse a negative, infinite or NaN factor or cap."""
         _check_non_negative("factor", self.factor)
         _check_non_negative("max_wait", self.max_wait)
 
-    def delay(self, retry: int) -> float:
-        """Return the wait before retry number *retry* (from 1): the jittered exponential, capped at ``max_wait``."""
+    def delay(self, retry: int, draw: float) -> float:
+        """Return the wait before retry number *retry* (from 1): the exponential times *draw*, capped at ``max_wait``.
+
+        *draw* is a uniform draw in ``[0, 1)``, the jitter.
+        """
         exponent = min(retry, _MAX_BACKOFF_EXPONENT)
         # A large factor times 2^1023 overflows to infinity, and infinity times a zero draw is NaN; the largest finite
         # float keeps the product finite while leaving every value that does not overflow exactly as it was.
         nominal = min(self.factor * (2.0**exponent), sys.float_info.max)
-        return min(nominal * self.jitter(), self.max_wait)
+        return min(nominal * draw, self.max_wait)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -212,14 +213,14 @@ class RetryPolicy:
             msg = f"a hedge may not be configured for non-idempotent methods ({', '.join(sorted(unsafe))})"
             raise ValueError(msg)
 
-    def wait_after(self, retry_after: float | None, retry: int) -> float:
+    def wait_after(self, retry_after: float | None, retry: int, draw: float) -> float:
         """Return how long to wait before retry number *retry* (from 1), after a failure that asked for *retry_after*.
 
         *retry_after* is the delay the failed response's ``retry-after-ms`` or ``Retry-After`` asked for, as the
         attempt's classification read it, or ``None``. It is waited exactly and uncapped (the retry layer refuses one
-        past :attr:`max_retry_after` instead of waiting it); without one, the wait is :meth:`Backoff.delay`.
+        past :attr:`max_retry_after` instead of waiting it); without one, the wait is :meth:`Backoff.delay` of *draw*.
         """
-        return self.backoff.delay(retry) if retry_after is None else retry_after
+        return self.backoff.delay(retry, draw) if retry_after is None else retry_after
 
 
 @dataclass(frozen=True, slots=True)

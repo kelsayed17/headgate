@@ -69,8 +69,7 @@ def _budget(clock: TestClock, rate: Rate = _RATE, **options: Adaptive | int | No
         rate,
         adaptive=adaptive,
         max_in_flight=in_flight,
-        timing=Timing(clock=clock, sleep=clock.sleep),
-        wall_clock=clock,
+        timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock),
     )
 
 
@@ -364,7 +363,7 @@ async def test_real_pacing_waits_on_the_system_clock() -> None:
 def test_a_budget_reads_out_what_its_pacer_saw() -> None:
     """Report, through the public budget, the pause and the lowered rate a 429 left on the pacer it spends through."""
     clock = TestClock()
-    budget = RateBudget(_RATE, timing=clock.timing, wall_clock=clock)
+    budget = RateBudget(_RATE, timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
     assert (budget.pause_remaining, budget.effective_rate) == (0, _RATE)
 
     pacer_of(budget).observe(_response(429, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
@@ -428,7 +427,7 @@ async def test_a_pause_that_starts_while_a_call_waits_its_turn_is_waited_too() -
             budget.observe(_response(429, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
         await clock.sleep(seconds)
 
-    budget = Pacer(Rate.per_second(1), adaptive=None, timing=Timing(clock=clock, sleep=sleep), wall_clock=clock)
+    budget = Pacer(Rate.per_second(1), adaptive=None, timing=Timing(clock=clock, sleep=sleep, wall_clock=clock))
     await budget.wait(_context(clock))
     await budget.wait(_context(clock))
     assert clock.sleeps == [1.0, _PAUSE - 1.0], "the pause began when the turn's wait did"
@@ -442,7 +441,7 @@ async def test_a_pause_past_the_deadline_found_after_a_paced_wait_raises() -> No
         budget.observe(_response(429, {"Retry-After": str(int(_LONG_DEADLINE * 2))}), sent_at=clock())
         await clock.sleep(seconds)
 
-    budget = Pacer(Rate.per_second(1), adaptive=None, timing=Timing(clock=clock, sleep=sleep), wall_clock=clock)
+    budget = Pacer(Rate.per_second(1), adaptive=None, timing=Timing(clock=clock, sleep=sleep, wall_clock=clock))
     await budget.wait(_context(clock))
     with pytest.raises(BudgetPausedError):
         await budget.wait(_context(clock, deadline=_LONG_DEADLINE))
@@ -461,7 +460,7 @@ async def test_a_pause_holds_the_turns_already_reserved_in_order_and_at_the_rate
     """Send the calls queued before a pause one interval apart after it, in their order, not all at its end."""
     timeline = _Timeline()
     rate = Rate(requests=1, period=0.1)
-    budget = Pacer(rate, adaptive=None, timing=timeline.timing, wall_clock=timeline)
+    budget = Pacer(rate, adaptive=None, timing=Timing(clock=timeline, sleep=timeline.sleep, wall_clock=timeline))
     sent: list[tuple[int, float]] = []
 
     async def call(number: int) -> None:
@@ -481,7 +480,11 @@ async def test_a_pause_holds_the_turns_already_reserved_in_order_and_at_the_rate
 async def test_a_call_arriving_during_a_pause_queues_behind_the_turns_it_postponed() -> None:
     """Keep FIFO across a pause: a call that arrives while it runs sends after every call queued before it."""
     timeline = _Timeline()
-    budget = Pacer(Rate(requests=1, period=1.0), adaptive=None, timing=timeline.timing, wall_clock=timeline)
+    budget = Pacer(
+        Rate(requests=1, period=1.0),
+        adaptive=None,
+        timing=Timing(clock=timeline, sleep=timeline.sleep, wall_clock=timeline),
+    )
     sent: list[str] = []
 
     async def call(name: str, *, after: float = 0.0) -> None:
@@ -502,7 +505,11 @@ async def test_a_call_arriving_during_a_pause_queues_behind_the_turns_it_postpon
 async def test_a_turn_postponed_by_a_pause_reports_its_wait_after_the_pause_as_the_pauses() -> None:
     """Report a queued call's wait for its postponed turn as ``paused`` even once the pause itself has ended."""
     timeline = _Timeline()
-    budget = Pacer(Rate(requests=1, period=1.0), adaptive=None, timing=timeline.timing, wall_clock=timeline)
+    budget = Pacer(
+        Rate(requests=1, period=1.0),
+        adaptive=None,
+        timing=Timing(clock=timeline, sleep=timeline.sleep, wall_clock=timeline),
+    )
     recorder = Recorder()
 
     async def pushback() -> None:
@@ -523,7 +530,11 @@ async def test_a_turn_postponed_by_a_pause_reports_its_wait_after_the_pause_as_t
 async def test_a_second_pause_moves_the_queue_on_from_where_the_first_left_it() -> None:
     """Shift the turns queued behind a pause again when a longer one follows, from where the first pause put them."""
     timeline = _Timeline()
-    budget = Pacer(Rate(requests=1, period=1.0), adaptive=None, timing=timeline.timing, wall_clock=timeline)
+    budget = Pacer(
+        Rate(requests=1, period=1.0),
+        adaptive=None,
+        timing=Timing(clock=timeline, sleep=timeline.sleep, wall_clock=timeline),
+    )
     sent: list[float] = []
 
     async def call() -> None:
@@ -551,7 +562,7 @@ async def test_a_cancelled_waiters_turn_does_not_hold_the_queue_at_a_pause() -> 
         await blocked.wait()
         await clock.sleep(seconds)
 
-    budget = Pacer(Rate.per_second(1), adaptive=None, timing=Timing(clock=clock, sleep=sleep), wall_clock=clock)
+    budget = Pacer(Rate.per_second(1), adaptive=None, timing=Timing(clock=clock, sleep=sleep, wall_clock=clock))
     await budget.wait(_context(clock))
     first = asyncio.create_task(budget.wait(_context(clock)))
     second = asyncio.create_task(budget.wait(_context(clock)))
@@ -930,7 +941,7 @@ async def test_a_refused_call_gives_back_the_turn_it_reserved() -> None:
         await clock.sleep(seconds)
 
     rate = Rate(requests=1, period=interval)
-    budget = Pacer(rate, adaptive=None, timing=Timing(clock=clock, sleep=sleep), wall_clock=clock)
+    budget = Pacer(rate, adaptive=None, timing=Timing(clock=clock, sleep=sleep, wall_clock=clock))
     await budget.wait(_context(clock))
     with pytest.raises(BudgetPausedError):
         await budget.wait(_context(clock, deadline=interval + 0.5))
@@ -944,7 +955,7 @@ async def test_an_absolute_reset_is_measured_from_the_wall_clock() -> None:
     clock = TestClock()
     wall = 1_700_000_000.0
     reset_in = 42.0
-    budget = Pacer(_RATE, timing=Timing(clock=clock, sleep=clock.sleep), wall_clock=lambda: wall)
+    budget = Pacer(_RATE, timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=lambda: wall))
     headers = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": f"{wall + reset_in:.0f}"}
 
     budget.observe(_response(200, headers), sent_at=clock())

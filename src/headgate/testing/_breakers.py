@@ -8,7 +8,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
-from headgate._core import current_timing
 from headgate.breaker import BreakerRegistry
 from headgate.breaker._scope import registry_override
 
@@ -29,5 +28,5 @@ def isolated_breakers() -> Generator[BreakerRegistry]:
     Inspect the registry yielded (``registry[host].state``, ``headgate.health.breaker_states(registry)``) to assert on
     them.
     """
-    with registry_override(BreakerRegistry(clock=current_timing().clock)) as registry:
+    with registry_override(BreakerRegistry()) as registry:
         yield registry

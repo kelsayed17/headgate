@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from typing import TYPE_CHECKING, Final, Self
 
-from headgate._core import Timing, current_timing, timing_override
+from headgate._core import RandomSource, Timing, current_timing, system_random, timing_override
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -32,9 +32,12 @@ _SETTLE_TURNS: Final = 16
 class TestClock:
     """A monotonic clock a test drives: it reads :attr:`now`, and its :meth:`sleep` advances it instead of waiting.
 
-    Build clients under :meth:`install` and every duration they measure (events, deadlines, breaker cooldowns read
-    from a registry built by :func:`~headgate.testing.isolated_breakers` in the same block) is on this clock, and every
-    wait they make (retry backoff) moves it, so a test of time runs in no time. :attr:`sleeps` records each wait.
+    Build under :meth:`install` and every duration measured by what the block builds is on this clock: a client's
+    events, deadlines and retry budget, a token auth's lifetimes, a shared rate budget's pacing, a breaker registry's
+    cooldowns. Every wait they make (retry backoff, pacing) moves it, so a test of time runs in no time.
+    :attr:`sleeps` records each wait. The wall clock reads *epoch* plus the reading, so a ``Retry-After`` date and the
+    monotonic clock agree, and *random* is the backoff's jitter draw (the system's by default; pass ``lambda: 1.0`` for
+    the full, predictable backoff).
 
     Concurrent sleeps overlap, as they do in real time: each sleeper wakes at the reading it began at plus its delay.
     Once the event loop has turned a few times with no sleep beginning or ending, so that every task not sleeping has
@@ -45,9 +48,13 @@ class TestClock:
     # Not a test class, whatever pytest's name-based collection thinks of "Test...".
     __test__ = False
 
-    def __init__(self, start: float = 0.0) -> None:
-        """Start the clock at *start*."""
+    def __init__(
+        self, start: float = 0.0, *, epoch: float = 1_800_000_000.0, random: RandomSource = system_random
+    ) -> None:
+        """Start the clock at *start*, its wall clock at *epoch* plus that, drawing jitter from *random*."""
         self.now = start
+        self.epoch = epoch
+        self._random = random
         self.sleeps: list[float] = []
         self._sleepers: list[tuple[float, int, asyncio.Future[None]]] = []
         self._order = itertools.count()
@@ -103,14 +110,18 @@ class TestClock:
             self._quiet_turns = 0
         loop.call_soon(self._turn, loop)
 
+    def wall_clock(self) -> float:
+        """Return Unix seconds: the *epoch* plus the current reading."""
+        return self.epoch + self.now
+
     @property
     def timing(self) -> Timing:
-        """This clock and its sleep, as the :class:`~headgate._core.Timing` a client takes."""
-        return Timing(clock=self, sleep=self.sleep)
+        """This clock, its sleep, wall clock and random draw, as the :class:`~headgate.timing.Timing` they take."""
+        return Timing(clock=self, sleep=self.sleep, wall_clock=self.wall_clock, random=self._random)
 
     @contextmanager
     def install(self) -> Generator[Self]:
-        """Build the clients constructed inside the block on this clock; yield the clock."""
+        """Build everything constructed inside the block with no ``timing=`` of its own on this clock; yield it."""
         with timing_override(self.timing):
             yield self
 

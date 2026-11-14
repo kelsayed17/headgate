@@ -40,13 +40,13 @@ def test_a_retry_wait_is_finite_non_negative_and_capped_unless_the_server_asked(
     retry_after: str, retry: int, backoff_factor: float, jitter: float
 ) -> None:
     """Wait the delay a 503's ``Retry-After`` asks for exactly, and otherwise a backoff between zero and its cap."""
-    policy = RetryPolicy(attempts=retry + 1, backoff=Backoff(factor=backoff_factor, jitter=lambda: jitter))
+    policy = RetryPolicy(attempts=retry + 1, backoff=Backoff(factor=backoff_factor))
     # Header bytes arrive from the wire as Latin-1, so any of the 256 byte values can appear.
     headers = [(b"Retry-After", retry_after.encode("latin-1"))]
     response = httpx2.Response(httpx2.codes.SERVICE_UNAVAILABLE, headers=headers)
 
     asked = retry_after_of(response)
-    wait = policy.wait_after(asked, retry)
+    wait = policy.wait_after(asked, retry, jitter)
 
     assert math.isfinite(wait)
     assert wait >= 0

@@ -53,7 +53,7 @@ class _Server:
 
 def _budget(clock: TestClock) -> RateBudget:
     """Return a generous budget on *clock*."""
-    return RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep), wall_clock=clock)
+    return RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
 
 
 def _client(

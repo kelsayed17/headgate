@@ -32,7 +32,7 @@ from tests.support.clients import StubClient
 _HOST = "api.test"
 
 #: A backoff that always waits its full nominal delay.
-_FULL = Backoff(jitter=lambda: 1.0)
+_FULL = Backoff()
 
 #: A ``Retry-After`` longer than the default ``max_retry_after``.
 _TOO_LONG = 100.0

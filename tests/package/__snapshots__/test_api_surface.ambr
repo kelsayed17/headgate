@@ -7,7 +7,7 @@
       field failure_threshold: int = 5
       field recovery_timeout: float = 60.0
       field registry: BreakerRegistry = <headgate.breaker._registry.BreakerRegistry object at 0x…>
-  class BreakerRegistry(object)(*, max_hosts: 'int' = 1024, clock: 'Clock' = <built-in function monotonic>) -> 'None'
+  class BreakerRegistry(object)(*, max_hosts: 'int' = 1024, timing: 'Timing | None' = None) -> 'None'
       def breaker_for(self, origin: 'httpx2.Origin | httpx2.URL | str', *, failure_threshold: 'int', recovery_timeout: 'float') -> 'CircuitBreaker'
       def breakers(self, origin: 'httpx2.Origin | httpx2.URL | str | None' = None) -> 'tuple[CircuitBreaker, ...]'
       def clear(self) -> 'None'
@@ -16,7 +16,7 @@
       CLOSED = 'closed'
       OPEN = 'open'
       HALF_OPEN = 'half_open'
-  class CircuitBreaker(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0, name: 'str' = '', clock: 'Clock' = <built-in function monotonic>) -> 'None'
+  class CircuitBreaker(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0, name: 'str' = '', timing: 'Timing | None' = None) -> 'None'
       property failure_count
       property failure_threshold
       property name
@@ -339,7 +339,7 @@
       classmethod per_hour(cls, requests: 'float') -> 'Rate'
       classmethod per_minute(cls, requests: 'float') -> 'Rate'
       classmethod per_second(cls, requests: 'float') -> 'Rate'
-  class RateBudget(object)(rate: 'Rate', *, max_in_flight: 'int | None' = None, adaptive: 'Adaptive | None' = Adaptive(decrease=0.5, increase=0.1, min_rate=0.1), timing: 'Timing' = Timing(clock=<built-in function monotonic>, sleep=<function asyncio_sleep at 0x…>), wall_clock: 'Clock' = <built-in function time>) -> 'None'
+  class RateBudget(object)(rate: 'Rate', *, max_in_flight: 'int | None' = None, adaptive: 'Adaptive | None' = Adaptive(decrease=0.5, increase=0.1, min_rate=0.1), timing: 'Timing | None' = None) -> 'None'
       property adaptive
       property effective_rate
       property in_flight
@@ -354,11 +354,10 @@
   __all__ = ['IDEMPOTENT_METHODS', 'RETRY_STATUSES', 'Backoff', 'Hedge', 'RetryBudget', 'RetryPolicy']
   IDEMPOTENT_METHODS = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'})
   RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
-  class Backoff(object)(*, factor: 'float' = 0.5, max_wait: 'float' = 5.0, jitter: 'RandomSource' = <bound method SystemRandom.random of <random.SystemRandom object at 0x…>>) -> 'None'
+  class Backoff(object)(*, factor: 'float' = 0.5, max_wait: 'float' = 5.0) -> 'None'
       field factor: float = 0.5
       field max_wait: float = 5.0
-      field jitter: RandomSource = <bound method SystemRandom.random of <random.SystemRandom object at 0x…>>
-      def delay(self, retry: 'int') -> 'float'
+      def delay(self, retry: 'int', draw: 'float') -> 'float'
   class Hedge(object)(*, after: 'float' = 0.5, max_extra: 'int' = 1) -> 'None'
       field after: float = 0.5
       field max_extra: int = 1
@@ -377,7 +376,7 @@
       field respect_should_retry: bool = True
       field hedge: Hedge | None = None
       field min_attempt_time: float = 0.05
-      def wait_after(self, retry_after: 'float | None', retry: 'int') -> 'float'
+      def wait_after(self, retry_after: 'float | None', retry: 'int', draw: 'float') -> 'float'
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.security]
@@ -465,18 +464,38 @@
       field seconds: float
       field then: Respond = <factory>
   type Step = ConnectFail | PoolFull | Respond | DropMidBody | Slow | RefusedStream
-  class TestClock(object)(start: 'float' = 0.0) -> 'None'
+  class TestClock(object)(start: 'float' = 0.0, *, epoch: 'float' = 1800000000.0, random: 'RandomSource' = <bound method SystemRandom.random of <random.SystemRandom object at 0x…>>) -> 'None'
       def __call__(self) -> 'float'
       def advance(self, seconds: 'float') -> 'None'
       def install(self) -> 'Generator[Self]'
       def sleep(self, seconds: 'float', /) -> 'None'
       property timing
+      def wall_clock(self) -> 'float'
   class UnmatchedRequestError(AssertionError)(no signature)
   def budget_for(client: 'AsyncBaseClient', url: 'str | None' = None) -> 'RateBudget'
   def cache_of(client: 'AsyncBaseClient') -> 'HttpCache | None'
   def check_codec(codec: 'Codec', *, record: 'TypeForm[object] | None' = None) -> 'None'
   def instant_retries() -> 'Generator[None]'
   def isolated_breakers() -> 'Generator[BreakerRegistry]'
+  '''
+# ---
+# name: test_the_public_surface_matches_the_snapshot[headgate.timing]
+  '''
+  module headgate.timing
+  __all__ = ['Clock', 'RandomSource', 'Sleep', 'Timing', 'current_timing', 'timing_override']
+  class Clock(Protocol)(*args, **kwargs)
+      def __call__(self) -> 'float'
+  class RandomSource(Protocol)(*args, **kwargs)
+      def __call__(self) -> 'float'
+  class Sleep(Protocol)(*args, **kwargs)
+      def __call__(self, seconds: 'float', /) -> 'Awaitable[None]'
+  class Timing(object)(*, clock: 'Clock' = <built-in function monotonic>, sleep: 'Sleep' = <function asyncio_sleep at 0x…>, wall_clock: 'Clock' = <built-in function time>, random: 'RandomSource' = <bound method SystemRandom.random of <random.SystemRandom object at 0x…>>) -> 'None'
+      field clock: Clock = <built-in function monotonic>
+      field sleep: Sleep = <function asyncio_sleep at 0x…>
+      field wall_clock: Clock = <built-in function time>
+      field random: RandomSource = <bound method SystemRandom.random of <random.SystemRandom object at 0x…>>
+  def current_timing() -> 'Timing'
+  def timing_override(timing: 'Timing') -> 'Generator[None]'
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate]
@@ -524,7 +543,7 @@
       field failure_threshold: int = 5
       field recovery_timeout: float = 60.0
       field registry: BreakerRegistry = <headgate.breaker._registry.BreakerRegistry object at 0x…>
-  class CachedTokenAuth(Auth, Generic)(*, refresh_margin: 'float' = 120.0) -> 'None'
+  class CachedTokenAuth(Auth, Generic)(*, refresh_margin: 'float' = 120.0, timing: 'Timing | None' = None) -> 'None'
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
       def attach(self, request: 'httpx2.Request', token: 'TokenT') -> 'None'
       property credential_headers
@@ -683,7 +702,7 @@
       classmethod per_hour(cls, requests: 'float') -> 'Rate'
       classmethod per_minute(cls, requests: 'float') -> 'Rate'
       classmethod per_second(cls, requests: 'float') -> 'Rate'
-  class RateBudget(object)(rate: 'Rate', *, max_in_flight: 'int | None' = None, adaptive: 'Adaptive | None' = Adaptive(decrease=0.5, increase=0.1, min_rate=0.1), timing: 'Timing' = Timing(clock=<built-in function monotonic>, sleep=<function asyncio_sleep at 0x…>), wall_clock: 'Clock' = <built-in function time>) -> 'None'
+  class RateBudget(object)(rate: 'Rate', *, max_in_flight: 'int | None' = None, adaptive: 'Adaptive | None' = Adaptive(decrease=0.5, increase=0.1, min_rate=0.1), timing: 'Timing | None' = None) -> 'None'
       property adaptive
       property effective_rate
       property in_flight
@@ -723,7 +742,7 @@
       field respect_should_retry: bool = True
       field hedge: Hedge | None = None
       field min_attempt_time: float = 0.05
-      def wait_after(self, retry_after: 'float | None', retry: 'int') -> 'float'
+      def wait_after(self, retry_after: 'float | None', retry: 'int', draw: 'float') -> 'float'
   class Route(object)(fragment: 'str', /, **options: 'Unpack[RouteOptions]') -> 'None'
       property fragment
       property options

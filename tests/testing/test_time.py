@@ -6,22 +6,32 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import math
+import time
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx2
 import pytest
 
-from headgate import HttpOptions, Rate, RetryPolicy, TransportPolicy, nothing
+import headgate.timing
+from headgate import HttpOptions, Rate, RateBudget, RetryPolicy, TransportPolicy, nothing
+from headgate._core import Timing as CoreTiming
 from headgate._core import current_timing
+from headgate.breaker import BreakerRegistry, CircuitBreaker
 from headgate.retry import Backoff
 from headgate.testing import FakeTransport, TestClock, instant_retries
 from headgate.testing._time import _SETTLE_TURNS
+from headgate.timing import Timing
 from tests.support.clients import StubClient
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _START = 100.0
 _STEP = 2.5
-#: A backoff whose waits are exactly ``factor * 2**retry``: the jitter always draws 1.
-_EXACT_BACKOFF = Backoff(factor=1.0, max_wait=60.0, jitter=lambda: 1.0)
+#: A backoff whose waits are exactly ``factor * 2**retry`` under a clock whose jitter always draws 1.
+_EXACT_BACKOFF = Backoff(factor=1.0, max_wait=60.0)
 
 
 def test_the_clock_reads_what_it_was_moved_to() -> None:
@@ -141,14 +151,12 @@ async def test_a_sleep_refuses_a_step_no_clock_takes(step: float) -> None:
 async def test_concurrent_calls_back_off_together() -> None:
     """Retry two concurrent calls that each back off 30 s at t=30, inside their 45 s deadlines, as production would."""
     fake = FakeTransport().reply("GET", "/x", 503, 503, 200, 200)
-    clock = TestClock()
+    clock = TestClock(random=lambda: 1.0)
     with clock.install():
         client = StubClient(
             base_url="https://h.test",
             rate=Rate.per_second(1000),
-            policy=TransportPolicy(
-                retry=RetryPolicy(attempts=2, backoff=Backoff(factor=15.0, max_wait=60.0, jitter=lambda: 1.0))
-            ),
+            policy=TransportPolicy(retry=RetryPolicy(attempts=2, backoff=Backoff(factor=15.0, max_wait=60.0))),
             http=HttpOptions(transport=fake),
         )
 
@@ -161,7 +169,7 @@ async def test_concurrent_calls_back_off_together() -> None:
 async def test_a_client_built_under_install_waits_on_the_test_clock() -> None:
     """Sleep the retry backoff on the test clock: each wait recorded, and the clock moved by all of them."""
     fake = FakeTransport().reply("GET", "/x", 503, 503, 200)
-    clock = TestClock()
+    clock = TestClock(random=lambda: 1.0)
     with clock.install() as installed:
         assert installed is clock
         client = StubClient(
@@ -193,3 +201,78 @@ async def test_instant_retries_retries_without_waiting() -> None:
         client = StubClient(base_url="https://h.test", rate=Rate.per_second(1000), http=HttpOptions(transport=fake))
     await client.get("x", expect=nothing)
     assert len(fake.calls) == len(("503", "200"))
+
+
+@pytest.mark.transport_policy
+async def test_install_reaches_a_rate_budget_two_clients_share() -> None:
+    """Pace two clients that share a budget built in the block on the test clock: their waits are its sleeps."""
+    clock = TestClock()
+    with clock.install():
+        shared = RateBudget(Rate.per_second(1))
+        clients = [
+            StubClient(
+                base_url="https://h.test", rate=shared, http=HttpOptions(transport=FakeTransport().reply("GET", "/x"))
+            )
+            for _ in range(2)
+        ]
+
+    for client in clients:
+        await client.get("x", expect=nothing)
+
+    assert clock.now == pytest.approx(1.0), "the second client waited its turn on the test clock"
+
+
+def test_install_reaches_the_cooldown_of_a_registry() -> None:
+    """Run the cooldown of a breaker from a registry built in the block on the test clock."""
+    clock = TestClock()
+    with clock.install():
+        registry = BreakerRegistry()
+    _trip(registry)
+
+    clock.advance(29.0)
+    assert _breaker(registry).refusing
+    clock.advance(1.0)
+    assert not _breaker(registry).refusing
+
+
+def test_what_is_built_outside_the_block_keeps_the_system_clock() -> None:
+    """Leave a registry built before the block on the system clock: installing a clock changes nothing already built."""
+    outside = BreakerRegistry()
+    clock = TestClock()
+    with clock.install():
+        _trip(outside)
+    clock.advance(30.0)
+
+    assert _breaker(outside).refusing, "its cooldown runs in real time, which has not passed"
+
+
+def _breaker(registry: BreakerRegistry) -> CircuitBreaker:
+    """Return *registry*'s breaker for the test origin, tripping after one failure and cooling down for 30 s."""
+    return registry.breaker_for("https://h.test", failure_threshold=1, recovery_timeout=30.0)
+
+
+def _trip(registry: BreakerRegistry) -> None:
+    """Open *registry*'s breaker for the test origin with one failure."""
+    with _breaker(registry).track() as verdict:
+        verdict.mark_failed()
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: Backoff(**cast("Any", {"jitter": lambda: 1.0})),
+        lambda: RateBudget(Rate.per_second(1), **cast("Any", {"wall_clock": time.time})),
+        lambda: BreakerRegistry(**cast("Any", {"clock": time.monotonic})),
+    ],
+    ids=["backoff-jitter", "budget-wall-clock", "registry-clock"],
+)
+def test_the_old_clock_keywords_are_gone(build: Callable[[], object]) -> None:
+    """Refuse ``jitter=``, ``wall_clock=`` and ``clock=``: each is a field of the one ``timing=`` now."""
+    with pytest.raises(TypeError):
+        build()
+
+
+def test_the_timing_module_is_the_one_seam() -> None:
+    """Export the same ``Timing`` the layers take, with all four seams."""
+    assert headgate.timing.Timing is CoreTiming
+    assert {field.name for field in dataclasses.fields(Timing)} == {"clock", "sleep", "wall_clock", "random"}

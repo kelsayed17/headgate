@@ -34,13 +34,12 @@ from __future__ import annotations
 
 import math
 import threading
-import time
 import weakref
 from typing import TYPE_CHECKING, Final
 
 import httpx2
 
-from headgate._core import SYSTEM_TIMING, BudgetBacklogError, BudgetPausedError, RateLimited
+from headgate._core import SYSTEM_TIMING, BudgetBacklogError, BudgetPausedError, RateLimited, current_timing
 from headgate.ratelimit._feedback import read_feedback
 from headgate.ratelimit._inflight import InFlightLimit
 from headgate.ratelimit._rate import Adaptive, Rate
@@ -48,7 +47,7 @@ from headgate.ratelimit._rate import Adaptive, Rate
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from headgate._core import CallContext, Clock, Timing
+    from headgate._core import CallContext, Timing
     from headgate.ratelimit._feedback import Feedback
 
 __all__ = [
@@ -138,7 +137,6 @@ class Pacer:
         max_in_flight: int | None = None,
         adaptive: Adaptive | None = DEFAULT_ADAPTIVE,
         timing: Timing = SYSTEM_TIMING,
-        wall_clock: Clock = time.time,
     ) -> None:
         """Build a budget; see the class docstring for the parameters.
 
@@ -152,7 +150,7 @@ class Pacer:
         self._in_flight = None if max_in_flight is None else InFlightLimit(max_in_flight)
         self._clock = timing.clock
         self._sleep = timing.sleep
-        self._wall_clock = wall_clock
+        self._wall_clock = timing.wall_clock
         self._lock = threading.Lock()
         self._tat = -math.inf
         self._factor = 1.0
@@ -382,8 +380,10 @@ class RateBudget:
     See the module docstring for the algorithm and for what sharing means. *rate* is the configured rate;
     *max_in_flight* caps how many requests may be in flight at once, a request counting from before its turn until its
     response body is closed (``None``: no cap); *adaptive* lowers the rate on pushback (``None``: never). *timing*'s
-    clock (monotonic seconds) and sleep pace requests and wait out pauses; *wall_clock* is Unix time, for the absolute
-    times some rate-limit headers carry.
+    clock (monotonic seconds) and sleep pace requests and wait out pauses, and its wall clock (Unix seconds) reads the
+    absolute times some rate-limit headers carry. Without a *timing*, the budget runs on the timing current when it is
+    built (:func:`headgate.timing.current_timing`), so one built inside ``TestClock.install()`` paces on the test
+    clock, whichever clients share it.
 
     Two clients given the same budget pace together. What it reports (its rate, its effective rate after adaptive
     throttling, how many requests are in flight, how long a server pause has left) is read here; what spends from it is
@@ -400,11 +400,11 @@ class RateBudget:
         *,
         max_in_flight: int | None = None,
         adaptive: Adaptive | None = DEFAULT_ADAPTIVE,
-        timing: Timing = SYSTEM_TIMING,
-        wall_clock: Clock = time.time,
+        timing: Timing | None = None,
     ) -> None:
         """Build a budget and the pacer it spends through; see the class docstring for the parameters."""
-        self._pacer = Pacer(rate, max_in_flight=max_in_flight, adaptive=adaptive, timing=timing, wall_clock=wall_clock)
+        timing = current_timing() if timing is None else timing
+        self._pacer = Pacer(rate, max_in_flight=max_in_flight, adaptive=adaptive, timing=timing)
         _PACERS[self] = self._pacer
 
     @property

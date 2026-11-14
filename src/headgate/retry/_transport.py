@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Final, override
 
@@ -50,12 +49,15 @@ import httpx2
 from headgate._core import (
     BREAKER_GATE,
     SENDING,
+    SYSTEM_TIMING,
     BudgetBacklogError,
     BudgetPausedError,
     CallContext,
+    Clock,
+    RandomSource,
     RetryScheduled,
     Sleep,
-    asyncio_sleep,
+    Timing,
 )
 from headgate.retry._budget import RetryLedger
 from headgate.retry._classify import Attempted, Verdict, classify
@@ -71,7 +73,7 @@ from headgate.retry._policy import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from headgate._core import Clock, SendProgress
+    from headgate._core import SendProgress
     from headgate.retry._policy import Hedge, RetryBudget, RetryPolicy
 
 __all__ = ["RetryTransport"]
@@ -172,10 +174,12 @@ _STOP = _Decision()
 
 @dataclass(frozen=True, slots=True)
 class _Via:
-    """How a sequence sends and waits: the transport below the retry layer, and the injected sleep."""
+    """How a sequence sends, waits and draws: the transport below the retry layer, and the injected sleep and random."""
 
     transport: httpx2.AsyncBaseTransport
     sleep: Sleep
+    random: RandomSource
+    wall_clock: Clock
 
 
 class _Sequence:
@@ -196,6 +200,8 @@ class _Sequence:
         """
         self._transport = via.transport
         self._sleep = via.sleep
+        self._random = via.random
+        self._wall_clock = via.wall_clock
         self._request = request
         self._context = context
         self._policy = policy
@@ -225,10 +231,10 @@ class _Sequence:
         The judge holds the attempt's progress, not the context: it rides on the context (``RETRY_OUTCOME``), and one
         holding the context back would leave every call's objects in a reference cycle, for the garbage collector.
         """
-        attempted, policy = self._attempted(self._context.progress), self._policy
+        attempted, policy, wall_clock = self._attempted(self._context.progress), self._policy, self._wall_clock
 
         def judge(result: httpx2.Response | Exception) -> RetryOutcome:
-            verdict = classify(result, attempted, policy)
+            verdict = classify(result, attempted, policy, now=wall_clock())
             return RetryOutcome(verdict.retryable, verdict.retry_after, failure=verdict.failure)
 
         return judge
@@ -269,7 +275,7 @@ class _Sequence:
             raise
         finally:
             SENDING.reset(sending)
-        verdict = classify(result, self._attempted(progress), self._policy)
+        verdict = classify(result, self._attempted(progress), self._policy, now=self._wall_clock())
         context.add_note(f"{prefix}: {_describe(result, verdict)} after {_rounded(context.clock() - started)}")
         return _Attempt(result, verdict, request)
 
@@ -368,7 +374,7 @@ class _Sequence:
         if (note := self._unsendable(attempt)) is not None:
             return _Decision(note=note)
         # The backoff grows with the retries made, not with the sends: a hedge is no retry.
-        delay = self._policy.wait_after(attempt.verdict.retry_after, self._retries + 1)
+        delay = self._policy.wait_after(attempt.verdict.retry_after, self._retries + 1, self._random())
         if (note := self._unaffordable(delay)) is not None:
             return _Decision(note=note)
         return _Decision(delay=delay)
@@ -520,14 +526,13 @@ class RetryTransport(httpx2.AsyncBaseTransport):
         *,
         transport: httpx2.AsyncBaseTransport,
         policy: RetryPolicy,
-        sleep: Sleep = asyncio_sleep,
-        clock: Clock = time.monotonic,
+        timing: Timing = SYSTEM_TIMING,
     ) -> None:
-        """Re-send through *transport* under *policy*, waiting with *sleep*; a budget's window runs on *clock*."""
+        """Re-send through *transport* under *policy*; *timing* waits, draws the jitter and runs a budget's window."""
         self._transport = transport
-        self._via = _Via(transport, sleep)
+        self._via = _Via(transport, timing.sleep, timing.random, timing.wall_clock)
         self.policy = policy
-        self._clock = clock
+        self._clock = timing.clock
         self._ledgers: dict[RetryBudget, RetryLedger] = {}
 
     def _ledger(self, budget: RetryBudget | None) -> RetryLedger | None:
