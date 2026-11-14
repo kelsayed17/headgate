@@ -52,7 +52,7 @@ def check_codec(codec: Codec, *, record: TypeForm[object] | None = None) -> None
 
     * its ``media_type`` is a media type;
     * a value it writes reads back equal;
-    * a value of the wrong type is refused, not coerced: a string where an ``int`` is declared;
+    * a value of the wrong type is refused, not coerced: a string where an ``int`` is declared, even ``"1"``;
     * malformed bytes (a body cut short at its middle, so a final delimiter is not all that is lost) are refused;
     * each refusal raises one of its ``errors``, so a call raises it as ``ResponseParseError``, and neither its
       description nor its traceback (what ``logger.exception`` logs, chained errors included) repeats the input, a
@@ -84,6 +84,9 @@ def check_codec(codec: Codec, *, record: TypeForm[object] | None = None) -> None
                 "it, which logger.exception would log"
             )
             raise AssertionError(msg)
+
+    numeric = codec.encoder(dict[str, str])({"a": "1"})
+    _refused(codec, numeric, dict[str, int], "a numeric string where an int is declared")
 
     _refused(codec, counts[: len(counts) // 2], dict[str, int], "a cut-short body")
 

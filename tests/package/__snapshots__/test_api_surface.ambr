@@ -429,7 +429,7 @@
   '''
   module headgate.testing
   __all__ = ['CassetteFilter', 'ConnectFail', 'DropMidBody', 'FakeTransport', 'FaultCall', 'FaultyTransport', 'PoolFull', 'RecordedRequest', 'RefusedStream', 'Reply', 'Respond', 'Slow', 'Step', 'TestClock', 'UnmatchedRequestError', 'budget_for', 'cache_of', 'check_codec', 'instant_retries', 'isolated_breakers']
-  class CassetteFilter(object)(*, auths: 'Iterable[object]' = (), headers: 'Iterable[str]' = (), params: 'Iterable[str]' = ()) -> 'None'
+  class CassetteFilter(object)(*, auths: 'Iterable[object]' = (), headers: 'Iterable[str]' = (), params: 'Iterable[str]' = (), replaying: 'bool' = False) -> 'None'
       def __call__(self, request: 'httpx2.Request', call_next: 'Next') -> 'httpx2.Response'
       def before_record_request(self, request: 'R') -> 'R | None'
       def before_record_response(self, response: 'MutableMapping[str, object]') -> 'MutableMapping[str, object]'

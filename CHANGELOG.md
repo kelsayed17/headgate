@@ -8,6 +8,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `CassetteFilter(replaying=True)`, for replaying a cassette (`record_mode="none"`): a token mint fails the test with
+  an `AssertionError` saying to seed the auth. A mint is never recorded, so vcrpy let an unseeded one reach the
+  network, with the auth's secret.
 - `Body`, the union of `EncodedBody`, `Json`, `Form`, `Multipart` and `Raw`, the body classes a call's `body=` takes.
   `Raw(...).replayable` and `Multipart(...).replayable` say whether a retry or a 307/308 redirect can send the body
   again: not for a `Raw` async iterable, nor a `Multipart` holding a file that cannot be rewound.
@@ -299,6 +302,17 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - Under a headgate client, `CachedTokenAuth` no longer reads a streamed upload into memory before sending it. A body
   that can be sent again (bytes, a factory, a rewindable `files=` upload) is still re-sent after a 401 re-mint; a
   one-shot stream's 401 reaches the caller as `AuthError`, and the next call mints a new token.
+
+- `FakeTransport.calls` logs a snapshot of each send, so a request changed between attempts shows each attempt's own
+  headers; it logged the one live request object, so every attempt showed the last one's. A reply function is given
+  the snapshot.
+- `FakeTransport` reads a request's body from its stream on every send, as a network transport does. It read the body
+  once and served that copy again, so a one-shot body sent twice went unnoticed in tests.
+- `check_codec` refuses a codec that reads a numeric string (`"1"`) as an `int`. It caught only strings that are no
+  number.
+- `CassetteFilter` keeps credentials out of recorded responses too: it drops the headers it filters from requests,
+  besides `Set-Cookie`, and redacts the secret query values in a `Location` or `Content-Location`, such as a signed
+  download URL.
 
 ### Security
 
