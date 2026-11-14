@@ -80,28 +80,32 @@ class Verdict:
 
     Unmarked means "nothing": only an explicit mark makes a raise an origin failure, and only a clean exit that was not
     marked untested is an origin success. See :meth:`CircuitBreaker.track` for why the default is not the reverse.
-    ``probe`` says whether this fetch is the half-open breaker's one probe.
+    ``probe`` says whether this fetch is the half-open breaker's one probe, and ``generation`` how many times the
+    breaker had opened when it was admitted.
     """
 
-    __slots__ = ("_on_answer", "_refuses", "failed", "probe", "untested")
+    __slots__ = ("_listener", "_refuses", "_settle", "failed", "generation", "probe", "untested")
 
     def __init__(
         self,
+        generation: int = 0,
+        settle: Callable[[Verdict, _Outcome], Transition | None] | None = None,
+        refuses: Callable[[Verdict], bool] | None = None,
+        listener: TransitionListener | None = None,
         *,
         probe: bool = False,
-        on_answer: Callable[[Verdict], None] | None = None,
-        refuses: Callable[[Verdict], bool] | None = None,
     ) -> None:
-        """Start unmarked, with what :meth:`mark_answered` and :meth:`refused` run: *on_answer* and *refuses*.
+        """Start unmarked, with the breaker's *settle* and *refuses* and the fetch's *listener*.
 
-        The breaker passes both; a verdict built without them (a client with no breaker) settles nothing early and
-        refuses nothing.
+        A verdict built without them (a client with no breaker) settles nothing early and refuses nothing.
         """
         self.failed = False
         self.untested = False
         self.probe = probe
-        self._on_answer = on_answer
+        self.generation = generation
+        self._settle = settle
         self._refuses = refuses
+        self._listener = listener
 
     def mark_failed(self) -> None:
         """Record that the wire failed: a transport error or timeout, or a 5xx that survived retries."""
@@ -117,8 +121,10 @@ class Verdict:
         The rest of the block (a body the caller reads at its own pace) is then tracked as a call admitted now, so a
         stream that took the probe does not hold the probe slot until its block exits.
         """
-        if self._on_answer is not None:
-            self._on_answer(self)
+        if self._settle is not None:
+            transition = self._settle(self, _clean_exit_outcome(self))
+            self.probe = self.failed = False
+            _notify(self._listener, transition)
 
     def refused(self) -> bool:
         """Return whether the breaker would refuse a re-send by this fetch now (never for the probe).
@@ -127,6 +133,14 @@ class Verdict:
         has closed the breaker again, so its retries cannot reach the recovering origin beside the probe.
         """
         return self._refuses is not None and self._refuses(self)
+
+    def release(self) -> None:
+        """Drop the breaker's methods and the listener once the fetch is settled.
+
+        A call's context still holds :meth:`refused` as its gate, and the listener holds that context, so keeping them
+        would make a reference cycle of every observed call. A released verdict settles and refuses nothing.
+        """
+        self._settle = self._refuses = self._listener = None
 
 
 type TransitionListener = Callable[[Transition], None]
@@ -263,29 +277,30 @@ class CircuitBreaker:
             msg = f"circuit breaker open for {self._name}"
             raise BreakerOpenError(msg, retry_after=retry_after)
 
-        # Each takes the verdict as an argument rather than closing over it, so the verdict holding them is no cycle.
-        def settle(fetch: Verdict, outcome: _Outcome) -> Transition | None:
-            return self._settle_probe(outcome) if fetch.probe else self._settle_call(outcome, generation)
-
-        def answer(fetch: Verdict) -> None:
-            transition = settle(fetch, _clean_exit_outcome(fetch))
-            fetch.probe = fetch.failed = False
-            _notify(on_change, transition)
-
-        def refuses(fetch: Verdict) -> bool:
-            with self._lock:
-                return not fetch.probe and (generation != self._generation or not self._admits())
-
-        verdict = Verdict(probe=probing, on_answer=answer, refuses=refuses)
+        # Positional: the hot path, where parsing keywords costs a measurable share of the call.
+        verdict = Verdict(generation, self._settle, self._refuses, on_change, probe=probing)
         try:
             # Inside the try, so a listener raising here still frees the probe slot it was told of.
             _notify(on_change, taken)
             yield verdict
         except BaseException:
-            _notify(on_change, settle(verdict, _Outcome.FAILURE if verdict.failed else _Outcome.NOTHING))
+            _notify(on_change, self._settle(verdict, _Outcome.FAILURE if verdict.failed else _Outcome.NOTHING))
             raise
         else:
-            _notify(on_change, settle(verdict, _clean_exit_outcome(verdict)))
+            _notify(on_change, self._settle(verdict, _clean_exit_outcome(verdict)))
+        finally:
+            verdict.release()
+
+    def _settle(self, verdict: Verdict, outcome: _Outcome) -> Transition | None:
+        """Apply *outcome* to the probe when *verdict* holds it, else as a call admitted in its generation."""
+        if verdict.probe:
+            return self._settle_probe(outcome)
+        return self._settle_call(outcome, verdict.generation)
+
+    def _refuses(self, verdict: Verdict) -> bool:
+        """Return whether a re-send by *verdict*'s fetch would be refused (see :meth:`Verdict.refused`)."""
+        with self._lock:
+            return not verdict.probe and (verdict.generation != self._generation or not self._admits())
 
     def _take_probe(self) -> Transition | None:
         """Make this caller the canary, refusing concurrent callers until it reports. Called with the lock held."""
