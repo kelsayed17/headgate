@@ -95,14 +95,15 @@ class ClientError(Exception):
     """Base for every transport-layer failure.
 
     ``source`` names the originating client and prefixes the message as ``[source]``. Subclasses distinguish failure
-    modes so callers can branch on them. The read-only attributes :attr:`method`, :attr:`url`, :attr:`request_id`,
-    :attr:`attempts`, :attr:`retryable` and :attr:`retry_after` describe the call (see :class:`ErrorDetails`); each is
-    ``None`` (``retryable``: ``False``) when the raiser did not know it.
+    modes so callers can branch on them. The read-only attributes :attr:`source`, :attr:`method`, :attr:`url`,
+    :attr:`request_id`, :attr:`attempts`, :attr:`retryable` and :attr:`retry_after` describe the call (see
+    :class:`ErrorDetails`); each is ``None`` (``retryable``: ``False``) when the raiser did not know it. Every attribute
+    of every error is read-only, so what an error says about a call cannot be rewritten after it is raised.
     """
 
     def __init__(self, message: str, **details: Unpack[ErrorDetails]) -> None:
         """Record *details*, and build the message, prefixed with ``[source]`` when a source is named."""
-        self.source = source = details.get("source")
+        self._source = source = details.get("source")
         self._method = details.get("method")
         self._url = details.get("url")
         self._request_id = details.get("request_id")
@@ -110,6 +111,11 @@ class ClientError(Exception):
         self._retryable = details.get("retryable", False)
         self._retry_after = details.get("retry_after")
         super().__init__(message if _is_absent(source) else f"[{source}] {message}")
+
+    @property
+    def source(self) -> str | None:
+        """The name of the client that raised the error, which also prefixes its message."""
+        return self._source
 
     @property
     def method(self) -> str | None:
@@ -243,12 +249,22 @@ class UpstreamStatusError(ClientError):
         **details: Unpack[ErrorDetails],
     ) -> None:
         """Record the status, code and problem, and fold the status, code and body snippet into the message."""
-        self.status_code = status_code
-        self.code = code
+        self._status_code = status_code
+        self._code = code
         self._problem = problem
         tag = f"status={status_code}" if code is None else f"status={status_code}, code={code}"
         detail = "" if _is_absent(body) else f" — {body}"
         super().__init__(f"{message} ({tag}){detail}", **details)
+
+    @property
+    def status_code(self) -> int:
+        """The status the wire sent, or the endpoint's documented success status for a refusal in a success body."""
+        return self._status_code
+
+    @property
+    def code(self) -> str | None:
+        """The provider's own code for the refusal, where something named one."""
+        return self._code
 
     @property
     def problem(self) -> Problem | None:
@@ -294,9 +310,24 @@ class RefusedError(Exception):
     ) -> None:
         """Record the refusal's *message*, the provider's *code*, and the ``ClientError`` *kind* it becomes."""
         super().__init__(message)
-        self.message = message
-        self.code = code
-        self.kind = kind
+        self._message = message
+        self._code = code
+        self._kind = kind
+
+    @property
+    def message(self) -> str:
+        """The refusal's message, as the reader or check wrote it."""
+        return self._message
+
+    @property
+    def code(self) -> str | None:
+        """The provider's own code for the refusal."""
+        return self._code
+
+    @property
+    def kind(self) -> type[UpstreamStatusError]:
+        """The ``ClientError`` class the client raises the refusal as."""
+        return self._kind
 
 
 class ClientConfigurationError(ClientError):
@@ -373,4 +404,9 @@ class PageLimitError(ClientError):
     def __init__(self, message: str, *, pages: int, **details: Unpack[ErrorDetails]) -> None:
         """Record *pages*, the pages fetched, with the *details* of the page that would have come next."""
         super().__init__(message, **details)
-        self.pages = pages
+        self._pages = pages
+
+    @property
+    def pages(self) -> int:
+        """The number of pages the walk fetched."""
+        return self._pages

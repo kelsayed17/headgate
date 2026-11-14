@@ -63,12 +63,13 @@ class ErrorDetails(TypedDict, total=False):
     attempts: int | None
     retryable: bool
     retry_after: float | None
-    sent: bool | None                                   # new
+    sent: bool | None  # new
+
 
 class ClientError(Exception):
     def __init__(self, message: str, **details: Unpack[ErrorDetails]) -> None: ...
     @property
-    def source(self) -> str | None: ...                 # now read-only
+    def source(self) -> str | None: ...  # now read-only
     @property
     def method(self) -> str | None: ...
     @property
@@ -78,41 +79,44 @@ class ClientError(Exception):
     @property
     def attempts(self) -> int | None: ...
     @property
-    def retryable(self) -> bool: ...                    # one meaning; see Decisions
+    def retryable(self) -> bool: ...  # one meaning; see Decisions
     @property
     def retry_after(self) -> float | None: ...
     @property
-    def sent(self) -> bool | None: ...                  # new
+    def sent(self) -> bool | None: ...  # new
+
 
 class UpstreamStatusError(ClientError):
     def __init__(
         self,
         message: str,
         *,
-        status_code: int | None,                        # was int
+        status_code: int | None,  # was int
         code: str | None = None,
         body: str | None = None,
         problem: Problem | None = None,
         **details: Unpack[ErrorDetails],
     ) -> None: ...
     @property
-    def status_code(self) -> int | None: ...            # now read-only; None only for the rate budget's own refusal
+    def status_code(self) -> int | None: ...  # now read-only; None only for the rate budget's own refusal
     @property
-    def code(self) -> str | None: ...                   # now read-only
+    def code(self) -> str | None: ...  # now read-only
     @property
     def problem(self) -> Problem | None: ...
 
+
 class PageLimitError(ClientError):
     @property
-    def pages(self) -> int: ...                         # now read-only
+    def pages(self) -> int: ...  # now read-only
+
 
 class RefusedError(Exception):
     @property
-    def message(self) -> str: ...                       # now read-only
+    def message(self) -> str: ...  # now read-only
     @property
-    def code(self) -> str | None: ...                   # now read-only
+    def code(self) -> str | None: ...  # now read-only
     @property
-    def kind(self) -> type[UpstreamStatusError]: ...    # now read-only
+    def kind(self) -> type[UpstreamStatusError]: ...  # now read-only
 ```
 
 ## Migration

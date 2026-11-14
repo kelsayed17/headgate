@@ -38,6 +38,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- Every error attribute is read-only: `source`, `UpstreamStatusError.status_code` and `.code`,
+  `PageLimitError.pages`, and `RefusedError.message`, `.code` and `.kind` join the ones that already were. Assigning
+  one raises `AttributeError`; build a new error with the value instead.
 - `SecurityOptions(allow_private_hosts=False)` is `SecurityOptions(block_private_hosts=True)`, which says what it
   turns on without a double negative. The guard is still off by default. `allow_private_hosts=` raises `TypeError`.
 - **A route's explicit `retry=None` now sends once, and its explicit `deadline=None` now sets no deadline.** Each

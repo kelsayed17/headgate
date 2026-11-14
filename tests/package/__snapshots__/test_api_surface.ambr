@@ -77,6 +77,7 @@
       property request_id
       property retry_after
       property retryable
+      property source
       property url
   class ClientTimeoutError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class DecodeError(Exception)(no signature)
@@ -90,6 +91,7 @@
       key retry_after: float | None (optional)
   class ForbiddenDestinationError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class PageLimitError(ClientError)(message: 'str', *, pages: 'int', **details: 'Unpack[ErrorDetails]') -> 'None'
+      property pages
   class Problem(object)(*, type: 'str' = 'about:blank', title: 'str | None' = None, status: 'int | None' = None, detail: 'str | None' = None, instance: 'str | None' = None, extensions: 'Mapping[str, object]' = <factory>) -> 'None'
       field type: str = 'about:blank'
       field title: str | None = None
@@ -99,13 +101,18 @@
       field extensions: Mapping[str, object] = <factory>
   class RateLimitError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
   class RefusedError(Exception)(message: 'str', *, code: 'str | None' = None, kind: 'type[UpstreamStatusError]' = <class 'headgate.errors.UpstreamStatusError'>) -> 'None'
+      property code
+      property kind
+      property message
   class ResponseParseError(ClientError)(message: 'str', *, status_code: 'int | None' = None, content_type: 'str | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
       property content_type
       property status_code
   class ResponseTooLargeError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class TransportError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class UpstreamStatusError(ClientError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+      property code
       property problem
+      property status_code
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.events]
@@ -554,6 +561,7 @@
       property request_id
       property retry_after
       property retryable
+      property source
       property url
   class ClientTimeoutError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
   class Codec(Protocol)(*args, **kwargs)
@@ -650,6 +658,7 @@
       field max_pages: int
       field on_limit: Literal['raise', 'stop'] = 'raise'
   class PageLimitError(ClientError)(message: 'str', *, pages: 'int', **details: 'Unpack[ErrorDetails]') -> 'None'
+      property pages
   class PageNumber(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', more: 'Callable[[P], bool]', param: 'str' = 'page', start: 'int' = 1, write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field items: Callable[[P], Sequence[I]]
       field more: Callable[[P], bool]
@@ -765,7 +774,9 @@
       field idempotency: IdempotencyKeys | None = None
       field routes: tuple[Route, ...] = ()
   class UpstreamStatusError(ClientError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
+      property code
       property problem
+      property status_code
   class ViewOptions(dict)(no signature)
       closed
       key headers: Mapping[str, str] (optional)
