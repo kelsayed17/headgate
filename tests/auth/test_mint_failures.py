@@ -470,3 +470,36 @@ async def test_a_hop_that_sets_its_own_timeouts_keeps_them() -> None:
     timeouts = await _hop_timeouts(_OneHop({"timeout": _HOP_TIMEOUTS}), deadline=None)
 
     assert timeouts == _HOP_TIMEOUTS
+
+
+class _Tracked(httpx2.AsyncByteStream):
+    """A token response body that records whether it was closed."""
+
+    def __init__(self) -> None:
+        """Open."""
+        self.closed = False
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"{}"
+
+    @override
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+async def test_a_token_response_refused_by_its_length_closes_its_stream() -> None:
+    """Close a hop's network stream refused by its ``Content-Length`` unread, or its pooled connection leaks."""
+    body = _Tracked()
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/token":
+            return httpx2.Response(
+                httpx2.codes.OK, stream=body, headers={"Content-Length": str(MAX_MINT_RESPONSE_BYTES + 1)}
+            )
+        return httpx2.Response(httpx2.codes.OK)
+
+    with pytest.raises(ResponseTooLargeError, match=r"\(token mint\)"):
+        await _call(_FlowReadsJson(), handle)
+
+    assert body.closed

@@ -92,13 +92,18 @@ class ExchangeAuth(SigningAuth):
 For a provider that mints short-lived tokens over the network. A subclass supplies the exchange; the base class gives
 it:
 
-- **one mint at a time.** Concurrent requests that need a token wait for a single mint instead of each firing one;
+- **one mint at a time.** Concurrent requests that need a token wait for a single mint instead of each firing one.
+  When that mint fails, every request that waited for it fails with the same error, rather than each trying again in
+  turn; a request that starts later mints afresh;
 - **refresh before expiry**, `refresh_margin` (120 s) before the token expires, or at half its life when that is
-  shorter, because a token expiring mid-flight fails a request that may be a write;
+  shorter, because a token expiring mid-flight fails a request that may be a write. A refresh that fails while the
+  held token has not expired yet sends that token instead of failing the call;
 - **one re-mint on a 401**, for a token revoked early, and never a loop. A token minted in the last 60 seconds is not
   re-minted: a 401 on it is a permissions problem, which reaches the caller as the `AuthError` it is. Nor is a token
   re-minted for a 401 to a request sent without it, such as a call to an origin you do not trust, where the credential
-  guard withheld it.
+  guard withheld it. The re-sent 401's body is dropped unread, and the call's body is re-sent only if it can be: a
+  one-shot stream (`content=` an async iterable) is streamed as it is produced, never held in memory, so its 401
+  reaches the caller and the next call mints a new token. Pass `content=` a factory to have it re-sent.
 
 The exchange is one of two methods. `mint_token()` makes it on a client of its own and returns `(token, lifetime)`:
 
