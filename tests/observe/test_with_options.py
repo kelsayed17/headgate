@@ -76,7 +76,9 @@ async def test_the_client_itself_is_unchanged() -> None:
 async def test_a_view_replaces_only_the_phases_it_sets() -> None:
     """Keep the client's other timeouts and replace the one the view sets."""
     fake = FakeTransport().reply("GET", "/v1/x")
-    root = client(fake, http=HttpOptions(timeout=Timeouts(connect=1.0, read=2.0, write=3.0, pool=4.0)))
+    root = client(
+        fake, http=HttpOptions(), policy=TransportPolicy(timeout=Timeouts(connect=1.0, read=2.0, write=3.0, pool=4.0))
+    )
     await root.with_options(timeout=Timeouts(read=9.0)).get("x", expect=nothing)
     assert _sent_timeout(fake.calls[0]) == {"connect": 1.0, "read": 9.0, "write": 3.0, "pool": 4.0}
 
@@ -84,7 +86,7 @@ async def test_a_view_replaces_only_the_phases_it_sets() -> None:
 async def test_each_layer_replaces_the_phases_it_sets_and_a_call_wins() -> None:
     """Lay the view's phases over the client's and the defaults; a call's own phases then win over both."""
     fake = FakeTransport().reply("GET", "/v1/x")
-    view = client(fake, http=HttpOptions(timeout=Timeouts(read=5.0))).with_options(
+    view = client(fake, http=HttpOptions(), policy=TransportPolicy(timeout=Timeouts(read=5.0))).with_options(
         timeout=Timeouts(connect=1.0, read=2.0)
     )
     await view.get("x", expect=nothing)
@@ -97,7 +99,7 @@ async def test_each_layer_replaces_the_phases_it_sets_and_a_call_wins() -> None:
 async def test_phases_no_layer_sets_keep_the_defaults() -> None:
     """Send the default timeout for every phase that neither the client nor the view sets."""
     fake = FakeTransport().reply("GET", "/v1/x")
-    root = client(fake, http=HttpOptions(timeout=Timeouts(read=5.0)))
+    root = client(fake, http=HttpOptions(), policy=TransportPolicy(timeout=Timeouts(read=5.0)))
     await root.with_options(timeout=Timeouts(read=6.0)).get("x", expect=nothing)
     assert _sent_timeout(fake.calls[0]) == {"connect": 10.0, "read": 6.0, "write": 10.0, "pool": 15.0}
 

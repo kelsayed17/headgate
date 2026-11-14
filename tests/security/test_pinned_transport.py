@@ -65,8 +65,8 @@ def _client(base_url: str, guard: AddressGuard, *, tls: bool = False, timeout: T
     return StubClient(
         base_url=base_url,
         rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=NO_RETRY),
-        http=HttpOptions(transport=transport, timeout=timeout or Timeouts()),
+        policy=TransportPolicy(retry=NO_RETRY, timeout=timeout or Timeouts()),
+        http=HttpOptions(transport=transport),
     )
 
 

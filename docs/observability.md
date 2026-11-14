@@ -6,10 +6,10 @@ demand. What to record, where, and at what level is the application's decision.
 
 ## Events
 
-An observer is any object with a `notify(event)` method, installed with `HttpOptions(observers=(...))`:
+An observer is any object with a `notify(event)` method, passed to the client as `observers=(...)`:
 
 ```python
-from headgate import HttpOptions
+from headgate import AsyncBaseClient
 from headgate.events import CallFinished, Event, RateLimited
 
 
@@ -24,7 +24,7 @@ class Metrics:
                 pass
 
 
-http = HttpOptions(observers=(Metrics(),))
+client = AsyncBaseClient(base_url="https://api.example", observers=(Metrics(),))
 ```
 
 | Event | When | Carries |
@@ -55,14 +55,16 @@ observer raises never reaches the call: it is swallowed and counted per observer
 `pip install 'headgate[otel]'` (it needs only `opentelemetry-api`; bring your own SDK):
 
 ```python
-from headgate import HttpOptions
+from headgate import AsyncBaseClient
 from headgate.otel import OpenTelemetryObserver
 
 otel = OpenTelemetryObserver()  # the global tracer and meter providers by default
-http = otel.install(HttpOptions(user_agent="shop-sync/1.4"))
+client = AsyncBaseClient(base_url="https://api.example", observers=(otel,), middleware=(otel,))
 ```
 
-`install` adds it as an observer and as the outermost middleware, and every call then gets:
+It is both an observer, which turns a call's events into its span, and a middleware, which writes the span's trace
+context onto every attempt, so it is passed as both. Put it first among the middleware, so every other middleware runs
+inside its span. Every call then gets:
 
 - **one CLIENT span per logical call**, named `GET` or `GET series/{series_id}`, covering every attempt, backoff wait,
   token mint and the body read, with the stable HTTP semantic-convention attributes: `http.request.method`,

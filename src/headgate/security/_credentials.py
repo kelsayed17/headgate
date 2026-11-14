@@ -58,8 +58,10 @@ from headgate._core import EXPLICIT_HEADERS, CredentialStamper, ExplicitHeaders,
 from headgate.errors import ForbiddenDestinationError
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from http.cookiejar import CookieJar
 
+    from headgate._middleware import Middleware
     from headgate._options import HttpOptions
 
 __all__ = ["CHAIN_ORIGIN", "CredentialGuard", "check_names"]
@@ -104,12 +106,13 @@ class CredentialGuard:
         auth: httpx2.Auth | None,
         base_url: httpx2.URL,
         http: HttpOptions,
+        middleware: Sequence[Middleware] = (),
         cookie_jar: CookieJar | None,
     ) -> None:
-        """Trust *base_url*'s origin and *http*'s ``trusted_origins``; withhold *auth*'s credentials and *http*'s.
+        """Trust *base_url*'s origin and *http*'s ``trusted_origins``; withhold what *auth*, *http*, *middleware* carry.
 
         *http*'s are each header in its ``headers`` but ``User-Agent``, ``Content-Type`` and the content negotiation
-        headers, and what each of its ``middleware`` declares. *cookie_jar* is the jar the client keeps, if any, whose
+        headers, and *middleware*'s what each declares. *cookie_jar* is the jar the client keeps, if any, whose
         cookies for the hop's origin replace a withheld ``Cookie``.
 
         :raises TypeError: for an *auth* whose declarations are not frozensets of names.
@@ -129,9 +132,9 @@ class CredentialGuard:
         self._params = params
         self._cookie_jar = cookie_jar
         self._middleware_headers = frozenset(
-            name.lower() for item in http.middleware for name in item.credential_headers
+            name.lower() for item in middleware for name in item.credential_headers
         )
-        self._middleware_params = frozenset(name for item in http.middleware for name in item.credential_params)
+        self._middleware_params = frozenset(name for item in middleware for name in item.credential_params)
         trusted = (httpx2.Origin(origin) for origin in http.security.trusted_origins)
         self._trusted = frozenset({base_url.origin, *trusted})
 

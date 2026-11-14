@@ -220,7 +220,8 @@ async def test_a_hedge_can_be_read_by_middleware() -> None:
         built = client(
             fake,
             policy=TransportPolicy(retry=RetryPolicy(hedge=_HEDGE, budget=None)),
-            http=HttpOptions(middleware=(middleware,)),
+            http=HttpOptions(),
+            middleware=(middleware,),
         )
 
     await built.get("x", expect=nothing)

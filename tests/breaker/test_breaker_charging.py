@@ -58,7 +58,8 @@ def _client(
         base_url=_ORIGIN,
         rate=_RATE,
         policy=policy or TransportPolicy(retry=NO_RETRY),
-        http=HttpOptions(transport=httpx2.MockTransport(handler), observers=() if recorder is None else (recorder,)),
+        http=HttpOptions(transport=httpx2.MockTransport(handler)),
+        observers=() if recorder is None else (recorder,),
     )
 
 

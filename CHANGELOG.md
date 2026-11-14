@@ -34,6 +34,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- `HttpOptions(timeout=...)` is `TransportPolicy(timeout=...)`, beside the `deadline` it is checked against, and a
+  phase set longer than the deadline is refused where the policy is built, not in the client constructor.
+  `HttpOptions(observers=..., middleware=...)` is `AsyncBaseClient(..., observers=..., middleware=...)`: they are
+  parts of the stack, not settings of how a request is sent. Each takes a sequence; a lone observer or a `str` raises
+  `TypeError`. The old `HttpOptions` keywords raise `TypeError`.
 - A walk of POSTs takes its body as `paginate(query=value)`, where it took `body=value` (encoded by the pager's
   `write=`) or `json=value` (builtins): the pager's `write=` encodes the value when it has one, and without one the
   value is sent as JSON. So `body=` means one thing everywhere, the request body. `paginate(body=...)` and
@@ -123,6 +128,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Removed
 
+- `OpenTelemetryObserver.install()`: pass the observer to the client twice, as `observers=(otel,)` and
+  `middleware=(otel,)`, since it is both.
 - `retry=True` on a call, which undid its view's `retry=`: make the call on the client instead of the view.
 - `PageOptions`: `paginate()` takes `CallOptions`, which has the same keys plus `retry`.
 - `HttpCache(policy=...)` and `HttpCache.filter_policy()`, and `headgate.cache.MethodFilter`, `PathFragmentFilter` and

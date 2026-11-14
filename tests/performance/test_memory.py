@@ -80,7 +80,8 @@ def _client(
         base_url="https://api.example.test",
         rate=_FAST,
         policy=TransportPolicy(retry=RetryPolicy(budget=None), cache=cache),
-        http=HttpOptions(transport=httpx2.MockTransport(handler), observers=(Recorder(),) if observed else ()),
+        http=HttpOptions(transport=httpx2.MockTransport(handler)),
+        observers=(Recorder(),) if observed else (),
     )
 
 

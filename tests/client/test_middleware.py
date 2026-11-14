@@ -73,7 +73,8 @@ def _client(script: Script, *middleware: HmacSigner | Recorder | ShortCircuit) -
         base_url="https://api.example.test",
         rate=Rate.per_second(1000),
         policy=TransportPolicy(retry=RetryPolicy(attempts=_ATTEMPTS)),
-        http=HttpOptions(transport=script.transport(), middleware=middleware),
+        http=HttpOptions(transport=script.transport()),
+        middleware=middleware,
     )
 
 
@@ -175,7 +176,9 @@ async def test_the_client_closes_the_network_under_the_middleware(count: int) ->
     client = StubClient(
         base_url="https://api.example.test",
         rate=Rate.per_second(1000),
-        http=HttpOptions(transport=_Network(script), middleware=middleware, observers=(_Silent(),) * count),
+        http=HttpOptions(transport=_Network(script)),
+        observers=(_Silent(),) * count,
+        middleware=middleware,
     )
     await client.aclose()
 
@@ -252,7 +255,7 @@ async def _bare_function(request: httpx2.Request, call_next: Next) -> httpx2.Res
 def test_a_middleware_that_declares_nothing_is_refused(item: object, name: str) -> None:
     """Refuse a middleware that does not declare both names as frozensets, and name it."""
     with pytest.raises(TypeError, match="must declare credential_headers and credential_params") as raised:
-        HttpOptions(middleware=(cast("Middleware", item),))
+        StubClient(base_url="https://x", middleware=(cast("Middleware", item),))
 
     assert f"middleware {name} must" in str(raised.value)
 
@@ -279,7 +282,7 @@ class _PropertySigner:
 async def test_a_middleware_may_declare_through_properties() -> None:
     """Accept properties as the declaration, and withhold the header they name on a cross-origin hop."""
     web = Web({f"{BASE}/start": "https://files.example/signed"})
-    async with web.client(http=HttpOptions(middleware=(_PropertySigner(),))) as client:
+    async with web.client(http=HttpOptions(), middleware=(_PropertySigner(),)) as client:
         await client.get("start", expect=nothing)
 
     first, hop = web.sent

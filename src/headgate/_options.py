@@ -3,10 +3,10 @@
 
 """The option objects an :class:`~headgate.AsyncBaseClient` is configured with, beyond its URL, rate and auth.
 
-* :class:`TransportPolicy`: what the transport stack does for every request (retries, the deadline, the breaker,
-  per-path rates, the cache, idempotency keys, per-route overrides).
+* :class:`TransportPolicy`: what the transport stack does for every request (retries, the timeouts and the deadline
+  they are checked against, the breaker, per-path rates, the cache, idempotency keys, per-route overrides).
 * :class:`HttpOptions`: how a request is sent and its response read (the network transport and its TLS, pool and proxy,
-  headers, timeouts, redirects, the body cap, cookies, observers, middleware).
+  headers, redirects, the body cap, cookies).
 * :class:`Timeouts`, :class:`IdempotencyKeys` and :class:`Route`, the values those hold.
 
 Every one is frozen, slotted and keyword-only, validates on construction so a bad configuration fails where it is
@@ -34,8 +34,6 @@ if TYPE_CHECKING:
     import ssl
     from collections.abc import Callable, Iterable, Mapping
 
-    from headgate._core import Observer
-    from headgate._middleware import Middleware
     from headgate._responses import ResponseCheck
     from headgate.cache import HttpCache
     from headgate.ratelimit import RateRule
@@ -52,6 +50,8 @@ __all__ = [
     "Timeouts",
     "TransportPolicy",
     "check_deadline",
+    "check_hooks",
+    "check_middleware",
     "check_timeout_fits",
     "httpx_timeout",
     "match_route",
@@ -250,6 +250,8 @@ class TransportPolicy:
     """What the transport stack does for every request.
 
     * ``retry``: how a call is re-sent (:class:`~headgate.RetryPolicy`). A call opts out with ``retry=None``.
+    * ``timeout``: :class:`Timeouts`; a phase it leaves unset takes its default (:data:`DEFAULT_TIMEOUTS`). A phase it
+      sets may not be longer than ``deadline``, since it could never take effect.
     * ``deadline``: seconds the whole logical call may take, every attempt, wait and the body read included; ``None``
       for none. Past it the call raises ``ClientTimeoutError``. A call overrides it with ``deadline=``.
     * ``breaker``: the circuit breaker (:class:`~headgate.BreakerPolicy`), or ``None`` for none.
@@ -261,6 +263,7 @@ class TransportPolicy:
     """
 
     retry: RetryPolicy = field(default_factory=RetryPolicy)
+    timeout: Timeouts = field(default_factory=Timeouts)
     deadline: float | None = 60.0
     breaker: BreakerPolicy | None = field(default_factory=BreakerPolicy)
     rate_limits: tuple[RateRule, ...] = ()
@@ -278,6 +281,7 @@ class TransportPolicy:
         check_kind("retry", self.retry, RetryPolicy, "a RetryPolicy; turn retries off with headgate.retry.NO_RETRY")
         check_kind("breaker", self.breaker, (BreakerPolicy, type(None)), "a BreakerPolicy, or None for no breaker")
         check_deadline(self.deadline)
+        check_timeout_fits(self.timeout, self.deadline)
         object.__setattr__(self, "rate_limits", tuple(self.rate_limits))
         object.__setattr__(self, "routes", tuple(self.routes))
 
@@ -319,13 +323,13 @@ def _check_proxy(proxy: str) -> None:
         raise ValueError(msg)
 
 
-def _check_hooks(name: str, values: Iterable[object]) -> None:
-    """Refuse an upstream-httpx object among *values*."""
+def check_hooks(name: str, values: Iterable[object]) -> None:
+    """Refuse an upstream-httpx object among *values*, a client's ``observers`` or ``middleware``."""
     for value in values:
         reject_upstream_httpx(value, what=f"an entry of {name}")
 
 
-def _check_middleware(middleware: Iterable[object]) -> None:
+def check_middleware(middleware: Iterable[object]) -> None:
     """Refuse a middleware that does not declare the credentials it stamps as two frozensets."""
     for item in middleware:
         declared = (getattr(item, "credential_headers", None), getattr(item, "credential_params", None))
@@ -374,7 +378,6 @@ class HttpOptions:
       HTTP/2 ``httpx2.AsyncHTTPTransport``.
     * ``headers``: sent on every request to ``base_url``'s origin and the ``trusted_origins``; any other origin gets
       only ``User-Agent`` and the ``Accept`` headers among them. A call's ``headers=`` wins a clash.
-    * ``timeout``: :class:`Timeouts`; a phase it leaves unset takes its default (:data:`DEFAULT_TIMEOUTS`).
     * ``follow_redirects`` and ``max_redirects``: the client's default, which a call can override, and the hop limit.
       httpx2 counts an auth flow's hops in the same history as redirects, so each request a
       :class:`~headgate.CachedTokenAuth` mint sends, and a 401 it re-mints after, uses one of ``max_redirects`` too.
@@ -388,15 +391,15 @@ class HttpOptions:
       python/<v>"``); without one, headgate's alone.
     * ``cookies``: ``True`` keeps httpx2's cookie jar; by default no cookie a response sets is stored or sent back.
     * ``request_id_headers``: the response headers a ``ClientError``'s ``request_id`` is read from, first match wins.
-    * ``observers``: receive the client's events (see :mod:`headgate.events`).
-    * ``middleware``: run once per attempt, in order, inside the retry layer (see :class:`~headgate.Middleware`).
+
+    The timeouts are the policy's (``TransportPolicy(timeout=)``), and the observers and middleware the client's own
+    (``AsyncBaseClient(observers=, middleware=)``): parts of the stack, not settings of how a request is sent.
 
     Nothing is read from the environment: no proxy variable, no ``.netrc``, no ``SSL_CERT_FILE``.
     """
 
     transport: httpx2.AsyncBaseTransport | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
-    timeout: Timeouts = field(default_factory=Timeouts)
     follow_redirects: bool = True
     max_redirects: int = 5
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
@@ -408,12 +411,9 @@ class HttpOptions:
     user_agent: str | None = None
     cookies: bool = False
     request_id_headers: tuple[str, ...] = DEFAULT_REQUEST_ID_HEADERS
-    observers: tuple[Observer, ...] = ()
-    middleware: tuple[Middleware, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate every option, and freeze and normalize the collections."""
-        check_kind("timeout", self.timeout, Timeouts, _TIMEOUTS_WANTED)
         self._check_transport()
         _check_positive("max_response_bytes", self.max_response_bytes)
         if self.max_redirects < 0:
@@ -430,13 +430,8 @@ class HttpOptions:
         if not all(names):
             msg = "request_id_headers must name headers"
             raise ValueError(msg)
-        _check_hooks("observers", self.observers)
-        _check_hooks("middleware", self.middleware)
-        _check_middleware(self.middleware)
         object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
         object.__setattr__(self, "request_id_headers", names)
-        object.__setattr__(self, "observers", tuple(self.observers))
-        object.__setattr__(self, "middleware", tuple(self.middleware))
 
     def _check_guard(self) -> None:
         """Refuse the SSRF guard with a proxy, which would resolve the target past it."""

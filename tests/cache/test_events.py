@@ -66,7 +66,8 @@ def _client(network: httpx2.AsyncBaseTransport, storage: AsyncBaseStorage, recor
         base_url="https://x",
         rate=UNLIMITED,
         policy=TransportPolicy(retry=NO_RETRY, cache=HttpCache(**every_get_rules(), storage=storage)),
-        http=HttpOptions(transport=network, observers=(recorder,)),
+        http=HttpOptions(transport=network),
+        observers=(recorder,),
     )
 
 

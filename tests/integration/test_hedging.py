@@ -49,7 +49,7 @@ async def test_a_hedge_spends_the_retry_budget() -> None:
     fake = FakeTransport().reply("GET", "/v1/x", first_hangs_then_slow)
     policy = TransportPolicy(retry=RetryPolicy(hedge=_HEDGE, budget=_ONE_RETRY))
     with clock.install():
-        built = client(fake, policy=policy, http=HttpOptions(observers=(recorder,)))
+        built = client(fake, policy=policy, http=HttpOptions(), observers=(recorder,))
 
     await built.get("x", expect=nothing)
     await built.get("x", expect=nothing)

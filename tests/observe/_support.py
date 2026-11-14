@@ -11,9 +11,11 @@ from headgate import HttpOptions, Rate, TransportPolicy
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import httpx2
 
-    from headgate import RateBudget
+    from headgate import Middleware, RateBudget
     from headgate.events import Observer
     from headgate.testing import FakeTransport
 
@@ -28,6 +30,7 @@ def client(
     http: HttpOptions | None = None,
     auth: httpx2.Auth | None = None,
     rate: Rate | RateBudget = RATE,
+    middleware: Sequence[Middleware] = (),
 ) -> StubClient:
     """Build a client for :data:`BASE` over *fake*, spending *rate*, reporting to *observers*, with *http*'s options."""
     options = http or HttpOptions()
@@ -36,11 +39,7 @@ def client(
         rate=rate,
         auth=auth,
         policy=policy or TransportPolicy(),
-        http=HttpOptions(
-            transport=fake,
-            observers=(*options.observers, *observers),
-            middleware=options.middleware,
-            headers=options.headers,
-            timeout=options.timeout,
-        ),
+        http=HttpOptions(transport=fake, headers=options.headers),
+        observers=observers,
+        middleware=middleware,
     )

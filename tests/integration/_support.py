@@ -15,9 +15,12 @@ from headgate._core import CredentialStamper
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import httpx2
 
-    from headgate import RateBudget
+    from headgate import Middleware, RateBudget
+    from headgate.events import Observer
 
 #: The origin every client here is built for, and its path prefix.
 BASE = "https://api.example.test/v1"
@@ -33,6 +36,8 @@ def client(
     http: HttpOptions | None = None,
     auth: httpx2.Auth | None = None,
     rate: Rate | RateBudget = FAST,
+    observers: Sequence[Observer] = (),
+    middleware: Sequence[Middleware] = (),
 ) -> StubClient:
     """Build a client for :data:`BASE` over *transport*, spending *rate*, with *http*'s other options."""
     options = http or HttpOptions()
@@ -43,13 +48,12 @@ def client(
         policy=policy or TransportPolicy(),
         http=HttpOptions(
             transport=transport,
-            observers=options.observers,
-            middleware=options.middleware,
             headers=options.headers,
-            timeout=options.timeout,
             security=options.security,
             follow_redirects=options.follow_redirects,
         ),
+        observers=observers,
+        middleware=middleware,
     )
 
 

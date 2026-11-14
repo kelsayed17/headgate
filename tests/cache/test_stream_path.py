@@ -261,12 +261,13 @@ async def test_traced_identical_gets_share_one_download(storage: AsyncSqliteStor
     """Share one download between identical GETs that OpenTelemetry gives different ``traceparent`` headers."""
     network = _Gated()
     telemetry = Telemetry()
-    http = telemetry.http
     client = StubClient(
         base_url="https://x",
         rate=UNLIMITED,
         policy=TransportPolicy(cache=HttpCache(storage=storage)),
-        http=HttpOptions(transport=network, observers=http.observers, middleware=http.middleware),
+        http=HttpOptions(transport=network),
+        observers=(telemetry.observer,),
+        middleware=(telemetry.observer,),
     )
     async with client, asyncio.timeout(5):
         calls = [asyncio.create_task(client.get("series", expect=as_bytes)) for _ in range(_PAIR)]

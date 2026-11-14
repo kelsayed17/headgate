@@ -55,7 +55,7 @@ bound the whole body.
 
 `Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)` are the defaults, per phase, in seconds: obtaining a pooled
 connection (`pool`), connecting, writing the request, and waiting for each read. A `Timeouts` sets only the phases it
-names, so `HttpOptions(timeout=Timeouts(read=60.0))` keeps the other three defaults. The defaults are
+names, so `TransportPolicy(timeout=Timeouts(read=60.0))` keeps the other three defaults. The defaults are
 `headgate.DEFAULT_TIMEOUTS`, and `timeout.over(DEFAULT_TIMEOUTS)` is what a `Timeouts` resolves to on a client, every
 phase set. A client computing a deadline from its timeouts reads them there, such as one that leaves every attempt its
 whole connect and read timeout:

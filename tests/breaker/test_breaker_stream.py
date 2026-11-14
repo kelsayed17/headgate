@@ -69,7 +69,9 @@ class _Breakers:
             base_url=_ORIGIN,
             rate=_RATE,
             policy=TransportPolicy(retry=NO_RETRY, breaker=self.policy),
-            http=HttpOptions(transport=transport, observers=observers, middleware=middleware),
+            http=HttpOptions(transport=transport),
+            observers=observers,
+            middleware=middleware,
         )
 
     async def trip(self) -> None:

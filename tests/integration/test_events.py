@@ -53,7 +53,7 @@ def _every_layer(storage: AsyncSqliteStorage, recorder: Recorder) -> StubClient:
         cache=HttpCache(**every_get_rules(), storage=storage), breaker=BreakerPolicy(failure_threshold=1)
     )
     with isolated_breakers():
-        return client(fake, policy=policy, http=HttpOptions(observers=(recorder,)))
+        return client(fake, policy=policy, http=HttpOptions(), observers=(recorder,))
 
 
 async def test_one_clients_calls_emit_every_event_type(storage: AsyncSqliteStorage) -> None:

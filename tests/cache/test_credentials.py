@@ -37,7 +37,7 @@ from tests.support.responses import RESPONSE
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Generator, Mapping
 
-    from headgate import Next
+    from headgate import Middleware, Next
 
 _URL = "https://x/series?id=A"
 _HEADER = "X-Api-Key"
@@ -120,6 +120,7 @@ def _client(
     *,
     partition: Partition = Partition.CREDENTIAL,
     http: HttpOptions | None = None,
+    middleware: tuple[Middleware, ...] = (),
 ) -> StubClient:
     """Build a client caching ``/series`` into *storage*, with *auth* and *partition*, and *http* over *network*."""
     return StubClient(
@@ -128,6 +129,7 @@ def _client(
         auth=auth,
         policy=TransportPolicy(cache=HttpCache(**series_rules(), storage=storage, partition=partition)),
         http=dataclasses.replace(http or HttpOptions(), transport=network),
+        middleware=middleware,
     )
 
 
@@ -238,8 +240,8 @@ async def test_a_middlewares_declared_credential_partitions_and_is_never_stored(
 ) -> None:
     """A key a middleware stamps and declares keeps each key's entries apart, and no stored row carries it."""
     network = _Recorder()
-    alice = _client(network, inspected, None, http=HttpOptions(middleware=(_KeyMiddleware("alice-middleware-key"),)))
-    bob = _client(network, inspected, None, http=HttpOptions(middleware=(_KeyMiddleware("bob-middleware-key"),)))
+    alice = _client(network, inspected, None, http=HttpOptions(), middleware=(_KeyMiddleware("alice-middleware-key"),))
+    bob = _client(network, inspected, None, http=HttpOptions(), middleware=(_KeyMiddleware("bob-middleware-key"),))
 
     await alice.get(_URL, expect=RESPONSE)
     await bob.get(_URL, expect=RESPONSE)

@@ -25,6 +25,7 @@ import pytest
 from headgate import (
     HttpOptions,
     IdempotencyKeys,
+    Next,
     Rate,
     RateRule,
     RetryPolicy,
@@ -45,8 +46,6 @@ from tests.support.wire import Script
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
-    from headgate import Middleware
-    from headgate.events import Observer
 
 _RATE = Rate.per_second(1000)
 _BASE = "https://api.example.test"
@@ -107,8 +106,12 @@ _UpstreamHook.__module__ = "httpx._client"
     ("build", "what"),
     [
         pytest.param(lambda: HttpOptions(transport=_UpstreamTransport()), "transport", id="transport"),
-        pytest.param(lambda: HttpOptions(observers=(_UpstreamObserver(),)), "observers", id="observer"),
-        pytest.param(lambda: HttpOptions(middleware=(_UpstreamHook(),)), "middleware", id="event-hook"),
+        pytest.param(
+            lambda: StubClient(base_url=_BASE, rate=_RATE, observers=(_UpstreamObserver(),)), "observers", id="observer"
+        ),
+        pytest.param(
+            lambda: StubClient(base_url=_BASE, rate=_RATE, middleware=(_UpstreamHook(),)), "middleware", id="event-hook"
+        ),
         pytest.param(lambda: StubClient(base_url=_BASE, rate=_RATE, auth=_UpstreamAuth()), "auth", id="auth"),
     ],
 )
@@ -461,12 +464,9 @@ async def test_a_calls_retry_policy_wins_over_its_route() -> None:
 
 
 def test_the_security_options_have_safe_defaults() -> None:
-    """Trust no extra origin and allow private hosts until configured, with no observers or middleware."""
+    """Trust no extra origin and allow private hosts until configured."""
     options = HttpOptions()
-    observers: tuple[Observer, ...] = ()
-    middleware: tuple[Middleware, ...] = ()
     assert options.security == SecurityOptions(trusted_origins=frozenset(), allow_private_hosts=True, resolver=None)
-    assert (options.observers, options.middleware) == (observers, middleware)
 
 
 class _CountingNetwork(httpx2.AsyncBaseTransport):
@@ -510,3 +510,64 @@ def test_check_kind_names_what_it_got(value: object, named: str) -> None:
     with pytest.raises(TypeError) as caught:
         StubClient(base_url=_BASE, rate=cast("Any", value))
     assert str(caught.value) == f"rate= takes a Rate, such as Rate.per_second(10), or a RateBudget (got {named})"
+
+
+# Phase 4's moves: timeouts sit with the deadline, observers and middleware with the client.
+
+
+def test_a_policys_timeout_is_checked_against_its_own_deadline() -> None:
+    """Refuse a policy whose timeout is longer than its deadline where both are written, not in the client."""
+    with pytest.raises(ValueError, match=r"^read timeout 120s is longer than the 60s deadline"):
+        TransportPolicy(timeout=Timeouts(read=120.0), deadline=60.0)
+    assert TransportPolicy(timeout=Timeouts(read=120.0), deadline=None).timeout == Timeouts(read=120.0)
+
+
+@pytest.mark.parametrize("name", ["timeout", "observers", "middleware"])
+def test_http_options_no_longer_take_what_moved(name: str) -> None:
+    """Refuse ``HttpOptions(timeout=)``, ``observers=`` and ``middleware=``: they are the policy's and the client's."""
+    moved: dict[str, Any] = {name: ()}
+    with pytest.raises(TypeError, match=name):
+        HttpOptions(**moved)
+
+
+@pytest.mark.parametrize("name", ["observers", "middleware"])
+@pytest.mark.parametrize(
+    ("value", "got"),
+    [("x", "str"), (object(), "object")],
+    ids=["str", "lone"],
+)
+def test_the_client_takes_observers_and_middleware_as_sequences(name: str, value: object, got: str) -> None:
+    """Refuse a lone observer or middleware, or a ``str``, where the client takes a sequence of them."""
+    given: dict[str, Any] = {name: value}
+    with pytest.raises(TypeError, match=rf"^{name}= takes a sequence, such as a tuple, of them \(got {got}\)$"):
+        StubClient(base_url=_BASE, rate=_RATE, **given)
+
+
+async def test_the_clients_observers_hear_its_calls() -> None:
+    """Report a call to an observer given to the client, and run a middleware given to it on every attempt."""
+    heard: list[str] = []
+    seen: list[str] = []
+
+    class _Observer:
+        def notify(self, event: object) -> None:
+            heard.append(type(event).__name__)
+
+    class _Middleware:
+        credential_headers: ClassVar = frozenset[str]()
+        credential_params: ClassVar = frozenset[str]()
+
+        async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+            seen.append(request.method)
+            return await call_next(request)
+
+    script = Script()
+    client = StubClient(
+        base_url=_BASE,
+        rate=_RATE,
+        http=HttpOptions(transport=script.transport()),
+        observers=[_Observer()],
+        middleware=[_Middleware()],
+    )
+    await client.get("x", expect=nothing)
+
+    assert ("CallStarted" in heard, "CallFinished" in heard, seen) == (True, True, ["GET"])
