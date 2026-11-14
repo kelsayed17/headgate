@@ -8,6 +8,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `ClientError.sent`: whether any byte of the failed call can have reached the network. It is `False` only when no
+  byte can have, so the call is safe to send again whatever its method. It is `True` when some may have, so a write
+  may have been processed, and `None` on an error no client call raised. It covers every send, retry and followed
+  redirect of the call, and never a token mint's own requests.
 - `CassetteFilter(replaying=True)`, for replaying a cassette (`record_mode="none"`): a token mint fails the test with
   an `AssertionError` saying to seed the auth. A mint is never recorded, so vcrpy let an unseeded one reach the
   network, with the auth's secret.
@@ -38,6 +42,18 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- **`UpstreamStatusError.status_code` is `int | None`, a type change that ty and pyright flag wherever it is
+  ordered.** A `RateLimitError` from the client's own rate budget, paused at the server's request past the call's
+  deadline, carries `status_code=None`, and its message has no status tag, since the call got no response. Before, it
+  carried the status of the earlier response that asked for the pause. A 429 or a refusal in a 200 body still carries
+  its status. Code that compares `status_code` with `<` or `>=` narrows it first (`if exc.status_code is not None`);
+  `==`, `in` and `match` need no change.
+- `retryable` has one meaning on every error: sending the call again later could succeed, and is safe as the call
+  stands. `CircuitOpenError.retryable` is now `True`, with the cooldown left as `retry_after`, as the rate budget's
+  own refusals already were. The recipe in `docs/errors.md` reschedules it rather than re-raising it.
+- Every error attribute is read-only: `source`, `UpstreamStatusError.status_code` and `.code`,
+  `PageLimitError.pages`, and `RefusedError.message`, `.code` and `.kind` join the ones that already were. Assigning
+  one raises `AttributeError`; build a new error with the value instead.
 - `SecurityOptions(allow_private_hosts=False)` is `SecurityOptions(block_private_hosts=True)`, which says what it
   turns on without a double negative. The guard is still off by default. `allow_private_hosts=` raises `TypeError`.
 - **A route's explicit `retry=None` now sends once, and its explicit `deadline=None` now sets no deadline.** Each

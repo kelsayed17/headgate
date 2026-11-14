@@ -84,8 +84,8 @@ the first goes when the pause ends and the rest follow at the rate, ahead of any
 pause lasts at most an hour, long enough for an hourly quota's reset, so one hostile or mistaken header, such as a
 `Retry-After` dated in the year 9999, cannot stop every client sharing the budget for good. A call whose deadline
 would pass before the pause ends does not wait: it raises `RateLimitError` at once, with `retry_after` set to the time
-left in the pause, `retryable=True`, and `status_code` the status of the response that asked for it: a 200 whose
-rate-limit headers said the quota was spent gives `RateLimitError(status_code=200)`.
+left in the pause, `retryable=True`, `sent=False` and `status_code=None`: the call it refuses got no response, so it
+carries no status of its own rather than that of the response that asked for the pause.
 
 ## Adaptive throttling
 

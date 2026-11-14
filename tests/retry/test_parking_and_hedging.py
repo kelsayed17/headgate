@@ -514,7 +514,7 @@ def _backlog() -> BudgetBacklogError:
 
 def _paused() -> BudgetPausedError:
     """Return the error the rate budget raises for a server pause past the deadline."""
-    return BudgetPausedError("rate budget paused past the call's deadline", retry_after=30.0, status_code=429)
+    return BudgetPausedError("rate budget paused past the call's deadline", retry_after=30.0)
 
 
 #: Both refusals of a send the rate budget cannot admit before the deadline: neither is ever sent.

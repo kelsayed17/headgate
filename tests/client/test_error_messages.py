@@ -298,6 +298,7 @@ async def test_a_readers_refusal_is_chained_to_the_error_it_becomes() -> None:
             await client.get("series", expect=refuse)
 
     assert caught.value.__cause__ is refusal
+    assert caught.value.status_code == httpx2.codes.OK, "a quota refusal written in a 200 body carries the 200"
 
 
 # --- A response_check that raises rather than returns ---
