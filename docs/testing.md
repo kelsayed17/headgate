@@ -73,9 +73,9 @@ with a registry of its own keeps it.
 
 A client fixes its options in its `__init__`, so a test of its configuration reads them back. `cache_of(client)` returns
 the `HttpCache` it was built with (or `None`), whose `caches_request(method, path)` and `stores_status(status)` say
-what it stores, from its `methods`, `paths` and `statuses`. `budget_for(client, url)` returns the
-`RateBudget` a request to `url` spends from, the first `RateRule` that matches it or the default; without a `url`, the
-default budget, built from `rate=`.
+what it stores, from its `methods`, `paths` and `statuses`. `budget_for(client, url)` returns the `RateBudget` a
+request to `url` spends from: that of the first `Route` that matches it, when that route sets `rate=`, or the default;
+without a `url`, the default budget, built from `rate=`.
 
 ```python
 from headgate.testing import budget_for, cache_of
@@ -155,7 +155,7 @@ calls it first.
 Some tests, and connectivity probes, want the first failure as it is: no retries, no breaker, no pacing.
 `headgate.policy.policy_disabled()` builds the clients constructed in its block with retries off (whatever a call or
 route asks for), no breaker (the client never reads a registry, so it cannot be refused by one another client opened),
-and an effectively unlimited rate, also for its `rate_limits` rules and a shared `RateBudget` passed in.
+and a budget that paces nothing, also for its routes' `rate=` and a shared `RateBudget` passed in.
 
 ```python
 from collections.abc import Iterator

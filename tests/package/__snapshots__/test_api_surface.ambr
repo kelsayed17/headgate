@@ -326,7 +326,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.ratelimit]
   '''
   module headgate.ratelimit
-  __all__ = ['Adaptive', 'Rate', 'RateBudget', 'RateRule']
+  __all__ = ['Adaptive', 'Rate', 'RateBudget']
   class Adaptive(object)(*, decrease: 'float' = 0.5, increase: 'float' = 0.1, min_rate: 'float' = 0.1) -> 'None'
       field decrease: float = 0.5
       field increase: float = 0.1
@@ -346,9 +346,6 @@
       property max_in_flight
       property pause_remaining
       property rate
-  class RateRule(object)(fragment: 'str', rate: 'Rate | RateBudget') -> 'None'
-      field fragment: str
-      field rate: Rate | RateBudget
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.retry]
@@ -485,10 +482,10 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['DEFAULT_TIMEOUTS', 'MAX_MINT_RESPONSE_BYTES', 'AsyncBaseClient', 'AuthError', 'BearerAuth', 'Body', 'BodyCursor', 'BodyOffset', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Codec', 'Cursor', 'DecodeError', 'EncodedBody', 'Expect', 'ForbiddenDestinationError', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'LinkHeader', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'NextUrl', 'Offset', 'PageLimit', 'PageLimitError', 'PageNumber', 'Paginated', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'RateRule', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_json', 'body_reader', 'decode_with', 'event_stream', 'nothing', 'reader_for', 'writer_for']
+  __all__ = ['DEFAULT_TIMEOUTS', 'MAX_MINT_RESPONSE_BYTES', 'AsyncBaseClient', 'AuthError', 'BearerAuth', 'Body', 'BodyCursor', 'BodyOffset', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Codec', 'Cursor', 'DecodeError', 'EncodedBody', 'Expect', 'ForbiddenDestinationError', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'LinkHeader', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'NextUrl', 'Offset', 'PageLimit', 'PageLimitError', 'PageNumber', 'Paginated', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_json', 'body_reader', 'decode_with', 'event_stream', 'nothing', 'reader_for', 'writer_for']
   DEFAULT_TIMEOUTS = Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)
   MAX_MINT_RESPONSE_BYTES = 1048576
-  class AsyncBaseClient(object)(*, base_url: 'str', rate: 'Rate | RateBudget | None' = None, auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryBudget(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), timeout=Timeouts(connect=None, read=None, write=None, pool=None), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=<headgate.breaker._registry.BreakerRegistry object at 0x…>), rate_limits=(), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, response_check=None, security=SecurityOptions(trusted_origins=frozenset(), allow_private_hosts=True, resolver=None), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')), observers: 'Sequence[Observer]' = (), middleware: 'Sequence[Middleware]' = ()) -> 'None'
+  class AsyncBaseClient(object)(*, base_url: 'str', rate: 'Rate | RateBudget | None' = None, auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryBudget(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), timeout=Timeouts(connect=None, read=None, write=None, pool=None), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=<headgate.breaker._registry.BreakerRegistry object at 0x…>), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, response_check=None, security=SecurityOptions(trusted_origins=frozenset(), allow_private_hosts=True, resolver=None), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')), observers: 'Sequence[Observer]' = (), middleware: 'Sequence[Middleware]' = ()) -> 'None'
       def aclose(self) -> 'None'
       def delete(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def get(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
@@ -694,9 +691,6 @@
       property pause_remaining
       property rate
   class RateLimitError(UpstreamStatusError)(message: 'str', *, status_code: 'int', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
-  class RateRule(object)(fragment: 'str', rate: 'Rate | RateBudget') -> 'None'
-      field fragment: str
-      field rate: Rate | RateBudget
   class Raw(object)(content: 'RawContent') -> 'None'
       field content: RawContent
       property replayable
@@ -730,10 +724,15 @@
       field hedge: Hedge | None = None
       field min_attempt_time: float = 0.05
       def wait_after(self, retry_after: 'float | None', retry: 'int') -> 'float'
-  class Route(object)(fragment: 'str', *, retry: 'RetryPolicy | None' = None, deadline: 'float | None' = None) -> 'None'
-      field fragment: str
-      field retry: RetryPolicy | None = None
-      field deadline: float | None = None
+  class Route(object)(fragment: 'str', /, **options: 'Unpack[RouteOptions]') -> 'None'
+      property fragment
+      property options
+  class RouteOptions(dict)(no signature)
+      closed
+      key retry: RetryPolicy | None (optional)
+      key deadline: float | None (optional)
+      key rate: Rate | RateBudget | None (optional)
+      key cache: None (optional)
   class SecurityOptions(object)(*, trusted_origins: 'frozenset[str]' = frozenset(), allow_private_hosts: 'bool' = True, resolver: 'Resolver | None' = None) -> 'None'
       field trusted_origins: frozenset[str] = frozenset()
       field allow_private_hosts: bool = True
@@ -757,12 +756,11 @@
       field pool: float | None = None
       def over(self, base: 'Timeouts') -> 'Timeouts'
   class TransportError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  class TransportPolicy(object)(*, retry: 'RetryPolicy | None' = <factory>, timeout: 'Timeouts' = <factory>, deadline: 'float | None' = 60.0, breaker: 'BreakerPolicy | None' = <factory>, rate_limits: 'tuple[RateRule, ...]' = (), cache: 'HttpCache | None' = None, idempotency: 'IdempotencyKeys | None' = None, routes: 'tuple[Route, ...]' = ()) -> 'None'
+  class TransportPolicy(object)(*, retry: 'RetryPolicy | None' = <factory>, timeout: 'Timeouts' = <factory>, deadline: 'float | None' = 60.0, breaker: 'BreakerPolicy | None' = <factory>, cache: 'HttpCache | None' = None, idempotency: 'IdempotencyKeys | None' = None, routes: 'tuple[Route, ...]' = ()) -> 'None'
       field retry: RetryPolicy | None = <factory>
       field timeout: Timeouts = <factory>
       field deadline: float | None = 60.0
       field breaker: BreakerPolicy | None = <factory>
-      field rate_limits: tuple[RateRule, ...] = ()
       field cache: HttpCache | None = None
       field idempotency: IdempotencyKeys | None = None
       field routes: tuple[Route, ...] = ()

@@ -25,7 +25,6 @@ from headgate import (
     LinkHeader,
     Minted,
     Rate,
-    RateRule,
     RetryPolicy,
     Route,
     Timeouts,
@@ -129,8 +128,8 @@ class OrdersClient(AsyncBaseClient):
                 timeout=Timeouts(read=20.0),
                 deadline=30.0,  # each call, every attempt and wait included
                 idempotency=IdempotencyKeys(),  # every POST and PATCH carries a key, so it is retried safely
-                rate_limits=(RateRule("/exports", Rate.per_minute(6)),),  # a slower lane for the export endpoint
-                routes=(Route("/exports", deadline=300.0),),  # and a longer deadline
+                # the export endpoint gets a slower lane and a longer deadline
+                routes=(Route("/exports", rate=Rate.per_minute(6), deadline=300.0),),
             ),
             http=HttpOptions(transport=transport, user_agent="shop-sync/1.4"),
             observers=observers,

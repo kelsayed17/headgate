@@ -15,7 +15,7 @@ Two properties follow from that placement, which is why they are tested here
 * every re-send the retry layer makes passes through the budget, so a retried request spends one turn per attempt.
   A client cannot exceed its declared rate by retrying.
 
-A per-path ``RateRule`` keys off the URL, which hishel's cache transport passes through as it is; request extensions,
+A route's ``rate=`` keys off the URL, which hishel's cache transport passes through as it is; request extensions,
 which hishel drops on its way down, play no part in choosing the budget.
 """
 
@@ -28,11 +28,11 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage
 
-from headgate import HttpOptions, TransportPolicy
+from headgate import HttpOptions, Route, TransportPolicy
 from headgate.cache import HttpCache
-from headgate.ratelimit import Rate, RateRule
+from headgate.ratelimit import Rate
 from headgate.ratelimit._budget import Pacer, pacer_of
-from headgate.ratelimit._budgets import PathBudgets
+from headgate.ratelimit._budgets import Lane, PathBudgets
 from headgate.ratelimit._transport import RateLimitTransport
 from headgate.retry import RetryPolicy
 from tests.support.budgets import default_budget, rate_limit_transport
@@ -180,7 +180,7 @@ async def test_a_path_rule_selects_its_own_budget(acquired: dict[int, int]) -> N
     client = StubClient(
         base_url="https://x",
         rate=Rate.per_second(_INSTANT),
-        policy=TransportPolicy(rate_limits=(RateRule("/candles", Rate.per_second(_INSTANT)),)),
+        policy=TransportPolicy(routes=(Route("/candles", rate=Rate.per_second(_INSTANT)),)),
         http=HttpOptions(transport=base),
     )
 
@@ -209,7 +209,9 @@ async def test_aclose_reaches_the_transport_below_the_budget() -> None:
 
 async def test_the_transport_paces_each_request_on_the_budget_its_path_selects(acquired: dict[int, int]) -> None:
     """Take a request's turn from the budget :class:`PathBudgets` selects for its path, with no client around."""
-    budgets = PathBudgets(default=Rate.per_second(_INSTANT), rules=[RateRule("/candles", Rate.per_second(_INSTANT))])
+    budgets = PathBudgets(
+        default=Rate.per_second(_INSTANT), lanes=[Lane("/candles", Rate.per_second(_INSTANT), sets_rate=True)]
+    )
     transport = RateLimitTransport(budgets=budgets, transport=_CountingTransport())
     candles = httpx2.Request("GET", "https://x/candles")
 

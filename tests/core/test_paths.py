@@ -13,7 +13,7 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage
 
-from headgate import HttpOptions, RateRule, Route, TransportPolicy
+from headgate import HttpOptions, Route, TransportPolicy
 from headgate._core import CallContext, check_fragment, path_has_fragment, url_path
 from headgate.cache import HttpCache
 from headgate.errors import UpstreamStatusError
@@ -77,7 +77,7 @@ def test_a_urls_segments_are_split_before_they_are_decoded(url: str, fragment: s
     "build",
     [
         lambda: check_fragment("//"),
-        lambda: RateRule("", Rate.per_second(1)),
+        lambda: Route("", rate=Rate.per_second(1)),
         lambda: Route("/"),
         lambda: HttpCache(storage=cast("Any", None), paths=("/orders", "")),
     ],
