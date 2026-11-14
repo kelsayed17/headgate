@@ -84,7 +84,7 @@ redirect raise as its 3xx, and `cache_ttl=` is each page's cache lifetime.
 | Strategy | The next page is | Last page |
 | --- | --- | --- |
 | `Cursor(items=, next=, param=)` | the same request with `param` set to the cursor `next(page)` returns | `next` returns `None` or `""`, or a page with no items |
-| `Offset(items=, page_size=, param="offset", start=0, total=None)` | the same request with `param` advanced by the items this page held | a page with fewer than `page_size` items, or one that reaches `total` |
+| `Offset(items=, page_size=, param="offset", size_param=None, start=0, total=None)` | the same request with `param` advanced by the items this page held | a page with fewer items than the page size, or one that reaches `total` |
 | `PageNumber(items=, more=, param="page", start=1)` | the same request with `param` one higher | `more` returns `False`, or a page with no items |
 | `LinkHeader(items=)` | the target of the response's `Link: <...>; rel="next"` (RFC 8288), unless its `anchor` names another resource | no `rel="next"` link, or a page with no items |
 | `NextUrl(items=, next=)` | the URL `next(page)` returns, absolute or relative | `next` returns `None` or `""`, or a page with no items |
@@ -95,9 +95,11 @@ A page with no items ends a `Cursor`, `PageNumber`, `LinkHeader` or `NextUrl` wa
 advances while returning nothing makes no progress, and following it spends the rate budget for nothing. For an
 endpoint that sends empty pages mid-walk, pass `stop_on_empty=False`.
 
-`Offset` sends only the offset; the page size goes in `params=`, under whatever name the endpoint uses (`limit`,
-`per_page`, `page_size`). The walk starts at the offset your own `params=` give, else at `start` (`1` for a 1-based
-API). Where a page reports how many items the whole walk holds, `total=` reads it, and the walk ends once it has
+With `size_param=`, `Offset` sends the page size too, under whatever name the endpoint uses (`limit`, `per_page`,
+SODA's `$limit`): your own size there, an int of at least 1 or a string of digits, when your `params=` give one, and
+`page_size` otherwise. A page shorter than that size is the last. Without `size_param=`, the page size is yours to
+send in `params=`, and the walk steps by `page_size`. The walk starts at the offset your own `params=` give, else at
+`start` (`1` for a 1-based API). Where a page reports how many items the whole walk holds, `total=` reads it, and the walk ends once it has
 passed that many items, or at an empty page: it does not ask for the empty page past a last page that happened to be
 full, and a server that caps its pages below `page_size` is still walked to the end. A `total` that returns `None` (a count the server gives only as "at least", say) leaves the walk to end at a short page:
 

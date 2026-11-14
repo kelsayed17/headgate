@@ -163,19 +163,20 @@ def _last[P](page: P, count: int, page_size: int, total: Callable[[P], int | Non
     return count == 0 or walked >= known
 
 
-def _position[B](request: PageRequest[B], param: str, default: int, what: str) -> int:
-    """Return the position *request* carries under *param* (an int >= 0 or a string of digits), else *default*.
+def _position[B](request: PageRequest[B], param: str, default: int, what: str, *, minimum: int = 0) -> int:
+    """Return the number *request* carries under *param* (an int, or a string of digits), else *default*.
 
-    :raises ValueError: for a value that is neither, naming it *what* (``"a page number"``, ``"an offset"``).
+    :raises ValueError: for a value that is neither, or is below *minimum*, naming it *what* (``"a page number"``,
+        ``"an offset"``, ``"a page size"``).
     """
     value = (request.params or {}).get(param)
     if value is None:
         return default
-    if isinstance(value, str) and value.isascii() and value.isdecimal():
+    if isinstance(value, str) and value.isascii() and value.isdecimal() and int(value) >= minimum:
         return int(value)
-    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= minimum:
         return value
-    msg = f"{param} must be {what}, an int >= 0 or a string of digits (got {value!r})"
+    msg = f"{param} must be {what}, an int >= {minimum} or a string of its digits (got {value!r})"
     raise ValueError(msg)
 
 
@@ -259,20 +260,25 @@ class Offset[P, I, B = None](WritingPager[P, I, B]):
     ends once it has passed that many items from ``start``, or at an empty page: a walk whose items fill its last page
     ends there instead of fetching an empty page past it, and one whose server caps pages below ``page_size`` is
     walked to the end. ``total`` returns ``None`` for a page that states no exact total (one reported as "at least"),
-    which leaves the walk to end at a short page. The page size itself is the caller's to send, in ``params=`` under
-    whatever name the endpoint uses, since that name varies (``limit``, ``per_page``, ``page_size``). ``B`` is the
-    type of the request body for a walk of POSTs, and ``write`` its writer, as on :class:`Cursor`.
+    which leaves the walk to end at a short page. ``B`` is the type of the request body for a walk of POSTs, and
+    ``write`` its writer, as on :class:`Cursor`.
+
+    The page size goes out under ``size_param``, whatever name the endpoint uses (``limit``, ``per_page``, SODA's
+    ``$limit``). The caller's own size there, an int of at least 1 or a string of digits, is sent and stepped by;
+    without one, ``page_size`` is sent. Without ``size_param``, the page size is the caller's to send in ``params=``,
+    and the walk steps by ``page_size``.
     """
 
     items: Callable[[P], Sequence[I]]
     page_size: int
     param: str = "offset"
+    size_param: str | None = None
     start: int = 0
     total: Callable[[P], int | None] | None = None
     write: Writer[B] | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a page size below one, a negative start and an empty parameter name."""
+        """Refuse a page size below one, a negative start, and a parameter name that is empty or used twice."""
         if self.page_size < 1:
             msg = f"page_size must be >= 1 (got {self.page_size})"
             raise ValueError(msg)
@@ -280,11 +286,21 @@ class Offset[P, I, B = None](WritingPager[P, I, B]):
             msg = f"start must be >= 0 (got {self.start})"
             raise ValueError(msg)
         _check_param(self.param)
+        if self.size_param is not None:
+            if not self.size_param:
+                msg = "size_param must name a query parameter"
+                raise ValueError(msg)
+            if self.size_param == self.param:
+                msg = f"size_param must differ from param: both name {self.param!r}"
+                raise ValueError(msg)
 
     @override
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
-        """Return *request* at its own offset, or at ``start``, refusing an offset that is not one."""
-        return request.with_param(self.param, _position(request, self.param, self.start, "an offset"))
+        """Return *request* at its own offset, or at ``start``, with its page size; refuse a value that is not one."""
+        first = request.with_param(self.param, _position(request, self.param, self.start, "an offset"))
+        if self.size_param is None:
+            return first
+        return first.with_param(self.size_param, self._size(request))
 
     @override
     def page_items(self, page: P) -> Sequence[I]:
@@ -297,9 +313,15 @@ class Offset[P, I, B = None](WritingPager[P, I, B]):
         del response
         count = len(self.items(page))
         following = _position(request, self.param, self.start, "an offset") + count
-        if _last(page, count, self.page_size, self.total, following - self.start):
+        if _last(page, count, self._size(request), self.total, following - self.start):
             return None
         return request.with_param(self.param, following)
+
+    def _size(self, request: PageRequest[B]) -> int:
+        """Return the page size *request* carries under ``size_param``, else ``page_size``; refuse one below 1."""
+        if self.size_param is None:
+            return self.page_size
+        return _position(request, self.size_param, self.page_size, "a page size", minimum=1)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
