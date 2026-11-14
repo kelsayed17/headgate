@@ -72,6 +72,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   same for `headgate.pydantic`. A reader's refusal check is spelled `refuse=` where it was `refusal_check=`, on
   `reader_for`, the flavors' `reader` and `body_reader`. `Codec.decoder` and `Codec.encoder` keep their
   names.
+- A call costs about 6% less CPU in headgate's own code. A client's timeouts are resolved once, not on every call,
+  and fitting a call's timeouts to its deadline no longer sorts them. Behavior is unchanged.
 
 ### Removed
 
@@ -197,8 +199,26 @@ change the public API; such changes are listed under **Changed** and **Removed**
   and `credential_params` when the client is built. A bare `str` (`"x-api-key"`) iterates as its letters, so the
   guard and the cache withheld single letters instead of the header.
 
+- `AsyncCurlTransport` sends a request the retry layer would not repeat (a POST or PATCH without an idempotency key,
+  or any method outside the call's `RetryPolicy(methods=...)`) on a fresh connection. On a reused keep-alive
+  connection that died unanswered, libcurl sent it a second time on its own, so the server could process it twice
+  while headgate counted one attempt.
+- A call through `AsyncCurlTransport` cancelled before the response head, by a deadline or a timeout, ends its
+  transfer and gives its connection back. curl kept downloading the body into memory nobody read, outside
+  `max_response_bytes`, and enough such calls held every connection, so calls to healthy paths timed out.
+- An `AsyncCurlTransport` response is returned at its head, as httpx2's own transport does, not at its first body
+  byte, so a stream whose first event is slow no longer times out on open.
+- Closing an `AsyncCurlTransport` response whose body has stalled returns at once. It waited for curl's own stall
+  timeout, past the call's deadline.
+- An explicit `CurlOpt.PROXY` in `AsyncCurlTransport(curl_options=...)` is used for every host. The transport's
+  `NOPROXY="*"`, which keeps the environment's proxy out, bypassed it too; a `CurlOpt.NOPROXY` of your own is kept.
+
 ### Security
 
+- `AsyncCurlTransport` verifies TLS against the Mozilla CA bundle `curl_cffi` installs. It took its trust store from
+  `SSL_CERT_FILE`, `CURL_CA_BUNDLE` or `REQUESTS_CA_BUNDLE`, which a native transport ignores; pass `CurlOpt.CAINFO`
+  in `curl_options` for a bundle of your own. libcurl still writes TLS session keys to the file `SSLKEYLOGFILE` names,
+  when it is set.
 - A transport or token-mint error whose message quoted one long word (a redirect to a URL with a 64 KiB port, a token
   field the mint's parser quoted whole) took time quadratic in the word's length to redact, over twenty seconds on a
   desktop for the longest URL httpx2 accepts, blocking the event loop on a value the server chose. The `name=value`

@@ -286,6 +286,7 @@ cache = [
     { name = "hishel", extra = ["async"] },
 ]
 curl = [
+    { name = "certifi" },
     { name = "curl-cffi" },
 ]
 msgspec = [
@@ -322,6 +323,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
+    { name = "certifi", marker = "extra == 'curl'", specifier = ">=2024.2.2" },
     { name = "curl-cffi", marker = "extra == 'curl'", specifier = ">=0.16.3" },
     { name = "hishel", specifier = ">=2.0.0" },
     { name = "hishel", extras = ["async"], marker = "extra == 'cache'", specifier = ">=2.0.0" },
