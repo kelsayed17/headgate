@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, override
 import httpx2
 
 from headgate._body import read_capped
-from headgate._core import CallContext, origin_text
+from headgate._core import CallContext, Slot, origin_text
 from headgate._failures import CallSite, loggable_url, mint_error
 from headgate._url import register_secret_params
 from headgate.errors import ClientConfigurationError
@@ -48,6 +48,7 @@ __all__ = [
     "AUTH_HOP",
     "FRESH_TOKEN_S",
     "MAX_MINT_RESPONSE_BYTES",
+    "MINTING",
     "SIGNER_EXT",
     "BearerAuth",
     "CachedTokenAuth",
@@ -62,6 +63,11 @@ __all__ = [
 #: request. :class:`CachedTokenAuth` sets it on every request its :meth:`~CachedTokenAuth.mint_flow` yields. A fixture
 #: recorder can read it to skip the hop, which is not the endpoint's answer.
 AUTH_HOP = "headgate.auth_hop"
+
+#: True on a call's context while its :class:`CachedTokenAuth` waits for the mint lock or mints under it, so the call's
+#: deadline passing then is not charged to the API origin's breaker: the time went to the credential host. A raise or
+#: cancellation leaves it set, for the exchange to read on the way out.
+MINTING = Slot[bool]("minting")
 
 #: The request extension holding the :class:`SigningAuth` that signs the request. Its flow sets it on a request it
 #: signs, and the transport stack calls its :meth:`~SigningAuth.sign` on every attempt, before the credential guard,
@@ -608,7 +614,10 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         # The token a 401 came back for, rather than a "force" flag: each waiter on the lock re-checks the cache
         # against the token it was rejected for, so concurrent 401s share the first replacement instead of each minting.
         rejected: TokenT | None = None
+        context = CallContext.find(request)
         while True:
+            if context is not None:
+                context.put(MINTING, value=True)
             async with self._lock:
                 token = self._usable(rejected)
                 if token is None:
@@ -629,6 +638,8 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
                         await mint.aclose()
                     token = step.token
                     self._cache(token, step.lifetime, minted_at=time.monotonic())
+            if context is not None:
+                context.put(MINTING, value=False)
             self.attach(request, token)
             response = yield request
             # ``rejected`` is set only after the first 401, so this re-sends at most once. A 401 to a request the token

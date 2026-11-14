@@ -22,7 +22,7 @@ import contextlib
 import pytest
 
 from headgate.breaker import BreakerPolicy, BreakerRegistry, BreakerState, CircuitBreaker
-from headgate.breaker._breaker import BreakerOpenError
+from headgate.breaker._breaker import BreakerOpenError, Transition
 from headgate.breaker._registry import DEFAULT_REGISTRY, NO_BREAKER
 
 #: The half-open tests' cooldown, and a sleep that outlasts it.
@@ -427,3 +427,120 @@ def test_a_probe_whose_failure_was_caught_reopens_the_breaker() -> None:
     with cb.track() as verdict:
         verdict.mark_failed()
     assert cb.state is BreakerState.OPEN
+
+
+def _clocked(threshold: int = 1) -> tuple[CircuitBreaker, _Clock]:
+    """Build a breaker for ``t`` whose cooldown a test elapses by hand."""
+    clock = _Clock()
+    return CircuitBreaker(failure_threshold=threshold, recovery_timeout=_LONG_COOLDOWN, name="t", clock=clock), clock
+
+
+def test_a_call_admitted_before_the_trip_is_ignored_after_the_probe_closes() -> None:
+    """Record nothing for a call from before the trip, even once the probe has closed the breaker again."""
+    cb, clock = _clocked()
+    with contextlib.ExitStack() as stale:
+        verdict = stale.enter_context(cb.track())
+        _fail(cb)
+        clock.now = _LONG_COOLDOWN
+        with cb.track():
+            pass
+        assert cb.state is BreakerState.CLOSED
+        verdict.mark_failed()
+    assert cb.state is BreakerState.CLOSED, "a stale failure must not trip the recovered breaker again"
+    assert cb.failure_count == 0
+
+
+def test_a_call_admitted_before_the_trip_is_refused_its_retries() -> None:
+    """Refuse a re-send from before the trip once the cooldown elapses: it would reach the origin beside the probe."""
+    cb, clock = _clocked()
+    with cb.track() as stale:
+        _fail(cb)
+        clock.now = _LONG_COOLDOWN
+        assert not cb.refusing, "a new call would be admitted as the probe"
+        assert stale.refused()
+        with cb.track() as probe:
+            assert not probe.refused(), "the probe keeps its retries"
+        with cb.track() as fresh:
+            assert not fresh.refused()
+        assert stale.refused(), "the breaker closing again does not make the stale call current"
+
+
+def test_a_listener_raising_on_the_probe_transition_frees_the_probe_slot() -> None:
+    """Free the probe slot when the listener told of taking it raises, so the breaker does not refuse forever."""
+    cb, clock = _clocked()
+    _fail(cb)
+    clock.now = _LONG_COOLDOWN
+
+    def _raise(_: object) -> None:
+        raise _BoomError
+
+    with pytest.raises(_BoomError), cb.track(_raise):
+        pytest.fail("the block must not run when the listener raised")
+    assert not cb.refusing
+    with cb.track():
+        pass
+    assert cb.state is BreakerState.CLOSED
+
+
+def test_an_answered_probe_closes_the_breaker_before_its_block_exits() -> None:
+    """Settle a probe once its origin answered, and count a later failure as a closed breaker's."""
+    cb, clock = _clocked(threshold=2)
+    _fail(cb, 2)
+    clock.now = _LONG_COOLDOWN
+    changes: list[Transition] = []
+    with cb.track(changes.append) as probe:
+        probe.mark_answered()
+        assert cb.state is BreakerState.CLOSED
+        assert [change.state for change in changes] == [BreakerState.HALF_OPEN, BreakerState.CLOSED]
+        with cb.track():
+            pass  # admitted while the probe's body is still being read
+        probe.mark_failed()
+    assert cb.state is BreakerState.CLOSED, "a mid-body failure is one ordinary failure, not a failed probe"
+    assert cb.failure_count == 1
+
+
+def test_an_answered_call_records_its_head_once() -> None:
+    """Record a closed call's answer at its head, and nothing more for a raise the block then makes unmarked."""
+    cb, _ = _clocked(threshold=2)
+    _fail(cb)
+    with contextlib.suppress(_BoomError), cb.track() as verdict:
+        verdict.mark_answered()
+        assert cb.failure_count == 0
+        raise _BoomError
+    assert cb.failure_count == 0
+
+
+def test_an_untested_answered_probe_frees_the_slot_without_closing() -> None:
+    """Free the probe slot at the head of a response the cache served, leaving the breaker for the next call to test."""
+    cb, clock = _clocked()
+    _fail(cb)
+    clock.now = _LONG_COOLDOWN
+    with cb.track() as probe:
+        probe.mark_untested()
+        probe.mark_answered()
+        assert not cb.refusing
+        probe.mark_failed()
+    assert cb.state is BreakerState.HALF_OPEN
+    with cb.track():
+        pass
+    assert cb.state is BreakerState.CLOSED
+
+
+def test_an_answered_probe_that_failed_reopens_and_records_nothing_after() -> None:
+    """Re-open at the head of a failing answer (a 501), and ignore the rest of that block."""
+    cb, clock = _clocked()
+    _fail(cb)
+    clock.now = _LONG_COOLDOWN
+    with cb.track() as probe:
+        probe.mark_failed()
+        probe.mark_answered()
+        assert cb.state is BreakerState.OPEN
+    assert cb.state is BreakerState.OPEN
+    assert cb.refusing
+
+
+def test_no_breaker_takes_an_answer_and_refuses_nothing() -> None:
+    """Accept an answer and never refuse a re-send without a breaker."""
+    with NO_BREAKER.track() as verdict:
+        verdict.mark_answered()
+        assert not verdict.refused()

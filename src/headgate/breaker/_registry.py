@@ -50,11 +50,6 @@ type _Key = tuple[str, int, float]
 class Breaker(Protocol):
     """What a client needs of a breaker; :class:`CircuitBreaker` is the real one."""
 
-    @property
-    def refusing(self) -> bool:
-        """Whether a call made now would be refused."""
-        ...
-
     def track(self, on_change: TransitionListener | None = None) -> AbstractContextManager[Verdict]:
         """Run one fetch through the breaker, yielding the :class:`Verdict` it marks."""
         ...
@@ -68,11 +63,6 @@ class _NoBreaker:
     """
 
     __slots__ = ()
-
-    @property
-    def refusing(self) -> bool:
-        """Never refuse."""
-        return False
 
     @contextmanager
     def track(self, on_change: TransitionListener | None = None) -> Generator[Verdict]:
