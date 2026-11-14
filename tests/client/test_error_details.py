@@ -380,6 +380,22 @@ async def test_a_problems_extensions_are_read_only_at_every_depth() -> None:
     assert isinstance(errors[0], MappingProxyType)
 
 
+#: How deep a problem's extension nests in about 1 KB of JSON: past the recursion limit once each level is frozen.
+_DEEP = 600
+
+
+async def test_a_problem_nested_too_deep_to_read_is_a_status_error_with_its_body() -> None:
+    """Raise the status error naming the body, rather than the ``RecursionError`` freezing its extension raised."""
+    body = b'{"title": "t", "deep": ' + b"[" * _DEEP + b"]" * _DEEP + b"}"
+    script = Script(httpx2.Response(400, content=body, headers={"Content-Type": _PROBLEM}))
+
+    error = await _raised(_client(script))
+
+    assert isinstance(error, UpstreamStatusError)
+    assert error.problem is None
+    assert '{"title": "t", "deep": [[[' in str(error)
+
+
 async def test_a_member_of_the_wrong_type_is_ignored_and_type_defaults() -> None:
     """Ignore a standard member of the wrong JSON type, as RFC 9457 requires, and default ``type``."""
     error = await _raised(_client(_problem_response({"type": 7, "title": ["x"], "status": True, "detail": "d"})))

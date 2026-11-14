@@ -89,6 +89,17 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A problem+json error body with an extension nested hundreds of levels deep, about 1 KB, raised a raw
+  `RecursionError` from every call. It is now read as no problem detail, and the status error names the body.
+- An error body declaring `charset=idna` or `charset=undefined` raised a bare `UnicodeError`. It is read as UTF-8,
+  as other charsets that are no text encoding already were.
+- The default transport moves on to the next vetted address after a connect timeout, as it already did after a
+  refusal. Each address gets an even share of the time left on the connect timeout, so one that hangs no longer
+  spends all of it.
+- A raw `#` in a URL's userinfo (`https://user:pa#ss@host/`) is redacted from error messages. The password after the
+  `#` was shown.
+- A `Retry-After` HTTP-date is measured from the response's `Date` header, so a local clock ahead of the server's no
+  longer shortens the wait to nothing, and one behind no longer stretches it.
 - A one-shot `content=` stream is never sent twice below the retry layer either. When an HTTP/2 GOAWAY moved the
   request to a new connection, an async-iterable file went out empty and the server processed an empty POST, and an
   async generator raised a raw `httpx2.StreamConsumed`. The second read is now refused, and the call raises
