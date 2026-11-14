@@ -61,8 +61,7 @@ change the public API; such changes are listed under **Changed** and **Removed**
   is leaving it out, and raises `TypeError`.
 - A keyword no option names, such as a misspelled `retires=`, raises `TypeError` before anything is sent, on every
   verb, `stream()`, `paginate()` and `with_options()`, where it was ignored. `paginate(data=...)`, `content=` and
-  `files=` now raise this `TypeError` too, still saying a walk of POSTs sends `body=` or `json=`, where they raised
-  `ValueError`.
+  `files=` now raise this `TypeError` too, naming the walk's `query=`, where they raised `ValueError`.
 - `HttpOptions(refusal_check=...)` is `HttpOptions(response_check=...)`, and its type `RefusalCheck` is
   `ResponseCheck`. The check is unchanged: it sees the final response and returns a `RefusedError` or `None`. The
   `ValueError` for a redirect-following client names `response_check=`.

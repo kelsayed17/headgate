@@ -23,7 +23,7 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate import EncodedBody, Expect, HttpOptions, Json, TransportPolicy, Writer
+from headgate import EncodedBody, Expect, Form, HttpOptions, Json, Multipart, Raw, TransportPolicy, Writer
 from headgate import msgspec as flavor
 from headgate._client import AsyncBaseClient
 from headgate._responses import as_bytes, nothing
@@ -176,14 +176,14 @@ async def test_the_writers_content_type_wins_over_the_clients_default() -> None:
 
 
 async def test_an_encoded_bodys_content_type_wins_over_the_clients_default() -> None:
-    """Send the type httpx2 encoded ``json=``, ``data=`` and ``files=`` with, so multipart keeps its boundary."""
+    """Send the type a ``Json``, ``Form`` or ``Multipart`` body is encoded with, so multipart keeps its boundary."""
     wire = _Wire()
     async with _defaulting(wire, {"Content-Type": "application/xml"}) as c:
-        await c.post("x", json={"a": 1}, expect=nothing)
-        await c.post("x", data={"a": "1"}, expect=nothing)
-        await c.post("x", files={"f": ("f.txt", b"hi")}, expect=nothing)
-        await c.post("x", content=b"<a/>", expect=nothing)
-        await c.post("x", json={"a": 1}, headers={"Content-Type": "application/vnd.api+json"}, expect=nothing)
+        await c.post("x", body=Json({"a": 1}), expect=nothing)
+        await c.post("x", body=Form({"a": "1"}), expect=nothing)
+        await c.post("x", body=Multipart({"f": ("f.txt", b"hi")}), expect=nothing)
+        await c.post("x", body=Raw(b"<a/>"), expect=nothing)
+        await c.post("x", body=Json({"a": 1}), headers={"Content-Type": "application/vnd.api+json"}, expect=nothing)
 
     json, form, multipart, content, explicit = (request.headers.get_list("content-type") for request in wire.sent)
     assert (json, form, content, explicit) == (
