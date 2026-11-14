@@ -86,7 +86,7 @@ class Pager[P, I, B = None](Protocol):
     """How pages of type ``P`` holding items of type ``I``, fetched with request bodies of type ``B``, link up.
 
     ``B`` is the type of the walk's body, ``None`` for a pager that only walks GETs. A pager typed with a body may walk
-    GETs too, when ``paginate`` is given no body (``body=None``): the first request's ``body`` is then ``None``, and a
+    GETs too, when ``paginate`` is given no body (``query=None``): the first request's ``body`` is then ``None``, and a
     later one has a body only if the pager gives it one.
     """
 
@@ -111,10 +111,10 @@ class Pager[P, I, B = None](Protocol):
 
 
 class WritingPager[P, I, B](Pager[P, I, B], ABC):
-    """A :class:`Pager` that writes the walk's request bodies: ``write`` encodes a ``body=`` for every page.
+    """A :class:`Pager` that writes the walk's request bodies: ``write`` encodes the walk's ``query=`` for every page.
 
-    A walk given ``body=`` needs one, since the body is the caller's own value, and a walk given ``json=`` needs one
-    whose ``write`` is ``None``, since builtins are sent as JSON. :class:`Cursor`, :class:`Offset`,
+    The body is the caller's own value, which ``write`` encodes; with ``write`` ``None``, the value is builtins, sent as
+    JSON. :class:`Cursor`, :class:`Offset`,
     :class:`BodyCursor` and :class:`BodyOffset` are writing pagers; a pager of GETs is not one.
 
     A pager is one by subclassing this class, not by its shape: an attribute that only shares the name ``write`` is
@@ -182,7 +182,7 @@ def _check_get[B](request: PageRequest[B], pager: str) -> None:
 def _posted[B](request: PageRequest[B], pager: str) -> B:
     """Return *request*'s body, refusing a request with none: *pager* rewrites the body, so its walk is POSTs."""
     if request.body is None:
-        msg = f"{pager} rewrites the request body, so its walk needs one: pass body= or json="
+        msg = f"{pager} rewrites the request body, so its walk needs one: pass query="
         raise ValueError(msg)
     return request.body
 
@@ -194,8 +194,8 @@ class Cursor[P, I, B = None](WritingPager[P, I, B]):
     The last page is the one whose ``next`` returns ``None`` or ``""``, or one with no items: a cursor that advances
     while returning nothing makes no progress. Set ``stop_on_empty=False`` for an endpoint that sends empty pages
     mid-walk. ``B`` is the type of the request body for a walk of POSTs (``Cursor[Page, Item, Query]``), and
-    ``None`` for a walk of GETs. ``write`` encodes a ``body=`` on each page (a flavor's ``writer``); a walk of POSTs
-    without one sends ``json=``, and a walk of GETs leaves it unused.
+    ``None`` for a walk of GETs. ``write`` encodes the walk's ``query=`` on each page (a flavor's ``writer``); a walk
+    of POSTs without one sends it as JSON, and a walk of GETs leaves it unused.
     """
 
     items: Callable[[P], Sequence[I]]

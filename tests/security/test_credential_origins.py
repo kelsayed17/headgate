@@ -22,6 +22,7 @@ from headgate import (
     LinkHeader,
     Minted,
     QueryParamAuth,
+    Raw,
     SecurityOptions,
     StaticHeaderAuth,
     TransportPolicy,
@@ -212,9 +213,9 @@ async def test_a_body_keeps_its_content_type_on_a_foreign_origin() -> None:
     web = Web()
     http = HttpOptions(headers={"Content-Type": "application/json"})
     async with web.client(http=http) as client:
-        await client.post("https://cdn.example/x", content=b"{}", expect=RESPONSE)
+        await client.post("https://cdn.example/x", body=Raw(b"{}"), expect=RESPONSE)
         await client.with_options(headers={"Content-Type": "text/csv"}).post(
-            "https://cdn.example/x", content=b"a,b", expect=RESPONSE
+            "https://cdn.example/x", body=Raw(b"a,b"), expect=RESPONSE
         )
 
     assert [request.headers.get("content-type") for request in web.sent] == ["application/json", "text/csv"]

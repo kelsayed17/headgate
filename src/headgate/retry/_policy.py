@@ -244,7 +244,7 @@ class RetryOutcome:
         return self if self.judge is None else self.judge(result)
 
 
-#: The policy that sends once and never re-sends: what ``retry=False`` installs for a call.
+#: The policy that sends once and never re-sends: what a call's or a view's ``retry=None`` installs.
 NO_RETRY = RetryPolicy(attempts=1)
 
 #: The header an idempotency key is read from when the call names none (a request no client call built).
@@ -260,7 +260,7 @@ def is_keyed(context: CallContext, request: httpx2.Request) -> bool:
     return bool(key and key.strip())
 
 
-#: The call's own retry policy, when it overrides the client's (``retry=False`` or a ``RetryPolicy``).
+#: The call's own retry policy, when it overrides the client's (``retry=None`` or a ``RetryPolicy``).
 RETRY_POLICY = Slot[RetryPolicy]("retry")
 
 #: ``False`` when the call's body cannot be sent a second time (a one-shot stream); absent means replayable.

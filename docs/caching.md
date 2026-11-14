@@ -56,8 +56,9 @@ policy = TransportPolicy(cache=cache)
   finite number: anything else raises before the call is sent.
 - **TTL, not revalidation.** An entry is served until its lifetime ends and is never revalidated with the origin. For
   revalidation, use [conditional reads](#conditional-reads).
-- The body is held up to `HttpOptions.max_response_bytes`, and a body past it raises `ResponseTooLargeError` as it would
-  uncached. A body past the cap is not stored.
+- The body is held up to the call's `max_response_bytes=`, else `HttpOptions.max_response_bytes`, and a body past it
+  raises `ResponseTooLargeError` as it would uncached. A body past the cap is not stored. An entry is checked against
+  the cap of the call that reads it, so one stored for a call that raised its cap is refused to a call that did not.
 
 ## Partitions
 

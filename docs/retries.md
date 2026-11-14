@@ -6,7 +6,7 @@ repeating it is harmless) and **worthwhile** (the failure is transient, the budg
 and the origin's breaker is not refusing).
 
 Configure it once with `TransportPolicy(retry=RetryPolicy(...))`; override it for a call with `retry=RetryPolicy(...)`,
-turn it off with `retry=False`, or set it per route with `Route(fragment, retry=...)`.
+turn it off with `retry=None`, or set it per route with `Route(fragment, retry=...)`.
 
 ```python
 from headgate import RetryPolicy, TransportPolicy
@@ -34,8 +34,9 @@ policy = TransportPolicy(
 | `hedge` | `None` | an opt-in `Hedge` for slow idempotent requests |
 | `min_attempt_time` | `0.05` | the least time left before the deadline that a retry, a hedge or a wait starts with |
 
-`NO_RETRY` is `RetryPolicy(attempts=1)`, what `retry=False` installs. `headgate.retry.RETRY_STATUSES` is the default
-`statuses`, to extend rather than restate: `RetryPolicy(statuses=RETRY_STATUSES | {520})`.
+`NO_RETRY` is `RetryPolicy(attempts=1)`, what a call's or a view's `retry=None` installs.
+`headgate.retry.RETRY_STATUSES` is the default `statuses`, to extend rather than restate:
+`RetryPolicy(statuses=RETRY_STATUSES | {520})`.
 
 ## What is re-sent
 
@@ -58,10 +59,10 @@ Each attempt's result is classified, in this order:
    began is safe; a `ReadTimeout` after the body was sent is not. A custom transport that reports no progress is judged
    by the exception's type instead.
 
-A request whose body is a one-shot stream (`content=` an async iterable, or a `files=` upload of a file that is neither
+A request whose body is a one-shot stream (`Raw` of an async iterable, or a `Multipart` upload of a file that is neither
 a regular file nor in memory, such as a pipe) is never sent twice; the error notes why. That holds below the retry
 layer too: when an HTTP/2 server's GOAWAY moves the request to a new connection, the body refuses a second read and the
-call raises `TransportError` rather than sending it empty. Give `content=` a factory instead to keep it retryable (see
+call raises `TransportError` rather than sending it empty. Give `Raw` a factory instead to keep it retryable (see
 [streaming](streaming.md#request-bodies)).
 
 The retry policy applies to each request the client sends: a followed redirect's hop, and a token-mint hop of a
@@ -117,9 +118,9 @@ one send leaves the others running, its body read (a bounded head) and its conne
 meanwhile; no hedge starts once an answer is in. Hedges count as attempts, spend the retry budget, respect the deadline and the
 breaker, and appear in events (`RetryScheduled` with reason `hedge`) and in the history (`attempt 2/3 (hedge): ...`).
 
-Only `methods` are hedged, and only with an in-memory body (bytes, `body=`, `json=` or a form): a hedge sends a copy of
-it, and a streamed or multipart body is sent once, unhedged. A policy whose `methods` include POST or PATCH refuses a
-hedge when it is constructed.
+Only `methods` are hedged, and only with an in-memory body (an `EncodedBody`, `Json`, `Form` or `Raw` bytes): a hedge
+sends a copy of it, and a streamed or multipart body is sent once, unhedged. A policy whose `methods` include POST or
+PATCH refuses a hedge when it is constructed.
 
 ## Idempotency keys
 
