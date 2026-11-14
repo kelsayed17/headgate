@@ -50,10 +50,10 @@ class Partition(enum.Enum):
     CREDENTIAL = "credential"
     """Only to requests made with the same credential: the default, and the only safe choice for private data.
 
-    The partition is a keyed hash of the auth's :meth:`~headgate._core.CredentialStamper.credential_identity` and of
+    The partition is a keyed hash of the auth's :meth:`~headgate.security.CredentialStamper.credential_identity` and of
     any other credential the request carries, so two clients with different credentials never see each other's entries,
     even on one storage. It requires an auth that declares its credentials (a
-    :class:`~headgate._core.CredentialStamper`), or no auth.
+    :class:`~headgate.security.CredentialStamper`), or no auth.
     """
 
     SHARED = "shared"

@@ -30,10 +30,11 @@ from headgate._core import (
     RetryScheduled,
 )
 from headgate.ratelimit import Rate
-from headgate.retry import Backoff, Hedge, RetryBudget, RetryPolicy
+from headgate.retry import Backoff, Hedge, RetryBudget, RetryPolicy, RetryShare
 from headgate.retry._tracking import head_size
 from headgate.retry._transport import RetryTransport
 from headgate.testing import FaultyTransport, Respond, TestClock
+from headgate.timing import Timing
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
@@ -49,7 +50,14 @@ _PARKED_BODY_BYTES: Final = 64 * 1024
 _MARK: Final = "test.mark"
 _REQUEST_ID: Final = "req-1"
 #: Waits a quarter-second backoff exactly before the first retry (``0.125 · 2¹``).
-_QUARTER: Final = Backoff(factor=0.125, jitter=lambda: 1.0)
+
+
+def _full_draw() -> float:
+    """Draw the top of the jitter range, so each backoff wait is its nominal value."""
+    return 1.0
+
+
+_QUARTER: Final = Backoff(factor=0.125)
 _HEDGE_AFTER: Final = 0.5
 
 
@@ -117,7 +125,11 @@ async def _parked(network: httpx2.AsyncBaseTransport) -> httpx2.Response:
         opened = True
         await clock.sleep(seconds)
 
-    retry = RetryTransport(transport=network, policy=RetryPolicy(budget=None), sleep=open_breaker, clock=clock)
+    retry = RetryTransport(
+        transport=network,
+        policy=RetryPolicy(budget=None),
+        timing=Timing(clock=clock, sleep=open_breaker, random=_full_draw),
+    )
     request, context = _request(clock)
     context.put(BREAKER_GATE, lambda: opened)
     return await retry.handle_async_request(request)
@@ -256,7 +268,12 @@ def _held(policy: RetryPolicy) -> tuple[RetryTransport, _Held, _Gate, _Changes]:
     """Return a retry transport under *policy* over a held network and a gated hedge timer."""
     changes = _Changes()
     network, gate = _Held(changes), _Gate(changes)
-    return RetryTransport(transport=network, policy=policy, sleep=gate.sleep), network, gate, changes
+    return (
+        RetryTransport(transport=network, policy=policy, timing=Timing(sleep=gate.sleep, random=_full_draw)),
+        network,
+        gate,
+        changes,
+    )
 
 
 async def _settle() -> None:
@@ -322,7 +339,7 @@ async def test_a_retryable_failure_in_a_hedged_round_waits_for_the_other_send() 
 @pytest.mark.parametrize(
     "policy",
     [
-        RetryPolicy(hedge=Hedge(after=_HEDGE_AFTER), budget=RetryBudget(ratio=0.0, min_per_second=0.0)),
+        RetryPolicy(hedge=Hedge(after=_HEDGE_AFTER), budget=RetryShare(ratio=0.0, min_per_second=0.0)),
         RetryPolicy(hedge=Hedge(after=_HEDGE_AFTER), budget=None, min_attempt_time=2.0),
     ],
     ids=["no-budget", "no-time"],
@@ -402,7 +419,9 @@ async def test_a_failure_kept_while_a_hedge_waits_for_its_slot_gives_the_slot_up
     changes = _Changes()
     network, gate = _OneSlot(changes), _Gate(changes)
     retry = RetryTransport(
-        transport=network, policy=RetryPolicy(budget=None, hedge=Hedge(after=_HEDGE_AFTER)), sleep=gate.sleep
+        transport=network,
+        policy=RetryPolicy(budget=None, hedge=Hedge(after=_HEDGE_AFTER)),
+        timing=Timing(sleep=gate.sleep, random=_full_draw),
     )
     request, context = _request(TestClock())
 
@@ -484,7 +503,9 @@ async def test_a_cancelled_hedge_gives_its_retry_back_if_never_dispatched(*, que
     changes = _Changes()
     network, gate = _Queued(changes), _Gate(changes)
     policy = RetryPolicy(budget=_one_retry(clock), hedge=Hedge(after=_HEDGE_AFTER))
-    retry = RetryTransport(transport=network, policy=policy, sleep=gate.sleep, clock=clock)
+    retry = RetryTransport(
+        transport=network, policy=policy, timing=Timing(clock=clock, sleep=gate.sleep, random=_full_draw)
+    )
 
     first = asyncio.create_task(retry.handle_async_request(_request(clock)[0]))
     await changes.until(lambda: network.started and gate.waits)
@@ -541,7 +562,11 @@ async def test_a_first_send_the_budget_cannot_admit_is_withdrawn_and_raised(unse
     """Raise the budget's refusal of the first send, which then counts as no attempt and adds no history line."""
     clock = TestClock()
     refusal = unsent()
-    retry = RetryTransport(transport=_Scripted(refusal), policy=RetryPolicy(budget=None), sleep=clock.sleep)
+    retry = RetryTransport(
+        transport=_Scripted(refusal),
+        policy=RetryPolicy(budget=None),
+        timing=Timing(sleep=clock.sleep, random=_full_draw),
+    )
     request, context = _request(clock)
 
     with pytest.raises(type(refusal)):
@@ -555,7 +580,11 @@ async def test_a_retry_the_budget_cannot_admit_ends_with_the_last_failure(unsent
     """End with the failure already in hand, noted as out of time, rather than with the unsent retry."""
     clock = TestClock()
     policy = RetryPolicy(budget=None, backoff=_QUARTER)
-    retry = RetryTransport(transport=_Scripted(503, unsent()), policy=policy, sleep=clock.sleep, clock=clock)
+    retry = RetryTransport(
+        transport=_Scripted(503, unsent()),
+        policy=policy,
+        timing=Timing(clock=clock, sleep=clock.sleep, random=_full_draw),
+    )
     request, context = _request(clock)
 
     response = await retry.handle_async_request(request)
@@ -587,7 +616,9 @@ async def test_a_hedge_the_budget_cannot_admit_leaves_the_first_send_to_answer(u
     changes = _Changes()
     network, gate = _HedgeRefused(changes, unsent), _Gate(changes)
     retry = RetryTransport(
-        transport=network, policy=RetryPolicy(budget=None, hedge=Hedge(after=_HEDGE_AFTER)), sleep=gate.sleep
+        transport=network,
+        policy=RetryPolicy(budget=None, hedge=Hedge(after=_HEDGE_AFTER)),
+        timing=Timing(sleep=gate.sleep, random=_full_draw),
     )
     request, context = _request(TestClock())
 
@@ -623,7 +654,9 @@ async def test_a_hedge_refused_after_the_first_send_failed_ends_with_that_failur
     changes = _Changes()
     network, gate = _HedgeRefusedLater(changes), _Gate(changes)
     retry = RetryTransport(
-        transport=network, policy=RetryPolicy(budget=None, hedge=Hedge(after=_HEDGE_AFTER)), sleep=gate.sleep
+        transport=network,
+        policy=RetryPolicy(budget=None, hedge=Hedge(after=_HEDGE_AFTER)),
+        timing=Timing(sleep=gate.sleep, random=_full_draw),
     )
     request, context = _request(TestClock())
 
@@ -643,7 +676,7 @@ async def test_a_hedge_refused_after_the_first_send_failed_ends_with_that_failur
 
 def _one_retry(clock: TestClock) -> RetryBudget:
     """Return a budget on *clock* that admits one retry at a time over its window."""
-    return RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0, clock=clock)
+    return RetryBudget(RetryShare(ratio=0.0, min_per_second=0.1, window=10.0), timing=Timing(clock=clock))
 
 
 #: The send :class:`_RefusesTheSecondSend` refuses: the first call's hedge.
@@ -672,7 +705,9 @@ async def test_a_hedge_the_budget_cannot_admit_gives_its_retry_back() -> None:
     changes = _Changes()
     network, gate = _RefusesTheSecondSend(changes), _Gate(changes)
     policy = RetryPolicy(budget=_one_retry(clock), hedge=Hedge(after=_HEDGE_AFTER))
-    retry = RetryTransport(transport=network, policy=policy, sleep=gate.sleep, clock=clock)
+    retry = RetryTransport(
+        transport=network, policy=policy, timing=Timing(clock=clock, sleep=gate.sleep, random=_full_draw)
+    )
 
     first = asyncio.create_task(retry.handle_async_request(_request(clock)[0]))
     await changes.until(lambda: network.started and gate.waits)
@@ -693,7 +728,9 @@ async def test_a_hedged_retry_the_budget_cannot_admit_gives_its_retry_back() -> 
     clock = TestClock()
     network = _Scripted(503, _backlog(), 503, 200)
     policy = RetryPolicy(budget=_one_retry(clock), backoff=_QUARTER, hedge=Hedge(after=_HEDGE_AFTER))
-    retry = RetryTransport(transport=network, policy=policy, sleep=clock.sleep, clock=clock)
+    retry = RetryTransport(
+        transport=network, policy=policy, timing=Timing(clock=clock, sleep=clock.sleep, random=_full_draw)
+    )
 
     refused = await retry.handle_async_request(_request(clock)[0])
     retried = await retry.handle_async_request(_request(clock)[0])
@@ -709,7 +746,9 @@ async def test_a_retry_after_exactly_at_the_cap_is_waited() -> None:
     clock = TestClock()
     network = FaultyTransport(schedule=[Respond(503, retry_after=2.0), Respond(200)], sleep=clock.sleep)
     policy = RetryPolicy(budget=None, max_retry_after=2.0)
-    retry = RetryTransport(transport=network, policy=policy, sleep=clock.sleep, clock=clock)
+    retry = RetryTransport(
+        transport=network, policy=policy, timing=Timing(clock=clock, sleep=clock.sleep, random=_full_draw)
+    )
     request, _ = _request(clock)
 
     response = await retry.handle_async_request(request)
@@ -724,13 +763,15 @@ async def test_a_retry_leaving_exactly_min_attempt_time_is_made() -> None:
     clock = TestClock()
     network = FaultyTransport(schedule=[Respond(503), Respond(200)], sleep=clock.sleep)
     policy = RetryPolicy(budget=None, backoff=_QUARTER, min_attempt_time=0.5)
-    retry = RetryTransport(transport=network, policy=policy, sleep=clock.sleep, clock=clock)
+    retry = RetryTransport(
+        transport=network, policy=policy, timing=Timing(clock=clock, sleep=clock.sleep, random=_full_draw)
+    )
     request, _ = _request(clock, deadline=0.75)
 
     response = await retry.handle_async_request(request)
 
     assert response.status_code == httpx2.codes.OK
-    assert clock.sleeps == [_QUARTER.delay(1)]
+    assert clock.sleeps == [_QUARTER.delay(1, 1.0)]
     await response.aclose()
 
 
@@ -759,7 +800,11 @@ async def test_a_status_the_server_says_to_retry_keeps_its_retry_after_and_is_na
     clock = TestClock()
     marked = Respond(503, headers={"x-should-retry": "true"}, retry_after=2.0)
     network = FaultyTransport(schedule=[marked, Respond(200)], sleep=clock.sleep)
-    retry = RetryTransport(transport=network, policy=RetryPolicy(budget=None), sleep=clock.sleep, clock=clock)
+    retry = RetryTransport(
+        transport=network,
+        policy=RetryPolicy(budget=None),
+        timing=Timing(clock=clock, sleep=clock.sleep, random=_full_draw),
+    )
     observer = _Events()
     request = httpx2.Request("GET", "https://api.test/orders")
     context = CallContext(CallInfo(method="GET", url="orders"), clock=clock, emitter=Emitter((observer,)))
@@ -814,7 +859,7 @@ async def test_a_hedge_cancelled_before_it_was_sent_gives_its_retry_budget_back(
         base_url="https://hedged.example",
         rate=Rate.per_second(1000),
         policy=TransportPolicy(
-            retry=RetryPolicy(hedge=Hedge(after=0.001), budget=RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0))
+            retry=RetryPolicy(hedge=Hedge(after=0.001), budget=RetryShare(ratio=0.0, min_per_second=0.1, window=10.0))
         ),
         http=HttpOptions(
             transport=httpx2.MockTransport(lambda request: httpx2.Response(200, content=b"{}", request=request))

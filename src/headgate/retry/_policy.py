@@ -4,9 +4,9 @@
 """The retry policy: which failures a call is re-sent after, how often, how long apart, and within what budget.
 
 :class:`RetryPolicy` holds every option the retry layer (:class:`~headgate.retry.RetryTransport`) reads, and the values
-it is built from: :class:`Backoff` (the wait between attempts), :class:`RetryBudget` (the share of traffic retries may
-add) and :class:`Hedge` (an opt-in second send for a slow idempotent request). Each is frozen and validates on
-construction, so a bad configuration fails where it is written.
+it is built from: :class:`Backoff` (the wait between attempts), :class:`RetryShare` (the share of traffic retries may
+add, which a live :class:`RetryBudget` spends) and :class:`Hedge` (an opt-in second send for a slow idempotent
+request). Each value is frozen and validates on construction, so a bad configuration fails where it is written.
 
 The values the retry layer exchanges with the rest of the stack through a call's
 :class:`~headgate._core.CallContext` are declared here as slots: :data:`RETRY_POLICY` (a call's own policy),
@@ -18,17 +18,19 @@ from __future__ import annotations
 
 import math
 import sys
+import threading
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, final, override
 
 import httpx2
 
-from headgate._core import Clock, RandomSource, Slot, system_random
+from headgate._core import Slot, check_kind, current_timing
+from headgate.retry._budget import RetryLedger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from headgate._core import CallContext
+    from headgate._core import CallContext, Timing
 
 __all__ = [
     "IDEMPOTENCY_HEADER",
@@ -46,6 +48,7 @@ __all__ = [
     "RetryBudget",
     "RetryOutcome",
     "RetryPolicy",
+    "RetryShare",
     "is_keyed",
 ]
 
@@ -102,51 +105,108 @@ def _check_positive(name: str, value: float) -> None:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Backoff:
-    """Exponential backoff with full jitter: the wait before retry *n* is ``factor · 2^n`` times a ``jitter`` draw.
+    """Exponential backoff with full jitter: the wait before retry *n* is ``factor · 2^n`` times a uniform draw.
 
     ``max_wait`` caps every backoff wait; a ``Retry-After`` the response sends is waited exactly instead (see
-    :attr:`RetryPolicy.max_retry_after`). ``jitter`` returns a uniform draw in ``[0, 1)``; it is a parameter so a test
-    can replay a seeded sequence.
+    :attr:`RetryPolicy.max_retry_after`). The draw is the client's (``Timing.random``), so a test pins it there.
     """
 
     factor: float = 0.5
     max_wait: float = 5.0
-    jitter: RandomSource = field(default=system_random, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Refuse a negative, infinite or NaN factor or cap."""
         _check_non_negative("factor", self.factor)
         _check_non_negative("max_wait", self.max_wait)
 
-    def delay(self, retry: int) -> float:
-        """Return the wait before retry number *retry* (from 1): the jittered exponential, capped at ``max_wait``."""
+    def delay(self, retry: int, draw: float) -> float:
+        """Return the wait before retry number *retry* (from 1): the exponential times *draw*, capped at ``max_wait``.
+
+        *draw* is a uniform draw in ``[0, 1)``, the jitter.
+        """
         exponent = min(retry, _MAX_BACKOFF_EXPONENT)
         # A large factor times 2^1023 overflows to infinity, and infinity times a zero draw is NaN; the largest finite
         # float keeps the product finite while leaving every value that does not overflow exactly as it was.
         nominal = min(self.factor * (2.0**exponent), sys.float_info.max)
-        return min(nominal * self.jitter(), self.max_wait)
+        return min(nominal * draw, self.max_wait)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class RetryBudget:
+class RetryShare:
     """A cap on the extra load retries add: retries in the last ``window`` seconds may not exceed a share of traffic.
 
     A retry (or a hedge) is allowed while the retries over the sliding window number fewer than ``ratio`` times the
-    first attempts over it, plus ``min_per_second · window``, a floor so a quiet client can still retry. A client keeps
-    one budget for each distinct value, shared by every call it makes, so an outage cannot multiply its traffic by the
-    attempt count. ``clock`` measures the window; ``None`` uses the client's clock.
+    first attempts over it, plus ``min_per_second · window``, a floor so a quiet client can still retry.
+
+    A share is a value, as a :class:`~headgate.Rate` is: a client given one in its policy keeps a budget of its own for
+    each distinct share, spent by every call, view and route of that client, so an outage cannot multiply its traffic
+    by the attempt count. To spend one budget across clients, build a :class:`RetryBudget` from the share and give
+    every client the same object.
     """
 
     ratio: float = 0.2
     min_per_second: float = 10.0
     window: float = 10.0
-    clock: Clock | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         """Refuse a negative ratio or floor, and a window that is not positive."""
         _check_non_negative("ratio", self.ratio)
         _check_non_negative("min_per_second", self.min_per_second)
         _check_positive("window", self.window)
+
+
+#: The share a policy spends when it names none, and a budget built from none.
+_DEFAULT_SHARE: Final = RetryShare()
+
+
+@final
+class RetryBudget:
+    """Live shared state: one retry allowance, spent by every client given this same object.
+
+    It is built from a :class:`RetryShare` and spends it over a sliding window, as a :class:`~headgate.RateBudget` is
+    built from a :class:`~headgate.Rate`. Two clients whose policies name the same ``RetryBudget`` spend one window
+    together: once the first has spent it, the second's retries are refused too. The window runs on *timing*'s
+    clock, or, without one, on the timing current when the budget is built. Its ``repr`` shows the share and what the
+    window holds now.
+
+    :raises TypeError: for a *share* that is not a :class:`RetryShare`, and, as Python's own, for the old keywords
+        (``RetryBudget(ratio=0.1)`` is now ``RetryBudget(RetryShare(ratio=0.1))``).
+    """
+
+    __slots__ = ("_ledger", "_lock", "_share")
+
+    def __init__(self, share: RetryShare = _DEFAULT_SHARE, *, timing: Timing | None = None) -> None:
+        """Spend *share* over its window, on *timing*'s clock."""
+        check_kind("share", share, RetryShare, "a RetryShare, such as RetryShare(ratio=0.1)")
+        self._share = share
+        self._ledger = RetryLedger(share, (current_timing() if timing is None else timing).clock)
+        self._lock = threading.Lock()
+
+    @property
+    def share(self) -> RetryShare:
+        """The share this budget spends."""
+        return self._share
+
+    def record_first(self) -> None:
+        """Count a first attempt, which earns retries their share."""
+        with self._lock:
+            self._ledger.record_first()
+
+    def try_spend(self) -> bool:
+        """Count a retry and return ``True`` if the window has room for it, else count nothing and return ``False``."""
+        with self._lock:
+            return self._ledger.try_spend()
+
+    def refund(self) -> None:
+        """Take back a retry :meth:`try_spend` counted but never sent."""
+        with self._lock:
+            self._ledger.refund()
+
+    @override
+    def __repr__(self) -> str:
+        with self._lock:
+            retries, firsts = self._ledger.counts()
+        return f"RetryBudget({self._share!r}, retries={retries}, firsts={firsts})"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -180,7 +240,8 @@ class RetryPolicy:
     * ``backoff``: the wait between attempts when the response sets no ``Retry-After``.
     * ``max_retry_after``: the longest ``Retry-After`` (or ``retry-after-ms``) that is waited, exactly. A longer one
       stops the call, and the error it raises carries the delay as ``retry_after``.
-    * ``budget``: the :class:`RetryBudget` retries spend, or ``None`` for no cap.
+    * ``budget``: what retries spend: a :class:`RetryShare`, from which the client builds a budget of its own; a
+      :class:`RetryBudget`, shared with every client given the same object; or ``None`` for no cap.
     * ``respect_should_retry``: follow a response's ``x-should-retry: true|false`` over the status rules.
     * ``hedge``: an opt-in :class:`Hedge` for the idempotent ``methods``; refused when ``methods`` include POST or
       PATCH.
@@ -193,7 +254,7 @@ class RetryPolicy:
     statuses: frozenset[int] = RETRY_STATUSES
     backoff: Backoff = field(default_factory=Backoff)
     max_retry_after: float = 30.0
-    budget: RetryBudget | None = field(default_factory=RetryBudget)
+    budget: RetryShare | RetryBudget | None = field(default_factory=RetryShare)
     respect_should_retry: bool = True
     hedge: Hedge | None = None
     min_attempt_time: float = 0.05
@@ -205,6 +266,9 @@ class RetryPolicy:
             raise ValueError(msg)
         _check_non_negative("max_retry_after", self.max_retry_after)
         _check_non_negative("min_attempt_time", self.min_attempt_time)
+        check_kind(
+            "budget", self.budget, (RetryShare, RetryBudget, type(None)), "a RetryShare, a shared RetryBudget, or None"
+        )
         methods = frozenset(method.upper() for method in self.methods)
         object.__setattr__(self, "methods", methods)
         object.__setattr__(self, "statuses", frozenset(self.statuses))
@@ -212,14 +276,14 @@ class RetryPolicy:
             msg = f"a hedge may not be configured for non-idempotent methods ({', '.join(sorted(unsafe))})"
             raise ValueError(msg)
 
-    def wait_after(self, retry_after: float | None, retry: int) -> float:
+    def wait_after(self, retry_after: float | None, retry: int, draw: float) -> float:
         """Return how long to wait before retry number *retry* (from 1), after a failure that asked for *retry_after*.
 
         *retry_after* is the delay the failed response's ``retry-after-ms`` or ``Retry-After`` asked for, as the
         attempt's classification read it, or ``None``. It is waited exactly and uncapped (the retry layer refuses one
-        past :attr:`max_retry_after` instead of waiting it); without one, the wait is :meth:`Backoff.delay`.
+        past :attr:`max_retry_after` instead of waiting it); without one, the wait is :meth:`Backoff.delay` of *draw*.
         """
-        return self.backoff.delay(retry) if retry_after is None else retry_after
+        return self.backoff.delay(retry, draw) if retry_after is None else retry_after
 
 
 @dataclass(frozen=True, slots=True)

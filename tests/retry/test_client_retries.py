@@ -23,7 +23,7 @@ from headgate import (
 from headgate._core import RetryScheduled, Timing, timing_override
 from headgate.errors import TransportError
 from headgate.ratelimit import Rate
-from headgate.retry import Backoff, RetryBudget
+from headgate.retry import Backoff, RetryShare
 from headgate.testing import ConnectFail, DropMidBody, FaultyTransport, Respond, Slow, TestClock
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
@@ -32,7 +32,7 @@ from tests.support.clients import StubClient
 _HOST = "api.test"
 
 #: A backoff that always waits its full nominal delay.
-_FULL = Backoff(jitter=lambda: 1.0)
+_FULL = Backoff()
 
 #: A ``Retry-After`` longer than the default ``max_retry_after``.
 _TOO_LONG = 100.0
@@ -164,16 +164,17 @@ async def test_a_whole_retry_sequence_counts_once_toward_the_breaker() -> None:
     """Charge one failure to the host's breaker for a call that failed on every attempt."""
     network = FaultyTransport(schedule=[Respond(503)] * _ATTEMPTS)
 
+    client = _client(network)
     with pytest.raises(UpstreamStatusError):
-        await _client(network).get("series", expect=nothing)
+        await client.get("series", expect=nothing)
 
     assert len(network.calls) == _ATTEMPTS
-    assert failures(_HOST) == 1
+    assert failures(client, _HOST) == 1
 
 
 async def test_the_budget_is_shared_by_every_call_of_a_client() -> None:
     """Refuse the second call's retry once the first call spent the client's budget."""
-    budget = RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0)
+    budget = RetryShare(ratio=0.0, min_per_second=0.1, window=10.0)
     network = FaultyTransport(schedule=[Respond(503), Respond(200), Respond(503)])
     client = _client(network, RetryPolicy(backoff=_FULL, budget=budget))
 

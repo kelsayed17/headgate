@@ -12,10 +12,11 @@ import httpx2
 import pytest
 
 from headgate._core import SendProgress
-from headgate.retry import RetryBudget, RetryPolicy
+from headgate.retry import RetryBudget, RetryPolicy, RetryShare
 from headgate.retry._budget import RetryLedger
 from headgate.retry._classify import Attempted, classify, refused_stream
 from headgate.testing import TestClock
+from headgate.timing import Timing
 
 #: A window, in seconds, for the budget tests.
 _WINDOW = 10.0
@@ -30,7 +31,7 @@ _FLOOR_RETRIES = 10
 def test_the_floor_admits_min_per_second_times_window_retries() -> None:
     """Admit exactly ``min_per_second · window`` retries with no first attempts, then refuse."""
     clock = TestClock()
-    ledger = RetryLedger(RetryBudget(ratio=0.0, min_per_second=1.0, window=_WINDOW), clock)
+    ledger = RetryLedger(RetryShare(ratio=0.0, min_per_second=1.0, window=_WINDOW), clock)
 
     admitted = [ledger.try_spend() for _ in range(_FLOOR_RETRIES + 1)]
 
@@ -39,7 +40,7 @@ def test_the_floor_admits_min_per_second_times_window_retries() -> None:
 
 def test_first_attempts_earn_retries_their_ratio() -> None:
     """Admit ``ratio`` of a retry per first attempt, beyond a zero floor."""
-    ledger = RetryLedger(RetryBudget(ratio=0.5, min_per_second=0.0, window=_WINDOW), TestClock())
+    ledger = RetryLedger(RetryShare(ratio=0.5, min_per_second=0.0, window=_WINDOW), TestClock())
     for _ in range(4):
         ledger.record_first()
 
@@ -49,7 +50,7 @@ def test_first_attempts_earn_retries_their_ratio() -> None:
 def test_the_window_slides_so_old_retries_stop_counting() -> None:
     """Forget the retries made more than a window ago, so the budget refills as time passes."""
     clock = TestClock()
-    ledger = RetryLedger(RetryBudget(ratio=0.0, min_per_second=0.1, window=_WINDOW), clock)
+    ledger = RetryLedger(RetryShare(ratio=0.0, min_per_second=0.1, window=_WINDOW), clock)
 
     assert ledger.try_spend() is True
     assert ledger.try_spend() is False
@@ -62,7 +63,7 @@ def test_the_window_slides_so_old_retries_stop_counting() -> None:
 def test_a_refunded_retry_stops_counting() -> None:
     """Take back a retry that was never sent, so the window has room for it again; a refund of nothing does nothing."""
     clock = TestClock()
-    ledger = RetryLedger(RetryBudget(ratio=0.0, min_per_second=0.1, window=_WINDOW), clock)
+    ledger = RetryLedger(RetryShare(ratio=0.0, min_per_second=0.1, window=_WINDOW), clock)
 
     ledger.refund()
     assert ledger.try_spend() is True
@@ -73,16 +74,15 @@ def test_a_refunded_retry_stops_counting() -> None:
     assert ledger.try_spend() is False
 
 
-def test_a_budget_measures_its_window_on_its_own_clock_when_it_has_one() -> None:
-    """Prefer the budget's own clock to the one the transport supplies."""
-    own, transport = TestClock(), TestClock()
-    ledger = RetryLedger(RetryBudget(ratio=0.0, min_per_second=0.1, window=_WINDOW, clock=own), transport)
-    assert ledger.try_spend() is True
+def test_a_shared_budget_measures_its_window_on_its_own_timing() -> None:
+    """Slide a live budget's window on the timing it was built with, whichever client spends it."""
+    own = TestClock()
+    budget = RetryBudget(RetryShare(ratio=0.0, min_per_second=0.1, window=_WINDOW), timing=Timing(clock=own))
+    assert budget.try_spend() is True
+    assert budget.try_spend() is False
 
-    transport.advance(_WINDOW * 2)
-    assert ledger.try_spend() is False, "the transport's clock moving does not slide the window"
     own.advance(_WINDOW * 2)
-    assert ledger.try_spend() is True
+    assert budget.try_spend() is True
 
 
 # --- classify ---

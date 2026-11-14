@@ -5,20 +5,21 @@ with nothing private patched. Two seams make that possible:
 
 - **the network** is `HttpOptions(transport=...)`. Have the client accept a transport and pass it through, as the
   [examples](https://github.com/kelsayed17/headgate/tree/main/examples) do: `CatalogClient(api_key, transport=fake)`;
-- **time and breaker state** are read when a client is **constructed**, from context variables the kit's context
-  managers set. Build the client inside them; entering one around a client that already exists changes nothing.
+- **time** is read when a client is **constructed**, from a context variable the kit's context managers set. Build the
+  client inside them; entering one around a client that already exists changes nothing. Breaker state needs no seam:
+  each client keeps its own.
 
 ```python
 from collections.abc import Iterator
 
 import pytest
 
-from headgate.testing import FakeTransport, Respond, instant_retries, isolated_breakers
+from headgate.testing import FakeTransport, Respond, instant_retries
 
 
 @pytest.fixture
 def catalog() -> Iterator[CatalogClient]:
-    with instant_retries(), isolated_breakers():
+    with instant_retries():
         yield CatalogClient("test-key", transport=FakeTransport().reply("GET", "/v1/series/GDP", Respond(json=GDP)))
 ```
 
@@ -48,10 +49,20 @@ fake = (
 
 ## TestClock and instant retries
 
-`TestClock()` is a monotonic clock that moves only when told: `clock.now`, `clock.advance(seconds)`, and an async
-`clock.sleep` that records the wait in `clock.sleeps` and advances the clock instead of waiting. Clients built inside
-`clock.install()` measure every duration on it (deadlines, events, rate pacing, and the cooldowns of a registry built by
-`isolated_breakers()` in the same block) and wait through its sleep, so a test of a 60-second cooldown runs in no time.
+`TestClock(start=0.0, *, epoch=..., random=...)` is a monotonic clock that moves only when told: `clock.now`,
+`clock.advance(seconds)`, and an async `clock.sleep` that records the wait in `clock.sleeps` and advances the clock
+instead of waiting. Its wall clock reads `epoch` plus the reading, so a `Retry-After` date agrees with it, and `random`
+is the backoff's jitter draw: pass `random=lambda: 1.0` for a full backoff a test can predict.
+
+Everything built inside `clock.install()` with no `timing=` of its own runs on it: a client's deadlines, events, retry
+backoff and retry budget, a `CachedTokenAuth`'s token lifetimes, a `RateBudget` the block builds (shared by any number
+of clients), and a `BreakerRegistry`'s cooldowns. So a test of a 60-second cooldown, or of a token that expires in an
+hour, runs in no time. What was built before the block keeps the clock it was built with.
+
+`install()` is `headgate.timing.timing_override(clock.timing)`. The seam is public, so a test kit of your own can
+install a clock the same way: a `Timing(clock=..., sleep=..., wall_clock=..., random=...)`, whose four fields satisfy
+the `Clock`, `Sleep` and `RandomSource` protocols, set for a block with `timing_override`, and read back with
+`current_timing()`. Each object takes `timing=` too, to run on one timing whatever block it is built in.
 
 Concurrent sleeps overlap as they would in real time: each sleeper wakes at the reading it began at plus its delay.
 The clock moves to the earliest wake after 16 turns of the event loop in which no sleep begins or ends, room for the
@@ -63,11 +74,11 @@ reading.
 `instant_retries()` leaves the clock as it is (the real one, or a `TestClock`) and makes every wait return at once, so a
 mocked failure is retried exactly as production retries it, without the backoff.
 
-## Isolated breakers
+## Breakers
 
-`isolated_breakers()` gives the clients built in its block a fresh `BreakerRegistry` (and yields it), so failures in one
-test open no breaker in the next. Assert on it with `headgate.health.breaker_states(registry)`. A client configured
-with a registry of its own keeps it.
+Each client keeps its breakers in a `BreakerRegistry` of its own, unless its `BreakerPolicy` names one to share, so
+failures in one test open no breaker in the next. `breakers_of(client)` returns that registry (or `None` for a client
+without a breaker); assert on it with `headgate.health.breaker_states(registry)`.
 
 ## What a client was built with
 

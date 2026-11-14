@@ -17,9 +17,10 @@ from headgate._client import built_with
 
 if TYPE_CHECKING:
     from headgate import AsyncBaseClient, HttpCache
+    from headgate.breaker import BreakerRegistry
     from headgate.ratelimit import RateBudget
 
-__all__ = ["budget_for", "cache_of"]
+__all__ = ["breakers_of", "budget_for", "cache_of"]
 
 
 def cache_of(client: AsyncBaseClient) -> HttpCache | None:
@@ -40,3 +41,12 @@ def budget_for(client: AsyncBaseClient, url: str | None = None) -> RateBudget:
     if url is None:
         return built.budgets.default
     return built.budgets.for_request(built.http.build_request("GET", url))
+
+
+def breakers_of(client: AsyncBaseClient) -> BreakerRegistry | None:
+    """Return the :class:`~headgate.breaker.BreakerRegistry` *client*'s breakers live in, or ``None`` without a breaker.
+
+    It is the client's own, or the shared one its ``BreakerPolicy(registry=...)`` names. Read a breaker's state from it
+    (``breakers_of(client).breakers(url)``), or pass it to :func:`headgate.health.breaker_states`.
+    """
+    return built_with(client).breakers

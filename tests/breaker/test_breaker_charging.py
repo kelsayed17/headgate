@@ -24,6 +24,7 @@ from headgate.breaker import BreakerRegistry
 from headgate.errors import ClientError, RateLimitError, UpstreamStatusError
 from headgate.ratelimit import Rate
 from headgate.testing import TestClock
+from headgate.timing import Timing
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
 from tests.support.events import Recorder
@@ -52,7 +53,7 @@ def _client(
     policy: TransportPolicy | None = None,
     recorder: Recorder | None = None,
 ) -> StubClient:
-    """Return a client against *handler*, sending each call once, on the default registry's default breaker."""
+    """Return a client against *handler*, sending each call once, on a default breaker of its own."""
     return StubClient(
         base_url=_ORIGIN,
         rate=_RATE,
@@ -80,7 +81,7 @@ async def test_a_429_is_not_a_host_failure() -> None:
     client = _client(lambda _request: httpx2.Response(429))
     with pytest.raises(RateLimitError):
         await client.get("x", expect=RESPONSE)
-    assert failures(_HOST) == 0
+    assert failures(client, _HOST) == 0
 
 
 async def test_a_5xx_is_a_host_failure() -> None:
@@ -88,23 +89,25 @@ async def test_a_5xx_is_a_host_failure() -> None:
     client = _client(lambda _request: httpx2.Response(502))
     with pytest.raises(UpstreamStatusError):
         await client.get("x", expect=RESPONSE)
-    assert failures(_HOST) == 1
+    assert failures(client, _HOST) == 1
 
 
 @pytest.mark.parametrize("exc", [httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2.PoolTimeout])
 async def test_a_local_failure_is_not_a_host_failure(exc: type[httpx2.TransportError]) -> None:
     """Charge nothing for a failure our own side made: the origin never had a say."""
+    client = _client(_raising(exc))
     with pytest.raises(ClientError):
-        await _client(_raising(exc)).get("x", expect=RESPONSE)
-    assert failures(_HOST) == 0
+        await client.get("x", expect=RESPONSE)
+    assert failures(client, _HOST) == 0
 
 
 @pytest.mark.parametrize("exc", [httpx2.ConnectError, httpx2.ReadTimeout, httpx2.RemoteProtocolError])
 async def test_a_network_failure_is_a_host_failure(exc: type[httpx2.TransportError]) -> None:
     """Charge a failure the origin's side of the wire produced."""
+    client = _client(_raising(exc))
     with pytest.raises(ClientError):
-        await _client(_raising(exc)).get("x", expect=RESPONSE)
-    assert failures(_HOST) == 1
+        await client.get("x", expect=RESPONSE)
+    assert failures(client, _HOST) == 1
 
 
 # --- Transitions as events ---
@@ -113,7 +116,7 @@ async def test_a_network_failure_is_a_host_failure(exc: type[httpx2.TransportErr
 async def test_every_transition_is_reported_once_by_the_call_that_caused_it() -> None:
     """Emit closed to open, open to half-open and half-open to open, then half-open to closed, each with its call."""
     clock = TestClock()
-    registry = BreakerRegistry(clock=clock)
+    registry = BreakerRegistry(timing=Timing(clock=clock))
     breaker = BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN, registry=registry)
     statuses = iter([503, 503, 503, 200])
     recorder = Recorder()
@@ -186,7 +189,7 @@ def _gated_client(wire: _GateReader, policy: TransportPolicy) -> StubClient:
 async def test_the_gate_opens_when_another_call_trips_the_breaker_mid_call() -> None:
     """Read false while the breaker admits, and true once a concurrent failure has opened it."""
     clock = TestClock()
-    registry = BreakerRegistry(clock=clock)
+    registry = BreakerRegistry(timing=Timing(clock=clock))
     breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=registry)
 
     def trip() -> None:
@@ -209,7 +212,7 @@ async def test_the_gate_stays_shut_for_a_call_from_before_the_trip() -> None:
     Its retries would otherwise reach the recovering origin beside the probe.
     """
     clock = TestClock()
-    registry = BreakerRegistry(clock=clock)
+    registry = BreakerRegistry(timing=Timing(clock=clock))
     breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=registry)
 
     def trip_and_cool_down() -> None:
@@ -228,7 +231,7 @@ async def test_the_gate_stays_shut_for_a_call_from_before_the_trip() -> None:
 async def test_the_probe_is_not_stopped_by_its_own_probe_slot() -> None:
     """Read false for the half-open breaker's probe, so its own retries are its one recovery test."""
     clock = TestClock()
-    registry = BreakerRegistry(clock=clock)
+    registry = BreakerRegistry(timing=Timing(clock=clock))
     breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=registry)
     failing = _gated_client(_GateReader(503), TransportPolicy(retry=None, breaker=breaker))
     with pytest.raises(UpstreamStatusError):

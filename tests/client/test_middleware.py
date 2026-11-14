@@ -10,6 +10,7 @@ attempt's nonce, which a server that rejects replays refuses; a middleware signs
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import itertools
@@ -18,16 +19,17 @@ from typing import TYPE_CHECKING, ClassVar, cast, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, Json, Rate, TransportPolicy, nothing
+from headgate import HttpOptions, Json, Rate, TransportPolicy, call_info, nothing
 from headgate._core import CallContext
-from headgate.retry import RetryPolicy
+from headgate.retry import Backoff, Hedge, RetryPolicy
+from headgate.testing import FakeTransport, TestClock
 from tests.security._web import BASE, Web
 from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
     from headgate import Middleware, Next
-    from headgate.events import Event
+    from headgate.events import CallView, Event
 
 _SECRET = b"shared-secret"
 _ATTEMPTS = 3
@@ -288,3 +290,75 @@ async def test_a_middleware_may_declare_through_properties() -> None:
     first, hop = web.sent
     assert "X-Signature" in first.headers
     assert "X-Signature" not in hop.headers
+
+
+async def test_a_middleware_reads_its_call_through_call_info() -> None:
+    """Read the call's route template, attempt and time left in a middleware, fresh on every send."""
+    seen: list[CallView | None] = []
+
+    class _Reader:
+        credential_headers: ClassVar = frozenset[str]()
+        credential_params: ClassVar = frozenset[str]()
+
+        async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+            seen.append(call_info(request))
+            return await call_next(request)
+
+    clock = TestClock(random=lambda: 1.0)
+    with clock.install():
+        client = StubClient(
+            base_url="https://h.test",
+            rate=Rate.per_second(1000),
+            policy=TransportPolicy(retry=RetryPolicy(backoff=Backoff(factor=1.0)), breaker=None),
+            http=HttpOptions(transport=FakeTransport().reply("GET", "/series/s1", 503, 200)),
+            middleware=(_Reader(),),
+        )
+    series_id = "s1"
+    await client.get(t"series/{series_id}", expect=nothing, deadline=30.0)
+
+    first, second = seen
+    assert first is not None
+    assert second is not None
+    assert (first.call.route, first.attempt, second.attempt) == ("series/{series_id}", 1, 2)
+    assert first.call is second.call, "one call, the same record events carry"
+    assert first.remaining == pytest.approx(30.0)
+    assert clock.now > 0
+    assert second.remaining == pytest.approx(30.0 - clock.now), "the time left fell by the backoff waited"
+    assert call_info(httpx2.Request("GET", "https://h.test/x")) is None
+
+
+async def test_a_hedged_send_reads_its_own_attempt() -> None:
+    """Give each send its own attempt number, though a hedge begun meanwhile raised the call's."""
+    seen: list[tuple[int, int]] = []
+    hedge_began = asyncio.Event()
+
+    class _Reader:
+        credential_headers: ClassVar = frozenset[str]()
+        credential_params: ClassVar = frozenset[str]()
+
+        async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+            before = _attempt(request)
+            if before == 1:
+                await hedge_began.wait()
+            else:
+                hedge_began.set()
+            seen.append((before, _attempt(request)))
+            return await call_next(request)
+
+    client = StubClient(
+        base_url="https://h.test",
+        rate=Rate.per_second(1000),
+        policy=TransportPolicy(retry=RetryPolicy(budget=None, hedge=Hedge(after=0.01)), breaker=None),
+        http=HttpOptions(transport=FakeTransport().reply("GET", "/x", 200)),
+        middleware=(_Reader(),),
+    )
+    await client.get("x", expect=nothing)
+
+    assert sorted(seen) == [(1, 1), (2, 2)]
+
+
+def _attempt(request: httpx2.Request) -> int:
+    """Return the attempt *request*'s send is, as a middleware reads it."""
+    view = call_info(request)
+    assert view is not None
+    return view.attempt

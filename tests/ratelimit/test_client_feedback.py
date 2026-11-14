@@ -53,7 +53,7 @@ class _Server:
 
 def _budget(clock: TestClock) -> RateBudget:
     """Return a generous budget on *clock*."""
-    return RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep), wall_clock=clock)
+    return RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
 
 
 def _client(
@@ -104,7 +104,7 @@ async def test_a_pause_past_the_deadline_raises_rate_limit_error_without_sending
     assert (error.attempts, getattr(error, "__notes__", [])) == (0, []), "an attempt never sent is no attempt"
     assert str(error).endswith("past the call's deadline"), "no status tag: this call got no status"
     assert server.received == 1, "the refused call never reached the server"
-    assert failures(_HOST) == 0, "neither the 429 nor the local refusal is a host failure"
+    assert failures(client, _HOST) == 0, "neither the 429 nor the local refusal is a host failure"
 
 
 async def test_a_call_the_paused_budget_refuses_reports_no_attempt() -> None:

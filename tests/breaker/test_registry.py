@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``BreakerRegistry``: keyed by origin and thresholds, bounded by LRU eviction of closed breakers, safe across threads.
+"""``BreakerRegistry``: keyed by origin, bounded by LRU eviction of closed breakers, safe across threads.
 
 The Hypothesis machine drives a small registry through random lookups, trips and elapsed time and checks its bounds
 after every step; the threaded test runs several event loops against one registry at once.
@@ -21,6 +21,7 @@ from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
 
 from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
 from headgate.breaker._registry import DEFAULT_MAX_HOSTS
+from headgate.timing import Timing
 
 #: A registry small enough for Hypothesis to fill, and more origins than it holds.
 _MAX = 3
@@ -130,16 +131,16 @@ class RegistryMachine(RuleBasedStateMachine):
         """Start with an empty registry on a hand-driven clock."""
         super().__init__()
         self.now = 0.0
-        self.registry = BreakerRegistry(max_hosts=_MAX, clock=lambda: self.now)
+        self.registry = BreakerRegistry(max_hosts=_MAX, timing=Timing(clock=lambda: self.now))
         self.last_built: CircuitBreaker | None = None
 
-    @rule(origin=st.sampled_from(_ORIGINS), threshold=st.sampled_from((1, _THRESHOLD)))
-    def look_up(self, origin: str, threshold: int) -> None:
-        """Fetch *origin*'s breaker, building it if new; the same key always returns the same breaker while held."""
-        held = {(b.name, b.failure_threshold): b for b in self.registry}
-        breaker = self.registry.breaker_for(origin, failure_threshold=threshold, recovery_timeout=_COOLDOWN)
-        if (origin, threshold) in held:
-            assert breaker is held[origin, threshold]
+    @rule(origin=st.sampled_from(_ORIGINS))
+    def look_up(self, origin: str) -> None:
+        """Fetch *origin*'s breaker, building it if new; the same origin always returns the same breaker while held."""
+        held = {b.name: b for b in self.registry}
+        breaker = self.registry.breaker_for(origin, failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
+        if origin in held:
+            assert breaker is held[origin]
         assert self.registry.breakers()[-1] is breaker, "a lookup makes the breaker the most recently used"
         self.last_built = breaker
 
@@ -161,8 +162,8 @@ class RegistryMachine(RuleBasedStateMachine):
 
     @invariant()
     def keys_are_unique(self) -> None:
-        """Hold one breaker per origin and thresholds."""
-        keys = [(b.name, b.failure_threshold, b.recovery_timeout) for b in self.registry]
+        """Hold one breaker per origin."""
+        keys = [b.name for b in self.registry]
         assert len(keys) == len(set(keys))
 
     @override

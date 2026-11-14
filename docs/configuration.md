@@ -180,6 +180,30 @@ buffered body; a streamed body is not readable there. A middleware that replaces
 attempt. Even then the signature goes on the replacement, not on the request the client made, so a `SigningAuth`'s one
 re-send on a 401 is lost.
 
+The two declarations are the `headgate.security.CredentialCarrier` protocol, and an auth that also gives a
+`credential_identity()` (so a cache can partition by it) is a `headgate.security.CredentialStamper`; implement either
+from `headgate.security`, never from a private module.
+
+A middleware reads its call through `headgate.call_info(request)`, a `headgate.events.CallView` taken when asked: the
+call's `CallInfo` (method, URL and route template, the same record events carry), its `attempt` (1 on the first send,
+2 on the first retry or hedge) and the seconds `remaining` before its deadline, or `None` without one. It returns
+`None` for a request no client call built.
+
+```python
+from headgate import call_info
+
+
+class TracesFirstReportSends:
+    credential_headers = frozenset[str]()
+    credential_params = frozenset[str]()
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        view = call_info(request)
+        if view is not None and view.call.route == "reports/{report_id}" and view.attempt == 1:
+            request.headers["X-Trace-Report"] = "1"
+        return await call_next(request)
+```
+
 ## Per-call options
 
 Every verb, `get`, `post`, `put`, `patch`, `delete` and `head`, has the same signature, except that `head` reads

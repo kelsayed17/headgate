@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import httpx2
@@ -28,7 +29,8 @@ from headgate.errors import ClientError
 from headgate.otel import OpenTelemetryObserver
 from headgate.ratelimit import Rate
 from headgate.retry import Backoff, Hedge
-from headgate.testing import FakeTransport, TestClock, isolated_breakers
+from headgate.testing import FakeTransport, TestClock
+from headgate.timing import Timing, current_timing, timing_override
 from tests.cache._helpers import FaultyStorage, every_get_rules
 from tests.observe._support import client
 from tests.support.events import Recorder
@@ -69,8 +71,10 @@ async def _plain(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) 
 
 async def _retried(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) -> None:
     """Make one call, answered on its third attempt, backing off by a fixed jitter so the delays are reproducible."""
-    policy = TransportPolicy(retry=RetryPolicy(backoff=Backoff(jitter=_half_jitter)))
-    await _call(client(FakeTransport().reply("GET", "/v1/x", 503, 502, 200), *observers, policy=policy))
+    policy = TransportPolicy(retry=RetryPolicy(backoff=Backoff()))
+    with timing_override(replace(current_timing(), random=_half_jitter)):
+        built = client(FakeTransport().reply("GET", "/v1/x", 503, 502, 200), *observers, policy=policy)
+    await _call(built)
 
 
 async def _rate_limited(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) -> None:
@@ -81,7 +85,7 @@ async def _rate_limited(observers: tuple[Observer, ...], _storage: AsyncSqliteSt
     """
     clock = TestClock()
     limited = httpx2.Response(429, headers={"Retry-After": "1"})
-    budget = RateBudget(Rate.per_second(1000), timing=clock.timing, wall_clock=clock)
+    budget = RateBudget(Rate.per_second(1000), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
     with clock.install():
         built = client(FakeTransport().reply("GET", "/v1/x", limited, 200), *observers, rate=budget, policy=_ONCE)
     await _call(built, times=2)
@@ -118,8 +122,7 @@ async def _cache_degraded(observers: tuple[Observer, ...], storage: AsyncSqliteS
 async def _breaker_opening(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) -> None:
     """Fail once, opening the host's breaker, then make a call it refuses."""
     policy = TransportPolicy(retry=RetryPolicy(attempts=1), breaker=BreakerPolicy(failure_threshold=1))
-    with isolated_breakers():
-        built = client(FakeTransport().reply("GET", "/v1/x", 503), *observers, policy=policy)
+    built = client(FakeTransport().reply("GET", "/v1/x", 503), *observers, policy=policy)
     await _call(built, times=2)
 
 

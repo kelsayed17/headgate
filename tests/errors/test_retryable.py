@@ -49,7 +49,7 @@ if TYPE_CHECKING:
 
 _BASE = "https://api.example.test"
 #: Retries that never wait, so a surviving status is reached at once.
-_ONCE_MORE = RetryPolicy(attempts=2, backoff=Backoff(factor=0.0, jitter=lambda: 1.0))
+_ONCE_MORE = RetryPolicy(attempts=2, backoff=Backoff(factor=0.0))
 #: An upload's body.
 _ORDER = Json({"qty": 1})
 

@@ -9,7 +9,7 @@ runs request hooks after the auth flow has stamped the request and before every 
 auth flow yields. On any of them addressed elsewhere it removes:
 
 * every header and query parameter the client's auth declares it stamps (a
-  :class:`~headgate._core.CredentialStamper`: every auth in headgate);
+  :class:`~headgate.security.CredentialStamper`: every auth in headgate);
 * ``Authorization`` and ``Proxy-Authorization``, whatever the auth, so a third-party auth or a caller's own header does
   not reach another origin either. httpx2 itself drops ``Authorization`` only on a cross-origin redirect, not on a
   first request to an absolute URL;
@@ -41,11 +41,11 @@ body, which httpx2 sends again on a 307 or 308).
 **A middleware's credentials**, and a :class:`~headgate.SigningAuth`'s signature, follow the same rule. Both are
 stamped inside the transport stack, once per attempt, after the request hooks, so they would reach a cross-origin
 redirect hop after the hook had checked it. The signature is one of the auth's declared credentials; a middleware
-declares what it stamps (``credential_headers`` and ``credential_params``, a :class:`~headgate._core.CredentialCarrier`;
-``HttpOptions`` refuses one that does not), and those names are removed from any hop not addressed to ``base_url``'s
-origin or a trusted one: the guard runs a second time below the last middleware and the signature, where their output
-is visible. That pass trusts no auth flow's chain origin for a middleware's credentials, since the middleware did not
-choose it.
+declares what it stamps (``credential_headers`` and ``credential_params``, a
+:class:`~headgate.security.CredentialCarrier`; the client refuses one that does not), and those names are removed
+from any hop not addressed to ``base_url``'s origin or a trusted one: the guard runs a second time below the last
+middleware and the signature, where their output is visible. That pass trusts no auth flow's chain origin for a
+middleware's credentials, since the middleware did not choose it.
 """
 
 from __future__ import annotations

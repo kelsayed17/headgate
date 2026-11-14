@@ -293,7 +293,7 @@ token, an idempotent POST, a declared business refusal, `Link`-header pages and 
 | [Errors](https://kelsayed17.github.io/headgate/errors/) | One `ClientError` tree; method, URL, request id, attempts, `retryable`, `retry_after`, RFC 9457 problems |
 | [Auth](https://kelsayed17.github.io/headgate/auth/) | Static headers, query keys, per-attempt signatures, re-sent once on a 401, and a cached minted token with one re-mint on a 401 |
 | [Observability](https://kelsayed17.github.io/headgate/observability/) | Typed events, OpenTelemetry spans and metrics, request ids, `Deprecation` / `Sunset` notices, health snapshots |
-| [Testing kit](https://kelsayed17.github.io/headgate/testing/) | `FakeTransport`, `FaultyTransport`, `TestClock`, `isolated_breakers`, vcrpy cassette filters |
+| [Testing kit](https://kelsayed17.github.io/headgate/testing/) | `FakeTransport`, `FaultyTransport`, `TestClock`, `breakers_of`, vcrpy cassette filters |
 | [Per-call options](https://kelsayed17.github.io/headgate/configuration/#per-call-options) | `retry=`, `deadline=`, `timeout=`, `idempotency_key=`, `cache_ttl=`, and `with_options()` views |
 
 How the pieces fit together, for contributors and the curious: [design](https://kelsayed17.github.io/headgate/design/).
@@ -430,7 +430,7 @@ for the network, and a `TestClock` makes every wait instant.
 ```python
 from quickstart import CatalogClient
 
-from headgate.testing import FakeTransport, Respond, TestClock, isolated_breakers
+from headgate.testing import FakeTransport, Respond, TestClock
 
 GDP = {"id": "GDP", "title": "Gross domestic product", "values": [27.4, 28.1]}
 
@@ -447,7 +447,7 @@ async def test_a_503_is_retried_after_the_wait_it_asks_for() -> None:
     """Retry a 503 once its ``Retry-After`` has passed, on a test clock that makes the wait instant."""
     fake = FakeTransport().reply("GET", "/v1/series/GDP", Respond(503, retry_after=2.0), Respond(json=GDP))
     clock = TestClock()
-    with clock.install(), isolated_breakers():  # the clients built in the block use them
+    with clock.install():  # the clients built in the block run on it
         catalog = CatalogClient("test-key", transport=fake)
     async with catalog:
         series = await catalog.get_series("GDP")

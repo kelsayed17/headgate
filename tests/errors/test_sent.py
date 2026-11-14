@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 _BASE = "https://api.example.test"
 #: Retries that never wait.
-_NO_WAIT = Backoff(factor=0.0, jitter=lambda: 1.0)
+_NO_WAIT = Backoff(factor=0.0)
 
 
 def _client(

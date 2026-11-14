@@ -1,13 +1,16 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Where a client finds its origin's breaker: a :class:`BreakerRegistry`, by default the process-wide one.
+"""Where a client finds its origin's breaker: a :class:`BreakerRegistry`, its own unless it is given one to share.
 
-**Keying.** A breaker is keyed by origin (scheme, host and effective port, :func:`headgate._core.origin_of`) and by the
-policy's ``failure_threshold`` and ``recovery_timeout``. Every client that addresses an origin with the same thresholds
-shares one breaker; a client that asks for different thresholds gets a breaker of its own for that origin, with exactly
-the thresholds it asked for. The alternative, the first client to address an origin fixing the thresholds every later
-client gets, makes a client's breaker behavior depend on which client happened to call first.
+**Sharing.** A client builds a registry of its own, so its failures open no other client's breakers. Clients that
+should pool their failure counts on an origin are given one registry: ``BreakerPolicy(registry=shared)``. There is no
+process-wide registry.
+
+**Keying.** A breaker is keyed by origin (scheme, host and effective port, :func:`headgate._core.origin_of`). A registry
+fixes its thresholds, ``failure_threshold`` and ``recovery_timeout``, the first time a client binds it or a breaker is
+asked of it, and refuses a client whose policy asks for others with ``ValueError`` when that client is built, so
+every breaker it holds trips as every client sharing it expects.
 
 **Bounds.** A registry holds at most ``max_hosts`` breakers. Past that, the least recently used closed breaker is
 dropped (a closed breaker holds at most a few failures, which a fresh one relearns); only when every breaker is open
@@ -22,29 +25,29 @@ loops in different threads can share a registry; each breaker guards its own sta
 from __future__ import annotations
 
 import threading
-import time
 from collections import OrderedDict
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol, override
 
 import httpx2
 
-from headgate._core import BreakerState, origin_of, origin_text
+from headgate._core import BreakerState, current_timing, origin_of, origin_text
 from headgate.breaker._breaker import CircuitBreaker, Verdict
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator
     from contextlib import AbstractContextManager
 
-    from headgate._core import Clock
+    from headgate._core import Timing
     from headgate.breaker._breaker import TransitionListener
 
-__all__ = ["DEFAULT_MAX_HOSTS", "DEFAULT_REGISTRY", "NO_BREAKER", "Breaker", "BreakerRegistry"]
+__all__ = ["DEFAULT_MAX_HOSTS", "NO_BREAKER", "Breaker", "BreakerRegistry"]
 
 #: How many breakers a registry holds by default before it drops the least recently used closed one.
 DEFAULT_MAX_HOSTS: Final = 1024
 
-type _Key = tuple[str, int, float]
+#: An origin, as the text a breaker is named by.
+type _Key = str
 
 
 class Breaker(Protocol):
@@ -79,13 +82,13 @@ class BreakerRegistry:
     """The breakers of every origin its clients have called, built on first use. See the module docstring.
 
     Every client whose ``BreakerPolicy`` names the same registry shares its breakers. Reading the registry (``len``,
-    iteration, :meth:`breakers`) never builds one. *max_hosts* bounds how many it holds; *clock* is the monotonic clock
-    every breaker it builds reads.
+    iteration, :meth:`breakers`) never builds one. *max_hosts* bounds how many it holds; every breaker it builds runs
+    on *timing*, or, without one, on the timing current when the registry is built.
     """
 
-    __slots__ = ("_breakers", "_clock", "_lock", "_max_hosts")
+    __slots__ = ("_breakers", "_lock", "_max_hosts", "_thresholds", "_timing")
 
-    def __init__(self, *, max_hosts: int = DEFAULT_MAX_HOSTS, clock: Clock = time.monotonic) -> None:
+    def __init__(self, *, max_hosts: int = DEFAULT_MAX_HOSTS, timing: Timing | None = None) -> None:
         """Start empty.
 
         :raises ValueError: for a *max_hosts* below one.
@@ -94,7 +97,8 @@ class BreakerRegistry:
             msg = f"max_hosts must be >= 1 (got {max_hosts})"
             raise ValueError(msg)
         self._max_hosts = max_hosts
-        self._clock = clock
+        self._timing = current_timing() if timing is None else timing
+        self._thresholds: tuple[int, float] | None = None
         self._lock = threading.Lock()
         self._breakers: OrderedDict[_Key, CircuitBreaker] = OrderedDict()
 
@@ -103,22 +107,48 @@ class BreakerRegistry:
         """How many breakers the registry holds at most."""
         return self._max_hosts
 
+    def bind(self, *, failure_threshold: int, recovery_timeout: float) -> None:
+        """Fix the thresholds of every breaker this registry builds, or check them against the ones already fixed.
+
+        A client calls this when it is built, so a policy that cannot share the registry fails there, before any call.
+
+        :raises ValueError: for thresholds other than the ones the registry was first bound with, naming both.
+        """
+        with self._lock:
+            self._bind((failure_threshold, recovery_timeout))
+
+    def _bind(self, asked: tuple[int, float]) -> None:
+        """Do :meth:`bind`'s work for the thresholds *asked*; the caller holds the lock."""
+        if self._thresholds is None:
+            self._thresholds = asked
+        elif asked != self._thresholds:
+            fixed_threshold, fixed_timeout = self._thresholds
+            failure_threshold, recovery_timeout = asked
+            msg = (
+                f"this BreakerRegistry's breakers trip after {fixed_threshold} failures with a {fixed_timeout:g}s "
+                f"cooldown, so a client with BreakerPolicy(failure_threshold={failure_threshold}, "
+                f"recovery_timeout={recovery_timeout:g}) cannot share it: give that client the same thresholds, "
+                "or a registry of its own"
+            )
+            raise ValueError(msg)
+
     def breaker_for(
         self, origin: httpx2.Origin | httpx2.URL | str, *, failure_threshold: int, recovery_timeout: float
     ) -> CircuitBreaker:
-        """Return the breaker for *origin* (an origin, or an absolute URL) with these thresholds, building it if new.
+        """Return *origin*'s breaker (an origin, or an absolute URL), building it with these thresholds if new.
 
-        :raises ValueError: for a relative URL, which has no origin.
+        :raises ValueError: for a relative URL, which has no origin, and for thresholds the registry is not bound to
+            (see :meth:`bind`).
         """
-        name = origin_text(origin if isinstance(origin, httpx2.Origin) else origin_of(origin))
-        key = (name, failure_threshold, recovery_timeout)
+        key = name = origin_text(origin if isinstance(origin, httpx2.Origin) else origin_of(origin))
         with self._lock:
+            self._bind((failure_threshold, recovery_timeout))
             breaker = self._breakers.get(key)
             if breaker is not None:
                 self._breakers.move_to_end(key)
                 return breaker
             breaker = self._breakers[key] = CircuitBreaker(
-                failure_threshold=failure_threshold, recovery_timeout=recovery_timeout, name=name, clock=self._clock
+                failure_threshold=failure_threshold, recovery_timeout=recovery_timeout, name=name, timing=self._timing
             )
             if len(self._breakers) > self._max_hosts:
                 self._evict(keep=key)
@@ -148,11 +178,11 @@ class BreakerRegistry:
         return len(self._breakers)
 
     def clear(self) -> None:
-        """Forget every breaker, so each origin starts closed again."""
+        """Forget every breaker, so each origin starts closed again; the thresholds stay fixed."""
         with self._lock:
             self._breakers.clear()
 
-
-#: The registry every client shares unless its ``BreakerPolicy`` names another, so concurrent clients to one origin
-#: share a breaker. ``headgate.health.breaker_states`` reads it.
-DEFAULT_REGISTRY = BreakerRegistry()
+    @override
+    def __repr__(self) -> str:
+        states = {breaker.name: str(breaker.state) for breaker in self.breakers()}
+        return f"BreakerRegistry({states!r})"

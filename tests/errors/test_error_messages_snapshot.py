@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from typing import TYPE_CHECKING, Final, override
 
 import httpx2
@@ -37,8 +38,8 @@ from headgate import (
 )
 from headgate.breaker import BreakerRegistry
 from headgate.errors import RefusedError
-from headgate.retry import Backoff
 from headgate.testing import TestClock
+from headgate.timing import Timing, current_timing, timing_override
 from tests.support.clients import StubClient
 from tests.support.wire import Script
 
@@ -164,10 +165,10 @@ async def _surviving_429() -> None:
 
 async def _surviving_503() -> None:
     """Answer 503 on every attempt of three, under a policy with a fixed backoff: the history is in the notes."""
-    policy = TransportPolicy(
-        retry=RetryPolicy(attempts=3, backoff=Backoff(jitter=lambda: 0.0), budget=None), breaker=None
-    )
-    await _get(_client(httpx2.Response(503, text="maintenance", headers={"request-id": "req-503"}), policy=policy))
+    policy = TransportPolicy(retry=RetryPolicy(attempts=3, budget=None), breaker=None)
+    with timing_override(replace(current_timing(), random=lambda: 0.0)):
+        built = _client(httpx2.Response(503, text="maintenance", headers={"request-id": "req-503"}), policy=policy)
+    await _get(built)
 
 
 async def _surviving_429_past_max_retry_after() -> None:
@@ -263,7 +264,7 @@ async def _deadline_exceeded() -> None:
 
 async def _open_breaker() -> None:
     """Call an origin whose breaker a 503 opened: ``CircuitOpenError`` with the whole cooldown left."""
-    registry = BreakerRegistry(clock=lambda: 0.0)
+    registry = BreakerRegistry(timing=Timing(clock=lambda: 0.0))
     policy = TransportPolicy(
         retry=None, breaker=BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=registry)
     )

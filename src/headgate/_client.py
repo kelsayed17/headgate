@@ -100,10 +100,9 @@ from headgate._responses import Expect, Reader, accepts, nothing
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
 from headgate._view import KEEP, ROOT_DEFAULTS, VIEW_KEYS, ViewOptions
-from headgate.breaker import CircuitBreaker
+from headgate.breaker import BreakerRegistry, CircuitBreaker
 from headgate.breaker._breaker import BreakerOpenError
 from headgate.breaker._registry import NO_BREAKER
-from headgate.breaker._scope import scoped_registry
 from headgate.cache._transport import (
     MAX_RESPONSE_BYTES,
     STREAMED,
@@ -134,7 +133,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
     from types import TracebackType
 
-    from headgate._core import Observer
+    from headgate._core import Observer, Timing
     from headgate._middleware import Middleware
     from headgate._options import Route, RouteOptions
     from headgate._request_body import Lowered
@@ -225,11 +224,12 @@ class _Prepared:
 
 @dataclass(frozen=True, slots=True)
 class Built:
-    """What a client was built with, for :mod:`headgate.testing` to read back: its cache, its budgets, its pool."""
+    """What a client was built with, for :mod:`headgate.testing` to read back: its cache, budgets, pool and breakers."""
 
     cache: HttpCache | None
     budgets: PathBudgets
     http: httpx2.AsyncClient
+    breakers: BreakerRegistry | None
 
 
 #: The key a client keeps its :class:`Built` under, in its ``__dict__``. Not an identifier, so no attribute of a
@@ -287,7 +287,7 @@ class AsyncBaseClient:
     limit, raises the root ``ClientError``, since such a URL often comes from the wire rather than the code. Every
     message names a URL redacted and cut to a few hundred characters.
 
-    **Time.** The client takes its clock and sleep from :func:`headgate._core.current_timing` when it is built.
+    **Time.** The client takes its timing from :func:`headgate.timing.current_timing` when it is built.
     """
 
     def __init__(
@@ -336,6 +336,7 @@ class AsyncBaseClient:
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
         self._source = type(self).__name__
         self._timing = current_timing()
+        self._breakers = _registry_of(policy, self._timing)
         self._response_check = http.response_check
         self._max_response_bytes = http.max_response_bytes
         self._request_id_headers = http.request_id_headers
@@ -352,7 +353,7 @@ class AsyncBaseClient:
         self._http_client = build_http_client(
             base_url=base_url, credentials=credentials, http=http, timeout=policy.timeout, transport=stack
         )
-        vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client)
+        vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client, breakers=self._breakers)
 
     async def __aenter__(self) -> Self:
         """Return the client; leaving the block closes it (a view's block closes nothing, see :meth:`with_options`)."""
@@ -1055,11 +1056,11 @@ class AsyncBaseClient:
         return transport_error(exc, self._site(prepared))
 
     def _breaker_for(self, url: httpx2.URL) -> Breaker:
-        """Return *url*'s origin's breaker from the policy's registry, or a no-op one when the client has no breaker."""
+        """Return *url*'s origin's breaker from the client's registry, or a no-op one when the client has no breaker."""
         policy = self._policy.breaker
-        if policy is None:
+        if policy is None or self._breakers is None:
             return NO_BREAKER
-        return policy.registry.breaker_for(
+        return self._breakers.breaker_for(
             url, failure_threshold=policy.failure_threshold, recovery_timeout=policy.recovery_timeout
         )
 
@@ -1123,7 +1124,13 @@ class AsyncBaseClient:
         context = prepared.context
         info = context.info
         return CallSite(
-            self._source, info.method, info.url, context.attempt, self._request_id_headers, context.get(RETRY_OUTCOME)
+            self._source,
+            info.method,
+            info.url,
+            context.attempt,
+            self._request_id_headers,
+            context.get(RETRY_OUTCOME),
+            self._timing.wall_clock,
         )
 
     def _unsent_site(self, prepared: _Prepared) -> CallSite:
@@ -1156,15 +1163,24 @@ def _stack_parts[T](name: str, parts: Sequence[T]) -> tuple[T, ...]:
 def _effective_policy(policy: TransportPolicy, *, off: bool) -> TransportPolicy:
     """Return the policy a client built now runs: *policy*, less retries and the breaker when transport policy is *off*.
 
-    The breaker's registry is the one a :func:`~headgate.testing.isolated_breakers` block substitutes for the default,
-    if any. The rate budget checks for transport policy being off itself, when it is built.
+    The rate budget checks for transport policy being off itself, when it is built.
     """
-    if off:
-        return replace(policy, retry=None, breaker=None)
+    return replace(policy, retry=None, breaker=None) if off else policy
+
+
+def _registry_of(policy: TransportPolicy, timing: Timing) -> BreakerRegistry | None:
+    """Return the registry a client's breakers live in: the policy's shared one, else one of its own on *timing*.
+
+    The registry is bound to the policy's thresholds here, so a client that cannot share it fails when it is built.
+
+    :raises ValueError: for thresholds other than the ones a shared registry is bound to.
+    """
     breaker = policy.breaker
-    if breaker is None or (registry := scoped_registry(breaker.registry)) is breaker.registry:
-        return policy
-    return replace(policy, breaker=replace(breaker, registry=registry))
+    if breaker is None:
+        return None
+    registry = BreakerRegistry(timing=timing) if breaker.registry is None else breaker.registry
+    registry.bind(failure_threshold=breaker.failure_threshold, recovery_timeout=breaker.recovery_timeout)
+    return registry
 
 
 def _query_pairs(params: Mapping[str, object]) -> list[tuple[str, _QueryValue]]:

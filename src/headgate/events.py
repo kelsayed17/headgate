@@ -8,6 +8,9 @@ call emits :class:`CallStarted`, one :class:`AttemptFinished` per send, and :cla
 add :class:`RetryScheduled`, :class:`RateLimited`, :class:`BreakerChanged`, :class:`CacheResult` and
 :class:`Deprecated`. Every event is frozen and carries sanitized data only: no header, body or credential. An
 observer's exception never reaches the call; it is counted in :func:`headgate.health.observer_failures`.
+
+:class:`CallView` is what :func:`headgate.call_info` returns: the call's :class:`CallInfo`, with its attempt and the
+time left, read when asked, for a middleware.
 """
 
 from headgate._core import (
@@ -19,6 +22,7 @@ from headgate._core import (
     CallFinished,
     CallInfo,
     CallStarted,
+    CallView,
     Deprecated,
     Event,
     Observer,
@@ -35,6 +39,7 @@ __all__ = [
     "CallFinished",
     "CallInfo",
     "CallStarted",
+    "CallView",
     "Deprecated",
     "Event",
     "Observer",

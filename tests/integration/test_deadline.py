@@ -26,6 +26,7 @@ from headgate import (
 from headgate.ratelimit import Rate
 from headgate.retry import Backoff
 from headgate.testing import FakeTransport, TestClock
+from headgate.timing import Timing
 from tests.integration._support import client
 
 #: The server's pause, the backoff before the first retry, and a deadline that covers the pause but not both.
@@ -45,8 +46,8 @@ def _full_jitter() -> float:
 @pytest.mark.transport_policy
 async def test_a_pause_a_backoff_and_attempts_stay_inside_the_deadline() -> None:
     """Wait the pause and send, then stop rather than start a backoff the deadline cannot cover."""
-    clock = TestClock()
-    budget = RateBudget(Rate.per_second(100), timing=clock.timing, wall_clock=clock)
+    clock = TestClock(random=_full_jitter)
+    budget = RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
     timeouts: list[float] = []
 
     def unavailable(request: httpx2.Request) -> httpx2.Response:
@@ -55,7 +56,7 @@ async def test_a_pause_a_backoff_and_attempts_stay_inside_the_deadline() -> None
 
     limited = httpx2.Response(429, headers={"Retry-After": f"{_PAUSE:g}"})
     fake = FakeTransport().reply("GET", "/v1/limited", limited).reply("GET", "/v1/x", unavailable)
-    retry = RetryPolicy(backoff=Backoff(factor=_BACKOFF / 2, max_wait=_BACKOFF, jitter=_full_jitter))
+    retry = RetryPolicy(backoff=Backoff(factor=_BACKOFF / 2, max_wait=_BACKOFF))
     with clock.install():
         built = client(fake, rate=budget, policy=TransportPolicy(retry=retry))
     with pytest.raises(RateLimitError):

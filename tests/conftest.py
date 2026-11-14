@@ -4,9 +4,8 @@
 """The suite's fixtures: autouse ones that keep the transport policy real but instant and isolated, and a storage.
 
 They apply to every test under ``tests/``: a mocked failure is retried as production retries it without sleeping
-through the backoff, no breaker state carries from one test to the next, and the rate budget admits at once. A test
-whose subject is the throttle's own timing opts out of the no-op budget wait with
-``@pytest.mark.transport_policy``.
+through the backoff, and the rate budget admits at once. A test whose subject is the throttle's own timing opts out of
+the no-op budget wait with ``@pytest.mark.transport_policy``. Breakers need no reset: each client keeps its own.
 """
 
 from __future__ import annotations
@@ -17,7 +16,6 @@ import anysqlite
 import pytest
 from hishel import AsyncSqliteStorage
 
-from headgate.breaker._registry import DEFAULT_REGISTRY
 from headgate.ratelimit._budget import Pacer
 from headgate.testing import instant_retries
 
@@ -35,14 +33,6 @@ def instant_retry_sleep() -> Iterator[None]:
     """
     with instant_retries():
         yield
-
-
-@pytest.fixture(autouse=True)
-def reset_circuit_breakers() -> Iterator[None]:
-    """Reset the shared default breaker registry around every test, so failures never carry into a later test."""
-    DEFAULT_REGISTRY.clear()
-    yield
-    DEFAULT_REGISTRY.clear()
 
 
 @pytest.fixture(autouse=True)

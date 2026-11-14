@@ -114,13 +114,15 @@ def _should_retry(response: httpx2.Response, policy: RetryPolicy) -> bool | None
     return {"true": True, "false": False}.get(header)
 
 
-def _classify_response(response: httpx2.Response, attempted: Attempted, policy: RetryPolicy) -> Verdict:
+def _classify_response(
+    response: httpx2.Response, attempted: Attempted, policy: RetryPolicy, now: float | None
+) -> Verdict:
     """Classify a response by its status, the server's ``x-should-retry``, and the method's safety."""
     status = response.status_code
     should = _should_retry(response, policy)
     if status not in policy.statuses and should is not True:
         return _ANSWER
-    retry_after = retry_after_of(response)
+    retry_after = retry_after_of(response, now=now)
     reason = str(status)
     if should is not None:
         return Verdict(failure=True, retryable=should, reason=reason, retry_after=retry_after)
@@ -139,8 +141,14 @@ def _classify_error(exc: Exception, attempted: Attempted, policy: RetryPolicy) -
     return Verdict(failure=True, retryable=safe, reason=reason)
 
 
-def classify(result: httpx2.Response | Exception, attempted: Attempted, policy: RetryPolicy) -> Verdict:
-    """Return the verdict on *result*, one attempt of the request *attempted* under *policy*."""
+def classify(
+    result: httpx2.Response | Exception, attempted: Attempted, policy: RetryPolicy, *, now: float | None = None
+) -> Verdict:
+    """Return the verdict on *result*, one attempt of the request *attempted* under *policy*.
+
+    *now* is the Unix time a ``Retry-After`` HTTP-date is read against when the response sends no ``Date``; the
+    system's wall clock without one.
+    """
     if isinstance(result, httpx2.Response):
-        return _classify_response(result, attempted, policy)
+        return _classify_response(result, attempted, policy, now)
     return _classify_error(result, attempted, policy)

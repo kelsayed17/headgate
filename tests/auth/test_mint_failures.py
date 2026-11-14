@@ -121,13 +121,15 @@ def _slow(request: httpx2.Request) -> httpx2.Response:
 
 async def test_an_unreachable_token_host_names_the_token_endpoint_and_spares_the_api_host() -> None:
     """Name the token endpoint (its secret redacted), chain the cause, and leave the API host's breaker untouched."""
+    client = _api(_MintsOver(_refused))
     with pytest.raises(TransportError) as raised:
-        await _call(_MintsOver(_refused))
+        async with client:
+            await client.get("series", expect=as_bytes)
 
     assert type(raised.value) is TransportError
     assert str(raised.value) == f"[_MintsOver] POST {_LOGGED_EXCHANGE_URL} (token mint): connection refused"
     _assert_unchained(raised.value, httpx2.ConnectError)
-    assert failures(_API_HOST) == 0
+    assert failures(client, _API_HOST) == 0
 
 
 async def test_a_token_host_that_times_out_is_a_client_timeout() -> None:
@@ -513,8 +515,10 @@ async def test_a_mint_hops_network_failure_names_the_token_endpoint_not_the_api_
             return _refused(request)
         return httpx2.Response(httpx2.codes.OK)
 
+    client = _api(_FlowReadsJson(), handle)
     with pytest.raises(TransportError) as raised:
-        await _call(_FlowReadsJson(), handle)
+        async with client:
+            await client.get("series", expect=as_bytes)
 
     assert str(raised.value) == f"[_FlowReadsJson] POST https://{_API_HOST}/token (token mint): connection refused"
-    assert failures(_API_HOST) == 0
+    assert failures(client, _API_HOST) == 0

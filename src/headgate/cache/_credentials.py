@@ -8,16 +8,16 @@ that URL. So the cache layer hands hishel a view of the request, :meth:`Credenti
 below hishel for the network:
 
 * **Nothing credential-bearing is stored.** The view drops ``Authorization``, ``Proxy-Authorization``, ``Cookie``,
-  every header and query parameter the client's auth (:class:`~headgate._core.CredentialStamper`) or middleware
-  (:class:`~headgate._core.CredentialCarrier`) declares, every query parameter :func:`~headgate._url.is_secret_param`
+  every header and query parameter the client's auth (:class:`~headgate.security.CredentialStamper`) or middleware
+  (:class:`~headgate.security.CredentialCarrier`) declares, every query parameter :func:`~headgate._url.is_secret_param`
   names, and the URL's userinfo. Every header it keeps carries a keyed digest in place of its value, so a credential in
   a header nothing declares (an undeclared auth's, a client-wide or a per-call one) is not stored either, while the
   cache layer's ``Vary`` matching, which compares a stored value with a new one, still works.
 * **What was dropped decides the partition.** Under :attr:`Partition.CREDENTIAL <headgate.cache.Partition.CREDENTIAL>`
   the view's URL carries a partition label in its fragment: an HMAC-SHA256, under a key drawn at random once per
-  process, of the auth's class and :meth:`~headgate._core.CredentialStamper.credential_identity`, of the value of every
-  dropped credential the auth did not declare (a middleware's, a caller's own ``Authorization`` header, a cookie, an
-  ``api_key`` in the URL), and of the value of every header the client sets on all its requests
+  process, of the auth's class and :meth:`~headgate.security.CredentialStamper.credential_identity`, of the value of
+  every dropped credential the auth did not declare (a middleware's, a caller's own ``Authorization`` header, a
+  cookie, an ``api_key`` in the URL), and of the value of every header the client sets on all its requests
   (``HttpOptions.headers``, where a static key is often configured) or a view sets on all of its
   (``with_options(headers=...)``, often one tenant's key). Two requests with different credentials therefore
   never share an entry, and the label can be neither reversed nor compared with another process's. A request with no
@@ -165,8 +165,8 @@ class CredentialScope:
 
         *stamper* is the client's auth, represented by its identity. Each of *carriers* (the client's middleware) has
         what it declares dropped too, represented by its identity when it is a
-        :class:`~headgate._core.CredentialStamper` and by the values otherwise. *client_headers* names the headers the
-        client sets on every request, which label the partition by their values. The names are read once, here.
+        :class:`~headgate.security.CredentialStamper` and by the values otherwise. *client_headers* names the headers
+        the client sets on every request, which label the partition by their values. The names are read once, here.
 
         A *guarded* client (one that refuses private hosts) gets entries of its own under either partition, so it is
         never served a body an unguarded client on the same storage fetched from a host it would refuse.
@@ -271,7 +271,7 @@ def credential_scope(
     if auth is not None and stamper is None and cache.partition is Partition.CREDENTIAL:
         msg = (
             f"the HTTP cache partitions entries by credential, but {type(auth).__qualname__} does not declare its "
-            f"credentials (headgate._core.CredentialStamper: credential_headers, credential_params, "
+            f"credentials (headgate.security.CredentialStamper: credential_headers, credential_params, "
             f"credential_identity()), so another credential's client on the same storage could be served its entries. "
             f"Implement CredentialStamper on the auth, or, only if every cached response is public, pass "
             f"HttpCache(partition=Partition.SHARED)"

@@ -229,12 +229,13 @@ async def test_a_network_failure_mid_body_raises_from_the_iteration_and_counts_a
     """Raise ``TransportError`` from the iteration, after the earlier chunks, and charge the host's breaker."""
     body = _Body(b"head", then=httpx2.ReadError("connection reset"))
     received: list[bytes] = []
+    client = _client(_streaming(body))
     with pytest.raises(TransportError) as raised:
-        await _drain(_client(_streaming(body)), received.append)
+        await _drain(client, received.append)
     assert received == [b"head"]
     assert not isinstance(raised.value, ClientTimeoutError)
     assert isinstance(raised.value.__cause__, httpx2.ReadError)
-    assert failures(_HOST) == 1
+    assert failures(client, _HOST) == 1
 
 
 async def test_a_timeout_mid_body_raises_a_client_timeout() -> None:
@@ -250,10 +251,11 @@ async def test_an_error_of_the_callers_own_passes_through_and_charges_nothing() 
     class _MineError(Exception):
         """The caller's own failure."""
 
+    client = _client(_answer(httpx2.Response(200)))
     with pytest.raises(_MineError):
-        async with _client(_answer(httpx2.Response(200))).stream("f"):
+        async with client.stream("f"):
             raise _MineError
-    assert failures(_HOST) == 0
+    assert failures(client, _HOST) == 0
 
 
 async def _fail_while_handling(client: StubClient) -> None:
@@ -295,7 +297,7 @@ async def test_a_network_like_error_of_the_callers_own_is_not_the_streams(error:
         async with client.stream("f"):
             raise error
     assert raised.value is error
-    assert failures(_HOST) == 0
+    assert failures(client, _HOST) == 0
     async with client.stream("f") as stream:
         assert [chunk async for chunk in stream.aiter_bytes()] == [b"ok"]
 
@@ -425,17 +427,19 @@ async def test_events_require_an_event_stream() -> None:
 async def test_an_oversized_event_is_too_large_and_charges_nothing() -> None:
     """Raise ``ResponseTooLargeError`` for an event past the size limit, charging the host nothing."""
     body = _Body(b"data: " + b"x" * _BIG_BODY + b"\n\n")
+    client = _client(_streaming(body, _SSE))
     with pytest.raises(ResponseTooLargeError, match="server-sent event"):
-        await _drain_events(_client(_streaming(body, _SSE)), _SMALL_CAP)
-    assert failures(_HOST) == 0
+        await _drain_events(client, _SMALL_CAP)
+    assert failures(client, _HOST) == 0
 
 
 async def test_a_network_failure_mid_events_is_a_transport_error() -> None:
     """Map a network failure while events arrive onto ``TransportError``."""
     body = _Body(b"data: a\n\n", then=httpx2.RemoteProtocolError("peer closed"))
+    client = _client(_streaming(body, _SSE))
     with pytest.raises(TransportError):
-        await _drain_events(_client(_streaming(body, _SSE)), None)
-    assert failures(_HOST) == 1
+        await _drain_events(client, None)
+    assert failures(client, _HOST) == 1
 
 
 async def test_the_block_receives_a_stream() -> None:

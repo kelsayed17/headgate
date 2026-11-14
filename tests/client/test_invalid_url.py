@@ -35,7 +35,7 @@ async def test_a_malformed_url_is_a_client_error_and_not_a_host_failure() -> Non
             await client.get("a\x00b", expect=as_bytes)
     finally:
         await client.aclose()
-    assert failures("example.test") == 0, "a malformed URL is not a host failure"
+    assert failures(client, "example.test") == 0, "a malformed URL is not a host failure"
     assert str(raised.value).startswith("[_Client] invalid URL a%00b: Invalid non-printable ASCII character in URL")
     assert (raised.value.method, raised.value.url, raised.value.source) == ("GET", "a%00b", "_Client")
 

@@ -8,6 +8,26 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `headgate.testing.breakers_of(client)`, the `BreakerRegistry` a client's breakers live in, or `None` for a client
+  without a breaker.
+- `BreakerRegistry.bind(failure_threshold=, recovery_timeout=)`, which fixes the thresholds of every breaker the
+  registry holds, and a `repr` naming each origin's state.
+- `TestClock(epoch=..., random=...)` and `TestClock.wall_clock()`: a test clock's wall clock reads `epoch` plus its
+  monotonic reading, and `random` is the backoff's jitter draw (`random=lambda: 1.0` for a full backoff a test can
+  predict). `RetryBudget.record_first()`, `try_spend()`, `refund()` and `.share`, what a shared budget is spent
+  through.
+- A `repr` showing their state on `RateBudget` (its rate, the rate pacing runs at now, what is in flight and the pause
+  left) and `RetryBudget` (its share, and the retries and first attempts in the window).
+- `RetryShare`, the frozen share of traffic retries may add, from which each client builds a budget of its own.
+- `headgate.call_info(request)`, a middleware's read-only view of its call: a `headgate.events.CallView` holding the
+  call's `CallInfo` (its route template among it), its `attempt` and the seconds `remaining` before its deadline,
+  taken when asked, or `None` for a request no client call built. A middleware no longer imports the private
+  `CallContext`.
+- `headgate.security.CredentialCarrier` and `CredentialStamper`, the protocols an auth or a middleware declares its
+  credentials with, public where the cache's error message and the docs now point.
+- `headgate.timing`, the one seam for time and randomness: `Timing(clock=, sleep=, wall_clock=, random=)`, its
+  protocols `Clock`, `Sleep` and `RandomSource`, and `current_timing()` and `timing_override()`. `Timing` gains a
+  `wall_clock`, for `Retry-After` dates and `RateLimit` epochs, and a `random` source, for the backoff's jitter.
 - A `Timeouts` phase set to `math.inf` has no limit (`Timeouts(read=math.inf)`), while `None` still takes the layer
   beneath's value. httpx2 is handed `None` for that phase. Under a deadline it gets the time the deadline leaves, and
   it is never refused as longer than the deadline.
@@ -49,6 +69,36 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- `TestClock.install()` puts the clients built in its block on a fixed wall clock, `epoch` (2027-01-15 by default)
+  plus the test clock's reading, as well as its monotonic clock. A test that builds a `Retry-After` date or a
+  `RateLimit` reset from `time.time()` builds it from `clock.wall_clock()` instead.
+- A retry whose wait the server asked for (`Retry-After`) draws no random number: only a backoff does, so a seeded
+  `Timing(random=)` replays the same waits whatever the server asks.
+- **Each client keeps its breakers to itself.** A client given no registry builds one of its own, so one client's
+  failures no longer open a breaker another client is refused by. This changes behavior without an error: clients that
+  relied on pooling their failures against an upstream must now be given one registry:
+
+  ```python
+  shared = BreakerRegistry()
+  policy = TransportPolicy(breaker=BreakerPolicy(registry=shared))
+  ```
+
+  `BreakerPolicy(registry=)` defaults to `None`, the client's own. A registry keys a breaker by origin alone and fixes
+  its thresholds the first time a client binds it: a client whose `BreakerPolicy` asks for other thresholds is refused
+  with `ValueError` when it is built, instead of getting a second breaker for the origin.
+  `headgate.health.breaker_states(registry)` takes the registry to report on.
+- `RetryBudget(ratio=..., min_per_second=..., window=...)` as a policy value is `RetryShare(...)`, with the same
+  fields and the same per-client meaning: a client keeps one budget per distinct share, spent by its calls, views and
+  routes. `RetryBudget` is now live shared state, as `RateBudget` is: `RetryBudget(share, *, timing=None)`, and every
+  client whose policy names the same object spends one window. `RetryPolicy(budget=)` takes a `RetryShare`, a
+  `RetryBudget` or `None` (no cap). The old keywords raise `TypeError`, and `RetryBudget(clock=)` is
+  `RetryBudget(share, timing=Timing(clock=...))`.
+- Every clock is one `timing=`, and `None` reads the current timing when the object is built:
+  - `BreakerRegistry(clock=c)` and `CircuitBreaker(clock=c)` are `timing=Timing(clock=c)`;
+  - `RateBudget(wall_clock=w)` is `timing=Timing(wall_clock=w)`;
+  - `Backoff(jitter=j)` is gone: the draw is the client's `Timing(random=j)`, and `Backoff.delay(retry, draw)` and
+    `RetryPolicy.wait_after(retry_after, retry, draw)` take it;
+  - `CachedTokenAuth(timing=)` is new.
 - **`UpstreamStatusError.status_code` is `int | None`, a type change that ty and pyright flag wherever it is
   ordered.** A `RateLimitError` from the client's own rate budget, paused at the server's request past the call's
   deadline, carries `status_code=None`, and its message has no status tag, since the call got no response. Before, it
@@ -175,6 +225,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Removed
 
+- `headgate.breaker.DEFAULT_REGISTRY`, the process-wide registry: pass one `BreakerRegistry` to the clients that share
+  it. `headgate.testing.isolated_breakers()`: each client's breakers are already its own; read them with
+  `breakers_of(client)`.
 - `RateRule` and `TransportPolicy.rate_limits`: write `Route(fragment, rate=...)` in `routes=`.
 - `headgate.retry.NO_RETRY`: write `retry=None`. `headgate.ratelimit.UNLIMITED`: leave `rate=` out, or write
   `rate=None`.
@@ -194,6 +247,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- `TestClock.install()` reaches a `CachedTokenAuth`'s token lifetimes, a `RateBudget` shared between clients and a
+  `BreakerRegistry`'s cooldowns, each built in the block. They read `time.monotonic()` themselves, so a test had to
+  patch them. A `Retry-After` HTTP-date with no `Date` is read against the client's wall clock too.
 - A hedge that loses while it is still above the rate budget, in a middleware that awaits before it sends, gives its
   retry budget back. The send it raced reached the rate budget meanwhile and marked the hedge as sent, so every such
   call kept one retry, and enough of them drained the budget: later calls could neither hedge nor retry.

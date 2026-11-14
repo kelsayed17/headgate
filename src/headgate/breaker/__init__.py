@@ -1,9 +1,10 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The circuit breaker: :class:`BreakerPolicy` configures it, :class:`BreakerRegistry` shares it between clients.
+"""The circuit breaker: :class:`BreakerPolicy` configures it, :class:`BreakerRegistry` holds it.
 
-A registry hands out one :class:`CircuitBreaker` per origin, whose :class:`BreakerState` it reports.
+A registry hands out one :class:`CircuitBreaker` per origin, whose :class:`BreakerState` it reports. Each client keeps a
+registry of its own; clients given one registry pool their failures in it.
 
 Self-contained: it imports only ``httpx2``, the standard library and :mod:`headgate._core`.
 """

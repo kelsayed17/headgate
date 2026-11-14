@@ -152,11 +152,12 @@ async def test_a_request_the_library_could_not_encode_is_not_retryable() -> None
 @pytest.mark.parametrize("status", [501, 505, 507])
 async def test_a_surviving_status_the_policy_does_not_retry_is_not_retryable(status: int) -> None:
     """Mark a 5xx outside ``RetryPolicy.statuses`` not retryable, and still charge it to the origin's breaker."""
-    error = await _raised(_client(Script(status)))
+    client = _client(Script(status))
+    error = await _raised(client)
 
     assert isinstance(error, UpstreamStatusError)
     assert (error.status_code, error.retryable) == (status, False)
-    assert failures("api.example.test") == 1
+    assert failures(client, "api.example.test") == 1
 
 
 @pytest.mark.parametrize("status", [501, 505])
@@ -525,10 +526,11 @@ async def test_a_surviving_status_outside_the_policy_still_carries_its_retry_aft
 
 async def test_a_surviving_500_is_transient_and_charged_to_the_breaker() -> None:
     """Raise a surviving 500 as a transient status, and charge it to the origin, as every 5xx is."""
-    error = await _raised(_client(Script(500)))
+    client = _client(Script(500))
+    error = await _raised(client)
 
     assert str(error).startswith("[StubClient] transient 500 for GET orders")
-    assert failures("api.example.test") == 1
+    assert failures(client, "api.example.test") == 1
 
 
 async def test_a_refusal_and_a_parse_error_carry_the_request_id() -> None:

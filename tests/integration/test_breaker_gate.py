@@ -15,8 +15,9 @@ import pytest
 from headgate import BreakerPolicy, HttpOptions, TransportPolicy, UpstreamStatusError, nothing
 from headgate.breaker import BreakerState, CircuitBreaker
 from headgate.events import BreakerChanged
-from headgate.testing import FakeTransport, TestClock, isolated_breakers
+from headgate.testing import FakeTransport, TestClock
 from tests.integration._support import BASE, client
+from tests.support.breakers import registry_of
 from tests.support.events import Recorder
 
 _PATH = "/v1/x"
@@ -39,8 +40,8 @@ async def test_a_breaker_opening_mid_sequence_stops_the_retries() -> None:
         return httpx2.Response(503)
 
     fake = FakeTransport().reply("GET", _PATH, unavailable_while_another_call_fails, 200)
-    with isolated_breakers() as registry:
-        built = client(fake, policy=_POLICY)
+    built = client(fake, policy=_POLICY)
+    registry = registry_of(built)
     breakers.append(registry.breaker_for(BASE, failure_threshold=1, recovery_timeout=_COOLDOWN))
 
     with pytest.raises(UpstreamStatusError) as raised:
@@ -57,8 +58,9 @@ async def test_a_half_open_probe_keeps_its_retries() -> None:
     clock = TestClock()
     recorder = Recorder()
     fake = FakeTransport().reply("GET", _PATH, 503, 502, 200)
-    with clock.install(), isolated_breakers() as registry:
+    with clock.install():
         built = client(fake, policy=_POLICY, http=HttpOptions(), observers=(recorder,))
+    registry = registry_of(built)
     breaker = registry.breaker_for(BASE, failure_threshold=1, recovery_timeout=_COOLDOWN)
     _fail_once(breaker)
     clock.advance(_COOLDOWN)

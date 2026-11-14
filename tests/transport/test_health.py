@@ -19,7 +19,6 @@ from hishel import AsyncSqliteStorage, Entry
 
 from headgate._core import OBSERVER_FAILURES
 from headgate.breaker import BreakerRegistry, BreakerState
-from headgate.breaker._registry import DEFAULT_REGISTRY
 from headgate.cache import HttpCache
 from headgate.cache._transport import CACHE_DEGRADATIONS, CACHE_DEGRADED_EXT, ResilientCacheTransport
 from headgate.health import breaker_states, cache_degradations, observer_failures
@@ -73,16 +72,6 @@ def test_breaker_states_reports_a_tripped_host_as_open() -> None:
     assert breaker_states(registry)[_ORIGIN] == (BreakerState.OPEN, True)
 
 
-def test_an_origin_with_several_breakers_reports_the_most_degraded() -> None:
-    """Report the refusing breaker of an origin two policies address, whichever was built first."""
-    registry = BreakerRegistry()
-    registry.breaker_for(_ORIGIN, failure_threshold=_THRESHOLD, recovery_timeout=_LONG_COOLDOWN)
-    _trip(registry.breaker_for(_ORIGIN, failure_threshold=_THRESHOLD, recovery_timeout=_LONG_COOLDOWN + 1))
-    registry.breaker_for(_ORIGIN, failure_threshold=_THRESHOLD + 1, recovery_timeout=_LONG_COOLDOWN)
-
-    assert breaker_states(registry) == {_ORIGIN: (BreakerState.OPEN, True)}
-
-
 def test_a_tripped_breaker_past_its_cooldown_is_open_but_not_refusing() -> None:
     """Report open but not refusing: ``state`` waits for a probe, ``refusing`` follows the cooldown."""
     registry = BreakerRegistry()
@@ -91,12 +80,12 @@ def test_a_tripped_breaker_past_its_cooldown_is_open_but_not_refusing() -> None:
     assert breaker_states(registry)[_ORIGIN] == (BreakerState.OPEN, False)
 
 
-def test_breaker_states_reads_the_default_registry_and_is_a_copy() -> None:
-    """Read the shared registry by default, and return a fresh mapping each call that leaves the registry intact."""
-    DEFAULT_REGISTRY.breaker_for(_ORIGIN, failure_threshold=_THRESHOLD, recovery_timeout=_LONG_COOLDOWN)
-    snapshot = breaker_states()
-    snapshot.clear()
-    assert _ORIGIN in breaker_states()
+def test_breaker_states_is_a_copy() -> None:
+    """Return a fresh mapping each call, so clearing a snapshot leaves the registry intact."""
+    registry = BreakerRegistry()
+    registry.breaker_for(_ORIGIN, failure_threshold=_THRESHOLD, recovery_timeout=_LONG_COOLDOWN)
+    breaker_states(registry).clear()
+    assert _ORIGIN in breaker_states(registry)
 
 
 def test_observer_failures_is_a_copy() -> None:

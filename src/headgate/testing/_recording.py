@@ -6,7 +6,7 @@
 :class:`CassetteFilter` builds a vcrpy configuration from what headgate already knows is secret: the credential
 headers, the query parameters :func:`headgate._url.is_secret_param` names (the well-known ones and every name a
 ``QueryParamAuth`` registered), and what each auth declares through
-:class:`~headgate._core.CredentialStamper`. It is also a :class:`~headgate.Middleware` that marks the requests an
+:class:`~headgate.security.CredentialStamper`. It is also a :class:`~headgate.Middleware` that marks the requests an
 auth flow sends to mint a credential (:data:`headgate._auth.AUTH_HOP`), so the recorder skips them: a token response
 is a credential, and not the endpoint's answer.
 
@@ -82,7 +82,7 @@ class CassetteFilter:
     ) -> None:
         """Filter the credentials *auths* declare, plus *headers* and query *params* named here.
 
-        An auth that is a :class:`~headgate._core.CredentialStamper` contributes the headers and parameters it
+        An auth that is a :class:`~headgate.security.CredentialStamper` contributes the headers and parameters it
         stamps; any other auth contributes nothing, so name its credentials in *headers* and *params*.
 
         *replaying* (for ``record_mode="none"``) makes a mint fail the test with an ``AssertionError``: a mint is

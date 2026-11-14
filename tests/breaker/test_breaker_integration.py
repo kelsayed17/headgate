@@ -26,8 +26,7 @@ import httpx2
 import pytest
 
 from headgate import BreakerPolicy, HttpOptions, TransportPolicy
-from headgate.breaker import BreakerState, CircuitBreaker
-from headgate.breaker._registry import DEFAULT_REGISTRY
+from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
 from headgate.errors import (
     CircuitOpenError,
     ClientConfigurationError,
@@ -111,19 +110,23 @@ class _TruncatedBodyTransport(httpx2.AsyncBaseTransport):
         return httpx2.Response(200, stream=_TruncatedBodyStream(), headers={"content-type": "application/json"})
 
 
-#: The policy of every client below but the last test's: the fixture breaker's threshold and cooldown, so they share it.
-_FAST_BREAKER = BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
+#: The registry every client below but the last test's shares, so the fixture breaker is theirs.
+_SHARED = BreakerRegistry()
+
+#: The policy of every client below but the last test's: the fixture breaker's threshold, cooldown and registry.
+_FAST_BREAKER = BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN, registry=_SHARED)
 
 
 @pytest.fixture
 def breaker() -> CircuitBreaker:
     """Return the test host's breaker for :data:`_FAST_BREAKER`, fast-recovering (the default is 60s).
 
-    The autouse ``reset_circuit_breakers`` clears the registry around the test. The cooldown is 50 ms rather than the
-    1 ms ``test_breaker.py`` uses, so that a test asserting a healthy client is not refused cannot pass on a breaker
-    that opened and whose cooldown already elapsed, admitting the request as a probe.
+    The shared registry is cleared first, so no state carries in from an earlier test. The cooldown is 50 ms rather
+    than the 1 ms ``test_breaker.py`` uses, so that a test asserting a healthy client is not refused cannot pass on a
+    breaker that opened and whose cooldown already elapsed, admitting the request as a probe.
     """
-    return DEFAULT_REGISTRY.breaker_for(_URL, failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
+    _SHARED.clear()
+    return _SHARED.breaker_for(_URL, failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
 
 
 async def _fail(client: StubClient, times: int) -> None:
@@ -428,52 +431,49 @@ async def test_a_cache_hit_neither_resets_failures_nor_closes_a_probe(breaker: C
 async def test_an_opted_out_client_is_not_refused_by_a_breaker_another_client_opened() -> None:
     """Skip the registry read, not only the recording, with ``breaker=None`` and with policy off.
 
-    The registry is process-global and keyed by origin, so a client that merely stopped recording
-    would still be refused by a breaker some other client opened on the same host. Runs on the
-    registry's own 60s breaker rather than the ``breaker`` fixture: a 50ms cooldown could elapse
-    mid-test and admit the control below as a probe.
+    A registry the clients share is keyed by origin, so a client that merely stopped recording would still be refused
+    by a breaker another client opened on the same host. Runs on the default 60s breaker rather than the ``breaker``
+    fixture: a 50ms cooldown could elapse mid-test and admit the control below as a probe.
     """
-    DEFAULT_REGISTRY.clear()
-    try:
-        await _fail(
-            StubClient(
-                rate=Rate.per_second(2),
-                base_url=_URL,
-                policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
-                http=HttpOptions(transport=_ScriptedTransport(503)),
-            ),
-            _THRESHOLD,
-        )
-        assert [breaker.state for breaker in DEFAULT_REGISTRY.breakers(_URL)] == [BreakerState.OPEN]
+    shared = BreakerRegistry()
+    policy = TransportPolicy(retry=RetryPolicy(attempts=1), breaker=BreakerPolicy(registry=shared))
+    await _fail(
+        StubClient(
+            rate=Rate.per_second(2),
+            base_url=_URL,
+            policy=policy,
+            http=HttpOptions(transport=_ScriptedTransport(503)),
+        ),
+        _THRESHOLD,
+    )
+    assert [breaker.state for breaker in shared.breakers(_URL)] == [BreakerState.OPEN]
 
-        refused = _ScriptedTransport(200)
-        with pytest.raises(CircuitOpenError):
-            await StubClient(
-                rate=Rate.per_second(2),
-                base_url=_URL,
-                policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
-                http=HttpOptions(transport=refused),
-            ).get("x", expect=RESPONSE)
-        assert refused.calls == 0, "control: a client that consults the breaker is refused"
-
-        no_breaker = _ScriptedTransport(200)
+    refused = _ScriptedTransport(200)
+    with pytest.raises(CircuitOpenError):
         await StubClient(
             rate=Rate.per_second(2),
             base_url=_URL,
-            policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=None),
-            http=HttpOptions(transport=no_breaker),
+            policy=policy,
+            http=HttpOptions(transport=refused),
         ).get("x", expect=RESPONSE)
-        policy_off = _ScriptedTransport(200)
-        with policy_disabled():
-            policy_off_client = StubClient(
-                rate=Rate.per_second(2),
-                base_url=_URL,
-                policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
-                http=HttpOptions(transport=policy_off),
-            )
-        await policy_off_client.get("x", expect=RESPONSE)
+    assert refused.calls == 0, "control: a client that consults the breaker is refused"
 
-        assert no_breaker.calls == 1, "breaker=None must reach the network"
-        assert policy_off.calls == 1, "a policy-off client must reach the network"
-    finally:
-        DEFAULT_REGISTRY.clear()
+    no_breaker = _ScriptedTransport(200)
+    await StubClient(
+        rate=Rate.per_second(2),
+        base_url=_URL,
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=None),
+        http=HttpOptions(transport=no_breaker),
+    ).get("x", expect=RESPONSE)
+    policy_off = _ScriptedTransport(200)
+    with policy_disabled():
+        policy_off_client = StubClient(
+            rate=Rate.per_second(2),
+            base_url=_URL,
+            policy=policy,
+            http=HttpOptions(transport=policy_off),
+        )
+    await policy_off_client.get("x", expect=RESPONSE)
+
+    assert no_breaker.calls == 1, "breaker=None must reach the network"
+    assert policy_off.calls == 1, "a policy-off client must reach the network"
