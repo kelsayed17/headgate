@@ -44,7 +44,10 @@ first request, each redirect, and each request an auth flow sends. On any hop ad
 - every header set in `HttpOptions(headers=...)`, where a static key is often configured, except `User-Agent` and the
   content negotiation headers `Accept`, `Accept-Encoding` and `Accept-Language`: those name the client and the format it
   wants, never a caller, so they go everywhere. Any other name is withheld, whatever it holds; a client-wide header
-  another origin needs (a tracing or tenant header, say) needs that origin in `trusted_origins`.
+  another origin needs (a tracing or tenant header, say) needs that origin in `trusted_origins`;
+- the same, for every header a view sets (`with_options(headers=...)`), and for every header a call sets itself
+  (`headers=`) on a hop to another origin than the one the call named: a redirect, or a later page of a walk, whose URL
+  the server chose. A call that names another origin's URL itself still sends it its own headers.
 
 The request still goes out, unsigned, so a signed download URL on a CDN works. A credential meant for another origin
 needs that origin in `trusted_origins`, written as a bare origin:
@@ -81,7 +84,8 @@ such an auth unless told the data is public (see [caching](caching.md#partitions
 ## Redirects
 
 - **No downgrade.** A redirect from `https` to `http` is never followed: the 3xx becomes the call's final response and
-  raises as the `UpstreamStatusError` it is, with a note naming the refused target.
+  raises as the `UpstreamStatusError` it is, with a note naming the refused target. A next page an `https` page names
+  on `http` is refused the same way, before it is sent, as `ForbiddenDestinationError`.
 - **A hop limit.** `HttpOptions(max_redirects=5)` is the default. An auth flow's hops count toward it too, because
   httpx2 keeps one history per call; a client whose mint takes several hops raises it. Past it the call raises
   `TransportError` ("Exceeded maximum allowed redirects").

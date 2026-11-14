@@ -16,7 +16,8 @@ the request for the page after it. The client does the fetching (:meth:`AsyncBas
 * :class:`BodyOffset`: like :class:`Offset`, but the offset is put into the POSTed request body.
 
 A next-page URL from the wire is resolved against the URL that answered and sent as an absolute URL, which the client
-treats like any other: credentials go only to the origins the client trusts.
+treats like any other: credentials go only to the origins the client trusts. A next page that would take an ``https``
+walk down to plain ``http`` is refused, as a redirect would be.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, override
 
+from headgate._failures import loggable_url
+from headgate.errors import ForbiddenDestinationError
 from headgate.pagination._link import next_link
 
 if TYPE_CHECKING:
@@ -157,8 +160,16 @@ def _reached[P](total: Callable[[P], int | None] | None, page: P, offset: int) -
 
 
 def _absolute(response: httpx2.Response, target: str) -> PageRequest:
-    """Return the request for *target*, resolved against the URL that sent *response*, as an absolute URL."""
-    return PageRequest(response.url.join(target))
+    """Return the request for *target*, resolved against the URL that sent *response*, as an absolute URL.
+
+    :raises ForbiddenDestinationError: for a plain ``http`` *target* named by an ``https`` page, which would send the
+        next request (its credentials and cursor) in cleartext.
+    """
+    url = response.url.join(target)
+    if response.url.scheme == "https" and url.scheme == "http":
+        msg = f"refused to follow a next page from https to {loggable_url(str(url))}"
+        raise ForbiddenDestinationError(msg)
+    return PageRequest(url)
 
 
 def _check_get[B](request: PageRequest[B], pager: str) -> None:

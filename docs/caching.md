@@ -62,10 +62,10 @@ policy = TransportPolicy(cache=cache)
 with different keys can share one storage. The partition is an HMAC-SHA256, under a key drawn at random once per
 process, of the auth's class and `credential_identity()`, of any other credential the request carries (what a
 [middleware](configuration.md#middleware) declares in `credential_headers` and `credential_params`, a caller's own
-`Authorization`, a cookie, an `api_key` in the URL), and of every header set in `HttpOptions(headers=...)`, whatever
-it is, since a static key is often configured there. A call that sends the auth's own header or parameter itself
+`Authorization`, a cookie, an `api_key` in the URL), and of every header set in `HttpOptions(headers=...)` or by a
+view (`with_options(headers=...)`), whatever it is, since a static key, or one tenant's, is often configured there. A call that sends the auth's own header or parameter itself
 (`headers={"Authorization": ...}` beside a `BearerAuth`), which the auth then leaves alone, is partitioned by the value
-it sent too. A key a call sends in a header nothing declares and the client does not set (one call's `X-Api-Key`) is
+it sent too. A key a call sends in a header nothing declares and neither the client nor its view sets (one call's `X-Api-Key`) is
 not part of the partition: declare it in an auth, or have the response name it in `Vary`. A middleware whose
 credential changes on every request implements `credential_identity()` too, and is then partitioned by that, as an
 auth is. Labels can be neither reversed nor compared across processes, so credential-partitioned entries in a

@@ -19,6 +19,7 @@ from headgate import (
     CachedTokenAuth,
     ForbiddenDestinationError,
     HttpOptions,
+    LinkHeader,
     Minted,
     QueryParamAuth,
     SecurityOptions,
@@ -26,6 +27,7 @@ from headgate import (
     TransportPolicy,
 )
 from headgate._core import CredentialStamper
+from headgate.msgspec import reader
 from headgate.ratelimit import UNLIMITED
 from headgate.retry import NO_RETRY
 from headgate.security._credentials import CHAIN_ORIGIN, CredentialGuard
@@ -394,6 +396,71 @@ async def test_a_client_wide_negotiation_header_still_reaches_a_foreign_origin()
         await client.get("https://cdn.example/x", expect=RESPONSE)
 
     assert {name: web.sent[0].headers[name] for name in negotiation} == negotiation
+
+
+async def test_a_views_and_a_calls_headers_stay_off_a_foreign_redirect_hop() -> None:
+    """Withhold a view's ``headers=`` and a call's own from a redirect to another origin, as client-wide ones are."""
+    web = Web({f"{BASE}/start": "https://files.example/signed"})
+    async with web.client() as client:
+        view = client.with_options(headers={"X-Tenant-Key": "view-secret"})
+        await view.get("start", expect=RESPONSE, headers={"X-Call-Key": "call-secret", "Accept": "text/csv"})
+
+    home, foreign = web.sent
+    assert (home.headers["X-Tenant-Key"], home.headers["X-Call-Key"]) == ("view-secret", "call-secret")
+    assert "X-Tenant-Key" not in foreign.headers
+    assert "X-Call-Key" not in foreign.headers
+    assert foreign.headers["Accept"] == "text/csv"
+
+
+async def test_a_calls_headers_reach_the_foreign_url_it_names_but_a_views_do_not() -> None:
+    """Send a call's own headers to the other origin it names itself; a view's, like a client's, stay home."""
+    web = Web()
+    async with web.client() as client:
+        view = client.with_options(headers={"X-Tenant-Key": "view-secret"})
+        await view.get("https://files.example/upload", expect=RESPONSE, headers={"X-Upload-Token": "meant-for-it"})
+
+    (sent,) = web.sent
+    assert sent.headers["X-Upload-Token"] == "meant-for-it"
+    assert "X-Tenant-Key" not in sent.headers
+
+
+async def test_a_views_headers_reach_a_trusted_origin() -> None:
+    """Keep a view's headers on a redirect hop to an origin in ``trusted_origins``."""
+    web = Web({f"{BASE}/start": "https://files.example/signed"})
+    http = HttpOptions(security=SecurityOptions(trusted_origins=frozenset({"https://files.example"})))
+    async with web.client(http=http) as client:
+        await client.with_options(headers={"X-Tenant-Key": "k"}).get("start", expect=RESPONSE)
+
+    assert [request.headers["X-Tenant-Key"] for request in web.sent] == ["k", "k"]
+
+
+@pytest.mark.parametrize(
+    ("first", "following", "kept"),
+    [
+        ("items", "https://evil.example/p2", False),
+        ("https://partner.example/items", "https://partner.example/p2", True),
+        ("https://partner.example/items", "https://evil.example/p2", False),
+    ],
+    ids=["home-then-foreign", "foreign-then-same", "foreign-then-other"],
+)
+async def test_a_walks_own_headers_reach_a_later_page_only_on_the_first_pages_origin(
+    first: LiteralString, following: str, *, kept: bool
+) -> None:
+    """Send a walk's ``headers=`` to a later page the server named only on the origin the first page went to."""
+    sent: list[httpx2.Request] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        link = "" if len(sent) > 1 else f'<{following}>; rel="next"'
+        return httpx2.Response(httpx2.codes.OK, json=[1], headers={"Link": link})
+
+    http = HttpOptions(transport=httpx2.MockTransport(answer))
+    async with StubClient(base_url=BASE, rate=UNLIMITED, policy=TransportPolicy(retry=NO_RETRY), http=http) as client:
+        pages = client.paginate(first, expect=reader(list[int]), pages=LinkHeader(items=list), headers={"X-Key": "k"})
+        assert [item async for item in pages] == [1, 1]
+
+    assert sent[0].headers["X-Key"] == "k"
+    assert ("X-Key" in sent[1].headers) is kept
 
 
 async def test_a_client_wide_header_named_like_the_mint_hops_own_stays_on_the_token_host() -> None:

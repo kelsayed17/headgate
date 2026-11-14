@@ -20,6 +20,7 @@ from headgate import (
     ClientError,
     Cursor,
     Expect,
+    ForbiddenDestinationError,
     HttpOptions,
     LinkHeader,
     NextUrl,
@@ -335,6 +336,23 @@ async def test_link_header_pages_are_followed_as_absolute_urls() -> None:
         f"{_BASE}/items?page=2",
         "https://cdn.test/items?page=3",
     ]
+
+
+@pytest.mark.parametrize("kind", ["body", "link"])
+async def test_a_next_page_from_https_down_to_http_is_refused_before_it_is_sent(kind: str) -> None:
+    """Refuse a next page an ``https`` page names on plain ``http``, as a downgrading redirect is, sending nothing."""
+    following = "http://api.test/items?cursor=c"
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        response = _page(request, [1], next=following)
+        response.headers["Link"] = f'<{following}>; rel="next"'
+        return response
+
+    pages = NextUrl(items=items_of, next=next_of) if kind == "body" else LinkHeader(items=items_of)
+    api = _Api(answer)
+    with pytest.raises(ForbiddenDestinationError, match=r"from https to http://api\.test/items"):
+        _ = [item async for item in api.client().paginate("start", expect=reader(Page), pages=pages)]
+    assert [str(url) for url in api.sent] == [f"{_BASE}/start"]
 
 
 async def test_next_url_pages_are_followed_from_the_body() -> None:
