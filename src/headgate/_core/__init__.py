@@ -34,10 +34,12 @@ from headgate._core._paths import check_fragment, path_has_fragment
 from headgate._core._retry_after import RETRY_AFTER_STATUSES, parse_retry_after, retry_after_of
 from headgate._core._seams import (
     BREAKER_GATE,
+    EXPLICIT_HEADERS,
     BudgetBacklogError,
     BudgetPausedError,
     CredentialCarrier,
     CredentialStamper,
+    ExplicitHeaders,
 )
 from headgate._core._switch import policy_disabled, policy_is_disabled
 from headgate._core._time import (
@@ -54,6 +56,7 @@ from headgate._core._time import (
 
 __all__ = [
     "BREAKER_GATE",
+    "EXPLICIT_HEADERS",
     "OBSERVER_FAILURES",
     "RETRY_AFTER_STATUSES",
     "SILENT",
@@ -76,6 +79,7 @@ __all__ = [
     "Deprecated",
     "Emitter",
     "Event",
+    "ExplicitHeaders",
     "Observer",
     "RandomSource",
     "RateLimited",

@@ -32,6 +32,7 @@ import asyncio
 import contextlib
 import copy
 import functools
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
 from typing import TYPE_CHECKING, Literal, Self, Unpack, overload
@@ -45,6 +46,7 @@ from headgate._auth import failed_on_auth_hop
 from headgate._body import read_capped, read_head
 from headgate._core import (
     BREAKER_GATE,
+    EXPLICIT_HEADERS,
     SILENT,
     BreakerChanged,
     BudgetBacklogError,
@@ -53,6 +55,7 @@ from headgate._core import (
     CallInfo,
     CallStarted,
     Emitter,
+    ExplicitHeaders,
     Slot,
     check_kind,
     current_timing,
@@ -142,6 +145,10 @@ _LOCAL_FAILURES = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2
 #: The running timer of the call's deadline, put on its context by ``AsyncBaseClient._deadline``: whether it fired is
 #: what tells the deadline cutting an attempt off from the caller's task being cancelled.
 _DEADLINE_TIMER = Slot[asyncio.Timeout]("deadline_timer")
+
+#: The origin a walk's first page was sent to, set while ``paginate`` fetches a later page, whose URL the server chose:
+#: the call's own ``headers=`` reach that origin and trusted ones only (see :class:`~headgate._core.ExplicitHeaders`).
+_WALK_ORIGIN = ContextVar[httpx2.Origin | None]("headgate_walk_origin", default=None)
 
 #: The request options that make a body a walk cannot rewrite page by page, so ``paginate`` refuses them.
 _UNPAGEABLE_BODIES = ("data", "content", "files")
@@ -661,7 +668,20 @@ class AsyncBaseClient:
         answers = {status: _paired(read) for status, read in spec.answers.items()}
         paired = Expect(_paired(spec.ok), answers, headers=spec.headers, accept=spec.accept)
 
+        # The origin the first page was sent to, once it was: a later page's call headers go there and nowhere else.
+        addressed: list[httpx2.Origin] = []
+
         async def fetch(request: PageRequest[B]) -> tuple[P, httpx2.Response]:
+            token = _WALK_ORIGIN.set(addressed[0] if addressed and request is not first else None)
+            try:
+                page, response = await fetch_page(request)
+            finally:
+                _WALK_ORIGIN.reset(token)
+            if not addressed:
+                addressed.append((response.history[0] if response.history else response).request.url.origin)
+            return page, response
+
+        async def fetch_page(request: PageRequest[B]) -> tuple[P, httpx2.Response]:
             page_options = call_options.copy()
             page_options["params"] = request.params
             # A page's follow_redirects and cache_ttl land on the verb's own parameters of those names. The verbs are
@@ -811,6 +831,13 @@ class AsyncBaseClient:
             raise _invalid_url(exc, CallSite(self._source, call.method, log_url)) from exc
         if body is not None:
             _stamp_headers(request, self._view.headers_for(options.get("headers")), {"Content-Type": body.content_type})
+        own = options.get("headers") or {}
+        if self._view.headers or own:
+            request.extensions[EXPLICIT_HEADERS] = ExplicitHeaders(
+                origin=_WALK_ORIGIN.get() or request.url.origin,
+                view=frozenset(name.lower() for name, _ in self._view.headers),
+                call=frozenset(name.lower() for name in own),
+            )
         # The absolute URL is for observers only (an OpenTelemetry span's url.full and server.address).
         full_url = sanitize_url(str(request.url)) if self._emitter.active else None
         info = CallInfo(method=call.method, url=log_url, route=route, full_url=full_url)

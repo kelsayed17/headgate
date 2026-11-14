@@ -268,6 +268,24 @@ async def test_a_client_wide_header_partitions_and_is_never_stored(
     assert b"client-key" not in await _stored_bytes(connection)
 
 
+async def test_a_views_header_partitions_and_is_never_stored(
+    inspected: AsyncSqliteStorage, connection: anysqlite.Connection
+) -> None:
+    """A key a view sets (``with_options(headers=...)``, one tenant's) keeps each tenant's entries to that tenant."""
+    network = _Recorder()
+    client = _client(network, inspected, None)
+    alice = client.with_options(headers={_HEADER: "alice-view-key"})
+    bob = client.with_options(headers={_HEADER: "bob-view-key"})
+
+    await alice.get(_URL, expect=RESPONSE)
+    await bob.get(_URL, expect=RESPONSE)
+    hit = await alice.get(_URL, expect=RESPONSE)
+
+    assert len(network.sent) == len(("alice", "bob")), "bob was served alice's entry"
+    assert served_from_cache(hit)
+    assert b"view-key" not in await _stored_bytes(connection)
+
+
 async def test_a_shared_partition_stores_no_header_value_as_sent(
     inspected: AsyncSqliteStorage, connection: anysqlite.Connection
 ) -> None:
