@@ -1,0 +1,5 @@
+# Orca workspace hooks: each new workspace builds its own .venv with the locked sync CI runs,
+# and its agent starts only after that succeeds.
+scripts:
+  setup: uv sync --locked
+setupAgentStartupPolicy: wait-for-setup
