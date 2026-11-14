@@ -8,6 +8,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `CassetteFilter(replaying=True)`, for replaying a cassette (`record_mode="none"`): a token mint fails the test with
+  an `AssertionError` saying to seed the auth. A mint is never recorded, so vcrpy let an unseeded one reach the
+  network, with the auth's secret.
 - `Body`, the union of `EncodedBody`, `Json`, `Form`, `Multipart` and `Raw`, the body classes a call's `body=` takes.
   `Raw(...).replayable` and `Multipart(...).replayable` say whether a retry or a 307/308 redirect can send the body
   again: not for a `Raw` async iterable, nor a `Multipart` holding a file that cannot be rewound.
@@ -137,6 +140,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A cached call is answered only by an entry stored for the same `Accept`, so a CSV and a JSON of one URL no longer
+  answer each other. A request with a `Range` goes to the network, since no whole stored body answers it.
+- Under `Partition.SHARED`, a call that sends `Authorization` (or a cookie, or a declared credential) is never answered
+  by a stored entry that varies on it. An anonymous call's answer was served to an authenticated one.
+- A send that waits for its rate-budget turn while a hedge starts beside it records its connection and the bytes it
+  writes into its own attempt. They went into the hedge's attempt, whichever send wrote them.
 - A problem+json error body with an extension nested hundreds of levels deep, about 1 KB, raised a raw
   `RecursionError` from every call. It is now read as no problem detail, and the status error names the body.
 - An error body declaring `charset=idna` or `charset=undefined` raised a bare `UnicodeError`. It is read as UTF-8,
@@ -296,6 +305,16 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 - `AsyncCurlTransport` reads a request's body from its stream on every send, as httpx2's own transport does. It read
   the body once and sent that copy again, so a one-shot body sent a second time was not refused.
+- `FakeTransport.calls` logs a snapshot of each send, so a request changed between attempts shows each attempt's own
+  headers; it logged the one live request object, so every attempt showed the last one's. A reply function is given
+  the snapshot.
+- `FakeTransport` reads a request's body from its stream on every send, as a network transport does. It read the body
+  once and served that copy again, so a one-shot body sent twice went unnoticed in tests.
+- `check_codec` refuses a codec that reads a numeric string (`"1"`) as an `int`. It caught only strings that are no
+  number.
+- `CassetteFilter` keeps credentials out of recorded responses too: it drops the headers it filters from requests,
+  besides `Set-Cookie`, and redacts the secret query values in a `Location` or `Content-Location`, such as a signed
+  download URL.
 
 ### Security
 

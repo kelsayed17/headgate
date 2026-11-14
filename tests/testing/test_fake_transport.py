@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import gzip
+from typing import TYPE_CHECKING
 
 import httpx2
 import pytest
@@ -16,6 +17,9 @@ from headgate.retry import NO_RETRY
 from headgate.testing import FakeTransport, Respond, UnmatchedRequestError
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 _BASE = "https://api.example.test/v1"
 _RATE = Rate.per_second(1000)
@@ -126,3 +130,44 @@ async def test_closing_the_client_closes_the_transport() -> None:
     async with _client(fake):
         assert fake.closed is False
     assert fake.closed is True
+
+
+async def test_each_send_is_logged_as_it_was_sent() -> None:
+    """Log a snapshot of every send, so a request changed between attempts shows each attempt's own headers."""
+    fake = FakeTransport().reply("GET", "/x")
+    request = httpx2.Request("GET", "https://api.example.test/x", headers={"X-Attempt": "1"})
+    await fake.handle_async_request(request)
+    request.headers["X-Attempt"] = "2"
+    await fake.handle_async_request(request)
+
+    assert [call.headers["X-Attempt"] for call in fake.calls] == ["1", "2"]
+    assert fake.calls[0] is not request
+
+
+async def test_each_send_reads_the_body_stream_again() -> None:
+    """Read the body from the request's stream on every send, so a one-shot stream sent twice fails as on the wire."""
+
+    async def body() -> AsyncIterator[bytes]:
+        yield b"a"
+        yield b"b"
+
+    fake = FakeTransport().reply("POST", "/x")
+    request = httpx2.Request("POST", "https://api.example.test/x", content=body())
+    await fake.handle_async_request(request)
+
+    with pytest.raises(httpx2.StreamConsumed):
+        await fake.handle_async_request(request)
+    assert [call.content for call in fake.calls] == [b"ab"]
+
+
+async def test_the_log_keeps_the_headers_as_sent_for_a_streamed_body() -> None:
+    """Log a streamed body's headers as they went out, without a ``Content-Length`` the send never had."""
+
+    async def body() -> AsyncIterator[bytes]:
+        yield b"ab"
+
+    fake = FakeTransport().reply("POST", "/x")
+    await fake.handle_async_request(httpx2.Request("POST", "https://api.example.test/x", content=body()))
+
+    (call,) = fake.calls
+    assert (call.headers.get("transfer-encoding"), call.headers.get("content-length")) == ("chunked", None)

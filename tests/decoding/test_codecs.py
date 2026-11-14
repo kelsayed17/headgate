@@ -292,6 +292,14 @@ class _CoercesStrings(MsgspecCodec):
         return _decode
 
 
+class _CoercesNumericStrings(MsgspecCodec):
+    """msgspec's lax mode: ``"1"`` reads as ``1``, while a string that is no number is still refused."""
+
+    @override
+    def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
+        return cast("Callable[[bytes], T]", msgspec.json.Decoder(type_, strict=False).decode)
+
+
 class _ReadsMalformedBodiesAsEmpty(MsgspecCodec):
     @override
     def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
@@ -321,6 +329,10 @@ class _ReadsRecordsAsDicts(MsgspecCodec):
         (_ForgetsValues(), r"^_ForgetsValues wrote \{'a': 1\} and read back \{\}"),
         (_IgnoresTypes(), r"^_IgnoresTypes accepted a string where an int is declared"),
         (_CoercesStrings(), r"^_CoercesStrings accepted a string where an int is declared as \{'a': 0\}"),
+        (
+            _CoercesNumericStrings(),
+            r"^_CoercesNumericStrings accepted a numeric string where an int is declared as \{'a': 1\}",
+        ),
         (_ReadsMalformedBodiesAsEmpty(), r"^_ReadsMalformedBodiesAsEmpty accepted a cut-short body as \{\}"),
         (_QuotesTheInput(), r"^_QuotesTheInput\.describe\(\) repeats the input \(.*bad body"),
         (_QuotesTheKeys(), r"^_QuotesTheKeys\.describe\(\) repeats the input \(.*bad keys"),
@@ -338,6 +350,7 @@ class _ReadsRecordsAsDicts(MsgspecCodec):
         "round-trip",
         "strict",
         "coercing",
+        "coercing-numbers",
         "cut-short",
         "quiet",
         "quiet-keys",
