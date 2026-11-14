@@ -80,6 +80,8 @@ class RateLimitTransport(httpx2.AsyncBaseTransport):
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         budget = pacer_of(self._budgets.for_request(request))
         context = CallContext.of(request)
+        # This attempt's progress, read before the waits: a hedge begun while this send waits has its own.
+        progress = context.progress
         # The slot first, then the turn: calls that slots freed together still go out at the rate, and a pause set while
         # a call waited for its slot still holds it.
         release = await budget.occupy()
@@ -87,13 +89,13 @@ class RateLimitTransport(httpx2.AsyncBaseTransport):
             await budget.wait(context)
             # The waits took some of the call's time: the send that follows gets only what is left.
             context.fit_timeouts(request)
-            context.progress.mark_dispatched()
+            progress.mark_dispatched()
             sent_at = budget.now()
             response = await self._transport.handle_async_request(request)
         except BaseException:
             release()
             raise
-        pause = budget.observe(response, sent_at=sent_at)
+        pause = budget.observe(response, sent_at=sent_at) if self._budgets.heeds(request) else None
         if pause is not None and pause > 0 and context.observed:
             context.emit(RateLimited(call=context.info, delay=pause, reason=PUSHBACK))
         if budget.max_in_flight is not None:

@@ -59,7 +59,7 @@ import httpx2
 from hishel import AsyncBaseStorage, Entry, Request, Response
 from hishel.httpx2 import AsyncCacheTransport
 
-from headgate._core import CacheOutcome, CacheResult, CallContext, Slot
+from headgate._core import CacheOutcome, CacheResult, CallContext, Slot, url_path
 from headgate.cache._credentials import CredentialScope
 from headgate.cache._policy import Partition
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
@@ -697,7 +697,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
         # Stamped here because only a cached client has a default TTL to give; setdefault, so a per-call one wins.
         if self._ttl is not None:
             stamp_ttl(request, self._ttl, keep=True)
-        if not self._cache.caches_request(request.method, request.url.path):
+        if not self._cache.caches_request(request.method, url_path(request.url)):
             # Neither looked up nor stored, so nothing here needs its body: it goes up as it arrives.
             return await self._live.handle_async_request(request)
         context = CallContext.find(request)

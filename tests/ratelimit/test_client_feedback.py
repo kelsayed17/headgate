@@ -138,3 +138,18 @@ async def test_a_pause_past_the_deadline_is_not_mistaken_for_a_cache_fault(stora
         await client.get("x", expect=RESPONSE, deadline=_DEADLINE)
 
     assert CACHE_DEGRADATIONS[_HOST] == before
+
+
+async def test_feedback_from_another_origin_neither_pauses_nor_throttles_the_shared_budget() -> None:
+    """Pace a call to another origin, but heed only the client's own origin's 429: the budget is shared by origin."""
+    clock = TestClock()
+    budget = _budget(clock)
+    client = _client(budget, _Server())
+    with pytest.raises(RateLimitError):
+        await client.get(httpx2.URL("https://elsewhere.example/x"), expect=RESPONSE)
+    assert (budget.pause_remaining, budget.effective_rate) == (0.0, budget.rate)
+
+    own = _client(budget, _Server())
+    with pytest.raises(RateLimitError):
+        await own.get("x", expect=RESPONSE)
+    assert budget.pause_remaining == _PAUSE

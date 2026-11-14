@@ -30,7 +30,8 @@ and threads, because its state is plain numbers under a `threading.Lock` and not
 
 - **Pacing** is GCRA, the virtual-scheduling form of a leaky bucket. Up to `rate.requests` requests (at least one) go
   out back to back; after that they are `period / requests` seconds apart. Waiters are served in arrival order, and a
-  waiter cancelled in the queue gives its turn back when nobody reserved after it. A call whose turn comes at or after
+  waiter cancelled in the queue gives its turn back: at the end of the queue it comes off the schedule, and in the
+  middle the next call to arrive takes it, while its time is still ahead. A call whose turn comes at or after
   its deadline does not queue: it gives the turn back and the attempt is never sent (see [deadlines](deadlines.md)).
 - **`max_in_flight`** caps how many requests are open at once. A request takes its slot before its turn, so the
   requests that slots freed at one instant still go out at the rate, and holds it until its response body is
@@ -49,8 +50,9 @@ and threads, because its state is plain numbers under a `threading.Lock` and not
 budget of their own: the first matching rule wins, and a matching request spends from the rule's budget **instead
 of** the client's. A rule's `rate` is a `Rate` (a budget per client) or a shared `RateBudget`. The fragment is one or
 more whole path segments, matched anywhere in the path: `"/exports"` matches `/v2/exports` and
-`/v2/exports/orders.csv`, but not `/v2/exports-archive`. The cache's `paths` and the policy's `Route`
-match the same way.
+`/v2/exports/orders.csv`, but not `/v2/exports-archive`. The path is split into segments before they are decoded, so
+a `/` inside a t-string value, sent as `%2F`, stays in its segment: `t"/files/{name}"` with `name="exports/q3"` is
+not an `/exports` request. The cache's `paths` and the policy's `Route` match the same way.
 
 ## Server feedback
 
@@ -59,11 +61,17 @@ Every response is read for what it says about the quota, in this order of preced
 1. `retry-after-ms` or `Retry-After` on a 429 or 503, read exactly as the [retry layer](retries.md#retry-after) reads
    it, so the retry's wait and the budget's pause end together;
 2. `RateLimit` with `RateLimit-Policy` (the IETF draft): an item with `r=0` is an exhausted quota, and its `t` is the
-   seconds until it returns; a policy whose quota unit is not requests is skipped, and a malformed field is ignored;
+   seconds until it returns, or a Unix time told apart by size as the reset below is, since some servers send one; a
+   policy whose quota unit is not requests is skipped, and a malformed field is ignored;
 3. `X-RateLimit-Remaining` with `X-RateLimit-Reset`, the de facto pair, when `RateLimit` is absent. The reset is a
    number of seconds or an absolute Unix time (in seconds or milliseconds), told apart by size. A server with several
    windows lists a value per window in each header: the pause is the latest reset among the windows whose count is
    zero, paired by position, so `Remaining: 0, 4000` with `Reset: 1, 3600` pauses for 1 s.
+
+Only responses from the client's own origin, `base_url`'s, are read. A request to another origin (a redirect target,
+a next page another origin serves, a token host's mint hop, or an absolute URL the call named) still spends a turn and
+is paced, but what its response says cannot pause or throttle a budget that every client on the first origin may
+share. The call itself still waits out its own `Retry-After` in the [retry layer](retries.md#retry-after).
 
 A response that names a pause **pauses the whole budget** until it ends, so every concurrent and later call queues
 behind it instead of spending a request on a certain refusal. The calls already waiting their turn keep their order:
