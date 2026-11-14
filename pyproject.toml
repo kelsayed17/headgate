@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -57,8 +57,8 @@ dev = [
     "pytest-asyncio>=1.4",
     "syrupy>=6.1.1",
     "httpx2-pytest>=2.0.0",
-    "time-machine",
-    "ruff",
+    "time-machine>=2.14.0",
+    "ruff>=0.15.11",
     "ty>=0.0.93",
     "headgate[msgspec,pydantic,curl,otel,cache]",
     "opentelemetry-sdk>=1.45.1",
@@ -86,7 +86,7 @@ include = [
     "LICENSE",
     "pyproject.toml",
 ]
-exclude = ["docs/assets", ".hypothesis", "**/__pycache__", "**/*.pyc", "mutants", ".coverage*", ".codspeed"]
+exclude = ["docs/assets/social-preview.png", ".hypothesis", "**/__pycache__", "**/*.pyc", "mutants", ".coverage*", ".codspeed"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
