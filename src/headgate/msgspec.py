@@ -6,7 +6,8 @@
 :data:`CODEC` is msgspec as a :class:`~headgate.Codec`. A client usually reaches it through the shortcuts here
 (``from headgate.msgspec import reader, writer``): :func:`decode` is the bytes-level primitive, :func:`reader`
 builds a response reader on it and :func:`writer` its mirror, a request-body writer; :func:`to_builtins` prepares
-builtins for ``json=`` or ``data=``. Every decode failure is the shared :class:`~headgate.errors.DecodeError`.
+builtins for ``body=Json(...)`` or ``Form(...)``. Every decode failure is the shared
+:class:`~headgate.errors.DecodeError`.
 
 A ``DecodeError``'s message is msgspec's own diagnosis (the expected type and the path), bounded, with the input
 msgspec quotes left out: an unknown enum value or tag, and an unknown field's name. A dict key in the path is already
@@ -161,7 +162,7 @@ def to_builtins[T](value: list[T], *, drop_none: bool = ...) -> list[object]: ..
 @overload
 def to_builtins(value: object, *, drop_none: bool = ...) -> object: ...
 def to_builtins(value: object, *, drop_none: bool = False) -> object:
-    """Convert a struct, or a list or mapping of them, to builtins ready for httpx2's ``json=`` or ``data=``.
+    """Convert a struct, or a list or mapping of them, to builtins ready for ``body=Json(...)`` or ``Form(...)``.
 
     A delegate of ``msgspec.to_builtins``: it applies each struct's ``field(name=...)`` renames, keeps field
     declaration order (the wire key order once httpx2 serializes), and honors ``omit_defaults``. An ``array_like``

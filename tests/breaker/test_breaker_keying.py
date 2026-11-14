@@ -10,7 +10,7 @@ import contextlib
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, HttpOptions, TransportPolicy
+from headgate import BreakerPolicy, HttpOptions, Json, TransportPolicy
 from headgate._responses import nothing
 from headgate.breaker import BreakerState
 from headgate.breaker._registry import DEFAULT_REGISTRY
@@ -150,4 +150,4 @@ async def test_with_the_breaker_open_an_unencodable_body_raises_as_itself() -> N
         rate=Rate.per_second(2), base_url=f"https://{_HOST}", policy=TransportPolicy(retry=RetryPolicy(attempts=1))
     )
     with pytest.raises(TypeError, match="JSON serializable"):
-        await client.post("x", expect=nothing, json=object())
+        await client.post("x", expect=nothing, body=Json(object()))
