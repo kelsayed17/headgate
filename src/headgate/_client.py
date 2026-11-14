@@ -892,12 +892,15 @@ class AsyncBaseClient:
         """
         keys = self._policy.idempotency
         header = "Idempotency-Key" if keys is None else keys.header
+        if key is not None and not key.strip():
+            msg = f"idempotency_key= takes a key that is not empty or blank (got {key!r})"
+            raise ValueError(msg)
         if key is None and keys is not None and request.method in KEYED_METHODS:
             key = keys.factory()
-        if key is not None:
             if not key.strip():
-                msg = "an idempotency key must not be empty or blank: it would make a re-sent write look safe"
+                msg = f"IdempotencyKeys(factory=...) must return a key that is not empty or blank (got {key!r})"
                 raise ValueError(msg)
+        if key is not None:
             request.headers.setdefault(header, key)
         context.idempotency_key = request.headers.get(header)
 

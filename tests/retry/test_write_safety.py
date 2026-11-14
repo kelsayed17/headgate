@@ -224,7 +224,7 @@ async def test_an_empty_idempotency_key_is_refused(key: str) -> None:
     fake = FakeTransport().reply("POST", "/v1/x", 201)
     built = client(fake)
 
-    with pytest.raises(ValueError, match="idempotency key"):
+    with pytest.raises(ValueError, match=r"^idempotency_key= takes a key that is not empty or blank \(got '\s*'\)$"):
         await built.post("x", content=_BODY, idempotency_key=key, expect=nothing)
 
     assert not fake.calls
@@ -235,7 +235,7 @@ async def test_an_empty_key_from_the_factory_is_refused() -> None:
     fake = FakeTransport().reply("POST", "/v1/x", 201)
     built = client(fake, policy=TransportPolicy(idempotency=IdempotencyKeys(factory=lambda: "")))
 
-    with pytest.raises(ValueError, match="idempotency key"):
+    with pytest.raises(ValueError, match=r"^IdempotencyKeys\(factory=\.\.\.\) must return a key that is not empty"):
         await built.post("x", content=_BODY, expect=nothing)
 
     assert not fake.calls
