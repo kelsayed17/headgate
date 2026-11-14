@@ -10,6 +10,7 @@ share a name but are two readers.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import pkgutil
 import re
@@ -20,6 +21,7 @@ import pytest
 
 import headgate
 import headgate.errors
+import headgate.testing
 
 
 def _public_modules() -> list[str]:
@@ -29,7 +31,6 @@ def _public_modules() -> list[str]:
     return ["headgate", *sorted(names)]
 
 
-@pytest.mark.xfail(strict=True, reason="phase 8's later tasks move the names")
 def test_no_object_is_exported_from_two_public_modules() -> None:
     """List each exported object once, naming every module that exports it when it is not."""
     homes: defaultdict[int, list[str]] = defaultdict(list)
@@ -86,3 +87,27 @@ def test_the_errors_guide_names_each_errors_one_home() -> None:
     }
 
     assert listed == exported
+
+
+def test_the_constants_left_the_top_level() -> None:
+    """Hold the default timeouts on ``Timeouts`` and keep the mint cap private."""
+    assert not hasattr(headgate, "DEFAULT_TIMEOUTS")
+    assert not hasattr(headgate, "MAX_MINT_RESPONSE_BYTES")
+
+
+def test_the_default_timeouts_are_a_class_attribute_not_a_field() -> None:
+    """Resolve an unset phase against ``Timeouts.DEFAULT``, which ``replace`` copies rather than changes."""
+    resolved = headgate.Timeouts(read=60.0).over(headgate.Timeouts.DEFAULT)
+    shorter = dataclasses.replace(headgate.Timeouts.DEFAULT, read=5.0)
+
+    assert (resolved.connect, resolved.read, resolved.write, resolved.pool) == (10.0, 60.0, 10.0, 15.0)
+    assert "DEFAULT" not in {field.name for field in dataclasses.fields(headgate.Timeouts)}
+    assert (shorter.read, headgate.Timeouts.DEFAULT.read) == (5.0, 30.0)
+
+
+def test_the_fault_steps_live_in_the_testing_kit() -> None:
+    """Export every fault step from ``headgate.testing``, whose fault module is private now."""
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("headgate.testing.faults")
+    faults = importlib.import_module("headgate.testing._faults")
+    assert set(faults.__all__) <= set(headgate.testing.__all__)

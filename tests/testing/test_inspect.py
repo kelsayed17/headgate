@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
-from headgate import DEFAULT_TIMEOUTS, Client, HttpCache, Rate, RateBudget, Route, Timeouts, TransportPolicy
+from headgate import Client, HttpCache, Rate, RateBudget, Route, Timeouts, TransportPolicy
 from headgate.testing import budget_for, cache_of
 
 if TYPE_CHECKING:
@@ -52,7 +52,7 @@ def test_a_rate_becomes_the_clients_own_budget() -> None:
 
 def test_the_default_timeouts_set_every_phase() -> None:
     """Resolve every phase a ``Timeouts`` leaves unset, as a client does."""
-    resolved = Timeouts(read=60.0).over(DEFAULT_TIMEOUTS)
+    resolved = Timeouts(read=60.0).over(Timeouts.DEFAULT)
     assert (resolved.connect, resolved.read, resolved.write, resolved.pool) == (10.0, 60.0, 10.0, 15.0)
 
 

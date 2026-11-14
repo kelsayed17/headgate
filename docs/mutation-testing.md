@@ -207,14 +207,14 @@ few families:
 | `headgate.testing._time` | `TestClock.__init__ #7` | `_drive` resets the count before any turn reads it |
 | `headgate.testing._time` | `TestClock.__init__ #8` | `_drive` resets the count before any turn reads it |
 | `headgate.testing._time` | `TestClock._turn #11` | `_driven_on` is only compared by identity with a loop, which `""` is not any more than `None` |
-| `headgate.testing.faults` | `_read_timeout #12` | the only non-number a read timeout can be is `None`, which the fallback also returns |
-| `headgate.testing.faults` | `FaultyTransport._take #48` | `body` is only tested for truth |
-| `headgate.testing.faults` | `_write #14` | a write cut at 0 bytes is only asked whether it completed; its count is never read |
-| `headgate.testing.faults` | `_write #15` | `complete` is only tested for truth |
-| `headgate.testing.faults` | `_write #16` | a write cut at 0 bytes is only asked whether it completed; its count is never read |
-| `headgate.testing.faults` | `_write #18` | a write cut at 0 bytes is only asked whether it completed; its count is never read |
-| `headgate.testing.faults` | `_write #54` | `complete` is only tested for truth |
-| `headgate.testing.faults` | `_write #57` | each fault call is written once, so `=` and `+=` agree |
+| `headgate.testing._faults` | `_read_timeout #12` | the only non-number a read timeout can be is `None`, which the fallback also returns |
+| `headgate.testing._faults` | `FaultyTransport._take #48` | `body` is only tested for truth |
+| `headgate.testing._faults` | `_write #14` | a write cut at 0 bytes is only asked whether it completed; its count is never read |
+| `headgate.testing._faults` | `_write #15` | `complete` is only tested for truth |
+| `headgate.testing._faults` | `_write #16` | a write cut at 0 bytes is only asked whether it completed; its count is never read |
+| `headgate.testing._faults` | `_write #18` | a write cut at 0 bytes is only asked whether it completed; its count is never read |
+| `headgate.testing._faults` | `_write #54` | `complete` is only tested for truth |
+| `headgate.testing._faults` | `_write #57` | each fault call is written once, so `=` and `+=` agree |
 | `headgate.ratelimit._feedback` | `_ietf_quota #9` | header-name case |
 | `headgate.ratelimit._feedback` | `_ietf_quota #10` | header-name case |
 | `headgate.ratelimit._feedback` | `_policy_units #9` | header-name case |

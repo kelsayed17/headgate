@@ -67,17 +67,17 @@ names, so `TransportPolicy(timeout=Timeouts(read=60.0))` keeps the other three d
 has no limit of its own (`Timeouts(read=math.inf)`), while one left `None` takes the layer beneath's: under a
 deadline, an unlimited phase gets the time the deadline leaves, and it is never refused as longer than the deadline.
 The defaults are
-`headgate.DEFAULT_TIMEOUTS`, and `timeout.over(DEFAULT_TIMEOUTS)` is what a `Timeouts` resolves to on a client, every
-phase set. A client computing a deadline from its timeouts reads them there, such as one that leaves every attempt its
+`Timeouts.DEFAULT`, and `timeout.over(Timeouts.DEFAULT)` is what a `Timeouts` resolves to on a client, every phase
+set. A client computing a deadline from its timeouts reads them there, such as one that leaves every attempt its
 whole connect and read timeout:
 
 ```python
-from headgate import DEFAULT_TIMEOUTS, RetryPolicy, Timeouts
+from headgate import RetryPolicy, Timeouts
 
 SLOW_READ = Timeouts(read=120.0)
 RETRY = RetryPolicy()
 
-phases = SLOW_READ.over(DEFAULT_TIMEOUTS)
+phases = SLOW_READ.over(Timeouts.DEFAULT)
 SLOW_READ_DEADLINE = RETRY.attempts * (phases.connect + phases.read) + (RETRY.attempts - 1) * RETRY.backoff.max_wait
 ```
 

@@ -50,7 +50,6 @@ if TYPE_CHECKING:
 __all__ = [
     "AUTH_HOP",
     "FRESH_TOKEN_S",
-    "MAX_MINT_RESPONSE_BYTES",
     "MINTING",
     "SIGNER_EXT",
     "BearerAuth",
@@ -85,7 +84,7 @@ SIGNER_EXT: Final = "headgate.signer"
 
 #: The most of a mint flow's hop response that is read, in decompressed bytes. A token response is a few hundred bytes,
 #: and a cookie-plus-crumb page a few dozen KiB; past this the hop is refused as ``ResponseTooLargeError``.
-MAX_MINT_RESPONSE_BYTES = 1024 * 1024
+_MAX_MINT_RESPONSE_BYTES = 1024 * 1024
 
 #: A token rejected within this many seconds of being minted is not re-minted: it is not stale, so a fresh one carries
 #: the same authority and is rejected the same way. See :class:`CachedTokenAuth`.
@@ -211,7 +210,7 @@ class _Recorded(httpx2.AsyncByteStream):
 
 
 async def _read_hop(response: httpx2.Response, source: str) -> httpx2.Response:
-    """Read the response to a mint flow's hop, up to :data:`MAX_MINT_RESPONSE_BYTES`, and return it read.
+    """Read the response to a mint flow's hop, up to :data:`_MAX_MINT_RESPONSE_BYTES` (1 MiB), and return it read.
 
     httpx2 hands an auth flow each response unread, and reads it itself only after the flow has answered, so the flow
     would see ``ResponseNotRead`` on ``.content`` or ``.json()``. The body is read through a copy that counts the
@@ -225,7 +224,7 @@ async def _read_hop(response: httpx2.Response, source: str) -> httpx2.Response:
     raw = _Recorded(network.aiter_raw())
     decoded = httpx2.Response(response.status_code, headers=response.headers, stream=raw, request=request)
     try:
-        await read_capped(decoded, MAX_MINT_RESPONSE_BYTES, site)
+        await read_capped(decoded, _MAX_MINT_RESPONSE_BYTES, site)
     finally:
         # Closed whether it was read or refused unread (by its Content-Length), so its pooled connection goes back.
         await network.aclose()
@@ -521,8 +520,8 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     class and the token endpoint, chained to the original. It is raised from the auth flow, so the API host's circuit
     breaker records nothing for it. A hop :meth:`mint_flow` yields travels the owning client's stack; a network
     failure there is reported the same way, as ``TransportError`` naming this auth class and the hop's endpoint
-    (:func:`mint_hop_failure`), and reading its response (bounded by :data:`MAX_MINT_RESPONSE_BYTES`) fails through
-    the same mapping, so a body that is too large is ``ResponseTooLargeError`` and a dropped connection
+    (:func:`mint_hop_failure`), and reading its response (bounded at 1 MiB, :data:`_MAX_MINT_RESPONSE_BYTES`) fails
+    through the same mapping, so a body that is too large is ``ResponseTooLargeError`` and a dropped connection
     ``TransportError``.
     """
 
@@ -613,7 +612,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     ) -> AsyncGenerator[httpx2.Request | Minted[TokenT], httpx2.Response]:
         """Mint through the owning client's stack: yield each request the exchange needs, end with :class:`Minted`.
 
-        Each response is sent back in already read (up to :data:`MAX_MINT_RESPONSE_BYTES`), so ``.content`` and
+        Each response is sent back in already read (up to 1 MiB, :data:`_MAX_MINT_RESPONSE_BYTES`), so ``.content`` and
         ``.json()`` work on it. A hop that sets no ``timeout`` extension is sent with the call's timeouts, and every
         hop's timeouts are cut to what the call's deadline leaves. *request* is the call that needs the credential, for
         a hop that wants another of its extensions. Called with the lock held, like :meth:`mint_token`; the default

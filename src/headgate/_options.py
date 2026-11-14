@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Unpack, final, override
+from typing import TYPE_CHECKING, ClassVar, Final, Unpack, final, override
 
 import httpx2
 
@@ -57,7 +57,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DEFAULT_LIMITS",
-    "DEFAULT_TIMEOUTS",
     "KEYED_METHODS",
     "HttpOptions",
     "IdempotencyKeys",
@@ -134,11 +133,16 @@ class Timeouts:
     """Per-phase timeouts in seconds: obtaining a connection from the pool, connecting, writing, reading.
 
     A phase left ``None`` takes its value from the layer beneath: a call's from its view's or its client's, and a
-    client's from :data:`DEFAULT_TIMEOUTS` (connect 10 s, read 30 s, write 10 s, pool 15 s). So
+    client's from :attr:`Timeouts.DEFAULT` (connect 10 s, read 30 s, write 10 s, pool 15 s). So
     ``timeout=Timeouts(read=300.0)`` lengthens the read timeout and keeps every other phase as it was. A phase set to
     ``math.inf`` has no limit of its own: under a deadline it gets the time the deadline leaves, as a phase with no
     limit does in httpx2.
     """
+
+    #: The timeouts of every phase a client leaves unset. ``timeout.over(Timeouts.DEFAULT)`` is what *timeout*
+    #: resolves to on a client, every phase set: what a deadline computed from the timeouts reads. A class attribute,
+    #: not a field.
+    DEFAULT: ClassVar[Timeouts]
 
     connect: float | None = None
     read: float | None = None
@@ -160,9 +164,7 @@ def _set_phases(timeouts: Timeouts) -> list[tuple[str, float]]:
     return [(name, value) for name in _PHASES if (value := getattr(timeouts, name)) is not None]
 
 
-#: The timeouts of every phase a client leaves unset. ``timeout.over(DEFAULT_TIMEOUTS)`` is what *timeout* resolves to
-#: on a client, every phase set: what a deadline computed from the timeouts reads.
-DEFAULT_TIMEOUTS: Final = Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)
+Timeouts.DEFAULT = Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)
 
 
 #: What a ``timeout=`` takes, for :func:`check_kind`'s message.
@@ -177,7 +179,7 @@ def httpx_timeout(client: Timeouts, call: Timeouts | None = None) -> httpx2.Time
     if call is None:
         return _client_timeout(client)
     check_kind("timeout", call, Timeouts, _TIMEOUTS_WANTED)
-    return _as_httpx(call.over(client.over(DEFAULT_TIMEOUTS)))
+    return _as_httpx(call.over(client.over(Timeouts.DEFAULT)))
 
 
 @functools.lru_cache(maxsize=64)
@@ -186,7 +188,7 @@ def _client_timeout(client: Timeouts) -> httpx2.Timeout:
 
     Sharing one is safe, since httpx2 copies the ``Timeout`` it is handed.
     """
-    return _as_httpx(client.over(DEFAULT_TIMEOUTS))
+    return _as_httpx(client.over(Timeouts.DEFAULT))
 
 
 def _as_httpx(resolved: Timeouts) -> httpx2.Timeout:
@@ -358,7 +360,7 @@ class TransportPolicy:
 
     * ``retry``: how a call is re-sent (:class:`~headgate.RetryPolicy`), or ``None`` to send every call once. A call
       opts out with ``retry=None``, and a call's or a route's policy replaces this one.
-    * ``timeout``: :class:`Timeouts`; a phase it leaves unset takes its default (:data:`DEFAULT_TIMEOUTS`). A phase it
+    * ``timeout``: :class:`Timeouts`; a phase it leaves unset takes its default (:data:`Timeouts.DEFAULT`). A phase it
       sets may not be longer than ``deadline``, since it could never take effect.
     * ``deadline``: seconds the whole logical call may take, every attempt, wait and the body read included; ``None``
       for none. Past it the call raises ``ClientTimeoutError``. A call overrides it with ``deadline=``.

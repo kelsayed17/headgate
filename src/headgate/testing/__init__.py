@@ -5,7 +5,7 @@
 
 * :class:`FakeTransport`: the network, as a route table of canned replies with a log of what was sent; pass it as
   ``HttpOptions(transport=...)``, or to :func:`fake_network` around building an SDK that fixes its own transport.
-* :class:`FaultyTransport` (:mod:`headgate.testing.faults`): a network that fails on a schedule (a connect failure, a
+* :class:`FaultyTransport`: a network that fails on a schedule (a connect failure, a
   status, a dropped connection, a slow answer, a refused HTTP/2 stream) and records what each attempt sent.
 * :class:`TestClock`: a manual clock whose sleep advances it; :meth:`TestClock.install` builds clients on it.
 * :func:`instant_retries`: clients whose retries do not wait.
@@ -26,11 +26,7 @@ a test clock, and :func:`instant_retries` makes their retries not wait::
 """
 
 from headgate.testing._codec import check_codec
-from headgate.testing._inspect import breakers_of, budget_for, cache_of
-from headgate.testing._recording import CassetteFilter, RecordedRequest
-from headgate.testing._time import TestClock, instant_retries
-from headgate.testing._transport import FakeTransport, Reply, UnmatchedRequestError, fake_network
-from headgate.testing.faults import (
+from headgate.testing._faults import (
     ConnectFail,
     DropMidBody,
     FaultCall,
@@ -41,6 +37,10 @@ from headgate.testing.faults import (
     Slow,
     Step,
 )
+from headgate.testing._inspect import breakers_of, budget_for, cache_of
+from headgate.testing._recording import CassetteFilter, RecordedRequest
+from headgate.testing._time import TestClock, instant_retries
+from headgate.testing._transport import FakeTransport, Reply, UnmatchedRequestError, fake_network
 
 __all__ = [
     "CassetteFilter",

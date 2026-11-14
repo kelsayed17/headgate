@@ -78,6 +78,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- `DEFAULT_TIMEOUTS` is `Timeouts.DEFAULT`, a class attribute with the same value (connect 10 s, read 30 s, write
+  10 s, pool 15 s). It is not a field, so `dataclasses.replace` and `fields(Timeouts)` are unchanged.
 - **Each top-level name is exported from the top level only.** `RetryPolicy`, `Rate`, `RateBudget`, `BreakerPolicy`,
   `HttpCache` and `Paginated` are no longer re-exported by `headgate.retry`, `headgate.ratelimit`, `headgate.breaker`,
   `headgate.cache` and `headgate.pagination`: write `from headgate import RetryPolicy`, since
@@ -279,6 +281,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Removed
 
+- `MAX_MINT_RESPONSE_BYTES`, which no option sets: a mint hop's response is read up to 1 MiB, as the auth guide says.
+- `headgate.testing.faults`: import `FaultyTransport` and its steps from `headgate.testing`, which exports them all.
 - The pagers and the finer errors from `headgate`: each has one home now. Import `BodyCursor`, `BodyOffset`, `Cursor`,
   `LinkHeader`, `NextUrl`, `Offset` and `PageNumber` from `headgate.pagination`, and `CircuitOpenError`,
   `ClientConfigurationError`, `DecodeError`, `ForbiddenDestinationError`, `PageLimitError`, `ResponseParseError`,
@@ -631,6 +635,8 @@ is a minor release: see **Changed** and **Removed**.
 
 ### Changed
 
+- `DEFAULT_TIMEOUTS` is `Timeouts.DEFAULT`, a class attribute with the same value (connect 10 s, read 30 s, write
+  10 s, pool 15 s). It is not a field, so `dataclasses.replace` and `fields(Timeouts)` are unchanged.
 - `RequestOptions` and `PageOptions` are closed TypedDicts (PEP 728), so a keyword a verb or `paginate()` does not
   name, such as a misspelled option, is a type error. So is a TypedDict that subclasses one of them to add keys: declare
   your own keys in a TypedDict of your own and pass them beside the options, not inside them.
@@ -679,6 +685,8 @@ is a minor release: see **Changed** and **Removed**.
 
 ### Removed
 
+- `MAX_MINT_RESPONSE_BYTES`, which no option sets: a mint hop's response is read up to 1 MiB, as the auth guide says.
+- `headgate.testing.faults`: import `FaultyTransport` and its steps from `headgate.testing`, which exports them all.
 - `paginate()` no longer takes a `PageRequest` as its URL. Write `paginate(url, params=params, body=body, ...)` for
   `paginate(PageRequest(url, params, body=body, write=write), ...)` and put `write=` on the pager, or pass `json=body`
   for a request that had no `write`. `PageRequest` stays public as what a `Pager` reads and returns.
@@ -747,6 +755,8 @@ under **Changed**, so this is a minor release.
 
 ### Changed
 
+- `DEFAULT_TIMEOUTS` is `Timeouts.DEFAULT`, a class attribute with the same value (connect 10 s, read 30 s, write
+  10 s, pool 15 s). It is not a field, so `dataclasses.replace` and `fields(Timeouts)` are unchanged.
 - `paginate()` refuses `body=` (as it refused the other body options), `params=` beside a `PageRequest`, and on a walk
   of POSTs a fixed idempotency key (`idempotency_key=`, or the key's header in `headers=`); `LinkHeader` and `NextUrl`
   refuse a walk with a body. A `PageLimitError` or pagination-loop `ClientError` from a walk of POSTs names `POST` as
@@ -776,6 +786,8 @@ the `headgate[msgspec]` extra, so this is a minor release: see **Changed**.
 
 ### Changed
 
+- `DEFAULT_TIMEOUTS` is `Timeouts.DEFAULT`, a class attribute with the same value (connect 10 s, read 30 s, write
+  10 s, pool 15 s). It is not a field, so `dataclasses.replace` and `fields(Timeouts)` are unchanged.
 - msgspec is an extra: install `headgate[msgspec]` where you installed `headgate`, as `headgate[pydantic]` already
   was. `import headgate.msgspec` without it fails with an `ImportError` naming the extra.
 
@@ -807,6 +819,8 @@ code, so this is a minor release: each change below says what to write instead.
 
 ### Changed
 
+- `DEFAULT_TIMEOUTS` is `Timeouts.DEFAULT`, a class attribute with the same value (connect 10 s, read 30 s, write
+  10 s, pool 15 s). It is not a field, so `dataclasses.replace` and `fields(Timeouts)` are unchanged.
 - `HttpOptions`' `trusted_origins`, `allow_private_hosts` and `resolver` move into a group of their own,
   `SecurityOptions`, exported from `headgate`: write `HttpOptions(security=SecurityOptions(allow_private_hosts=False))`
   where you wrote `HttpOptions(allow_private_hosts=False)`.
@@ -850,6 +864,8 @@ code, so this is a minor release: each change below says what to write instead.
 
 ### Removed
 
+- `MAX_MINT_RESPONSE_BYTES`, which no option sets: a mint hop's response is read up to 1 MiB, as the auth guide says.
+- `headgate.testing.faults`: import `FaultyTransport` and its steps from `headgate.testing`, which exports them all.
 - From the root `headgate` package, names that live in a subpackage and are rarely needed to write a client. Import
   them from there:
   - `headgate.retry`: `Backoff`, `Hedge`, `RetryBudget`, `NO_RETRY`;
@@ -900,6 +916,8 @@ default, so this is a minor release: see **Changed**.
 
 ### Changed
 
+- `DEFAULT_TIMEOUTS` is `Timeouts.DEFAULT`, a class attribute with the same value (connect 10 s, read 30 s, write
+  10 s, pool 15 s). It is not a field, so `dataclasses.replace` and `fields(Timeouts)` are unchanged.
 - `Cursor`, `NextUrl` and `LinkHeader` stop at a page with no items, as `Offset` already did, instead of following its
   link: a link that advances while returning nothing made the walk spend requests for nothing. Pass
   `stop_on_empty=False` for an endpoint that sends empty pages mid-walk
@@ -916,6 +934,8 @@ configuration that could never work an error, so this is a minor release: see **
 
 ### Changed
 
+- `DEFAULT_TIMEOUTS` is `Timeouts.DEFAULT`, a class attribute with the same value (connect 10 s, read 30 s, write
+  10 s, pool 15 s). It is not a field, so `dataclasses.replace` and `fields(Timeouts)` are unchanged.
 - A timeout longer than the deadline it runs under is refused with `ValueError` on the client, a view or a call, since
   it could never take effect ([#6](https://github.com/kelsayed17/headgate/issues/6)). Raise the deadline with it, e.g.
   `with_options(timeout=300.0, deadline=600.0)`.
@@ -1013,6 +1033,8 @@ layer. Code written against the 0.1.0 source needs the migrations below; there a
 
 ### Changed
 
+- `DEFAULT_TIMEOUTS` is `Timeouts.DEFAULT`, a class attribute with the same value (connect 10 s, read 30 s, write
+  10 s, pool 15 s). It is not a field, so `dataclasses.replace` and `fields(Timeouts)` are unchanged.
 - **Only safe re-sends.** 0.1.0 retried every method, POST included, after any failure. A POST or PATCH is now re-sent
   only when nothing of it was written, the server proved it unprocessed, or it carries an idempotency key.
 - **Retried statuses** are 408, 425, 429, 500, 502, 503 and 504; 501 and other 5xx are no longer retried, and local
@@ -1036,6 +1058,8 @@ layer. Code written against the 0.1.0 source needs the migrations below; there a
 
 ### Removed
 
+- `MAX_MINT_RESPONSE_BYTES`, which no option sets: a mint hop's response is read up to 1 MiB, as the auth guide says.
+- `headgate.testing.faults`: import `FaultyTransport` and its steps from `headgate.testing`, which exports them all.
 - The `aiolimiter` dependency: pacing is headgate's own GCRA budget.
 - `AsyncBaseClient`'s individual keyword options, `stream_get()`, `Refused`, `Refusal` and `header_names` (see the
   migration table).
