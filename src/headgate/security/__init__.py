@@ -9,7 +9,11 @@ redirect from ``https`` to ``http`` is not followed. The SSRF guard (``SecurityO
 refuses hosts that are, or resolve to, addresses that are not globally routable, raising
 :class:`~headgate.errors.ForbiddenDestinationError`.
 
-What is public here plugs into the guard: a :data:`Resolver` (``SecurityOptions(resolver=...)``), and
+:class:`CredentialCarrier` and :class:`CredentialStamper` are the protocols an auth or a middleware implements to
+declare the headers and query parameters it stamps, so the guard keeps them on trusted origins and the cache partitions
+by them.
+
+What else is public here plugs into the guard: a :data:`Resolver` (``SecurityOptions(resolver=...)``), and
 :class:`AddressGuard` and :class:`PinnedHTTPTransport`, so that a test can reach a loopback server through the real
 pinning transport (``AddressGuard(check=...)``). :func:`forbidden_reason` is the default :data:`AddressCheck`, and
 :func:`resolve_with_loop` the default resolver.
@@ -17,6 +21,7 @@ pinning transport (``AddressGuard(check=...)``). :func:`forbidden_reason` is the
 Importing headgate also redacts the URL in httpx2's own ``HTTP Request:`` log line (:mod:`headgate.security._logging`).
 """
 
+from headgate._core import CredentialCarrier, CredentialStamper
 from headgate.security._addresses import AddressCheck, AddressGuard, Resolver, forbidden_reason, resolve_with_loop
 from headgate.security._logging import redact_httpx2_log
 from headgate.security._transport import PinnedHTTPTransport
@@ -27,6 +32,8 @@ redact_httpx2_log()
 __all__ = [
     "AddressCheck",
     "AddressGuard",
+    "CredentialCarrier",
+    "CredentialStamper",
     "PinnedHTTPTransport",
     "Resolver",
     "forbidden_reason",

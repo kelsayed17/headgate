@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from headgate._core._events import Emitter, Event
     from headgate._core._time import Clock
 
-__all__ = ["SENDING", "CallContext", "SendProgress", "Slot", "progress_of"]
+__all__ = ["SENDING", "CallContext", "CallView", "SendProgress", "Slot", "call_info", "progress_of"]
 
 #: The one request extension headgate keeps its per-call state in.
 _EXTENSION: Final = "headgate.call"
@@ -293,3 +293,32 @@ def progress_of(context: CallContext) -> SendProgress:
     """Return the progress of the attempt this task sends for *context* (:data:`SENDING`), else its latest attempt's."""
     sending = SENDING.get()
     return sending[1] if sending is not None and sending[0] is context else context.progress
+
+
+@dataclass(frozen=True, slots=True)
+class CallView:
+    """A read-only view of the call a request belongs to, taken when :func:`call_info` is called.
+
+    * ``call``: the :class:`~headgate.events.CallInfo` every event about the call carries: its method, URL and route
+      template (the t-string the URL was rendered from, or ``None``).
+    * ``attempt``: how many sends the call has begun, so inside a middleware 1 on the first send and 2 on the first
+      retry (or hedge).
+    * ``remaining``: the seconds left before the call's deadline (negative once past it), or ``None`` without one.
+    """
+
+    call: CallInfo
+    attempt: int
+    remaining: float | None
+
+
+def call_info(request: httpx2.Request) -> CallView | None:
+    """Return a view of the call *request* belongs to, now, or ``None`` for a request no client call built.
+
+    A middleware reads it to tell its call apart (by route template), to know a re-send from a first send, and to
+    leave a slow step out when the deadline is near. Every reading is fresh: the attempt and the time left are the
+    call's as they stand.
+    """
+    context = CallContext.find(request)
+    if context is None:
+        return None
+    return CallView(call=context.info, attempt=context.attempt, remaining=context.remaining())

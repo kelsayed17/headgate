@@ -11,7 +11,8 @@ here is what a client is written with:
 * the client and its options: :class:`AsyncBaseClient`, :data:`Method`, :class:`RequestOptions`,
   :class:`CallOptions`, :class:`ViewOptions`, :class:`TransportPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`,
   :class:`Timeouts` and :data:`DEFAULT_TIMEOUTS`, :class:`IdempotencyKeys`, :class:`Route` and its
-  :class:`RouteOptions`, :class:`Middleware` and :data:`Next` (what a middleware calls to continue);
+  :class:`RouteOptions`, :class:`Middleware`, :data:`Next` (what a middleware calls to continue) and
+  :func:`call_info` (what a middleware reads of its call);
 * declared responses: :class:`Expect`, :class:`Reader` and the readers (:data:`as_json` among them),
   :data:`ResponseCheck`;
 * codecs: :class:`Codec`, and :func:`reader_for`, :func:`writer_for` and :func:`decode_with`, which build a reader, a
@@ -45,6 +46,7 @@ from headgate._auth import (
 from headgate._call_options import CallOptions, RequestOptions
 from headgate._client import AsyncBaseClient, Method
 from headgate._codec import Codec, decode_with, reader_for, writer_for
+from headgate._core import call_info
 from headgate._middleware import Middleware, Next
 from headgate._options import (
     DEFAULT_TIMEOUTS,
@@ -165,6 +167,7 @@ __all__ = [
     "as_bytes",
     "as_json",
     "body_reader",
+    "call_info",
     "decode_with",
     "event_stream",
     "nothing",

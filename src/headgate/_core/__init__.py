@@ -8,7 +8,7 @@ It imports only the standard library and ``httpx2``, so the policy subpackages (
 between those subpackages goes through what is defined here and is wired together in :mod:`headgate._stack`.
 """
 
-from headgate._core._context import SENDING, CallContext, SendProgress, Slot, progress_of
+from headgate._core._context import SENDING, CallContext, CallView, SendProgress, Slot, call_info, progress_of
 from headgate._core._events import (
     OBSERVER_FAILURES,
     SILENT,
@@ -73,6 +73,7 @@ __all__ = [
     "CallFinished",
     "CallInfo",
     "CallStarted",
+    "CallView",
     "Clock",
     "CredentialCarrier",
     "CredentialStamper",
@@ -89,6 +90,7 @@ __all__ = [
     "Slot",
     "Timing",
     "asyncio_sleep",
+    "call_info",
     "check_callable",
     "check_collection",
     "check_fragment",

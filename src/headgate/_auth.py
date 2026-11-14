@@ -12,7 +12,7 @@ request) belongs in that provider's client, as a :class:`SigningAuth` subclass.
 **An explicit ``headers=`` or ``params=`` from the caller wins a clash.** Every class here merges setdefault-style,
 because the flow runs at send time and a plain assignment would override the caller.
 
-Every class here is a :class:`~headgate._core.CredentialStamper`: it declares the headers and query parameters it
+Every class here is a :class:`~headgate.security.CredentialStamper`: it declares the headers and query parameters it
 stamps (``credential_headers``, ``credential_params``), so the client withholds them from any origin it does not trust
 (:mod:`headgate.security`), and it names the credential it carries (``credential_identity()``), so a cache can keep one
 credential's responses from another's. The identity is the secret material itself; it is hashed, never logged or

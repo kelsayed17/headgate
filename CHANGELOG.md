@@ -8,6 +8,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `headgate.call_info(request)`, a middleware's read-only view of its call: a `headgate.events.CallView` holding the
+  call's `CallInfo` (its route template among it), its `attempt` and the seconds `remaining` before its deadline,
+  taken when asked, or `None` for a request no client call built. A middleware no longer imports the private
+  `CallContext`.
+- `headgate.security.CredentialCarrier` and `CredentialStamper`, the protocols an auth or a middleware declares its
+  credentials with, public where the cache's error message and the docs now point.
 - `headgate.timing`, the one seam for time and randomness: `Timing(clock=, sleep=, wall_clock=, random=)`, its
   protocols `Clock`, `Sleep` and `RandomSource`, and `current_timing()` and `timing_override()`. `Timing` gains a
   `wall_clock`, for `Retry-After` dates and `RateLimit` epochs, and a `random` source, for the backoff's jitter.

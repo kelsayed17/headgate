@@ -361,8 +361,11 @@ async def test_a_response_that_varies_on_everything_is_never_a_hit(storage: Asyn
 
 def test_an_auth_that_declares_nothing_is_refused_a_credential_partition(storage: AsyncSqliteStorage) -> None:
     """A cache partitioned by credential cannot work with an auth that declares nothing, so the client is refused."""
-    with pytest.raises(ClientConfigurationError, match=r"_OpaqueAuth does not declare its credentials.*SHARED"):
+    with pytest.raises(
+        ClientConfigurationError, match=r"_OpaqueAuth does not declare its credentials.*SHARED"
+    ) as raised:
         _client(_Recorder(), storage, _OpaqueAuth())
+    assert "headgate.security.CredentialStamper" in str(raised.value), "it names the public protocol, not a private one"
 
 
 async def test_an_auth_that_declares_nothing_may_share_explicitly(storage: AsyncSqliteStorage) -> None:
