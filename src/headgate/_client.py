@@ -94,7 +94,7 @@ from headgate.breaker import CircuitBreaker
 from headgate.breaker._breaker import BreakerOpenError
 from headgate.breaker._registry import NO_BREAKER
 from headgate.breaker._scope import scoped_registry
-from headgate.cache._transport import host_untested, served_from_cache, stamp_ttl, store_accepted
+from headgate.cache._transport import STREAMED, host_untested, served_from_cache, stamp_ttl, store_accepted
 from headgate.errors import (
     CircuitOpenError,
     ClientError,
@@ -758,6 +758,7 @@ class AsyncBaseClient:
         reports the exchange it was.
         """
         prepared = self._prepare(call)
+        prepared.context.put(STREAMED, value=True)
         own: Exception | None = None
         async with self._reported(prepared):
             try:

@@ -112,6 +112,20 @@ change the public API; such changes are listed under **Changed** and **Removed**
   the origin answering, and a network `TimeoutError` while reading the error's body is a transport failure rather than
   "deadline exceeded". A `ClientError` another call raises inside a stream's block is no longer reported as the
   stream's error, nor given the stream's notes.
+- A cached client no longer buffers a `stream()`, a POST, or a request its `HttpCache` rules do not name: each goes to
+  the network and up as it arrives, unshared. A server-sent event stream's block was entered only once the body ended
+  or 32 MiB arrived. A stream is still served from a hit, but a stream's miss is no longer stored.
+- On a cached client, a hedge sends its own request instead of waiting on its call's first send of the same GET.
+- A cache write still running at a verb's deadline is dropped and counted in `cache_degradations()`; the call returns
+  by its deadline. It ran on past it.
+- A response header holding raw UTF-8 (`Content-Disposition: attachment; filename="café.csv"`) is handed up as sent.
+  Every buffered call raised `UnicodeEncodeError`, and on a cached client a `Set-Cookie` beside it did too.
+- Identical GETs share one download with `OpenTelemetryObserver` installed: its per-call trace headers no longer keep
+  them apart.
+- A client that refuses private hosts has cache entries of its own, so it is never served a body that another client
+  on the same storage fetched from an internal address.
+- A per-call `cache_ttl=` that is not a positive finite number raises `ValueError`, and one that is not a number
+  `TypeError`, before the call is sent. `nan` was stored forever, and `"60"` was counted as a storage fault.
 - A view's headers (`with_options(headers=...)`) partition the cache, as `HttpOptions(headers=...)` does. Two views
   with different `X-Api-Key` values on one client were served each other's cached entries.
 - A view's headers are withheld from untrusted origins, as client-wide ones are, and a call's own `headers=` from a

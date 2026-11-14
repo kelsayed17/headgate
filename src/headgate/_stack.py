@@ -141,7 +141,13 @@ def build_transport_stack(
     layer = SendTrackingTransport(transport=_network(http))
     layer = RateLimitTransport(budgets=budgets, transport=layer)
     if (cache := policy.cache) is not None:
-        scope = credential_scope(cache, credentials.auth, middleware=http.middleware, headers=http.headers)
+        scope = credential_scope(
+            cache,
+            credentials.auth,
+            middleware=http.middleware,
+            headers=http.headers,
+            guarded=not http.security.allow_private_hosts,
+        )
         layer = ResilientCacheTransport(layer, cache, max_body_bytes=http.max_response_bytes, scope=scope)
     signer = credentials.auth if isinstance(credentials.auth, SigningAuth) else None
     if http.middleware or signer is not None:
