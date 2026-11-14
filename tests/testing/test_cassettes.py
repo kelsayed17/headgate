@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, override
 
 import httpx2
+import pytest
 import vcr
 
 from headgate import CachedTokenAuth, HttpOptions, Minted, Rate, as_bytes
@@ -99,3 +100,21 @@ async def test_a_cassette_replays_without_the_network(tmp_path: Path) -> None:
         )
 
     assert replayed == _BODY
+
+
+async def test_an_unseeded_mint_is_refused_when_replaying(tmp_path: Path) -> None:
+    """Refuse a mint a replaying filter sees, instead of letting it reach the network with the auth's secret."""
+    recording = CassetteFilter(auths=(_MintingAuth(),))
+    cassette = tmp_path / "call.yaml"
+    with vcr.VCR(**recording.vcr_config()).use_cassette(str(cassette), record_mode="all"):
+        await _client(_MintingAuth(), recording, httpx2.MockTransport(_network)).get("data", expect=as_bytes)
+
+    replaying = CassetteFilter(auths=(_MintingAuth(),), replaying=True)
+    sent: list[httpx2.Request] = []
+    with vcr.VCR(**replaying.vcr_config()).use_cassette(str(cassette), record_mode="none"):
+        client = _client(
+            _MintingAuth(), replaying, httpx2.MockTransport(lambda request: sent.append(request) or _network(request))
+        )
+        with pytest.raises(AssertionError, match=r"seed the auth"):
+            await client.get("data", expect=as_bytes)
+    assert sent == []

@@ -19,7 +19,8 @@ The recipe, with pytest-recording::
         return CASSETTES.vcr_config()
 
 and ``HttpOptions(middleware=(CASSETTES,))`` on the client under test. A skipped mint is not replayed, so seed the
-auth with a token when replaying (``CachedTokenAuth.seed``).
+auth with a token when replaying (``CachedTokenAuth.seed``), and build the filter with ``replaying=True`` then: an
+unseeded mint fails the test instead of reaching the network.
 
 vcrpy 8.3 and later patch httpx2's own transports (``httpx2.AsyncHTTPTransport``, which headgate's default network
 transport is, and ``httpx2.MockTransport``), below headgate's whole stack: a cassette holds each send as it went on
@@ -52,6 +53,9 @@ __all__ = ["CassetteFilter", "RecordedRequest"]
 #: The request headers that carry a credential whatever the auth: filtered from every recorded request.
 _CREDENTIAL_HEADERS = ("authorization", "proxy-authorization", "cookie")
 
+#: The response headers whose URL may carry a signed query, redacted as a recorded request's URI is.
+_URL_HEADERS = frozenset({"location", "content-location"})
+
 #: Whether the send in flight in this context is an auth flow's credential mint.
 _MINTING: ContextVar[bool] = ContextVar("headgate_recording_auth_hop", default=False)
 
@@ -69,13 +73,22 @@ class CassetteFilter:
     credential_params: ClassVar = frozenset[str]()
 
     def __init__(
-        self, *, auths: Iterable[object] = (), headers: Iterable[str] = (), params: Iterable[str] = ()
+        self,
+        *,
+        auths: Iterable[object] = (),
+        headers: Iterable[str] = (),
+        params: Iterable[str] = (),
+        replaying: bool = False,
     ) -> None:
         """Filter the credentials *auths* declare, plus *headers* and query *params* named here.
 
         An auth that is a :class:`~headgate._core.CredentialStamper` contributes the headers and parameters it
         stamps; any other auth contributes nothing, so name its credentials in *headers* and *params*.
+
+        *replaying* (for ``record_mode="none"``) makes a mint fail the test with an ``AssertionError``: a mint is
+        never recorded, so vcrpy would let it reach the network, with the auth's secret.
         """
+        self._replaying = replaying
         header_names = {name.lower() for name in (*_CREDENTIAL_HEADERS, *headers)}
         param_names = set(params)
         for auth in auths:
@@ -106,18 +119,40 @@ class CassetteFilter:
         return request
 
     def before_record_response(self, response: MutableMapping[str, object]) -> MutableMapping[str, object]:
-        """Return the recorded *response* without its ``Set-Cookie`` headers, which can carry a session."""
+        """Return the recorded *response* without its credentials, which a server may issue or echo.
+
+        That drops ``Set-Cookie`` and every header the filter names, and redacts the secret query values in a
+        ``Location`` or ``Content-Location``, such as a signed download URL.
+        """
         headers = response.get("headers")
         if isinstance(headers, Mapping):
-            response["headers"] = {name: value for name, value in headers.items() if str(name).lower() != "set-cookie"}
+            dropped = {"set-cookie", *self.filter_headers}
+            response["headers"] = {
+                name: _redacted(value) if str(name).lower() in _URL_HEADERS else value
+                for name, value in headers.items()
+                if str(name).lower() not in dropped
+            }
         return response
 
     async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
         """Send *request*, marked for the recorder as a mint when an auth flow sent it to mint a credential."""
         if not request.extensions.get(AUTH_HOP):
             return await call_next(request)
+        if self._replaying:
+            msg = (
+                f"a token mint ({sanitize_url(str(request.url))}) is never recorded, so it cannot be replayed: "
+                "seed the auth with a token when replaying (CachedTokenAuth.seed)"
+            )
+            raise AssertionError(msg)
         token = _MINTING.set(True)
         try:
             return await call_next(request)
         finally:
             _MINTING.reset(token)
+
+
+def _redacted(value: object) -> object:
+    """Return a recorded header *value* (vcrpy keeps a list of them) with each URL's secret query values redacted."""
+    if isinstance(value, list):
+        return [sanitize_url(item) if isinstance(item, str) else item for item in value]
+    return sanitize_url(value) if isinstance(value, str) else value

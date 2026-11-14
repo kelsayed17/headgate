@@ -169,17 +169,28 @@ def _vary_names(headers: Headers) -> frozenset[str]:
 
 
 def _same_variant(entry: Entry, headers: httpx2.Headers) -> bool:
-    """Return whether *entry* answers a request sending *headers*, by the headers its response's ``Vary`` names.
+    """Return whether *entry* answers a request sending *headers*, by ``Accept`` and the headers its ``Vary`` names.
 
-    Each named header must have the values the stored request had (RFC 9111 section 4.1). Both sides are the cache's
-    view of a request (see :class:`~headgate.cache._credentials.CredentialScope`), where each value is a keyed digest,
-    so equal digests are equal values. No entry varying on ``*``, or on a header the view drops, is ever stored (see
-    :meth:`_GuardedStorage.create_entry`), so a named header the view lacks is one neither request sent.
+    Each named header must have the values the stored request had (RFC 9111 section 4.1), and so must ``Accept``
+    whatever the response's ``Vary`` says, since an API that answers JSON and CSV at one URL rarely names it. Both sides
+    are the cache's view of a request (see :class:`~headgate.cache._credentials.CredentialScope`), where each value is a
+    keyed digest, so equal digests are equal values. A named header the view drops is told apart by
+    :func:`_varies_on_dropped`, never here.
     """
     return all(
         (entry.request.headers.get_list(name) or []) == headers.get_list(name)
-        for name in _vary_names(entry.response.headers)
+        for name in _vary_names(entry.response.headers) | {"accept"}
     )
+
+
+def _varies_on_dropped(names: frozenset[str]) -> bool:
+    """Return whether *names*, a response's ``Vary``, names a header this trip's request sent but its view drops.
+
+    That is a credential (``Authorization``, a cookie, a declared one): under a shared partition no view tells two of
+    its values apart, so such a response neither is stored nor answers this request.
+    """
+    call = _CALL.get()
+    return any(name in call.headers and name not in call.view_headers for name in names)
 
 
 class _GuardedStorage(AsyncBaseStorage):
@@ -193,8 +204,8 @@ class _GuardedStorage(AsyncBaseStorage):
     by :class:`_Store` once the call's reader accepts the response. One is never held when no later request could be
     told to be its variant or another's: a status *stores* refuses, a ``Vary: *``, and, under a *shared* partition, a
     ``Vary`` naming a header the request sent but the view drops (``Authorization``, a cookie, a declared credential).
-    Under a credential partition the view's partition label already carries that header's value, so each value has
-    entries of its own.
+    By the same rule, a stored entry varying on such a header never answers a request that sends it. Under a credential
+    partition the view's partition label already carries that header's value, so each value has entries of its own.
     """
 
     def __init__(self, backend: AsyncBaseStorage, *, stores: Callable[[int], bool], shared: bool) -> None:
@@ -210,8 +221,7 @@ class _GuardedStorage(AsyncBaseStorage):
         names = _vary_names(response.headers)
         if "*" in names:
             return False
-        call = _CALL.get()
-        return not (self._shared and any(name in call.headers and name not in call.view_headers for name in names))
+        return not (self._shared and _varies_on_dropped(names))
 
     @override
     async def create_entry(
@@ -229,7 +239,12 @@ class _GuardedStorage(AsyncBaseStorage):
             entries = await self._backend.get_entries(key)
         # hishel keys an entry by its URL alone, so the variants a response's Vary names are told apart here.
         headers = _CALL.get().view_headers
-        return [_guarded_body(entry) for entry in entries if _same_variant(entry, headers)]
+        return [
+            _guarded_body(entry)
+            for entry in entries
+            if _same_variant(entry, headers)
+            and not (self._shared and _varies_on_dropped(_vary_names(entry.response.headers)))
+        ]
 
     @override
     async def update_headers(self, id: uuid.UUID, headers: Headers) -> None:
@@ -697,7 +712,8 @@ class ResilientCacheTransport(AsyncCacheTransport):
         # Stamped here because only a cached client has a default TTL to give; setdefault, so a per-call one wins.
         if self._ttl is not None:
             stamp_ttl(request, self._ttl, keep=True)
-        if not self._cache.caches_request(request.method, url_path(request.url)):
+        # A Range asks for part of a body, which no stored whole one answers and whose 206 is never stored.
+        if not self._cache.caches_request(request.method, url_path(request.url)) or "range" in request.headers:
             # Neither looked up nor stored, so nothing here needs its body: it goes up as it arrives.
             return await self._live.handle_async_request(request)
         context = CallContext.find(request)
