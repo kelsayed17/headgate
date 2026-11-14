@@ -20,9 +20,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `CallOptions`, the TypedDict of every per-call option but the body, which every verb and `paginate()` take, and
   `headgate.streaming.StreamOptions`, the options of `stream()`. `with_options(follow_redirects=...)` sets a view's
   redirect choice, and is refused on a client with a `response_check`, as each of its calls would be.
-- `Stream.retry` and `EventParser.retry`: the reconnection time the server last set with an SSE `retry:` field, kept
-  across events as the WHATWG spec says, including a `retry:` sent in a block of its own. `Event.retry` is unchanged:
-  the field in that event's own block.
+- `Stream.retry`: the reconnection time the server last set with an SSE `retry:` field, kept across events as the
+  WHATWG spec says, including a `retry:` sent in a block of its own. The `retry` of each event `aiter_events` yields
+  (an `httpx2.ServerSentEvent`) is unchanged: the field in that event's own block.
+- `Stream.aiter_lines(max_line_size=...)`: a line past it, 1 MiB by default (`None` for no limit), raises
+  `ResponseTooLargeError`, before it ends if it never does. A body with no line ending used to be held whole.
 - `as_json`, a ready reader of JSON into builtins with the standard library's `json.loads`, so a core-only install
   can read JSON without a codec. It is typed `object`, and reads strict RFC 8259 JSON as `headgate.msgspec`'s reader
   does: a body that is not UTF-8, `NaN`, `Infinity`, a number out of range and a lone surrogate are each a
@@ -139,6 +141,25 @@ change the public API; such changes are listed under **Changed** and **Removed**
   answer each other. A request with a `Range` goes to the network, since no whole stored body answers it.
 - Under `Partition.SHARED`, a call that sends `Authorization` (or a cookie, or a declared credential) is never answered
   by a stored entry that varies on it. An anonymous call's answer was served to an authenticated one.
+- A problem+json error body with an extension nested hundreds of levels deep, about 1 KB, raised a raw
+  `RecursionError` from every call. It is now read as no problem detail, and the status error names the body.
+- An error body declaring `charset=idna` or `charset=undefined` raised a bare `UnicodeError`. It is read as UTF-8,
+  as other charsets that are no text encoding already were.
+- The default transport moves on to the next vetted address after a connect timeout, as it already did after a
+  refusal. Each address gets an even share of the time left on the connect timeout, so one that hangs no longer
+  spends all of it.
+- A raw `#` in a URL's userinfo (`https://user:pa#ss@host/`) is redacted from error messages. The password after the
+  `#` was shown.
+- A `Retry-After` HTTP-date is measured from the response's `Date` header, so a local clock ahead of the server's no
+  longer shortens the wait to nothing, and one behind no longer stretches it.
+- `Stream.aiter_lines` reads a body whose `charset` is no text encoding (`base64`, `rot13`, `idna`, `undefined`) as
+  UTF-8, and raises `ResponseParseError` for a body its `charset` cannot decode (UTF-16 without a byte order mark).
+  Each raised a raw `AssertionError`, `TypeError` or `UnicodeError`.
+- An SSE `retry:` of any length of digits is read; one past 2**63 - 1 milliseconds is held at that. More than 4,300
+  digits raised a raw `ValueError`, and a few hundred made `stream.retry / 1000` overflow.
+- Whether an SSE event passes `max_event_size` no longer depends on how the body is cut into chunks: a comment line,
+  or the byte order mark, still arriving counted toward it. A comment is now dropped as it arrives, so one that never
+  ends holds no memory.
 - A one-shot `content=` stream is never sent twice below the retry layer either. When an HTTP/2 GOAWAY moved the
   request to a new connection, an async-iterable file went out empty and the server processed an empty POST, and an
   async generator raised a raw `httpx2.StreamConsumed`. The second read is now refused, and the call raises
@@ -262,6 +283,20 @@ change the public API; such changes are listed under **Changed** and **Removed**
   timeout, past the call's deadline.
 - An explicit `CurlOpt.PROXY` in `AsyncCurlTransport(curl_options=...)` is used for every host. The transport's
   `NOPROXY="*"`, which keeps the environment's proxy out, bypassed it too; a `CurlOpt.NOPROXY` of your own is kept.
+- A 401 that `SigningAuth` or `CachedTokenAuth` answers by re-sending the request is dropped unread. httpx2 read it in
+  full, below `max_response_bytes`: a 66 MiB 401 body was read under a 1 MiB cap.
+- A token response that `MAX_MINT_RESPONSE_BYTES` refuses by its `Content-Length` closes its connection. It was left
+  open, so each such mint kept a pooled connection until the pool ran out.
+- When a token mint fails, every call that was waiting for it fails with the same error. Each waiting call used to
+  try the mint again, one after another, so a token host that was down cost one timeout per queued call.
+- A token refresh that fails inside `refresh_margin` sends the held token, which has not expired yet, instead of
+  failing the call.
+- A `mint_flow` hop that fails on the network (a refused connection, a timeout) is reported as the token mint's
+  `TransportError`, named for the auth class and the token endpoint. It was reported as the API call's, naming the
+  call's URL.
+- Under a headgate client, `CachedTokenAuth` no longer reads a streamed upload into memory before sending it. A body
+  that can be sent again (bytes, a factory, a rewindable `files=` upload) is still re-sent after a 401 re-mint; a
+  one-shot stream's 401 reaches the caller as `AuthError`, and the next call mints a new token.
 
 ### Security
 

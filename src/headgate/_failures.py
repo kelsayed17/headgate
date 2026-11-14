@@ -213,13 +213,14 @@ def body_snippet(resp: httpx2.Response) -> str | None:
 
     The upstream's own reason for a 4xx is the diagnosis (a 400 that names the missing field), so it is folded into the
     ``ClientError`` message, bounded and whitespace-collapsed because that message may reach an API response. A
-    ``charset`` that is no text encoding (httpx2 takes ``base64`` or ``rot13``, which ``bytes.decode`` refuses) is read
-    as UTF-8, as no ``charset`` is.
+    ``charset`` that is no text encoding (httpx2 takes ``base64`` or ``rot13``, which ``bytes.decode`` refuses with a
+    ``LookupError``, and ``idna`` or ``undefined``, which refuse with a ``UnicodeError``) is read as UTF-8, as no
+    ``charset`` is.
     """
     scanned = resp.content[:_SNIPPET_SCAN_BYTES]
     try:
         head = scanned.decode(resp.encoding or "utf-8", errors="replace")
-    except LookupError:
+    except LookupError, UnicodeError:
         head = scanned.decode("utf-8", errors="replace")
     text = " ".join(head.split())
     if not text:
@@ -241,7 +242,8 @@ def problem_of(resp: httpx2.Response) -> Problem | None:
     """Return the RFC 9457 problem detail *resp*'s body carries, or ``None`` when it is not one.
 
     Only a body declared ``application/problem+json``, no larger than :data:`_PROBLEM_SCAN_BYTES`, holding a JSON object
-    is read. A standard member of the wrong JSON type is ignored, as the RFC says; every other member is an extension.
+    nested no deeper than the recursion limit allows is read. A standard member of the wrong JSON type is ignored, as
+    the RFC says; every other member is an extension.
     """
     media_type = resp.headers.get("content-type", "").partition(";")[0].strip().lower()
     content = resp.content
@@ -255,14 +257,18 @@ def problem_of(resp: httpx2.Response) -> Problem | None:
         return None
     members = {str(key): value for key, value in document.items()}
     status = members.pop("status", None)
-    return Problem(
-        type=_text_member(members.pop("type", None)) or "about:blank",
-        title=_text_member(members.pop("title", None)),
-        status=status if isinstance(status, int) and not isinstance(status, bool) else None,
-        detail=_text_member(members.pop("detail", None)),
-        instance=_text_member(members.pop("instance", None)),
-        extensions=members,
-    )
+    try:
+        return Problem(
+            type=_text_member(members.pop("type", None)) or "about:blank",
+            title=_text_member(members.pop("title", None)),
+            status=status if isinstance(status, int) and not isinstance(status, bool) else None,
+            detail=_text_member(members.pop("detail", None)),
+            instance=_text_member(members.pop("instance", None)),
+            extensions=members,
+        )
+    except RecursionError:
+        # An extension nested too deep to freeze (about 1 KB of brackets): read the body as no problem detail.
+        return None
 
 
 def _text_member(value: object) -> str | None:
