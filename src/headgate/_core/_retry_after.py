@@ -52,25 +52,48 @@ def parse_retry_after(value: str, *, now: float) -> float | None:
     seconds = _decimal_seconds(value)
     if seconds is not None:
         return seconds
+    when = _unix_time(value)
+    return None if when is None else max(0.0, when - now)
+
+
+def _unix_time(value: str) -> float | None:
+    """Return an HTTP-date as a Unix time, a zone-less one read as GMT; ``None`` when it does not parse."""
     try:
         when = parsedate_to_datetime(value)
     except _DATE_ERRORS:
         return None
     if when.tzinfo is None:
         when = when.replace(tzinfo=UTC)
-    return max(0.0, when.timestamp() - now)
+    return when.timestamp()
 
 
 def retry_after_of(response: httpx2.Response, *, now: float | None = None) -> float | None:
     """Return the seconds a 429 or 503 *response* asks to wait: ``retry-after-ms`` if it parses, else ``Retry-After``.
 
     ``None`` for any other status, which RFC 9110 and RFC 6585 give the header no meaning on, and when neither header
-    is present or parses. *now* is the Unix time an HTTP-date is measured from, the system's wall clock by default.
+    is present or parses. An HTTP-date is measured from the response's own ``Date``, which the server's clock wrote as
+    it wrote the ``Retry-After``, so a skewed local clock neither drops the wait nor stretches it. Without a ``Date``
+    that parses, it is measured from *now*, a Unix time, the system's wall clock by default.
     """
     if response.status_code not in RETRY_AFTER_STATUSES:
         return None
-    millis = _decimal_seconds(response.headers.get("retry-after-ms", "").strip())
+    headers = response.headers
+    millis = _decimal_seconds(headers.get("retry-after-ms", "").strip())
     if millis is not None:
         return millis / _MS_PER_SECOND
-    header = response.headers.get("retry-after")
-    return None if header is None else parse_retry_after(header, now=time.time() if now is None else now)
+    header = headers.get("retry-after")
+    if header is None:
+        return None
+    header = header.strip()
+    seconds = _decimal_seconds(header)
+    if seconds is not None:
+        return seconds
+    when = _unix_time(header)
+    if when is None:
+        return None
+    # The server's Date is read only for an HTTP-date, and only when sent: a failed parse raises, which costs.
+    date = headers.get("date")
+    served = None if date is None else _unix_time(date)
+    if served is None:
+        served = time.time() if now is None else now
+    return max(0.0, when - served)

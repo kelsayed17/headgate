@@ -25,6 +25,7 @@ from headgate import (
     CachedTokenAuth,
     ClientError,
     HttpOptions,
+    Json,
     Problem,
     RateLimitError,
     Reader,
@@ -185,7 +186,7 @@ async def _surviving_500() -> None:
 async def _surviving_503_on_a_post() -> None:
     """Answer 503 to a POST without an idempotency key: transient, but not retryable."""
     async with _client(503) as client:
-        await client.post("orders", expect=nothing, json={"sku": "a"})
+        await client.post("orders", expect=nothing, body=Json({"sku": "a"}))
 
 
 async def _surviving_501() -> None:

@@ -24,6 +24,7 @@ from headgate import (
     CircuitOpenError,
     ClientError,
     HttpOptions,
+    Json,
     Problem,
     Rate,
     RateLimitError,
@@ -201,7 +202,7 @@ async def test_a_redirect_loop_is_not_retried_nor_charged_to_the_breaker() -> No
 async def test_a_post_without_a_key_that_survived_a_503_is_not_retryable() -> None:
     """Mark a surviving 503 on a POST without an idempotency key not retryable: sending it again is not safe."""
     with pytest.raises(UpstreamStatusError) as raised:
-        await _client(Script(503)).post("orders", expect=nothing, json={"sku": "a"})
+        await _client(Script(503)).post("orders", expect=nothing, body=Json({"sku": "a"}))
 
     assert raised.value.retryable is False
 
@@ -235,12 +236,12 @@ async def _get(client: StubClient) -> None:
 
 async def _put(client: StubClient) -> None:
     """Make a PUT with a JSON body."""
-    await client.put("orders/1", expect=nothing, json={"sku": "a"})
+    await client.put("orders/1", expect=nothing, body=Json({"sku": "a"}))
 
 
 async def _post(client: StubClient) -> None:
     """Make a POST with a JSON body and no idempotency key."""
-    await client.post("orders", expect=nothing, json={"sku": "a"})
+    await client.post("orders", expect=nothing, body=Json({"sku": "a"}))
 
 
 @pytest.mark.parametrize(
@@ -378,6 +379,22 @@ async def test_a_problems_extensions_are_read_only_at_every_depth() -> None:
     errors = extensions["errors"]
     assert isinstance(errors, tuple)
     assert isinstance(errors[0], MappingProxyType)
+
+
+#: How deep a problem's extension nests in about 1 KB of JSON: past the recursion limit once each level is frozen.
+_DEEP = 600
+
+
+async def test_a_problem_nested_too_deep_to_read_is_a_status_error_with_its_body() -> None:
+    """Raise the status error naming the body, rather than the ``RecursionError`` freezing its extension raised."""
+    body = b'{"title": "t", "deep": ' + b"[" * _DEEP + b"]" * _DEEP + b"}"
+    script = Script(httpx2.Response(400, content=body, headers={"Content-Type": _PROBLEM}))
+
+    error = await _raised(_client(script))
+
+    assert isinstance(error, UpstreamStatusError)
+    assert error.problem is None
+    assert '{"title": "t", "deep": [[[' in str(error)
 
 
 async def test_a_member_of_the_wrong_type_is_ignored_and_type_defaults() -> None:

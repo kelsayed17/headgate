@@ -12,6 +12,7 @@ import pytest
 from headgate import (
     HttpOptions,
     IdempotencyKeys,
+    Json,
     RateLimitError,
     RetryPolicy,
     TransportPolicy,
@@ -124,9 +125,9 @@ async def test_a_post_is_resent_only_with_an_idempotency_key() -> None:
     keyed = FaultyTransport(schedule=[Respond(503), Respond(201, json={"id": 7})])
 
     with pytest.raises(UpstreamStatusError):
-        await _client(plain).post("orders", expect=nothing, json={"qty": 1})
+        await _client(plain).post("orders", expect=nothing, body=Json({"qty": 1}))
     order = await _client(keyed, idempotency=IdempotencyKeys()).post(
-        "orders", expect=body_reader(json.loads), json={"qty": 1}
+        "orders", expect=body_reader(json.loads), body=Json({"qty": 1})
     )
 
     assert len(plain.calls) == 1
@@ -141,7 +142,7 @@ async def test_a_post_dropped_before_it_was_written_is_resent_with_or_without_a_
     """Re-send a plain POST whose connection dropped before a byte was written, whether or not it carries a body."""
     network = FaultyTransport(schedule=[DropMidBody(after_bytes=0), Respond(201)])
 
-    await _client(network).post("orders", expect=nothing, json=body)
+    await _client(network).post("orders", expect=nothing, body=Json(body))
 
     assert len(network.calls) == len(("dropped", "resent"))
     assert network.calls[0].bytes_sent == 0
@@ -153,7 +154,7 @@ async def test_a_post_dropped_inside_its_head_is_not_resent(body: object) -> Non
     network = FaultyTransport(schedule=[DropMidBody(after_bytes=3), Respond(201)])
 
     with pytest.raises(TransportError) as raised:
-        await _client(network).post("orders", expect=nothing, json=body)
+        await _client(network).post("orders", expect=nothing, body=Json(body))
 
     assert raised.value.retryable is False
     assert len(network.calls) == 1

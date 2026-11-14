@@ -106,8 +106,9 @@ _PAIR: Final = re.compile(r"(?<![\w-])((?:(?![A-Za-z])[\w-])*+)([A-Za-z][\w-]*)=
 
 #: The userinfo of a URL in free text: everything between ``//`` and the last ``@`` before the first ``/``, ``?`` or
 #: ``#``. The last, because a password may hold a bare ``@`` (``//user:p@ss@host``), and stopping at the first would
-#: leave the rest of it in the message.
-_USERINFO: Final = re.compile(r"//[^/?#\s'\"]+@")
+#: leave the rest of it in the message. When no ``@`` comes before a ``#``, a raw ``#`` in the userinfo
+#: (``//user:pa#ss@host``) is taken as part of it, up to the last ``@`` before the first ``/`` or ``?``.
+_USERINFO: Final = re.compile(r"//(?:[^/?#\s'\"]+@|[^/?#\s'\"]*#[^/?\s'\"]*@)")
 
 #: A value that escapes to nothing but dots is a structural dot segment, not data. See :func:`escape_segment`.
 _DOT_SEGMENTS: Final = {".": "%2E", "..": "%2E%2E"}
@@ -253,14 +254,18 @@ def sanitize_url(url: str) -> str:
 
     That covers secret query parameters, the whole userinfo, and secret ``name=value`` pairs in the fragment (an OAuth
     implicit-flow ``#access_token=``). Everything else in the URL is kept byte for byte, so the URL a message names is
-    the one that was sent. A URL too malformed to split (an unclosed IPv6 bracket) is redacted as free text with
-    :func:`redact_secrets` instead, since its message still has to be safe to show.
+    the one that was sent. A URL too malformed to split (an unclosed IPv6 bracket), or one whose userinfo holds a raw
+    ``#``, is redacted as free text with :func:`redact_secrets` instead, since its message still has to be safe to
+    show.
     """
     if not any(marker in url for marker in ("?", "#", "@")):
         return url
     try:
         parts = urlsplit(url)
     except ValueError:
+        return redact_secrets(url)
+    if "@" in parts.fragment and "@" not in parts.netloc and not parts.path and not parts.query:
+        # A raw '#' in the userinfo (user:pa#ss@host) ends the host early, so the rest of it is in the fragment.
         return redact_secrets(url)
     return urlunsplit(
         parts._replace(

@@ -18,7 +18,16 @@ from typing import TYPE_CHECKING, BinaryIO, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, IdempotencyKeys, RetryPolicy, TransportPolicy, UpstreamStatusError, nothing
+from headgate import (
+    HttpOptions,
+    IdempotencyKeys,
+    Multipart,
+    Raw,
+    RetryPolicy,
+    TransportPolicy,
+    UpstreamStatusError,
+    nothing,
+)
 from headgate.errors import TransportError
 from headgate.retry import Hedge
 from headgate.testing import FakeTransport, TestClock
@@ -83,7 +92,7 @@ async def test_a_one_shot_body_refuses_the_pools_second_pass(body: Callable[[], 
     built = client(network)
 
     with pytest.raises(TransportError, match="one-shot"):
-        await built.post("upload", content=body(), expect=nothing)
+        await built.post("upload", body=Raw(body()), expect=nothing)
 
     assert network.processed == []
 
@@ -96,7 +105,7 @@ async def test_a_replayable_body_is_sent_whole_on_the_pools_second_pass(
     network = _MovesToANewConnection()
     built = client(network)
 
-    await built.post("upload", content=body, expect=nothing)
+    await built.post("upload", body=Raw(body), expect=nothing)
 
     assert network.processed == [_BODY]
 
@@ -117,7 +126,7 @@ async def test_an_upload_of_a_file_that_cannot_rewind_is_not_sent_again(pipe: Bi
     built = client(fake)
 
     with pytest.raises(UpstreamStatusError) as raised:
-        await built.post("upload", files={"file": ("data.bin", pipe)}, idempotency_key="k", expect=nothing)
+        await built.post("upload", body=Multipart({"file": ("data.bin", pipe)}), idempotency_key="k", expect=nothing)
 
     assert raised.value.status_code == httpx2.codes.BAD_GATEWAY
     assert len(fake.calls) == 1
@@ -141,7 +150,7 @@ async def test_an_upload_of_a_file_that_can_rewind_is_sent_whole_again(rewindabl
     fake = FakeTransport().reply("POST", "/v1/upload", 502, 201)
     built = client(fake)
 
-    await built.post("upload", files={"file": ("data.bin", rewindable)}, idempotency_key="k", expect=nothing)
+    await built.post("upload", body=Multipart({"file": ("data.bin", rewindable)}), idempotency_key="k", expect=nothing)
 
     assert len(fake.calls) == len(("failed", "retried"))
     assert all(_BODY in request.content for request in fake.calls)
@@ -159,7 +168,7 @@ async def test_a_hedge_copies_an_in_memory_body() -> None:
     with clock.install():
         built = client(fake, policy=TransportPolicy(retry=RetryPolicy(hedge=_HEDGE, budget=None)))
 
-    await built.put("x", content=_BODY, expect=nothing)
+    await built.put("x", body=Raw(_BODY), expect=nothing)
 
     assert [request.content for request in fake.calls] == [_BODY, _BODY]
 
@@ -176,7 +185,7 @@ async def test_a_hedge_never_shares_a_streamed_body() -> None:
     with clock.install():
         built = client(fake, policy=TransportPolicy(retry=RetryPolicy(hedge=_HEDGE, budget=None)))
 
-    await built.put("x", files={"file": ("data.bin", io.BytesIO(_BODY))}, expect=nothing)
+    await built.put("x", body=Multipart({"file": ("data.bin", io.BytesIO(_BODY))}), expect=nothing)
 
     assert len(fake.calls) == 1
 
@@ -226,7 +235,7 @@ async def test_an_empty_idempotency_header_does_not_make_a_post_retryable(key: s
     built = client(fake)
 
     with pytest.raises(UpstreamStatusError):
-        await built.post("x", content=_BODY, headers={"Idempotency-Key": key}, expect=nothing)
+        await built.post("x", body=Raw(_BODY), headers={"Idempotency-Key": key}, expect=nothing)
 
     assert len(fake.calls) == 1
 
@@ -238,7 +247,7 @@ async def test_an_empty_idempotency_key_is_refused(key: str) -> None:
     built = client(fake)
 
     with pytest.raises(ValueError, match=r"^idempotency_key= takes a key that is not empty or blank \(got '\s*'\)$"):
-        await built.post("x", content=_BODY, idempotency_key=key, expect=nothing)
+        await built.post("x", body=Raw(_BODY), idempotency_key=key, expect=nothing)
 
     assert not fake.calls
 
@@ -249,6 +258,6 @@ async def test_an_empty_key_from_the_factory_is_refused() -> None:
     built = client(fake, policy=TransportPolicy(idempotency=IdempotencyKeys(factory=lambda: "")))
 
     with pytest.raises(ValueError, match=r"^IdempotencyKeys\(factory=\.\.\.\) must return a key that is not empty"):
-        await built.post("x", content=_BODY, expect=nothing)
+        await built.post("x", body=Raw(_BODY), expect=nothing)
 
     assert not fake.calls

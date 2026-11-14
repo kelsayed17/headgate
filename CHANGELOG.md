@@ -8,6 +8,18 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `Body`, the union of `EncodedBody`, `Json`, `Form`, `Multipart` and `Raw`, the body classes a call's `body=` takes.
+  `Raw(...).replayable` and `Multipart(...).replayable` say whether a retry or a 307/308 redirect can send the body
+  again: not for a `Raw` async iterable, nor a `Multipart` holding a file that cannot be rewound.
+- `max_response_bytes=` on a call (#57) raises or lowers the client's body cap for that call alone, as `timeout=` and
+  `deadline=` already can: higher for one large file on a host whose other files are small, lower for an endpoint that
+  should stay small. It is checked as a positive `int`. A cached client holds the body up to the call's cap, so the
+  entry is stored, and every read of an entry is checked against the cap of the call reading it. An undeclared error
+  status keeps the client's cap, so it still raises as its status. `stream()` takes no cap, since its body is never
+  buffered.
+- `CallOptions`, the TypedDict of every per-call option but the body, which every verb and `paginate()` take, and
+  `headgate.streaming.StreamOptions`, the options of `stream()`. `with_options(follow_redirects=...)` sets a view's
+  redirect choice, and is refused on a client with a `response_check`, as each of its calls would be.
 - `Stream.retry`: the reconnection time the server last set with an SSE `retry:` field, kept across events as the
   WHATWG spec says, including a `retry:` sent in a block of its own. The `retry` of each event `aiter_events` yields
   (an `httpx2.ServerSentEvent`) is unchanged: the field in that event's own block.
@@ -22,6 +34,38 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- A walk of POSTs takes its body as `paginate(query=value)`, where it took `body=value` (encoded by the pager's
+  `write=`) or `json=value` (builtins): the pager's `write=` encodes the value when it has one, and without one the
+  value is sent as JSON. So `body=` means one thing everywhere, the request body. `paginate(body=...)` and
+  `paginate(json=...)` raise `TypeError` naming `query=`, before the pager runs. The two `ValueError`s that tied a
+  keyword to a pager having or lacking `write=` are gone, since the pager now decides; a fixed idempotency key on a
+  walk of POSTs is still refused.
+- A request body is one keyword, `body=`, whose value says what it is: `json=value` is `body=Json(value)`,
+  `data=fields` is `body=Form(fields)`, `files=files, data=fields` is `body=Multipart(files, fields)`, and
+  `content=raw` is `body=Raw(raw)`; `body=` an `EncodedBody` from a writer is unchanged. The old keywords raise
+  `TypeError` naming the replacement, before anything is sent, on every verb and `stream()`. A call has one body, so
+  the `ValueError`s for two that conflict are gone. `Json` is encoded as `json=` was, except that `Json(None)` sends
+  `null` where `json=None` sent no body. A `Raw` content that is no body (a `str`, a `bytearray`, a list) raises
+  `TypeError` when the `Raw` is built, and a `body=` that is no `Body` (bare `bytes`, a `dict`) raises `TypeError`
+  naming it.
+- **A call's or a view's explicit `retry=None` now sends once; it used to mean "take the view's or the client's
+  policy".** `with_options(retry=None)` ignored the `None` and kept the client's policy; it now sends each of the
+  view's calls once. `retry` is a call option now, where leaving it out inherits and `None` is off. A forwarding
+  wrapper whose own default is `None` (`retry=retry`) is the usual case: type it on `**options: Unpack[CallOptions]`
+  and forward `**options`, or leave `retry` out when it is `None`. Find affected calls and views with
+  `grep -rnE "(retry|cache_ttl)=(None|[a-z_]+)\b"`.
+- **A call's explicit `cache_ttl=None` now stores without a lifetime limit; it used to mean "the cache's `ttl`".** It
+  removes headgate's lifetime only: the cache is TTL-only and still never reads a response's own cache headers, so such
+  an entry is served until its storage evicts it, past any `Cache-Control: max-age` and even past `no-store`, as an
+  entry of `HttpCache(ttl=None)` is. Leave `cache_ttl` out for the cache's `ttl`.
+- `retry=`, `follow_redirects=` and `cache_ttl=` are no longer named parameters of the verbs, `stream()` and
+  `paginate()`, but keys of their options (`CallOptions`, `RequestOptions`, `headgate.streaming.StreamOptions`), so a
+  wrapper typed on the options forwards them. A call keeps the same spelling. `retry=False` is `retry=None`, on a call
+  and on a view (`with_options(retry=None)`); `True` and `False` raise `TypeError` saying so. `follow_redirects=None`
+  is leaving it out, and raises `TypeError`.
+- A keyword no option names, such as a misspelled `retires=`, raises `TypeError` before anything is sent, on every
+  verb, `stream()`, `paginate()` and `with_options()`, where it was ignored. `paginate(data=...)`, `content=` and
+  `files=` now raise this `TypeError` too, naming the walk's `query=`, where they raised `ValueError`.
 - `HttpOptions(refusal_check=...)` is `HttpOptions(response_check=...)`, and its type `RefusalCheck` is
   `ResponseCheck`. The check is unchanged: it sees the final response and returns a `RefusedError` or `None`. The
   `ValueError` for a redirect-following client names `response_check=`.
@@ -79,6 +123,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Removed
 
+- `retry=True` on a call, which undid its view's `retry=`: make the call on the client instead of the view.
+- `PageOptions`: `paginate()` takes `CallOptions`, which has the same keys plus `retry`.
 - `HttpCache(policy=...)` and `HttpCache.filter_policy()`, and `headgate.cache.MethodFilter`, `PathFragmentFilter` and
   `StatusCodeFilter`: hishel 2 removed `FilterPolicy` and `BaseFilter`, which they were built on. Write the same rules
   as `HttpCache(methods=..., paths=..., statuses=...)`, which headgate now applies itself; read them back with the new
@@ -91,6 +137,17 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A problem+json error body with an extension nested hundreds of levels deep, about 1 KB, raised a raw
+  `RecursionError` from every call. It is now read as no problem detail, and the status error names the body.
+- An error body declaring `charset=idna` or `charset=undefined` raised a bare `UnicodeError`. It is read as UTF-8,
+  as other charsets that are no text encoding already were.
+- The default transport moves on to the next vetted address after a connect timeout, as it already did after a
+  refusal. Each address gets an even share of the time left on the connect timeout, so one that hangs no longer
+  spends all of it.
+- A raw `#` in a URL's userinfo (`https://user:pa#ss@host/`) is redacted from error messages. The password after the
+  `#` was shown.
+- A `Retry-After` HTTP-date is measured from the response's `Date` header, so a local clock ahead of the server's no
+  longer shortens the wait to nothing, and one behind no longer stretches it.
 - `Stream.aiter_lines` reads a body whose `charset` is no text encoding (`base64`, `rot13`, `idna`, `undefined`) as
   UTF-8, and raises `ResponseParseError` for a body its `charset` cannot decode (UTF-16 without a byte order mark).
   Each raised a raw `AssertionError`, `TypeError` or `UnicodeError`.

@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
+import httpcore2
 import httpx2
 import pytest
 
@@ -23,6 +24,7 @@ from headgate.errors import ClientTimeoutError
 from headgate.ratelimit import Rate
 from headgate.retry import NO_RETRY
 from headgate.security import AddressGuard, PinnedHTTPTransport
+from headgate.security._transport import _VettingBackend
 from tests.security._servers import client_ssl_context, serving
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
@@ -120,6 +122,49 @@ async def test_an_unreachable_address_falls_back_to_the_next_vetted_one() -> Non
             await client.get("x", expect=RESPONSE)
 
     assert server.connections == 1
+
+
+class _Connector:
+    """A network backend that times out on every address but the last, recording the timeout each connect was given."""
+
+    def __init__(self, reachable: str) -> None:
+        """Connect only to *reachable*."""
+        self._reachable = reachable
+        self.attempts: list[tuple[str, float | None]] = []
+
+    async def connect_tcp(
+        self, host: str, _port: int, given: float | None, *_args: object
+    ) -> httpcore2.AsyncNetworkStream:
+        """Record the attempt and the timeout *given*; time out unless *host* is the reachable address."""
+        self.attempts.append((host, given))
+        if host != self._reachable:
+            msg = f"timed out connecting to {host}"
+            raise httpcore2.ConnectTimeout(msg)
+        return cast("httpcore2.AsyncNetworkStream", object())
+
+
+@pytest.mark.parametrize("budget", [9.0, None], ids=["budget", "no-budget"])
+async def test_a_connect_timeout_falls_back_to_the_next_vetted_address(
+    budget: float | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Move on to the next address after a timeout, as after a refusal, each within a share of one connect timeout.
+
+    An address gets an even share of the time left, so one that hangs cannot spend the whole timeout on its own.
+    """
+    connector = _Connector("10.0.0.3")
+    monkeypatch.setattr("headgate.security._transport.AnyIOBackend", lambda: connector)
+    backend = _VettingBackend(AddressGuard(_Resolver("10.0.0.1", "10.0.0.2", "10.0.0.3"), check=lambda _address: None))
+
+    await backend.connect_tcp("api.example", 443, budget)
+
+    assert [host for host, _ in connector.attempts] == ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+    first, *_, last = (given for _, given in connector.attempts)
+    if budget is None:
+        assert (first, last) == (None, None)
+        return
+    assert first is not None
+    assert last is not None
+    assert 0 < first <= budget / len(connector.attempts) < last <= budget
 
 
 async def test_a_name_that_does_not_resolve_is_a_connect_error() -> None:

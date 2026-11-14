@@ -60,6 +60,8 @@ class _VettingBackend(httpcore2.AsyncNetworkBackend):
         socket_options: Iterable[SOCKET_OPTION] | None = None,
     ) -> httpcore2.AsyncNetworkStream:
         # The lookup counts against the connect timeout, as it does for an unguarded connection.
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
         try:
             async with asyncio.timeout(timeout):
                 addresses = await self._guard.vet(host, port)
@@ -67,12 +69,15 @@ class _VettingBackend(httpcore2.AsyncNetworkBackend):
             raise httpcore2.ConnectTimeout(str(exc)) from exc
         except OSError as exc:
             raise httpcore2.ConnectError(str(exc)) from exc
-        # Each vetted address in turn, as an unguarded connect falls back along the resolver's answer.
+        # Each vetted address in turn, as an unguarded connect falls back along the resolver's answer, after a refusal
+        # or a timeout. Each gets an even share of the time left, so one that hangs cannot spend the whole timeout.
         *earlier, last = addresses
-        for address in earlier:
-            with contextlib.suppress(httpcore2.ConnectError):
-                return await self._backend.connect_tcp(address, port, timeout, local_address, socket_options)
-        return await self._backend.connect_tcp(last, port, timeout, local_address, socket_options)
+        for index, address in enumerate(earlier):
+            share = None if deadline is None else (deadline - loop.time()) / (len(addresses) - index)
+            with contextlib.suppress(httpcore2.ConnectError, httpcore2.ConnectTimeout):
+                return await self._backend.connect_tcp(address, port, share, local_address, socket_options)
+        left = None if deadline is None else deadline - loop.time()
+        return await self._backend.connect_tcp(last, port, left, local_address, socket_options)
 
 
 class PinnedHTTPTransport(httpx2.AsyncHTTPTransport):
