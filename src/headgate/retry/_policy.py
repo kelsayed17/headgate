@@ -35,11 +35,11 @@ __all__ = [
     "IDEMPOTENT_METHODS",
     "NETWORK_ERRORS",
     "NEVER_SENT_ERRORS",
-    "NO_RETRY",
     "REPLAYABLE_BODY",
     "RETRY_OUTCOME",
     "RETRY_POLICY",
     "RETRY_STATUSES",
+    "SEND_ONCE",
     "UNRETRYABLE_ERRORS",
     "Backoff",
     "Hedge",
@@ -244,8 +244,8 @@ class RetryOutcome:
         return self if self.judge is None else self.judge(result)
 
 
-#: The policy that sends once and never re-sends: what a call's or a view's ``retry=None`` installs.
-NO_RETRY = RetryPolicy(attempts=1)
+#: The policy that sends once and never re-sends: what ``retry=None`` installs, on a policy, a route, a view or a call.
+SEND_ONCE = RetryPolicy(attempts=1)
 
 #: The header an idempotency key is read from when the call names none (a request no client call built).
 IDEMPOTENCY_HEADER: Final = "Idempotency-Key"

@@ -23,7 +23,6 @@ from headgate import (
 )
 from headgate.errors import CircuitOpenError, ClientTimeoutError, UpstreamStatusError
 from headgate.policy import policy_disabled
-from headgate.retry import NO_RETRY
 from headgate.testing import FakeTransport, isolated_breakers
 from tests.observe._support import BASE, RATE, client
 from tests.support.clients import StubClient
@@ -156,7 +155,7 @@ async def test_retry_none_sends_once() -> None:
 async def test_a_view_policy_wins_over_the_routes_and_loses_to_the_calls() -> None:
     """Retry under the view's policy despite a no-retry route, and not at all when the call says so."""
     fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
-    policy = TransportPolicy(routes=(Route("/x", retry=NO_RETRY),))
+    policy = TransportPolicy(routes=(Route("/x", retry=RetryPolicy(attempts=1)),))
     view = client(fake, policy=policy).with_options(retry=RetryPolicy(attempts=2))
     await view.get("x", expect=nothing)
     assert len(fake.calls) == len(("503", "200"))
@@ -192,7 +191,7 @@ async def test_a_view_cannot_retry_a_client_built_with_its_policy_off() -> None:
 async def test_a_view_shares_the_breakers() -> None:
     """Refuse a view's call once the client's own calls opened the host's breaker."""
     fake = FakeTransport().reply("GET", "/v1/x", 503)
-    policy = TransportPolicy(retry=NO_RETRY, breaker=BreakerPolicy(failure_threshold=1))
+    policy = TransportPolicy(retry=None, breaker=BreakerPolicy(failure_threshold=1))
     with isolated_breakers():
         root = client(fake, policy=policy)
     with pytest.raises(UpstreamStatusError):

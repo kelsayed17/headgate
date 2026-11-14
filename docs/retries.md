@@ -34,7 +34,7 @@ policy = TransportPolicy(
 | `hedge` | `None` | an opt-in `Hedge` for slow idempotent requests |
 | `min_attempt_time` | `0.05` | the least time left before the deadline that a retry, a hedge or a wait starts with |
 
-`NO_RETRY` is `RetryPolicy(attempts=1)`, what a call's or a view's `retry=None` installs.
+`retry=None` sends once, on the policy, a route, a view or a call: it is `RetryPolicy(attempts=1)`.
 `headgate.retry.RETRY_STATUSES` is the default `statuses`, to extend rather than restate:
 `RetryPolicy(statuses=RETRY_STATUSES | {520})`.
 

@@ -16,7 +16,6 @@ import pytest
 from headgate import HttpOptions, TransportPolicy, as_bytes
 from headgate._failures import body_snippet
 from headgate.errors import UpstreamStatusError
-from headgate.ratelimit import UNLIMITED
 from headgate.retry import RetryPolicy
 from tests.support.clients import StubClient
 
@@ -46,7 +45,6 @@ def _client(status: int, charset: str) -> StubClient:
     headers = {"Content-Type": f"text/plain; charset={charset}"}
     return StubClient(
         base_url="https://api.example.test",
-        rate=UNLIMITED,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(
             transport=httpx2.MockTransport(lambda _request: httpx2.Response(status, headers=headers, content=b"gone"))

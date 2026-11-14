@@ -32,7 +32,6 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
-from headgate.ratelimit import UNLIMITED
 from headgate.retry import RetryPolicy
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
@@ -55,7 +54,6 @@ def _client(
     """Return a client over *handler* that sends each request once."""
     return StubClient(
         base_url=f"https://{_HOST}",
-        rate=UNLIMITED,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(
             transport=httpx2.MockTransport(handler),
@@ -101,7 +99,6 @@ async def test_a_header_value_the_http_library_refuses_is_never_quoted(local_ser
     """
     client = StubClient(
         base_url=local_server,
-        rate=UNLIMITED,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         auth=StaticHeaderAuth({"Authorization": f"Bearer {_CANARY}\n"}),
     )

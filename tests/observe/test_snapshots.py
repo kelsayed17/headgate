@@ -27,7 +27,7 @@ from headgate import BreakerPolicy, HttpCache, RateBudget, RetryPolicy, Transpor
 from headgate.errors import ClientError
 from headgate.otel import OpenTelemetryObserver
 from headgate.ratelimit import Rate
-from headgate.retry import NO_RETRY, Backoff, Hedge
+from headgate.retry import Backoff, Hedge
 from headgate.testing import FakeTransport, TestClock, isolated_breakers
 from tests.cache._helpers import FaultyStorage, every_get_rules
 from tests.observe._support import client
@@ -50,7 +50,7 @@ def _half_jitter() -> float:
 
 
 #: Send each call once, so a scenario's second call shows what the first left behind.
-_ONCE = TransportPolicy(retry=NO_RETRY)
+_ONCE = TransportPolicy(retry=None)
 
 _DEPRECATED = {"Deprecation": "@1688169599", "Sunset": "Sun, 30 Jun 2024 23:59:59 GMT"}
 

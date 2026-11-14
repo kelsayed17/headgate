@@ -12,7 +12,6 @@ import httpx2
 
 from headgate import HttpOptions, TransportPolicy
 from headgate.ratelimit import Rate
-from headgate.retry import NO_RETRY
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
@@ -53,7 +52,7 @@ class Web:
             base_url=base_url,
             rate=Rate.per_second(1000),
             auth=auth,
-            policy=TransportPolicy(retry=NO_RETRY),
+            policy=TransportPolicy(retry=None),
             http=replace(http or HttpOptions(), transport=httpx2.MockTransport(self)),
             middleware=middleware,
         )

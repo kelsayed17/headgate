@@ -12,7 +12,6 @@ import httpx2
 
 from headgate import Expect, HttpOptions, TransportPolicy, as_bytes
 from headgate.cache import Fresh, HttpCache, NotModified, Validator, conditional
-from headgate.ratelimit import UNLIMITED
 from tests.cache._helpers import every_get_rules
 from tests.support.clients import StubClient
 
@@ -48,7 +47,6 @@ def _client(origin: _Origin, cache: HttpCache | None = None) -> StubClient:
     """Build a client over *origin*, caching through *cache* when given."""
     return StubClient(
         base_url="https://x",
-        rate=UNLIMITED,
         policy=TransportPolicy(cache=cache),
         http=HttpOptions(transport=httpx2.MockTransport(origin)),
     )

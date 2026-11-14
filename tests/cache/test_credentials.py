@@ -29,7 +29,6 @@ from headgate._core import CredentialStamper
 from headgate.cache import HttpCache, Partition
 from headgate.cache._credentials import CredentialScope, credential_scope
 from headgate.cache._transport import served_from_cache
-from headgate.ratelimit import UNLIMITED
 from tests.cache._helpers import accept, cache_transport, series_rules
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
@@ -125,7 +124,6 @@ def _client(
     """Build a client caching ``/series`` into *storage*, with *auth* and *partition*, and *http* over *network*."""
     return StubClient(
         base_url="https://x",
-        rate=UNLIMITED,
         auth=auth,
         policy=TransportPolicy(cache=HttpCache(**series_rules(), storage=storage, partition=partition)),
         http=dataclasses.replace(http or HttpOptions(), transport=network),
@@ -397,7 +395,6 @@ async def test_the_network_gets_the_request_exactly_as_an_uncached_client_sends_
     await _client(cached, storage, _KeyAuth("alice"), http=HttpOptions(headers=headers)).get(url, expect=RESPONSE)
     await StubClient(
         base_url="https://x",
-        rate=UNLIMITED,
         auth=_KeyAuth("alice"),
         http=HttpOptions(transport=uncached, headers=headers),
     ).get(url, expect=RESPONSE)

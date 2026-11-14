@@ -37,6 +37,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- `None` is the one spelling of off. `TransportPolicy(retry=NO_RETRY)` is `TransportPolicy(retry=None)`, which sends
+  every call once unless the call gives a policy of its own. A client's `rate=` defaults to `None`, a budget that paces
+  nothing of its own but still waits out the server's pauses, where it defaulted to `UNLIMITED`; write `rate=None`, or
+  leave it out, for `rate=UNLIMITED`. `TransportPolicy(retry=False)` raises `TypeError`.
 - `HttpOptions(timeout=...)` is `TransportPolicy(timeout=...)`, beside the `deadline` it is checked against, and a
   phase set longer than the deadline is refused where the policy is built, not in the client constructor.
   `HttpOptions(observers=..., middleware=...)` is `AsyncBaseClient(..., observers=..., middleware=...)`: they are
@@ -131,6 +135,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Removed
 
+- `headgate.retry.NO_RETRY`: write `retry=None`. `headgate.ratelimit.UNLIMITED`: leave `rate=` out, or write
+  `rate=None`.
 - `OpenTelemetryObserver.install()`: pass the observer to the client twice, as `observers=(otel,)` and
   `middleware=(otel,)`, since it is both.
 - `retry=True` on a call, which undid its view's `retry=`: make the call on the client instead of the view.

@@ -20,7 +20,6 @@ import pytest
 from headgate import HttpOptions, _auth
 from headgate._auth import AUTH_HOP, FRESH_TOKEN_S, CachedTokenAuth, Minted, failed_on_auth_hop
 from headgate.errors import AuthError, ClientConfigurationError, TransportError
-from headgate.ratelimit import UNLIMITED
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 from tests.support.tokens import TEST_BEARER, premint
@@ -411,7 +410,6 @@ class TestAFreshTokenIsNotReMinted:
         auth = premint(_CountingAuth())
         client = StubClient(
             base_url="https://api.example",
-            rate=UNLIMITED,
             auth=auth,
             http=HttpOptions(transport=httpx2.MockTransport(answer)),
         )

@@ -21,9 +21,10 @@ import pytest
 
 from headgate._core import BudgetBacklogError, CallContext, CallInfo, Emitter, RateLimited, Timing
 from headgate.policy import policy_disabled
-from headgate.ratelimit import UNLIMITED, Adaptive, Rate, RateBudget, RateRule
+from headgate.ratelimit import Adaptive, Rate, RateBudget, RateRule
 from headgate.ratelimit._budget import MAX_PAUSE, BudgetPausedError, Pacer, pacer_of
 from headgate.ratelimit._budgets import PathBudgets
+from headgate.ratelimit._rate import UNPACED
 from headgate.ratelimit._transport import RateLimitTransport
 from headgate.testing import TestClock
 from tests.support.events import Recorder
@@ -802,7 +803,7 @@ def test_budgets_built_with_policy_off_are_private_and_unlimited() -> None:
     rule = budgets.for_request(httpx2.Request("GET", "https://x/r"))
     for budget in (budgets.default, rule):
         assert budget is not shared
-        assert (budget.rate, budget.adaptive, budget.max_in_flight) == (UNLIMITED, None, None)
+        assert (budget.rate, budget.adaptive, budget.max_in_flight) == (UNPACED, None, None)
 
 
 # --- Sharing across loops and threads ---

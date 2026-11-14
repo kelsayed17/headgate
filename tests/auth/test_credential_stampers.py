@@ -20,7 +20,6 @@ import pytest
 from headgate import BearerAuth, CachedTokenAuth, QueryParamAuth, SigningAuth, StaticHeaderAuth
 from headgate._core import CredentialStamper
 from headgate._url import is_secret_param
-from headgate.ratelimit import UNLIMITED
 from tests.support.clients import StubClient
 from tests.support.tokens import premint
 
@@ -351,4 +350,4 @@ class _StrStamper(httpx2.Auth):
 def test_a_client_refuses_an_auth_whose_declaration_is_not_a_frozenset_of_names() -> None:
     """Refuse, when the client is built, a ``CredentialStamper`` whose declarations would withhold the wrong names."""
     with pytest.raises(TypeError, match="frozenset of names"):
-        StubClient(base_url="https://api.example", rate=UNLIMITED, auth=_StrStamper())
+        StubClient(base_url="https://api.example", auth=_StrStamper())

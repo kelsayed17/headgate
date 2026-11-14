@@ -22,7 +22,6 @@ from headgate import ForbiddenDestinationError, HttpOptions, Timeouts, Transport
 from headgate._options import DEFAULT_LIMITS, TransportPolicy
 from headgate.errors import ClientTimeoutError
 from headgate.ratelimit import Rate
-from headgate.retry import NO_RETRY
 from headgate.security import AddressGuard, PinnedHTTPTransport
 from headgate.security._transport import _VettingBackend
 from tests.security._servers import client_ssl_context, serving
@@ -65,7 +64,7 @@ def _client(base_url: str, guard: AddressGuard, *, tls: bool = False, timeout: T
     return StubClient(
         base_url=base_url,
         rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=NO_RETRY, timeout=timeout or Timeouts()),
+        policy=TransportPolicy(retry=None, timeout=timeout or Timeouts()),
         http=HttpOptions(transport=transport),
     )
 
