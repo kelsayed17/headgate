@@ -15,7 +15,7 @@ client turns it into ``ResponseParseError`` (a 2xx body) or the status error (a 
 too deep to parse.
 
 :class:`RefusedError` is deliberately not a ``ClientError`` either. A reader or a client's ``response_check`` produces
-it, and the base client converts it into the ``ClientError`` its ``kind`` names, so a caller of a client never sees it.
+it, and the client converts it into the ``ClientError`` its ``kind`` names, so a caller of a client never sees it.
 
 ``retryable`` has one meaning on every error: sending the call again later could succeed, and is safe as the call
 stands (an idempotent method, an idempotency key, or nothing of it sent). For a status or a network failure it is the
@@ -127,7 +127,10 @@ class ClientError(Exception):
 
     @property
     def source(self) -> str | None:
-        """The host of the ``base_url`` of the client that raised the error, which also prefixes its message."""
+        """The host of the ``base_url`` of the client that raised the error, which also prefixes its message.
+
+        A token mint's failure names the auth's class instead (``ShopTokenAuth``), since the mint is the auth's.
+        """
         return self._source
 
     @property

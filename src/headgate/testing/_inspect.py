@@ -3,7 +3,7 @@
 
 """What a client was built with, read back: its cache, and the rate budget a request spends from.
 
-A client fixes its options in ``super().__init__()``, so its tests check what it configured by reading it back: the
+An SDK fixes its client's options where it builds it, so its tests check what it configured by reading it back: the
 cache it keeps (and, through :meth:`~headgate.HttpCache.caches_request` and
 :meth:`~headgate.HttpCache.stores_status`, what that stores) and the rate budget a path spends from. Neither sends
 anything.

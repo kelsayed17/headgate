@@ -140,8 +140,11 @@ def fake_network[T: httpx2.AsyncBaseTransport](transport: T) -> Generator[T]:
 
     It replaces even a transport the client was given itself (``HttpOptions(transport=...)``), so an SDK that fixes
     its own transport in its constructor can still be tested over a :class:`FakeTransport`. Only the network is
-    replaced: the rate budget, the cache, the retries and the breaker above it are the client's own. A client is read
-    when it is built, so build the SDK inside the block; the block need not stay open while it is used.
+    replaced: the rate budget, the cache, the retries, the breaker and the SSRF guard above it are the client's own. A
+    client is read when it is built, so build the SDK inside the block; the block need not stay open while it is used.
+    A token an auth mints on an ``httpx2.AsyncClient`` of its own (:meth:`~headgate.CachedTokenAuth.mint_token`) is
+    not a ``Client``'s and does not reach the fake; one it mints through :meth:`~headgate.CachedTokenAuth.mint_flow`
+    does.
     """
     token = NETWORK_OVERRIDE.set(transport)
     try:

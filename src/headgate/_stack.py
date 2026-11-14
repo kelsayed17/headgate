@@ -207,10 +207,11 @@ def _address_guard(http: HttpOptions) -> AddressGuard | None:
 def _request_hooks(
     credentials: CredentialGuard, http: HttpOptions
 ) -> list[Callable[[httpx2.Request], Awaitable[None]]]:
-    """Return the request hooks: the credential guard, then the SSRF guard when a custom transport cannot pin."""
+    """Return the request hooks: the credential guard, then the SSRF guard when a transport not ours cannot pin."""
     hooks: list[Callable[[httpx2.Request], Awaitable[None]]] = [credentials]
     addresses = _address_guard(http)
-    if addresses is not None and http.transport is not None:
+    unpinned = http.transport is not None or NETWORK_OVERRIDE.get() is not None
+    if addresses is not None and unpinned:
         hooks.append(address_hook(addresses))
     return hooks
 

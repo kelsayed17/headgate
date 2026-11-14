@@ -73,8 +73,9 @@ async def test_a_loopback_server_is_never_reached() -> None:
 
     assert server.connections == 0
     error = exc.value
-    assert str(error).startswith("[127.0.0.1] GET x: refused to connect to 127.0.0.1: it is a loopback address")
-    assert (error.source, error.method, error.url, error.retryable) == ("127.0.0.1", "GET", "x", False)
+    assert str(error).startswith(f"[{error.source}] GET x: refused to connect to 127.0.0.1: it is a loopback address")
+    assert error.source == httpx2.URL(server.url()).netloc.decode()
+    assert (error.method, error.url, error.retryable) == ("GET", "x", False)
 
 
 async def test_the_same_server_is_reachable_without_the_guard() -> None:

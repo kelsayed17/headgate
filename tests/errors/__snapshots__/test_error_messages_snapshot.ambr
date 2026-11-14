@@ -57,7 +57,7 @@
 # name: test_the_error_a_failure_raises_matches_the_snapshot[forbidden_destination]
   dict({
     'attempts': 0,
-    'message': '[127.0.0.1] GET admin?api_key=%2A%2A%2A: refused to connect to 127.0.0.1: it is a loopback address',
+    'message': '[127.0.0.1:8443] GET admin?api_key=%2A%2A%2A: refused to connect to 127.0.0.1: it is a loopback address',
     'method': 'GET',
     'notes': list([
     ]),
@@ -65,7 +65,7 @@
     'request_id': None,
     'retry_after': None,
     'retryable': False,
-    'source': '127.0.0.1',
+    'source': '127.0.0.1:8443',
     'type': 'ForbiddenDestinationError',
     'url': 'admin?api_key=%2A%2A%2A',
   })

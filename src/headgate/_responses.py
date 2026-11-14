@@ -11,7 +11,7 @@ a ``ClientError``. So each call declares, where it is made, what it can get back
 
 Anything a call did not declare raises through the client's status ladder. There is no raw mode, so no call can
 receive an undeclared status. A refusal the provider writes inside a body is raised by the reader as
-:class:`RefusedError`, and the base client turns it into a ``ClientError`` carrying the status the wire sent.
+:class:`RefusedError`, and the client turns it into a ``ClientError`` carrying the status the wire sent.
 
 This module is codec-free: it imports neither msgspec nor pydantic. The typed JSON ``reader`` a client builds its
 success reader with comes from the flavor module it chose, :mod:`headgate.msgspec` or :mod:`headgate.pydantic`, and both
@@ -60,8 +60,8 @@ class Reader[T]:
     body is not what was declared; a ``ValueError``, ``LookupError`` or ``TypeError`` from code over
     ``response.json()``, or nesting too deep to parse, counts the same) or :class:`RefusedError` (the provider said no
     inside the body). A ``RecursionError`` it raises is read as a body nested too deeply to parse, a shape error like
-    the others. It never builds a ``ClientError`` itself: the base client does, so the error carries the real status
-    and the client's name.
+    the others. It never builds a ``ClientError`` itself: the client does, so the error carries the real status
+    and the client's host.
 
     It is a class rather than any function of a response so that ``expect=`` refuses what only looks like one: a model
     class, ``str`` and a bare function are all callable, and each is a mistake there.

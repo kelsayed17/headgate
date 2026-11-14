@@ -878,15 +878,23 @@ def test_a_view_is_a_client() -> None:
     assert type(view) is Client
 
 
+def _answering_404() -> HttpOptions:
+    """Return options sending every request to a network that answers 404."""
+    return HttpOptions(transport=httpx2.MockTransport(lambda _request: httpx2.Response(404)))
+
+
 async def test_an_error_names_the_clients_host() -> None:
-    """Prefix an error with the ``base_url``'s host, which tells two SDKs apart without a class to name."""
+    """Prefix an error with the ``base_url``'s host and any port other than the default, which tells SDKs apart."""
     client = Client(
-        base_url="https://api.github.com",
+        base_url="https://api.github.com:443",
         rate=Rate.per_second(10),
         policy=TransportPolicy(retry=None),
-        http=HttpOptions(transport=httpx2.MockTransport(lambda _request: httpx2.Response(404))),
+        http=_answering_404(),
     )
 
     with pytest.raises(UpstreamStatusError, match=r"^\[api\.github\.com\] ") as raised:
         await client.get("repos/x/y", expect=nothing)
     assert raised.value.source == "api.github.com"
+    on_a_port = Client(base_url="http://localhost:8000/v1", http=_answering_404())
+    with pytest.raises(UpstreamStatusError, match=r"^\[localhost:8000\] "):
+        await on_a_port.get("x", expect=nothing)

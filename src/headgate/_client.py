@@ -237,7 +237,13 @@ _BUILT = "headgate.built"
 
 
 def built_with(client: Client) -> Built:
-    """Return what *client* (or the client a view was made from) was built with."""
+    """Return what *client* (or the client a view was made from) was built with.
+
+    :raises TypeError: for anything but a :class:`Client`, such as the SDK that holds one.
+    """
+    if not isinstance(client, Client):
+        msg = f"{type(client).__name__} is not a Client: pass the Client it holds"
+        raise TypeError(msg)
     return cast("Built", vars(client)[_BUILT])
 
 
@@ -331,7 +337,7 @@ class Client:
         check_middleware(middleware)
         self._policy_off = policy_is_disabled()
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
-        self._source = httpx2.URL(base_url).host or base_url
+        self._source = httpx2.URL(base_url).netloc.decode("ascii")  # host, and a port other than the default
         self._timing = current_timing()
         self._breakers = _registry_of(policy, self._timing)
         self._response_check = http.response_check

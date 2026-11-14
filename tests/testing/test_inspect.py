@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
+
+import pytest
 
 from headgate import DEFAULT_TIMEOUTS, Client, HttpCache, Rate, RateBudget, Route, Timeouts, TransportPolicy
 from headgate.testing import budget_for, cache_of
@@ -52,3 +54,14 @@ def test_the_default_timeouts_set_every_phase() -> None:
     """Resolve every phase a ``Timeouts`` leaves unset, as a client does."""
     resolved = Timeouts(read=60.0).over(DEFAULT_TIMEOUTS)
     assert (resolved.connect, resolved.read, resolved.write, resolved.pool) == (10.0, 60.0, 10.0, 15.0)
+
+
+def test_an_sdk_is_not_a_client() -> None:
+    """Name the mistake of passing the SDK that holds a client, rather than fail on a missing key."""
+
+    class _Sdk:
+        def __init__(self) -> None:
+            self.http = Client(base_url=_BASE)
+
+    with pytest.raises(TypeError, match=r"^_Sdk is not a Client: pass the Client it holds$"):
+        cache_of(cast("Any", _Sdk()))
