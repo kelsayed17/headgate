@@ -144,7 +144,6 @@ if TYPE_CHECKING:
     from headgate.breaker._registry import Breaker
     from headgate.cache import HttpCache
     from headgate.pagination import Pager, Paginated
-    from headgate.pagination._paginated import OnLimit
     from headgate.retry import RetryPolicy
     from headgate.streaming import Stream
 
@@ -588,7 +587,7 @@ class Client:
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, None],
         max_pages: int | None = None,
-        on_limit: OnLimit = "raise",
+        on_limit: Literal["raise", "stop"] = "raise",
         **options: Unpack[CallOptions],
     ) -> Paginated[I, P]: ...
     @overload
@@ -600,7 +599,7 @@ class Client:
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, B],
         max_pages: int | None = None,
-        on_limit: OnLimit = "raise",
+        on_limit: Literal["raise", "stop"] = "raise",
         **options: Unpack[CallOptions],
     ) -> Paginated[I, P]: ...
     def paginate[P, I, B](
@@ -611,7 +610,7 @@ class Client:
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, B],
         max_pages: int | None = None,
-        on_limit: OnLimit = "raise",
+        on_limit: Literal["raise", "stop"] = "raise",
         **options: Unpack[CallOptions],
     ) -> Paginated[I, P]:
         """Return the pages *pages* follows from *url*, each read through *expect*, iterated lazily.
