@@ -74,7 +74,8 @@ def _client(
         rate=_RATE,
         auth=auth,
         policy=policy or TransportPolicy(),
-        http=HttpOptions(transport=fake, observers=observers),
+        http=HttpOptions(transport=fake),
+        observers=observers,
     )
 
 

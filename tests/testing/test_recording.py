@@ -130,7 +130,8 @@ async def test_a_token_mint_is_skipped_and_the_call_itself_is_recorded() -> None
         base_url=_BASE,
         rate=Rate.per_second(1000),
         auth=_FlowAuth(),
-        http=HttpOptions(transport=fake, middleware=(cassettes,)),
+        http=HttpOptions(transport=fake),
+        middleware=(cassettes,),
     )
     assert await client.get("data", expect=as_bytes) == b"ok"
     assert recorded == {"mint": False, "call": True}

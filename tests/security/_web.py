@@ -18,6 +18,8 @@ from tests.support.clients import StubClient
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from headgate import Middleware
+
 #: The client's own origin in these tests.
 BASE = "https://api.example"
 
@@ -39,7 +41,12 @@ class Web:
         return httpx2.Response(httpx2.codes.OK, text="ok")
 
     def client(
-        self, *, auth: httpx2.Auth | None = None, http: HttpOptions | None = None, base_url: str = BASE
+        self,
+        *,
+        auth: httpx2.Auth | None = None,
+        http: HttpOptions | None = None,
+        base_url: str = BASE,
+        middleware: tuple[Middleware, ...] = (),
     ) -> StubClient:
         """Return a client on *base_url* over this web, sending each call once."""
         return StubClient(
@@ -48,4 +55,5 @@ class Web:
             auth=auth,
             policy=TransportPolicy(retry=NO_RETRY),
             http=replace(http or HttpOptions(), transport=httpx2.MockTransport(self)),
+            middleware=middleware,
         )

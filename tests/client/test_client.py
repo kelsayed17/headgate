@@ -125,7 +125,7 @@ async def test_each_client_has_its_own_http_client() -> None:
     ("build", "match"),
     [
         (lambda: TransportPolicy(retry=RetryPolicy(attempts=0)), "attempts"),
-        (lambda: HttpOptions(timeout=Timeouts(read=0)), "read"),
+        (lambda: TransportPolicy(timeout=Timeouts(read=0)), "read"),
         (lambda: HttpOptions(max_response_bytes=0), "max_response_bytes"),
     ],
 )
@@ -141,7 +141,7 @@ def test_an_option_group_refuses_a_nonsense_value(build: Callable[[], object], m
         (lambda: StubClient(base_url="https://x", rate=cast("Any", 10)), "rate= takes a Rate"),
         (lambda: TransportPolicy(retry=cast("Any", None)), "retry= takes a RetryPolicy"),
         (lambda: TransportPolicy(breaker=cast("Any", 3)), "breaker= takes a BreakerPolicy"),
-        (lambda: HttpOptions(timeout=cast("Any", 5.0)), "timeout= takes a Timeouts"),
+        (lambda: TransportPolicy(timeout=cast("Any", 5.0)), "timeout= takes a Timeouts"),
     ],
     ids=["rate", "retry", "breaker", "timeout"],
 )

@@ -310,7 +310,8 @@ async def test_notes_a_layer_added_reach_the_error() -> None:
         base_url=_BASE,
         rate=Rate.per_second(1000),
         policy=TransportPolicy(retry=NO_RETRY),
-        http=HttpOptions(transport=Script(404).transport(), middleware=(Annotate(),)),
+        http=HttpOptions(transport=Script(404).transport()),
+        middleware=(Annotate(),),
     )
     error = await _raised(client)
 

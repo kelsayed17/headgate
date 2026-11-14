@@ -235,9 +235,9 @@ async def test_each_attempt_is_signed_once_after_the_last_middleware() -> None:
         return next(answers)
 
     sent: list[str] = []
-    http = HttpOptions(transport=httpx2.MockTransport(handle), middleware=(_Stamp(),))
+    http = HttpOptions(transport=httpx2.MockTransport(handle))
     with instant_retries():
-        client = StubClient(base_url=_BASE, rate=UNLIMITED, auth=auth, http=http)
+        client = StubClient(base_url=_BASE, rate=UNLIMITED, auth=auth, http=http, middleware=(_Stamp(),))
     async with client:
         await client.get("orders", expect=RESPONSE, retry=RetryPolicy(attempts=2))
 
@@ -267,8 +267,8 @@ async def test_a_signer_that_is_not_the_clients_auth_never_signs() -> None:
         sent.append(request.headers.copy())
         return httpx2.Response(200)
 
-    http = HttpOptions(transport=httpx2.MockTransport(handle), middleware=(_Stamp(),))
-    client = StubClient(base_url=_BASE, rate=UNLIMITED, auth=_Wrapping(auth), http=http)
+    http = HttpOptions(transport=httpx2.MockTransport(handle))
+    client = StubClient(base_url=_BASE, rate=UNLIMITED, auth=_Wrapping(auth), http=http, middleware=(_Stamp(),))
     async with client:
         await client.get("orders", expect=RESPONSE)
 
@@ -304,8 +304,8 @@ async def test_a_wrapped_signer_is_not_re_sent_on_a_401() -> None:
         sent.append(request)
         return httpx2.Response(httpx2.codes.UNAUTHORIZED)
 
-    http = HttpOptions(transport=httpx2.MockTransport(handle), middleware=(_Stamp(),))
-    client = StubClient(base_url=_BASE, rate=UNLIMITED, auth=_Driving(auth), http=http)
+    http = HttpOptions(transport=httpx2.MockTransport(handle))
+    client = StubClient(base_url=_BASE, rate=UNLIMITED, auth=_Driving(auth), http=http, middleware=(_Stamp(),))
     async with client:
         with pytest.raises(AuthError):
             await client.get("orders", expect=RESPONSE)

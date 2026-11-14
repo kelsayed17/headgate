@@ -647,12 +647,14 @@ async def test_middleware_timeout_overrides_define_sharing(storage: AsyncSqliteS
     client = StubClient(
         base_url="https://example.test",
         rate=UNLIMITED,
-        policy=TransportPolicy(retry=NO_RETRY, deadline=60.0, cache=HttpCache(**_store_nothing(), storage=storage)),
-        http=HttpOptions(
-            transport=network,
+        policy=TransportPolicy(
+            retry=NO_RETRY,
+            deadline=60.0,
+            cache=HttpCache(**_store_nothing(), storage=storage),
             timeout=Timeouts(connect=30.0, read=30.0, write=30.0, pool=30.0),
-            middleware=(middleware,),
         ),
+        http=HttpOptions(transport=network),
+        middleware=(middleware,),
     )
     async with client:
         tasks = [asyncio.create_task(client.get("files/2025.zip", expect=as_bytes)) for _ in range(_CONCURRENT)]
@@ -687,13 +689,13 @@ async def test_middleware_can_change_the_timeout_on_a_later_retry(storage: Async
         base_url="https://example.test",
         rate=UNLIMITED,
         policy=TransportPolicy(
-            retry=RetryPolicy(attempts=2), deadline=60.0, cache=HttpCache(**_store_nothing(), storage=storage)
-        ),
-        http=HttpOptions(
-            transport=network,
+            retry=RetryPolicy(attempts=2),
+            deadline=60.0,
+            cache=HttpCache(**_store_nothing(), storage=storage),
             timeout=Timeouts(connect=30.0, read=30.0, write=30.0, pool=30.0),
-            middleware=(middleware,),
         ),
+        http=HttpOptions(transport=network),
+        middleware=(middleware,),
     )
     async with client:
         assert await client.get("files/2025.zip", expect=as_bytes) == _BODY

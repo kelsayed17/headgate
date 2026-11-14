@@ -29,7 +29,8 @@ def _client(sent: list[httpx2.Request], recorder: Recorder, *, auth: httpx2.Auth
         rate=Rate.per_second(1000),
         auth=auth,
         policy=TransportPolicy(retry=NO_RETRY),
-        http=HttpOptions(transport=httpx2.MockTransport(handle), observers=(recorder,)),
+        http=HttpOptions(transport=httpx2.MockTransport(handle)),
+        observers=(recorder,),
     )
 
 

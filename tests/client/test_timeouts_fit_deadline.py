@@ -34,8 +34,8 @@ def _client(*, timeout: Timeouts = _DEFAULTS, deadline: float | None = 60.0) -> 
     return StubClient(
         base_url="https://api.example.test",
         rate=UNLIMITED,
-        policy=TransportPolicy(deadline=deadline),
-        http=HttpOptions(transport=fake, timeout=timeout),
+        policy=TransportPolicy(deadline=deadline, timeout=timeout),
+        http=HttpOptions(transport=fake),
     )
 
 

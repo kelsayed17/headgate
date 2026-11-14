@@ -88,6 +88,8 @@ from headgate._options import (
     HttpOptions,
     TransportPolicy,
     check_deadline,
+    check_hooks,
+    check_middleware,
     check_timeout_fits,
     httpx_timeout,
     match_route,
@@ -129,9 +131,11 @@ from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOM
 from headgate.streaming._stream import OpenStream
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Mapping
+    from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
     from types import TracebackType
 
+    from headgate._core import Observer
+    from headgate._middleware import Middleware
     from headgate._options import Route
     from headgate._request_body import Lowered
     from headgate._responses import ResponseCheck
@@ -293,6 +297,8 @@ class AsyncBaseClient:
         auth: httpx2.Auth | None = None,
         policy: TransportPolicy = _DEFAULT_POLICY,
         http: HttpOptions = _DEFAULT_HTTP,
+        observers: Sequence[Observer] = (),
+        middleware: Sequence[Middleware] = (),
     ) -> None:
         """Build the transport stack for *base_url*, spending from *rate*, signing requests with *auth*.
 
@@ -302,17 +308,23 @@ class AsyncBaseClient:
         for: a 429 or 503 with ``Retry-After``, and a spent ``RateLimit`` quota. Pass a rate when the provider states
         its quota.
 
-        *policy* configures retries, the deadline, the breaker, per-path rates, the cache, idempotency keys and
-        per-route overrides (:class:`~headgate.TransportPolicy`); *http* the network transport, headers, timeouts,
-        redirects, the body cap, cookies, observers and middleware (:class:`~headgate.HttpOptions`).
+        *policy* configures retries, the timeouts and the deadline, the breaker, per-path rates, the cache,
+        idempotency keys and per-route overrides (:class:`~headgate.TransportPolicy`); *http* the network transport,
+        headers, redirects, the body cap and cookies (:class:`~headgate.HttpOptions`).
 
-        :raises TypeError: for an upstream ``httpx`` *auth*, and for a *rate* that is neither a ``Rate`` nor a
-            ``RateBudget``, such as a bare number.
+        *observers* receive the client's events (see :mod:`headgate.events`), and *middleware* runs once per attempt,
+        in order, inside the retry layer (see :class:`~headgate.Middleware`).
+
+        :raises TypeError: for an upstream ``httpx`` *auth*, for a *rate* that is neither a ``Rate`` nor a
+            ``RateBudget``, such as a bare number, for *observers* or *middleware* that are not a sequence, and for a
+            middleware that does not declare its credentials.
         :raises ClientConfigurationError: for a cache partitioned by credential with an *auth* that does not declare
             its credentials (see :class:`~headgate.cache.Partition`).
         """
         reject_upstream_httpx(auth, what="auth")
         check_kind("rate", rate, (Rate, RateBudget), "a Rate, such as Rate.per_second(10), or a RateBudget")
+        observers, middleware = _stack_parts("observers", observers), _stack_parts("middleware", middleware)
+        check_middleware(middleware)
         self._policy_off = policy_is_disabled()
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
         self._source = type(self).__name__
@@ -320,17 +332,20 @@ class AsyncBaseClient:
         self._response_check = http.response_check
         self._max_response_bytes = http.max_response_bytes
         self._request_id_headers = http.request_id_headers
-        check_timeout_fits(http.timeout, policy.deadline)
-        self._timeout = http.timeout
-        self._emitter = Emitter(http.observers) if http.observers else SILENT
+        self._timeout = policy.timeout
+        self._emitter = Emitter(observers) if observers else SILENT
         self._view = ROOT_DEFAULTS
         self._owns_pool = True
-        credentials = Credentials.of(base_url=base_url, auth=auth, http=http)
+        credentials = Credentials.of(base_url=base_url, auth=auth, http=http, middleware=middleware)
         budgets = PathBudgets(
             default=rate, rules=policy.rate_limits, timing=self._timing, origin=httpx2.URL(base_url).origin
         )
-        stack = build_transport_stack(budgets, policy, http, self._timing, credentials)
-        self._http_client = build_http_client(base_url=base_url, credentials=credentials, http=http, transport=stack)
+        stack = build_transport_stack(
+            budgets, policy, http, self._timing, credentials, middleware=middleware, observed=bool(observers)
+        )
+        self._http_client = build_http_client(
+            base_url=base_url, credentials=credentials, http=http, timeout=policy.timeout, transport=stack
+        )
         vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client)
 
     async def __aenter__(self) -> Self:
@@ -1084,6 +1099,22 @@ class AsyncBaseClient:
     def _unsent_site(self, prepared: _Prepared) -> CallSite:
         """Return :meth:`_site` for a call whose current attempt never reached the network: it does not count."""
         return replace(self._site(prepared), attempts=prepared.context.attempt - 1)
+
+
+def _stack_parts[T](name: str, parts: Sequence[T]) -> tuple[T, ...]:
+    """Return a client's ``observers`` or ``middleware``, *parts*, as a tuple.
+
+    :raises TypeError: for a lone object or a ``str`` where a sequence of them goes, and for an upstream-httpx object.
+    """
+    try:
+        items = None if isinstance(parts, str) else tuple(parts)
+    except TypeError:  # A lone observer or middleware, which an untyped caller may pass.
+        items = None
+    if items is None:
+        msg = f"{name}= takes a sequence, such as a tuple, of them (got {type(parts).__name__})"
+        raise TypeError(msg)
+    check_hooks(name, items)
+    return items
 
 
 def _effective_policy(policy: TransportPolicy, *, off: bool) -> TransportPolicy:

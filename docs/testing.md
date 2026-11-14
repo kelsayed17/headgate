@@ -139,7 +139,7 @@ def vcr_config() -> dict[str, object]:
     return CASSETTES.vcr_config()
 
 
-http = HttpOptions(middleware=(CASSETTES,))  # on the client under test
+middleware = (CASSETTES,)  # the client under test's middleware=
 ```
 
 It filters `Authorization`, `Proxy-Authorization`, `Cookie`, every header and parameter the auths declare and the names

@@ -66,7 +66,8 @@ def _client(auth: CachedTokenAuth, cassettes: CassetteFilter, network: httpx2.Mo
         base_url=_BASE,
         rate=Rate.per_second(1000),
         auth=auth,
-        http=HttpOptions(transport=network, middleware=(cassettes,)),
+        http=HttpOptions(transport=network),
+        middleware=(cassettes,),
     )
 
 

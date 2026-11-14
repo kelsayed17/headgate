@@ -65,7 +65,8 @@ def _client(
         base_url=f"https://{_HOST}",
         rate=budget,
         policy=TransportPolicy(retry=NO_RETRY, cache=cache),
-        http=HttpOptions(transport=httpx2.MockTransport(server), observers=() if recorder is None else (recorder,)),
+        http=HttpOptions(transport=httpx2.MockTransport(server)),
+        observers=() if recorder is None else (recorder,),
     )
 
 

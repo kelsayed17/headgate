@@ -208,7 +208,8 @@ async def test_retries_are_announced_to_the_clients_observers() -> None:
         base_url=f"https://{_HOST}",
         rate=Rate.per_second(1000),
         policy=TransportPolicy(retry=RetryPolicy(backoff=_FULL, budget=None)),
-        http=HttpOptions(transport=network, observers=(observer,)),
+        http=HttpOptions(transport=network),
+        observers=(observer,),
     )
 
     await client.get("series", expect=nothing)

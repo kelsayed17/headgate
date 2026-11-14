@@ -62,7 +62,7 @@ async def test_a_view_waits_out_a_pause_its_client_was_asked_for() -> None:
     budget = RateBudget(Rate.per_second(100), timing=clock.timing, wall_clock=clock)
     with clock.install():
         built = client(
-            fake, rate=budget, policy=TransportPolicy(retry=NO_RETRY), http=HttpOptions(observers=(recorder,))
+            fake, rate=budget, policy=TransportPolicy(retry=NO_RETRY), http=HttpOptions(), observers=(recorder,)
         )
     view = built.with_options(deadline=None)
 

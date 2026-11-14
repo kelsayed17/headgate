@@ -33,7 +33,7 @@ async def _waits(limited: httpx2.Response) -> tuple[TestClock, Recorder]:
     budget = RateBudget(Rate.per_second(100), timing=clock.timing, wall_clock=clock)
     fake = FakeTransport().reply("GET", "/v1/x", limited, 200)
     with clock.install():
-        built = client(fake, rate=budget, http=HttpOptions(observers=(recorder,)))
+        built = client(fake, rate=budget, http=HttpOptions(), observers=(recorder,))
 
     await built.get("x", expect=nothing)
 
