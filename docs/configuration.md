@@ -246,9 +246,15 @@ await client.get(
 
 plus `body=` for a body (a `Body`: what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`, see
 [request bodies](streaming.md#request-bodies)) and `idempotency_key=` for a write. `stream()` takes the same options
-without `expect=`, `cache_ttl=` and `max_response_bytes=`, and `paginate()` takes `expect=`, `pages=`, `limit=` and the
-same options but the body, applied to each page; a walk of POSTs takes `query=`
+without `expect=`, `cache_ttl=` and `max_response_bytes=`, and `paginate()` takes `expect=`, `pages=`, `max_pages=`,
+`on_limit=` and the same options but the body, applied to each page; a walk of POSTs takes `query=`
 ([Walks of POSTs](pagination.md#walks-of-posts)).
+
+A `params=` value is a `str`, `int`, `float`, `bool` or `None`, or a list or tuple of them, which repeats the key. Any
+other scalar (a `UUID`, a `Decimal`, an `Enum` member, a `date`) is sent as its `str()`. A value no query parameter can
+carry raises `TypeError` naming the parameter, before anything is sent: a mapping, a set, `bytes`, `bytearray` or
+`memoryview`, and a list or tuple inside a list or tuple. Encode such a value into text first, with `json.dumps` or the
+API's own format.
 
 `cache_ttl=None` removes headgate's lifetime only: the cache is TTL-only and never reads a response's own cache headers,
 so an entry stored with `cache_ttl=None` is served until its storage evicts it, past any `Cache-Control: max-age` and

@@ -78,6 +78,16 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- A `params=` value no query parameter can carry raises `TypeError` naming the parameter, before anything is sent,
+  rather than going out as its Python `repr` (`filter=%7B%27a%27%3A+1%7D`). The refused shapes are:
+  - a mapping (`dict`, or any other `Mapping`);
+  - a set or `frozenset` (any `AbstractSet`);
+  - `bytes`, `bytearray` or `memoryview`;
+  - a list or tuple inside a list or tuple.
+
+  Encode such a value into text first, with `json.dumps` or the API's own format. A list or tuple of scalars still
+  repeats its key, and a scalar httpx2 does not encode itself (a `UUID`, a `Decimal`, an `Enum` member, a `date`) is
+  still sent as its `str()`.
 - **`Paginated[I, P = object]` names the item type first.** Write `-> Paginated[Issue]` for a walk of issues, or
   `-> Paginated[Issue, IssuePage]` where the pages matter, in place of `Paginated[IssuePage, Issue]`. A type
   checker flags the old order wherever the page and item types differ.

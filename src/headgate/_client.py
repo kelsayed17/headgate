@@ -33,6 +33,8 @@ import contextlib
 import copy
 import functools
 import math
+from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
@@ -132,7 +134,7 @@ from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOM
 from headgate.streaming._stream import OpenStream
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Callable, Sequence
     from types import TracebackType
 
     from headgate._core import Observer, Timing
@@ -1250,16 +1252,33 @@ def _registry_of(policy: TransportPolicy, timing: Timing) -> BreakerRegistry | N
 
 
 def _query_pairs(params: Mapping[str, object]) -> list[tuple[str, _QueryValue]]:
-    """Flatten *params* into the ``(key, value)`` pairs httpx2 encodes, exactly as httpx2 flattens a mapping."""
+    """Flatten *params* into the ``(key, value)`` pairs httpx2 encodes, exactly as httpx2 flattens a mapping.
+
+    :raises TypeError: for a value no query parameter can carry (see :data:`_NESTED`), before anything is sent.
+    """
     pairs: list[tuple[str, _QueryValue]] = []
     for key, value in params.items():
         items = value if isinstance(value, list | tuple) else (value,)
-        pairs.extend((key, _query_value(item)) for item in items)
+        pairs.extend((key, _query_value(key, item)) for item in items)
     return pairs
 
 
-def _query_value(value: object) -> _QueryValue:
-    """Return *value* if httpx2 encodes it natively, else its ``str()``, which is what httpx2 would send."""
+#: The values a query parameter cannot carry: a container, whose ``str()`` is its Python ``repr``, and raw bytes. A
+#: list or tuple of scalars repeats its key; one inside another is refused.
+_NESTED: Final = (Mapping, AbstractSet, bytes, bytearray, memoryview, list, tuple)
+
+
+def _query_value(key: str, value: object) -> _QueryValue:
+    """Return *value* if httpx2 encodes it natively, else its ``str()``, which is what a ``UUID`` or an ``Enum`` means.
+
+    :raises TypeError: for a value in :data:`_NESTED`, naming *key* and the value's type.
+    """
+    if isinstance(value, _NESTED):
+        msg = (
+            "params= takes a str, int, float, bool or None for each value, or a list or tuple of them (got"
+            f" {type(value).__name__} under {key!r}): encode a nested value into text first, such as with json.dumps"
+        )
+        raise TypeError(msg)
     return value if isinstance(value, str | int | float | bool | None) else str(value)
 
 
