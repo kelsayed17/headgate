@@ -3,7 +3,7 @@
 
 """The per-call context: what every layer of the stack knows about the logical call a request belongs to.
 
-``AsyncBaseClient`` builds one :class:`CallContext` per call and stamps it on the request in a single extension.
+``Client`` builds one :class:`CallContext` per call and stamps it on the request in a single extension.
 httpx2 hands a request's extensions to every redirect hop, and the cache layer restores them below hishel, so every
 layer from the auth flow down to the network transport finds the same object with :meth:`CallContext.find`. Layers
 read and write it through its methods, never through extension keys of their own:

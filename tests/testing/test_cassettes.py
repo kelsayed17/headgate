@@ -16,9 +16,8 @@ import httpx2
 import pytest
 import vcr
 
-from headgate import CachedTokenAuth, HttpOptions, Minted, Rate, as_bytes
+from headgate import CachedTokenAuth, Client, HttpOptions, Minted, Rate, as_bytes
 from headgate.testing import CassetteFilter
-from tests.support.clients import StubClient
 from tests.support.tokens import premint
 
 if TYPE_CHECKING:
@@ -60,9 +59,9 @@ def _refuse(request: httpx2.Request) -> httpx2.Response:
     raise AssertionError(msg)
 
 
-def _client(auth: CachedTokenAuth, cassettes: CassetteFilter, network: httpx2.MockTransport) -> StubClient:
+def _client(auth: CachedTokenAuth, cassettes: CassetteFilter, network: httpx2.MockTransport) -> Client:
     """Build a client signing with *auth* over *network*, with *cassettes* marking the auth's mints."""
-    return StubClient(
+    return Client(
         base_url=_BASE,
         rate=Rate.per_second(1000),
         auth=auth,

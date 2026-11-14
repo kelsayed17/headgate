@@ -4,7 +4,7 @@
 """Find a client's rate budgets in its transport stack.
 
 The budgets live in the stack's :class:`~headgate.ratelimit.RateLimitTransport`, under retry and, when the client
-caches, under the cache transport too. Neither ``AsyncBaseClient`` nor ``httpx2.AsyncClient`` exposes its transport,
+caches, under the cache transport too. Neither ``Client`` nor ``httpx2.AsyncClient`` exposes its transport,
 and each layer names the one below it differently, so the stack is searched through the object graph
 (:func:`gc.get_referents`) rather than by private attribute names. The search follows only instance dictionaries,
 transports and httpx2 clients, so it cannot wander into module globals and find another client's budget.
@@ -20,7 +20,7 @@ import httpx2
 from headgate.ratelimit._transport import RateLimitTransport
 
 if TYPE_CHECKING:
-    from headgate._client import AsyncBaseClient
+    from headgate._client import Client
     from headgate.ratelimit import RateBudget
 
 
@@ -29,7 +29,7 @@ def _is_stack_node(obj: object) -> bool:
     return isinstance(obj, (dict, httpx2.AsyncBaseTransport, httpx2.AsyncClient))
 
 
-def rate_limit_transport(client: AsyncBaseClient) -> RateLimitTransport:
+def rate_limit_transport(client: Client) -> RateLimitTransport:
     """Return the one :class:`RateLimitTransport` in *client*'s transport stack.
 
     Raises :class:`AssertionError` when the stack holds none, or more than one.
@@ -48,6 +48,6 @@ def rate_limit_transport(client: AsyncBaseClient) -> RateLimitTransport:
     return found[0]
 
 
-def default_budget(client: AsyncBaseClient) -> RateBudget:
+def default_budget(client: Client) -> RateBudget:
     """Return the budget *client* spends a request from when no route sets a rate for it."""
     return rate_limit_transport(client).budgets.default

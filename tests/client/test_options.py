@@ -23,6 +23,7 @@ import httpx2
 import pytest
 
 from headgate import (
+    Client,
     HttpOptions,
     IdempotencyKeys,
     Next,
@@ -39,7 +40,6 @@ from headgate import (
 from headgate._options import DEFAULT_LIMITS
 from headgate._user_agent import DEFAULT_USER_AGENT, headgate_version
 from headgate.testing import budget_for
-from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
@@ -53,10 +53,10 @@ type Rows = list[int]
 _KEY = "key-1"
 
 
-def _client(script: Script, *, policy: TransportPolicy | None = None, http: HttpOptions | None = None) -> StubClient:
+def _client(script: Script, *, policy: TransportPolicy | None = None, http: HttpOptions | None = None) -> Client:
     """Build a client over *script* with *policy* and *http*, whose transport is replaced by the script's."""
     options = replace(http or HttpOptions(), transport=script.transport())
-    return StubClient(base_url=_BASE, rate=_RATE, policy=policy or TransportPolicy(), http=options)
+    return Client(base_url=_BASE, rate=_RATE, policy=policy or TransportPolicy(), http=options)
 
 
 # --- Upstream httpx objects are refused by name ---
@@ -106,12 +106,12 @@ _UpstreamHook.__module__ = "httpx._client"
     [
         pytest.param(lambda: HttpOptions(transport=_UpstreamTransport()), "transport", id="transport"),
         pytest.param(
-            lambda: StubClient(base_url=_BASE, rate=_RATE, observers=(_UpstreamObserver(),)), "observers", id="observer"
+            lambda: Client(base_url=_BASE, rate=_RATE, observers=(_UpstreamObserver(),)), "observers", id="observer"
         ),
         pytest.param(
-            lambda: StubClient(base_url=_BASE, rate=_RATE, middleware=(_UpstreamHook(),)), "middleware", id="event-hook"
+            lambda: Client(base_url=_BASE, rate=_RATE, middleware=(_UpstreamHook(),)), "middleware", id="event-hook"
         ),
-        pytest.param(lambda: StubClient(base_url=_BASE, rate=_RATE, auth=_UpstreamAuth()), "auth", id="auth"),
+        pytest.param(lambda: Client(base_url=_BASE, rate=_RATE, auth=_UpstreamAuth()), "auth", id="auth"),
     ],
 )
 def test_an_upstream_httpx_object_is_refused_by_name(build: Callable[[], object], what: str) -> None:
@@ -247,7 +247,7 @@ async def test_the_default_transport_reads_no_environment_and_takes_the_tls_pool
     context = ssl.create_default_context()
     limits = httpx2.Limits(max_connections=50, max_keepalive_connections=10)
     proxy = "http://proxy.example.test:3128"
-    client = StubClient(base_url=_BASE, rate=_RATE, http=HttpOptions(ssl_context=context, limits=limits, proxy=proxy))
+    client = Client(base_url=_BASE, rate=_RATE, http=HttpOptions(ssl_context=context, limits=limits, proxy=proxy))
     await client.aclose()
 
     assert built == [{"verify": context, "http2": True, "limits": limits, "proxy": proxy, "trust_env": False}]
@@ -255,7 +255,7 @@ async def test_the_default_transport_reads_no_environment_and_takes_the_tls_pool
 
 async def test_the_default_transport_verifies_tls_by_default(built: list[dict[str, object]]) -> None:
     """Verify certificates with the default context, and use the default pool, when nothing else is configured."""
-    client = StubClient(base_url=_BASE, rate=_RATE)
+    client = Client(base_url=_BASE, rate=_RATE)
     await client.aclose()
 
     assert built == [{"verify": True, "http2": True, "limits": DEFAULT_LIMITS, "proxy": None, "trust_env": False}]
@@ -482,7 +482,7 @@ class _CountingNetwork(httpx2.AsyncBaseTransport):
 async def test_a_custom_transport_is_used_as_it_is() -> None:
     """Send through a custom transport, which owns its own pool and TLS."""
     network = _CountingNetwork()
-    await StubClient(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=network)).get("a", expect=nothing)
+    await Client(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=network)).get("a", expect=nothing)
     assert network.sends == 1
 
 
@@ -505,7 +505,7 @@ def test_an_installed_copy_reports_its_distributions_version() -> None:
 def test_check_kind_names_what_it_got(value: object, named: str) -> None:
     """Name a class, a type expression and a plain value apart, so a refusal says which mistake it was."""
     with pytest.raises(TypeError) as caught:
-        StubClient(base_url=_BASE, rate=cast("Any", value))
+        Client(base_url=_BASE, rate=cast("Any", value))
     assert str(caught.value) == f"rate= takes a Rate, such as Rate.per_second(10), a RateBudget or None (got {named})"
 
 
@@ -537,7 +537,7 @@ def test_the_client_takes_observers_and_middleware_as_sequences(name: str, value
     """Refuse a lone observer or middleware, or a ``str``, where the client takes a sequence of them."""
     given: dict[str, Any] = {name: value}
     with pytest.raises(TypeError, match=rf"^{name}= takes a sequence, such as a tuple, of them \(got {got}\)$"):
-        StubClient(base_url=_BASE, rate=_RATE, **given)
+        Client(base_url=_BASE, rate=_RATE, **given)
 
 
 async def test_the_clients_observers_hear_its_calls() -> None:
@@ -558,7 +558,7 @@ async def test_the_clients_observers_hear_its_calls() -> None:
             return await call_next(request)
 
     script = Script()
-    client = StubClient(
+    client = Client(
         base_url=_BASE,
         rate=_RATE,
         http=HttpOptions(transport=script.transport()),
@@ -587,7 +587,7 @@ async def test_a_policy_of_no_retries_sends_once_and_a_calls_own_policy_wins() -
 def test_no_rate_paces_nothing_of_its_own(rate: str | None) -> None:
     """Build an unpaced budget of the client's own for ``rate=None`` and for no ``rate=`` at all, the same budget."""
     given: dict[str, Any] = {} if rate == "absent" else {"rate": None}
-    client = StubClient(base_url=_BASE, **given)
+    client = Client(base_url=_BASE, **given)
 
     budget = budget_for(client)
     assert (budget.rate, budget.max_in_flight) == (Rate.per_second(1_000_000), None)
@@ -622,11 +622,11 @@ _WRONG_KINDS: Final[list[tuple[Callable[[], object], str]]] = [
     (lambda: SecurityOptions(block_private_hosts=True, resolver=cast("Any", "8.8.8.8")), r"^resolver= takes a resol"),
     (lambda: IdempotencyKeys(header=cast("Any", 1)), r"^header= takes a header name"),
     (lambda: IdempotencyKeys(factory=cast("Any", "uuid")), r"^factory= takes a function returning a fresh key"),
-    (lambda: StubClient(base_url=cast("Any", None)), r"^base_url= takes the API root"),
+    (lambda: Client(base_url=cast("Any", None)), r"^base_url= takes the API root"),
     (lambda: Route(cast("Any", None)), r"^fragment= takes path segments, such as '/exports' \(got NoneType\)$"),
     (lambda: TransportPolicy(routes=cast("Any", Route("/x"))), r"^routes= takes a tuple of Route.*\(got Route\)$"),
-    (lambda: StubClient(base_url=_BASE, policy=cast("Any", {})), r"^policy= takes TransportPolicy\(\.\.\.\)"),
-    (lambda: StubClient(base_url=_BASE, http=cast("Any", {})), r"^http= takes HttpOptions\(\.\.\.\)"),
+    (lambda: Client(base_url=_BASE, policy=cast("Any", {})), r"^policy= takes TransportPolicy\(\.\.\.\)"),
+    (lambda: Client(base_url=_BASE, http=cast("Any", {})), r"^http= takes HttpOptions\(\.\.\.\)"),
 ]
 _WRONG_KIND_IDS: Final = [
     "idempotency",

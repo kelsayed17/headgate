@@ -16,10 +16,9 @@ from typing import override
 import httpx2
 import pytest
 
-from headgate import ClientTimeoutError, HttpOptions, Rate, Route, TransportPolicy, nothing
+from headgate import Client, ClientTimeoutError, HttpOptions, Rate, Route, TransportPolicy, nothing
 from headgate.testing import TestClock
 from tests.support.breakers import failures
-from tests.support.clients import StubClient
 
 _HOST = "slow.example.test"
 _SHORT = 0.05
@@ -40,9 +39,9 @@ class _Network(httpx2.AsyncBaseTransport):
         return httpx2.Response(200)
 
 
-def _client(policy: TransportPolicy, delay: float = 3600.0) -> StubClient:
+def _client(policy: TransportPolicy, delay: float = 3600.0) -> Client:
     """Build a client over a network that answers after *delay* seconds."""
-    return StubClient(
+    return Client(
         base_url=f"https://{_HOST}",
         rate=Rate.per_second(1000),
         policy=policy,
@@ -124,7 +123,7 @@ class _HourLongNetwork(httpx2.AsyncBaseTransport):
 async def test_the_deadline_message_writes_the_elapsed_time_plainly(spent: float, written: str) -> None:
     """Write the elapsed time to the hundredth, never in scientific notation, without trailing zeros."""
     with TestClock().install() as clock:
-        client = StubClient(
+        client = Client(
             base_url=f"https://{_HOST}",
             rate=Rate.per_second(1000),
             policy=TransportPolicy(deadline=_SHORT, retry=None),

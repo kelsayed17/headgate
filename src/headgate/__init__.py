@@ -1,14 +1,14 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""headgate: an async HTTP base client with retry, rate limiting, circuit breaking and declared responses.
+"""headgate: an async HTTP client with retry, rate limiting, circuit breaking and declared responses.
 
-Built on ``httpx2``; Python 3.14 or newer. A client subclasses :class:`AsyncBaseClient`, configures it with a
+Built on ``httpx2``; Python 3.14 or newer. An SDK holds a :class:`Client`, configures it with a
 :class:`Rate` (or a shared :class:`RateBudget`) and optionally :class:`TransportPolicy` and :class:`HttpOptions`, and
 picks a codec: ``headgate.msgspec``, ``headgate.pydantic``, or any library as a :class:`Codec` of its own. Re-exported
 here is what a client is written with:
 
-* the client and its options: :class:`AsyncBaseClient`, :data:`Method`, :class:`RequestOptions`,
+* the client and its options: :class:`Client`, :data:`Method`, :class:`RequestOptions`,
   :class:`CallOptions`, :class:`ViewOptions`, :class:`TransportPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`,
   :class:`Timeouts` and :data:`DEFAULT_TIMEOUTS`, :class:`IdempotencyKeys`, :class:`Route` and its
   :class:`RouteOptions`, :class:`Middleware`, :data:`Next` (what a middleware calls to continue) and
@@ -24,7 +24,7 @@ here is what a client is written with:
   :class:`Minted`, :data:`MAX_MINT_RESPONSE_BYTES`;
 * the policy values a client usually sets: :class:`RetryPolicy`, :class:`BreakerPolicy`, :class:`Rate`,
   :class:`RateBudget` and :class:`HttpCache`;
-* pages: :meth:`AsyncBaseClient.paginate`'s :class:`Paginated`, its pagers and :class:`PageLimit`;
+* pages: :meth:`Client.paginate`'s :class:`Paginated`, its pagers and :class:`PageLimit`;
 * the errors, all under :class:`ClientError`.
 
 Everything else lives once, in its layer's subpackage: the finer policy values (:mod:`headgate.retry`'s ``Backoff``,
@@ -44,7 +44,7 @@ from headgate._auth import (
     StaticHeaderAuth,
 )
 from headgate._call_options import CallOptions, RequestOptions
-from headgate._client import AsyncBaseClient, Method
+from headgate._client import Client, Method
 from headgate._codec import Codec, decode_with, reader_for, writer_for
 from headgate._core import call_info
 from headgate._middleware import Middleware, Next
@@ -105,7 +105,6 @@ from headgate.retry import RetryPolicy
 __all__ = [
     "DEFAULT_TIMEOUTS",
     "MAX_MINT_RESPONSE_BYTES",
-    "AsyncBaseClient",
     "AuthError",
     "BearerAuth",
     "Body",
@@ -115,6 +114,7 @@ __all__ = [
     "CachedTokenAuth",
     "CallOptions",
     "CircuitOpenError",
+    "Client",
     "ClientConfigurationError",
     "ClientError",
     "ClientTimeoutError",

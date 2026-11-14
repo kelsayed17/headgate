@@ -5,15 +5,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Generator
+from contextlib import contextmanager
 from typing import Self, cast, override
 
 import httpx2
 
+from headgate._stack import NETWORK_OVERRIDE
 from headgate._url import sanitize_url
 from headgate.testing.faults import Respond
 
-__all__ = ["FakeTransport", "Reply", "UnmatchedRequestError"]
+__all__ = ["FakeTransport", "Reply", "UnmatchedRequestError", "fake_network"]
 
 type Reply = Respond | httpx2.Response | int | Callable[[httpx2.Request], httpx2.Response | Awaitable[httpx2.Response]]
 """What a route answers with: a :class:`Respond`, a response, a bare status, or a function of the request."""
@@ -130,3 +132,22 @@ class FakeTransport(httpx2.AsyncBaseTransport):
     async def aclose(self) -> None:
         """Record that the client closed the transport."""
         self.closed = True
+
+
+@contextmanager
+def fake_network[T: httpx2.AsyncBaseTransport](transport: T) -> Generator[T]:
+    """Send every client built in the block on *transport*, in place of the network, and yield it.
+
+    It replaces even a transport the client was given itself (``HttpOptions(transport=...)``), so an SDK that fixes
+    its own transport in its constructor can still be tested over a :class:`FakeTransport`. Only the network is
+    replaced: the rate budget, the cache, the retries, the breaker and the SSRF guard above it are the client's own. A
+    client is read when it is built, so build the SDK inside the block; the block need not stay open while it is used.
+    A token an auth mints on an ``httpx2.AsyncClient`` of its own (:meth:`~headgate.CachedTokenAuth.mint_token`) is
+    not a ``Client``'s and does not reach the fake; one it mints through :meth:`~headgate.CachedTokenAuth.mint_flow`
+    does.
+    """
+    token = NETWORK_OVERRIDE.set(transport)
+    try:
+        yield transport
+    finally:
+        NETWORK_OVERRIDE.reset(token)

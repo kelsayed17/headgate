@@ -11,10 +11,9 @@ from typing import TYPE_CHECKING, TypedDict, override
 import httpx2
 from hishel import AsyncBaseStorage, AsyncSqliteStorage, Entry, Request, Response
 
-from headgate import HttpOptions, TransportPolicy
+from headgate import Client, HttpOptions, TransportPolicy
 from headgate.cache import HttpCache
 from headgate.cache._transport import ResilientCacheTransport, store_accepted
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     import re
@@ -64,13 +63,13 @@ def stub_client(
     rate: Rate | None = None,
     http: HttpOptions | None = None,
     policy: TransportPolicy | None = None,
-) -> StubClient:
+) -> Client:
     """Build a client for ``https://x`` over *transport*, caching through *cache* when given.
 
     *http* carries any other HTTP setting; its ``transport`` is replaced by the one given here. *policy* carries any
     other policy setting; its ``cache`` is replaced by *cache*.
     """
-    return StubClient(
+    return Client(
         base_url="https://x",
         rate=rate,
         policy=dataclasses.replace(policy or TransportPolicy(), cache=cache),

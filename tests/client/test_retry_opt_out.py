@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate._client import AsyncBaseClient
+from headgate._client import Client
 from headgate._core import CallContext
 from headgate.errors import UpstreamStatusError
 from headgate.ratelimit import Rate
@@ -28,19 +28,16 @@ if TYPE_CHECKING:
     from pytest_httpx2 import HTTPXMock
 
 
-class _Probe(AsyncBaseClient):
-    """A client with the default retry policy."""
-
-    def __init__(self) -> None:
-        """Build with the defaults: three attempts per request."""
-        super().__init__(base_url="https://example.invalid", rate=Rate.per_second(2))
+def _probe() -> Client:
+    """Build with the defaults: three attempts per request."""
+    return Client(base_url="https://example.invalid", rate=Rate.per_second(2))
 
 
 async def test_retry_none_sends_exactly_one_request(httpx2_mock: HTTPXMock) -> None:
     """Check that a 500 with ``retry=None`` surfaces after one attempt, not three."""
     httpx2_mock.add_response(status_code=httpx2.codes.INTERNAL_SERVER_ERROR)
 
-    async with _Probe() as client:
+    async with _probe() as client:
         with pytest.raises(UpstreamStatusError):
             await client.post("orders", expect=RESPONSE, retry=None)
 
@@ -51,7 +48,7 @@ async def test_retry_none_works_on_a_read_verb(httpx2_mock: HTTPXMock) -> None:
     """Check that the flag works on a read verb too, not just the write ones."""
     httpx2_mock.add_response(status_code=httpx2.codes.INTERNAL_SERVER_ERROR)
 
-    async with _Probe() as client:
+    async with _probe() as client:
         with pytest.raises(UpstreamStatusError):
             await client.get("quote", expect=RESPONSE, retry=None)
 
@@ -66,7 +63,7 @@ async def test_the_default_retries(httpx2_mock: HTTPXMock) -> None:
     """
     httpx2_mock.add_response(status_code=httpx2.codes.INTERNAL_SERVER_ERROR, is_reusable=True)
 
-    async with _Probe() as client:
+    async with _probe() as client:
         with pytest.raises(UpstreamStatusError):
             await client.post("orders", expect=RESPONSE, idempotency_key="order-1")
 
@@ -77,7 +74,7 @@ async def test_retry_none_wins_over_an_idempotency_key(httpx2_mock: HTTPXMock) -
     """Check that the flag stops even a keyed POST, which the policy would otherwise re-send."""
     httpx2_mock.add_response(status_code=httpx2.codes.INTERNAL_SERVER_ERROR)
 
-    async with _Probe() as client:
+    async with _probe() as client:
         with pytest.raises(UpstreamStatusError):
             await client.post("orders", expect=RESPONSE, idempotency_key="order-1", retry=None)
 
@@ -89,7 +86,7 @@ async def test_retry_none_and_a_cache_ttl_are_both_stamped(httpx2_mock: HTTPXMoc
     httpx2_mock.add_response(status_code=httpx2.codes.OK)
     ttl = 5.0
 
-    async with _Probe() as client:
+    async with _probe() as client:
         await client.post("orders", expect=RESPONSE, retry=None, cache_ttl=ttl)
 
     sent = httpx2_mock.get_requests()[0]

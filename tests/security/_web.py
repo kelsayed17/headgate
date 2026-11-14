@@ -10,9 +10,8 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate import HttpOptions, TransportPolicy
+from headgate import Client, HttpOptions, TransportPolicy
 from headgate.ratelimit import Rate
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -46,9 +45,9 @@ class Web:
         http: HttpOptions | None = None,
         base_url: str = BASE,
         middleware: tuple[Middleware, ...] = (),
-    ) -> StubClient:
+    ) -> Client:
         """Return a client on *base_url* over this web, sending each call once."""
-        return StubClient(
+        return Client(
             base_url=base_url,
             rate=Rate.per_second(1000),
             auth=auth,

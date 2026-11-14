@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The defaults a view made by :meth:`~headgate.AsyncBaseClient.with_options` lays over its client's calls.
+"""The defaults a view made by :meth:`~headgate.Client.with_options` lays over its client's calls.
 
 A view is the same client with different defaults for its calls: extra headers, a retry policy, a deadline and a
 redirect choice (its timeouts lie over the client's directly, through ``Timeouts.over``). :class:`ViewDefaults` holds
@@ -34,7 +34,7 @@ __all__ = ["KEEP", "ROOT_DEFAULTS", "VIEW_KEYS", "Keep", "ViewDefaults", "ViewOp
 
 
 class ViewOptions(TypedDict, total=False, closed=True):
-    """The defaults :meth:`~headgate.AsyncBaseClient.with_options` changes; an option left out keeps the outer one.
+    """The defaults :meth:`~headgate.Client.with_options` changes; an option left out keeps the outer one.
 
     * ``headers``: sent on every call of the view, over the client's; a call's ``headers=`` still wins a clash.
     * ``timeout``: :class:`~headgate.Timeouts` whose set phases replace the client's; the others are kept.

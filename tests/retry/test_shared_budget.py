@@ -13,18 +13,17 @@ from typing import Any, Final, LiteralString, cast
 
 import pytest
 
-from headgate import HttpOptions, Rate, RetryPolicy, Route, TransportPolicy, UpstreamStatusError, nothing
+from headgate import Client, HttpOptions, Rate, RetryPolicy, Route, TransportPolicy, UpstreamStatusError, nothing
 from headgate.retry import Backoff, RetryBudget, RetryShare
-from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 #: One retry per ten-second window.
 _ONE_RETRY: Final = RetryShare(ratio=0.0, min_per_second=0.1, window=10.0)
 
 
-def _client(script: Script, budget: RetryShare | RetryBudget | None, *routes: Route) -> StubClient:
+def _client(script: Script, budget: RetryShare | RetryBudget | None, *routes: Route) -> Client:
     """Return a client over *script* whose policy retries 503s from *budget*, with *routes*."""
-    return StubClient(
+    return Client(
         base_url="https://api.example.test",
         rate=Rate.per_second(1000),
         policy=TransportPolicy(retry=RetryPolicy(budget=budget), breaker=None, routes=routes),
@@ -32,7 +31,7 @@ def _client(script: Script, budget: RetryShare | RetryBudget | None, *routes: Ro
     )
 
 
-async def _retried(client: StubClient, path: LiteralString = "x") -> bool:
+async def _retried(client: Client, path: LiteralString = "x") -> bool:
     """Return whether a call answered 503, then 200, was retried (it succeeds) or refused its retry (it raises)."""
     try:
         await client.get(path, expect=nothing)

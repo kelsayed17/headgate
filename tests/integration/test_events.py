@@ -34,13 +34,13 @@ from tests.support.events import Recorder
 if TYPE_CHECKING:
     from hishel import AsyncSqliteStorage
 
-    from tests.support.clients import StubClient
+    from headgate import Client
 
 _DEPRECATED = {"Deprecation": "@1688169599", "Cache-Control": "max-age=60"}
 _LIMITED = httpx2.Response(429, headers={"Retry-After": "1"})
 
 
-def _every_layer(storage: AsyncSqliteStorage, recorder: Recorder) -> StubClient:
+def _every_layer(storage: AsyncSqliteStorage, recorder: Recorder) -> Client:
     """Build a client with every reporting layer: retries, a cache, a breaker that trips at once, observers."""
     fake = (
         FakeTransport()

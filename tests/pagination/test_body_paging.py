@@ -21,6 +21,7 @@ from headgate import (
     BodyCursor,
     BodyOffset,
     CallOptions,
+    Client,
     ClientError,
     Cursor,
     EncodedBody,
@@ -42,7 +43,6 @@ from headgate.msgspec import reader, writer
 from headgate.pagination import PageRequest, WritingPager
 from headgate.ratelimit import Rate
 from headgate.retry import IDEMPOTENT_METHODS
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -138,10 +138,10 @@ class _Api:
         self.sent.append(request)
         return self.answer(request)
 
-    def client(self) -> StubClient:
+    def client(self) -> Client:
         """Return a client over this API."""
         transport = httpx2.MockTransport(self.handle)
-        return StubClient(base_url=_BASE, rate=_RATE, policy=self.policy, http=HttpOptions(transport=transport))
+        return Client(base_url=_BASE, rate=_RATE, policy=self.policy, http=HttpOptions(transport=transport))
 
     def bodies[T](self, type_: type[T]) -> list[T]:
         """Return the body of every request sent, decoded as *type_*."""
@@ -585,7 +585,7 @@ def test_a_walk_of_posts_refuses_a_fixed_key_the_client_or_a_view_sends(where: s
     if where == "view":
         client = api.client().with_options(headers=headers)
     else:
-        client = StubClient(
+        client = Client(
             base_url=_BASE, rate=_RATE, policy=api.policy, http=HttpOptions(transport=transport, headers=headers)
         )
     with pytest.raises(ValueError, match="idempotency key would be sent with every page's body"):
@@ -746,7 +746,7 @@ async def test_an_offset_walk_of_posts_writes_its_body_on_every_page() -> None:
 QUERY_PARAM_CURSOR: Final = Cursor[Page, Item, Query](items=items_of, next=cursor_of, param="after", write=QUERY)
 
 
-async def _search(client: StubClient, query: Query | None = None) -> list[int]:
+async def _search(client: Client, query: Query | None = None) -> list[int]:
     """Search with *query*, or list everything without one: one call, whether the body is given or not."""
     paginated = client.paginate("search", query=query, expect=reader(Page), pages=QUERY_PARAM_CURSOR)
     return [item.id async for item in paginated]

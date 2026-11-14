@@ -18,6 +18,7 @@ import pytest
 
 from headgate import (
     BreakerPolicy,
+    Client,
     ForbiddenDestinationError,
     HttpOptions,
     RetryPolicy,
@@ -30,7 +31,6 @@ from headgate.curl import AsyncCurlTransport
 from headgate.ratelimit import Rate
 from tests.security._servers import serving
 from tests.security._web import BASE, Web
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -55,9 +55,9 @@ class _Names:
         return (self.table[host],)
 
 
-def _guarded(base_url: str, policy: TransportPolicy | None = None) -> StubClient:
+def _guarded(base_url: str, policy: TransportPolicy | None = None) -> Client:
     """Build a client on *base_url* with the SSRF guard on, under *policy* (the default one if not given)."""
-    return StubClient(
+    return Client(
         base_url=base_url,
         rate=Rate.per_second(1000),
         policy=policy or TransportPolicy(),
@@ -73,13 +73,14 @@ async def test_a_loopback_server_is_never_reached() -> None:
 
     assert server.connections == 0
     error = exc.value
-    assert str(error).startswith("[StubClient] GET x: refused to connect to 127.0.0.1: it is a loopback address")
-    assert (error.source, error.method, error.url, error.retryable) == ("StubClient", "GET", "x", False)
+    assert str(error).startswith(f"[{error.source}] GET x: refused to connect to 127.0.0.1: it is a loopback address")
+    assert error.source == httpx2.URL(server.url()).netloc.decode()
+    assert (error.method, error.url, error.retryable) == ("GET", "x", False)
 
 
 async def test_the_same_server_is_reachable_without_the_guard() -> None:
     """Reach the same loopback server when private hosts are allowed, the default."""
-    async with serving() as server, StubClient(base_url=server.url(), rate=Rate.per_second(1000)) as client:
+    async with serving() as server, Client(base_url=server.url(), rate=Rate.per_second(1000)) as client:
         resp = await client.get("x", expect=RESPONSE)
 
     assert resp.text == "ok"
@@ -103,12 +104,12 @@ async def test_a_name_resolving_to_a_private_address_is_refused() -> None:
     options = HttpOptions(
         security=SecurityOptions(block_private_hosts=True, resolver=_Names(internal_example="10.0.0.5"))
     )
-    async with StubClient(base_url="https://internal.example", rate=Rate.per_second(1000), http=options) as client:
+    async with Client(base_url="https://internal.example", rate=Rate.per_second(1000), http=options) as client:
         with pytest.raises(ForbiddenDestinationError, match=r"internal\.example: it resolves to 10\.0\.0\.5"):
             await client.get("x", expect=RESPONSE)
 
 
-def _web_client(web: Web, resolver: _Names, *, base_url: str = BASE) -> StubClient:
+def _web_client(web: Web, resolver: _Names, *, base_url: str = BASE) -> Client:
     """Return a guarded client on *base_url* over *web*, a custom transport, resolving through *resolver*."""
     return web.client(
         http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=resolver)), base_url=base_url
@@ -158,7 +159,7 @@ async def test_the_curl_transport_is_vetted_before_it_sends() -> None:
         options = HttpOptions(
             transport=AsyncCurlTransport(impersonate="chrome"), security=SecurityOptions(block_private_hosts=True)
         )
-        async with StubClient(base_url=server.url(), rate=Rate.per_second(1000), http=options) as client:
+        async with Client(base_url=server.url(), rate=Rate.per_second(1000), http=options) as client:
             with pytest.raises(ForbiddenDestinationError):
                 await client.get("x", expect=RESPONSE)
 

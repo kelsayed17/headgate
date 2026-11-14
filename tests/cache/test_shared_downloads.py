@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import HttpCache, HttpOptions, Timeouts, TransportError, TransportPolicy, UpstreamStatusError
+from headgate import Client, HttpCache, HttpOptions, Timeouts, TransportError, TransportPolicy, UpstreamStatusError
 from headgate._core import CallContext, CallInfo
 from headgate._responses import as_bytes
 from headgate.cache._transport import CACHE_DEGRADED_EXT, host_untested, stamp_ttl
@@ -30,7 +30,6 @@ from headgate.retry import RetryPolicy
 from headgate.retry._policy import RETRY_POLICY
 from tests.cache._helpers import CacheRules, FaultyStorage, TrackingNetwork, cache_transport, every_get_rules
 from tests.support.breakers import failures
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -472,9 +471,9 @@ async def test_gets_that_differ_in_timeout_or_retry_policy_do_not_share(
     assert network.calls == len(requests)
 
 
-def _sharing_client(network: _GatedNetwork, storage: AsyncSqliteStorage) -> StubClient:
+def _sharing_client(network: _GatedNetwork, storage: AsyncSqliteStorage) -> Client:
     """Build a client over *network* that caches every GET and sends each request once."""
-    return StubClient(
+    return Client(
         base_url="https://example.test",
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), cache=HttpCache(**every_get_rules(), storage=storage)),
         http=HttpOptions(transport=network),
@@ -515,7 +514,7 @@ async def test_gets_whose_timeouts_the_deadline_cut_still_share(storage: AsyncSq
     sharing key uses the timeouts the call asked for.
     """
     network = _GatedNetwork()
-    client = StubClient(
+    client = Client(
         base_url="https://example.test",
         policy=TransportPolicy(
             deadline=20.0, retry=RetryPolicy(attempts=1), cache=HttpCache(**every_get_rules(), storage=storage)
@@ -643,7 +642,7 @@ async def test_middleware_timeout_overrides_define_sharing(storage: AsyncSqliteS
     """Different explicit limits stay separate; the same limit shares its failure without an extra send."""
     network = _GatedNetwork(exc=httpx2.ReadTimeout("explicit phase limit"))
     middleware = _TimeoutOverride(same=same)
-    client = StubClient(
+    client = Client(
         base_url="https://example.test",
         policy=TransportPolicy(
             retry=None,
@@ -683,7 +682,7 @@ async def test_middleware_can_change_the_timeout_on_a_later_retry(storage: Async
     network = _RetriedTimeoutNetwork()
     network.gate.set()
     middleware = _TimeoutOverride(same=False)
-    client = StubClient(
+    client = Client(
         base_url="https://example.test",
         policy=TransportPolicy(
             retry=RetryPolicy(attempts=2),

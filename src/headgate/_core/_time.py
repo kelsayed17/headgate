@@ -8,7 +8,7 @@ for it, and pins a draw instead of hoping. The shapes are protocols over plain c
 ``time.time``, ``asyncio.sleep`` and ``random.random`` satisfy them as they are.
 
 Everything that takes a ``timing=`` (a client, a token auth, a shared budget or registry) reads :func:`current_timing`
-when it is built and none is given. A client class usually fixes its own options and exposes none of them, so a test
+when it is built and none is given. An SDK usually fixes its client's options and exposes none of them, so a test
 replaces the timing of everything it builds with :func:`timing_override` instead of reaching into each one.
 """
 

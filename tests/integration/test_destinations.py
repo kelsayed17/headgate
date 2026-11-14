@@ -16,11 +16,10 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate import ForbiddenDestinationError, HttpOptions, NextUrl, SecurityOptions, StaticHeaderAuth, nothing
+from headgate import Client, ForbiddenDestinationError, HttpOptions, NextUrl, SecurityOptions, StaticHeaderAuth, nothing
 from headgate.msgspec import reader
 from headgate.testing import FakeTransport
 from tests.integration._support import BASE, FAST, Page, client, items_of, next_of
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -53,7 +52,7 @@ async def test_a_stream_to_a_private_address_is_refused() -> None:
 
 async def test_a_stream_through_the_pinning_transport_is_refused() -> None:
     """Refuse a stream on the default network transport, which vets the address it connects to."""
-    async with StubClient(base_url=BASE, rate=FAST, http=_GUARDED) as built:
+    async with Client(base_url=BASE, rate=FAST, http=_GUARDED) as built:
         with pytest.raises(ForbiddenDestinationError, match=r"10\.0\.0\.7.*private"):
             async with built.stream(_INTERNAL):
                 pass

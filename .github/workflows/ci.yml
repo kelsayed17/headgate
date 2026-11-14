@@ -90,7 +90,7 @@ jobs:
       - run: uv venv "$RUNNER_TEMP/core" && uv pip install --python "$RUNNER_TEMP/core/bin/python" .
       - run: >-
           "$RUNNER_TEMP/core/bin/python" -c
-          "import headgate, headgate.health, headgate.policy; from headgate import AsyncBaseClient, Codec"
+          "import headgate, headgate.health, headgate.policy; from headgate import Client, Codec"
       # No codec comes with the core: without its extra, the msgspec codec fails naming the extra to install.
       - run: |
           out=$("$RUNNER_TEMP/core/bin/python" -c "import headgate.msgspec" 2>&1) && exit 1

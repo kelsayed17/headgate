@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, HttpOptions, TransportPolicy
+from headgate import BreakerPolicy, Client, HttpOptions, TransportPolicy
 from headgate._core import BREAKER_GATE, BreakerChanged, BreakerState, CallContext
 from headgate.breaker import BreakerRegistry
 from headgate.errors import ClientError, RateLimitError, UpstreamStatusError
@@ -26,7 +26,6 @@ from headgate.ratelimit import Rate
 from headgate.testing import TestClock
 from headgate.timing import Timing
 from tests.support.breakers import failures
-from tests.support.clients import StubClient
 from tests.support.events import Recorder
 from tests.support.responses import RESPONSE
 
@@ -52,9 +51,9 @@ def _client(
     *,
     policy: TransportPolicy | None = None,
     recorder: Recorder | None = None,
-) -> StubClient:
+) -> Client:
     """Return a client against *handler*, sending each call once, on a default breaker of its own."""
-    return StubClient(
+    return Client(
         base_url=_ORIGIN,
         rate=_RATE,
         policy=policy or TransportPolicy(retry=None),
@@ -181,9 +180,9 @@ class _GateReader(httpx2.AsyncBaseTransport):
         return httpx2.Response(self._status, content=b"{}")
 
 
-def _gated_client(wire: _GateReader, policy: TransportPolicy) -> StubClient:
+def _gated_client(wire: _GateReader, policy: TransportPolicy) -> Client:
     """Return a client over *wire* with *policy*."""
-    return StubClient(base_url=_ORIGIN, rate=_RATE, policy=policy, http=HttpOptions(transport=wire))
+    return Client(base_url=_ORIGIN, rate=_RATE, policy=policy, http=HttpOptions(transport=wire))
 
 
 async def test_the_gate_opens_when_another_call_trips_the_breaker_mid_call() -> None:

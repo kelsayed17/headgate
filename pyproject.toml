@@ -115,7 +115,7 @@ ignore = ["COM812", "D203", "D213"]
 convention = "pep257"
 
 [tool.ruff.lint.pylint]
-# AsyncBaseClient takes seven keyword-only configuration groups; PLR0917 still limits positional arguments.
+# Client takes seven keyword-only configuration groups; PLR0917 still limits positional arguments.
 max-args = 7
 
 [tool.ruff.lint.flake8-pytest-style]

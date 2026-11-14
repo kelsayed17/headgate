@@ -9,13 +9,12 @@ import pytest
 
 import headgate.breaker
 import headgate.testing
-from headgate import BreakerPolicy, HttpOptions, Rate, TransportPolicy, nothing
+from headgate import BreakerPolicy, Client, HttpOptions, Rate, TransportPolicy, nothing
 from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
 from headgate.errors import CircuitOpenError, UpstreamStatusError
 from headgate.health import BreakerSnapshot, breaker_states
 from headgate.testing import FakeTransport, TestClock, breakers_of
 from tests.support.breakers import registry_of
-from tests.support.clients import StubClient
 
 _HOST = "flaky.test"
 _ORIGIN = f"https://{_HOST}"
@@ -24,9 +23,9 @@ _COOLDOWN = 30.0
 _TRIP_AT_ONCE = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN)
 
 
-def _client(fake: FakeTransport, breaker: BreakerPolicy | None = _TRIP_AT_ONCE) -> StubClient:
+def _client(fake: FakeTransport, breaker: BreakerPolicy | None = _TRIP_AT_ONCE) -> Client:
     """Build a client for :data:`_HOST` that sends once and trips its breaker on the first failure."""
-    return StubClient(
+    return Client(
         base_url=_ORIGIN,
         rate=Rate.per_second(1000),
         policy=TransportPolicy(retry=None, breaker=breaker),
@@ -34,7 +33,7 @@ def _client(fake: FakeTransport, breaker: BreakerPolicy | None = _TRIP_AT_ONCE) 
     )
 
 
-async def _fail(client: StubClient) -> None:
+async def _fail(client: Client) -> None:
     """Make one call the server answers 503."""
     with pytest.raises(UpstreamStatusError):
         await client.get("x", expect=nothing)

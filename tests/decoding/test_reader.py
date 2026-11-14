@@ -16,11 +16,10 @@ import headgate
 import headgate.errors
 import headgate.msgspec
 import headgate.pydantic
-from headgate import Expect, HttpOptions, Reader, as_bytes, event_stream, nothing, reader_for
+from headgate import Client, Expect, HttpOptions, Reader, as_bytes, event_stream, nothing, reader_for
 from headgate.cache import conditional
 from headgate.msgspec import CODEC
 from headgate.testing import FakeTransport
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -137,13 +136,13 @@ class _FirstRaises:
         raise AssertionError(msg)
 
 
-async def _paginate(client: StubClient, expect: Reader[object]) -> object:
+async def _paginate(client: Client, expect: Reader[object]) -> object:
     """Start a walk read through *expect*, whose pager fails if it is asked for a page."""
     return client.paginate("x", expect=expect, pages=cast("Any", _FirstRaises()))
 
 
 #: Each call that takes ``expect=``, given one.
-_CALLS: dict[str, Callable[[StubClient, Any], Awaitable[object]]] = {
+_CALLS: dict[str, Callable[[Client, Any], Awaitable[object]]] = {
     "get": lambda c, e: c.get("x", expect=e),
     "post": lambda c, e: c.post("x", expect=e),
     "put": lambda c, e: c.put("x", expect=e),
@@ -159,7 +158,7 @@ _CALLS: dict[str, Callable[[StubClient, Any], Awaitable[object]]] = {
 async def test_every_call_refuses_a_non_reader_expect(verb: str, value: object, named: str) -> None:
     """Refuse a non-reader ``expect=`` where the call is made, before the pager runs or anything is sent."""
     fake = FakeTransport()
-    async with StubClient(base_url="https://api.test", http=HttpOptions(transport=fake)) as client:
+    async with Client(base_url="https://api.test", http=HttpOptions(transport=fake)) as client:
         with pytest.raises(TypeError) as caught:
             await _CALLS[verb](client, cast("Any", value))
     assert str(caught.value) == f"expect= takes a Reader or an Expect (got {named})"

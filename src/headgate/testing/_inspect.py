@@ -3,7 +3,7 @@
 
 """What a client was built with, read back: its cache, and the rate budget a request spends from.
 
-A client fixes its options in ``super().__init__()``, so its tests check what it configured by reading it back: the
+An SDK fixes its client's options where it builds it, so its tests check what it configured by reading it back: the
 cache it keeps (and, through :meth:`~headgate.HttpCache.caches_request` and
 :meth:`~headgate.HttpCache.stores_status`, what that stores) and the rate budget a path spends from. Neither sends
 anything.
@@ -16,19 +16,19 @@ from typing import TYPE_CHECKING
 from headgate._client import built_with
 
 if TYPE_CHECKING:
-    from headgate import AsyncBaseClient, HttpCache
+    from headgate import Client, HttpCache
     from headgate.breaker import BreakerRegistry
     from headgate.ratelimit import RateBudget
 
 __all__ = ["breakers_of", "budget_for", "cache_of"]
 
 
-def cache_of(client: AsyncBaseClient) -> HttpCache | None:
+def cache_of(client: Client) -> HttpCache | None:
     """Return the :class:`~headgate.HttpCache` *client* was built with (``TransportPolicy(cache=...)``), or ``None``."""
     return built_with(client).cache
 
 
-def budget_for(client: AsyncBaseClient, url: str | None = None) -> RateBudget:
+def budget_for(client: Client, url: str | None = None) -> RateBudget:
     """Return the :class:`~headgate.RateBudget` a request to *url* spends from, as the client's rate layer chooses it.
 
     *url* is joined to the client's ``base_url`` as a verb's is, and the first :class:`~headgate.Route` whose
@@ -43,7 +43,7 @@ def budget_for(client: AsyncBaseClient, url: str | None = None) -> RateBudget:
     return built.budgets.for_request(built.http.build_request("GET", url))
 
 
-def breakers_of(client: AsyncBaseClient) -> BreakerRegistry | None:
+def breakers_of(client: Client) -> BreakerRegistry | None:
     """Return the :class:`~headgate.breaker.BreakerRegistry` *client*'s breakers live in, or ``None`` without a breaker.
 
     It is the client's own, or the shared one its ``BreakerPolicy(registry=...)`` names. Read a breaker's state from it

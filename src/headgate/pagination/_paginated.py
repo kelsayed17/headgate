@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The lazy sequence of pages and items :meth:`AsyncBaseClient.paginate <headgate.AsyncBaseClient.paginate>` returns."""
+"""The lazy sequence of pages and items :meth:`Client.paginate <headgate.Client.paginate>` returns."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ _DIGEST_BYTES: Final = 16
 
 @dataclass(frozen=True, slots=True)
 class PageLimit:
-    """A page budget for :meth:`AsyncBaseClient.paginate <headgate.AsyncBaseClient.paginate>`: at most ``max_pages``.
+    """A page budget for :meth:`Client.paginate <headgate.Client.paginate>`: at most ``max_pages``.
 
     When the budget is spent with more pages to come, ``on_limit`` says what happens: ``"raise"`` (the default) raises
     :class:`~headgate.errors.PageLimitError`, since the result is incomplete; ``"stop"`` ends the walk there, for a
@@ -93,7 +93,7 @@ class Paginated[P, I](Protocol):
 
 @final
 class PageWalk[P, I, B]:
-    """The :class:`Paginated` :meth:`AsyncBaseClient.paginate <headgate.AsyncBaseClient.paginate>` builds."""
+    """The :class:`Paginated` :meth:`Client.paginate <headgate.Client.paginate>` builds."""
 
     __slots__ = ("_fetch", "_first", "_items_of", "_limit", "_pager", "_source", "_write")
 

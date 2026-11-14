@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The open response :meth:`AsyncBaseClient.stream <headgate.AsyncBaseClient.stream>` hands its block.
+"""The open response :meth:`Client.stream <headgate.Client.stream>` hands its block.
 
 Its iterators read the body as it arrives, after content-decoding, and map a failure mid-body onto the
 ``ClientError`` tree where it happens, so a caller catching ``TransportError`` around its loop catches it. The
@@ -117,7 +117,7 @@ class Stream(Protocol):
 
 @final
 class OpenStream:
-    """The :class:`Stream` :meth:`AsyncBaseClient.stream <headgate.AsyncBaseClient.stream>` opens."""
+    """The :class:`Stream` :meth:`Client.stream <headgate.Client.stream>` opens."""
 
     __slots__ = ("_events", "_fail", "_request_id", "_response", "_site")
 

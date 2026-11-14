@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``AsyncBaseClient``'s cache: when it is engaged, hit and miss behavior, TTL threading, and a shared storage.
+"""``Client``'s cache: when it is engaged, hit and miss behavior, TTL threading, and a shared storage.
 
 The cache is opt-in per client (``cache=HttpCache(storage=, ttl=)``). A client with no ``cache`` never
 caches. The ``HttpCache``'s ``ttl`` is stamped on every request in hishel's ``caching`` extension by the cache transport
@@ -21,7 +21,7 @@ import pytest
 import time_machine
 
 from headgate import RequestOptions
-from headgate._client import AsyncBaseClient
+from headgate._client import Client
 from headgate.cache import HttpCache
 from headgate.cache._transport import served_from_cache
 from headgate.ratelimit import Rate
@@ -204,9 +204,7 @@ _VERBS = ("delete", "get", "head", "patch", "post", "put")
 @pytest.mark.parametrize("verb", _VERBS)
 def test_every_http_verb_takes_a_cache_ttl(verb: str) -> None:
     """Accept ``cache_ttl`` on every verb, through its options, so the forwarding test below covers them all."""
-    assert inspect.signature(getattr(AsyncBaseClient, verb)).parameters["options"].annotation == (
-        "Unpack[RequestOptions]"
-    )
+    assert inspect.signature(getattr(Client, verb)).parameters["options"].annotation == ("Unpack[RequestOptions]")
     assert "cache_ttl" in RequestOptions.__optional_keys__
 
 

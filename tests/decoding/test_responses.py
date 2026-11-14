@@ -14,7 +14,7 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate import HttpOptions, _responses, body_reader
+from headgate import Client, HttpOptions, _responses, body_reader
 from headgate._responses import Expect, Reader, as_bytes, as_json, nothing
 from headgate.errors import (
     ClientError,
@@ -26,7 +26,6 @@ from headgate.errors import (
 )
 from headgate.msgspec import decode, reader
 from headgate.testing import FakeTransport
-from tests.support.clients import StubClient
 from tests.support.responses import response
 
 
@@ -142,7 +141,7 @@ def test_a_body_reader_refuses_with_refuse() -> None:
 async def test_a_body_readers_decode_failure_is_a_parse_error() -> None:
     """Report a hand-written decoder's ``ValueError`` on a 2xx as ``ResponseParseError``, as any reader's."""
     fake = FakeTransport().reply("GET", "/rows", httpx2.Response(200, content=b"ab  one"))
-    client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
+    client = Client(base_url="https://api.test", http=HttpOptions(transport=fake))
 
     with pytest.raises(ResponseParseError) as raised:
         await client.get("rows", expect=body_reader(_fixed_width))
@@ -211,9 +210,9 @@ async def test_json_refuses_a_body_that_is_not_json() -> None:
     for body, _ in _REFUSED:
         fake = FakeTransport().reply("GET", "/x", httpx2.Response(200, content=body))
         with pytest.raises(ResponseParseError):
-            await StubClient(base_url="https://api.test", http=HttpOptions(transport=fake)).get("x", expect=as_json)
+            await Client(base_url="https://api.test", http=HttpOptions(transport=fake)).get("x", expect=as_json)
         fake = FakeTransport().reply("GET", "/x", httpx2.Response(404, content=body))
-        client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
+        client = Client(base_url="https://api.test", http=HttpOptions(transport=fake))
         with pytest.raises(UpstreamStatusError) as status:
             await client.get("x", expect=Expect(nothing).on(404, as_json))
         assert status.value.status_code == httpx2.codes.NOT_FOUND
@@ -239,7 +238,7 @@ def parser_overflows(monkeypatch: pytest.MonkeyPatch) -> bytes:
 async def _read_raises(status: int, body: bytes, expect: Reader[object] | Expect[object]) -> ClientError:
     """Return what a call raises reading *body* on *status* through *expect*."""
     fake = FakeTransport().reply("GET", "/x", httpx2.Response(status, content=body))
-    client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
+    client = Client(base_url="https://api.test", http=HttpOptions(transport=fake))
     with pytest.raises(ClientError) as raised:
         await client.get("x", expect=expect)
     return raised.value

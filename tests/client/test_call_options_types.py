@@ -19,12 +19,12 @@ _PRELUDE = dedent(
 
     from headgate import CallOptions, RequestOptions, nothing
     from headgate.pagination import NextUrl
-    from tests.support.clients import StubClient
+    from headgate import Client
 
     PAGES = NextUrl[None, object](items=lambda _page: (), next=lambda _page: None)
 
 
-    async def probe(c: StubClient, url: LiteralString) -> None:
+    async def probe(c: Client, url: LiteralString) -> None:
     """
 )
 

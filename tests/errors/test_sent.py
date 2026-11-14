@@ -22,6 +22,7 @@ import pytest
 from headgate import (
     BreakerPolicy,
     CachedTokenAuth,
+    Client,
     ClientError,
     HttpOptions,
     Json,
@@ -36,7 +37,6 @@ from headgate import (
 from headgate.breaker import BreakerRegistry
 from headgate.errors import CircuitOpenError, ClientTimeoutError, ResponseParseError, TransportError
 from headgate.retry import Backoff
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -52,9 +52,9 @@ def _client(
     retry: RetryPolicy | None = None,
     auth: httpx2.Auth | None = None,
     breaker: BreakerPolicy | None = None,
-) -> StubClient:
+) -> Client:
     """Return a client over *handler* that sends each call once unless *retry* says otherwise."""
-    return StubClient(
+    return Client(
         base_url=_BASE,
         auth=auth,
         policy=TransportPolicy(retry=retry, breaker=breaker),
@@ -62,7 +62,7 @@ def _client(
     )
 
 
-async def _raised(client: StubClient, *, method: str = "GET") -> ClientError:
+async def _raised(client: Client, *, method: str = "GET") -> ClientError:
     """Return what one call through *client* raises: a GET, or a POST of a JSON body."""
     call = (
         client.get("orders", expect=as_bytes)
@@ -128,7 +128,7 @@ def _closed_port() -> int:
 
 async def test_a_refused_connection_on_the_network_sent_nothing() -> None:
     """Record nothing sent for a connection the network refused."""
-    async with StubClient(base_url=f"http://127.0.0.1:{_closed_port()}", policy=TransportPolicy(retry=None)) as client:
+    async with Client(base_url=f"http://127.0.0.1:{_closed_port()}", policy=TransportPolicy(retry=None)) as client:
         error = await _raised(client, method="POST")
 
     assert isinstance(error, TransportError)
@@ -139,7 +139,7 @@ async def test_a_read_timeout_after_the_body_was_written_may_have_been_sent() ->
     """Record a POST the server read and never answered as maybe sent: it may have been processed."""
     async with _silent_server() as url:
         policy = TransportPolicy(retry=None, timeout=Timeouts(read=0.05))
-        async with StubClient(base_url=url, policy=policy) as client:
+        async with Client(base_url=url, policy=policy) as client:
             error = await _raised(client, method="POST")
 
     assert isinstance(error, ClientTimeoutError)

@@ -1,29 +1,29 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The base client: :class:`AsyncBaseClient`, a policy layer over ``httpx2.AsyncClient``.
+"""The client: :class:`Client`, a policy layer over ``httpx2.AsyncClient`` that an SDK holds.
 
 httpx2 does the URL joining, headers, timeouts and connection pooling. This adds retries, rate limiting, a per-origin
 circuit breaker, a deadline, a response-size cap, events, and the mapping of every failure onto the ``ClientError``
 tree. It orchestrates; each policy lives in its own module, and the transport stack under ``httpx2.AsyncClient`` is
 assembled in :mod:`headgate._stack`.
 
-Every call (a verb, :meth:`~AsyncBaseClient.stream`, each page of :meth:`~AsyncBaseClient.paginate`) is packed into a
+Every call (a verb, :meth:`~Client.stream`, each page of :meth:`~Client.paginate`) is packed into a
 :class:`_Call` and runs through the same steps:
 
-1. :meth:`~AsyncBaseClient._prepare` renders the URL, builds the ``httpx2.Request`` once, and stamps the call's
+1. :meth:`~Client._prepare` renders the URL, builds the ``httpx2.Request`` once, and stamps the call's
    :class:`~headgate._core.CallContext` on it: method, sanitized URL, route template, deadline, retry override, body
    replayability, idempotency key and redirect choice;
-2. :meth:`~AsyncBaseClient._reported` emits ``CallStarted`` and ``CallFinished`` around the call and adds its notes to
-   the error it raises; :meth:`~AsyncBaseClient._deadline` bounds it by its deadline;
-3. :meth:`~AsyncBaseClient._exchange` sends the request under the origin's circuit breaker, through the transport
-   stack, and :meth:`~AsyncBaseClient._sent` maps a network failure or a surviving 429/5xx onto a ``ClientError``
+2. :meth:`~Client._reported` emits ``CallStarted`` and ``CallFinished`` around the call and adds its notes to
+   the error it raises; :meth:`~Client._deadline` bounds it by its deadline;
+3. :meth:`~Client._exchange` sends the request under the origin's circuit breaker, through the transport
+   stack, and :meth:`~Client._sent` maps a network failure or a surviving 429/5xx onto a ``ClientError``
    (:mod:`headgate._failures`), charging the breaker with what the exchange showed;
 4. a verb caps the body (:func:`headgate._body.read_capped`) and reads it through the call's declared responses
-   (:meth:`~AsyncBaseClient._dispatch`); ``stream()`` hands the open response to the caller's block instead.
+   (:meth:`~Client._dispatch`); ``stream()`` hands the open response to the caller's block instead.
 
-The six verbs are written out rather than generated so that each keeps an exact signature for type checkers, IDEs
-and subclasses that override one; every body is a single call into :meth:`AsyncBaseClient._request`.
+The six verbs are written out rather than generated so that each keeps an exact signature for type checkers and IDEs;
+every body is a single call into :meth:`Client._request`.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ import functools
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Literal, Self, Unpack, overload
+from typing import TYPE_CHECKING, Literal, Self, Unpack, cast, final, overload
 
 import httpx2
 
@@ -145,10 +145,10 @@ if TYPE_CHECKING:
     from headgate.retry import RetryPolicy
     from headgate.streaming import Stream
 
-__all__ = ["AsyncBaseClient", "Built", "Method", "built_with"]
+__all__ = ["Built", "Client", "Method", "built_with"]
 
 type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]
-"""The HTTP methods a client sends: one verb each, and :meth:`AsyncBaseClient.stream`'s ``method``."""
+"""The HTTP methods a client sends: one verb each, and :meth:`Client.stream`'s ``method``."""
 
 #: A query value httpx2 encodes itself.
 type _QueryValue = str | int | float | bool | None
@@ -161,7 +161,7 @@ _STREAM_ERROR_HEAD_BYTES = 4096
 #: past ``max_redirects`` (the origin answered every hop; the loop is one URL's configuration, as a 4xx is).
 _LOCAL_FAILURES = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2.PoolTimeout, httpx2.TooManyRedirects)
 
-#: The running timer of the call's deadline, put on its context by ``AsyncBaseClient._deadline``: whether it fired is
+#: The running timer of the call's deadline, put on its context by ``Client._deadline``: whether it fired is
 #: what tells the deadline cutting an attempt off from the caller's task being cancelled.
 _DEADLINE_TIMER = Slot[asyncio.Timeout]("deadline_timer")
 
@@ -232,25 +232,28 @@ class Built:
     breakers: BreakerRegistry | None
 
 
-#: The key a client keeps its :class:`Built` under, in its ``__dict__``. Not an identifier, so no attribute of a
-#: subclass can collide with it, and a view (a shallow copy) shares it.
+#: The key a client keeps its :class:`Built` under, in its ``__dict__``, which a view (a shallow copy) shares.
 _BUILT = "headgate.built"
 
 
-def built_with(client: AsyncBaseClient) -> Built:
+def built_with(client: Client) -> Built:
     """Return what *client* (or the client a view was made from) was built with.
 
-    :raises TypeError: for a client whose ``AsyncBaseClient.__init__`` never ran, so that was built with nothing.
+    :raises TypeError: for anything but a :class:`Client`, such as the SDK that holds one.
     """
-    built = vars(client).get(_BUILT)
-    if not isinstance(built, Built):
-        msg = f"{type(client).__name__} was never built: its __init__ must call super().__init__()"
+    if not isinstance(client, Client):
+        msg = f"{type(client).__name__} is not a Client: pass the Client it holds"
         raise TypeError(msg)
-    return built
+    return cast("Built", vars(client)[_BUILT])
 
 
-class AsyncBaseClient:
-    """Async base for HTTP API clients. Configured through ``__init__``, which builds the transport stack once.
+@final
+class Client:
+    """An HTTP API client, configured through ``__init__``, which builds the transport stack once.
+
+    An SDK holds one rather than inheriting from it (``self._http = Client(...)``), and calls its verbs; subclassing
+    it raises ``TypeError``. Every :class:`~headgate.errors.ClientError` it raises names its ``base_url``'s host as
+    its ``source``.
 
     **Failure policy.** Every verb takes the call's declared responses as ``expect=`` and returns what the matching
     reader read, or raises a :class:`~headgate.errors.ClientError` subtype:
@@ -334,7 +337,7 @@ class AsyncBaseClient:
         check_middleware(middleware)
         self._policy_off = policy_is_disabled()
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
-        self._source = type(self).__name__
+        self._source = httpx2.URL(base_url).netloc.decode("ascii")  # host, and a port other than the default
         self._timing = current_timing()
         self._breakers = _registry_of(policy, self._timing)
         self._response_check = http.response_check
@@ -354,6 +357,15 @@ class AsyncBaseClient:
             base_url=base_url, credentials=credentials, http=http, timeout=policy.timeout, transport=stack
         )
         vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client, breakers=self._breakers)
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a subclass: an SDK holds a ``Client`` and calls it."""
+        del kwargs
+        msg = (
+            f"{cls.__name__} cannot subclass Client: hold one instead, as self._http = Client(base_url=...), and call "
+            "self._http.get(...)"
+        )
+        raise TypeError(msg)
 
     async def __aenter__(self) -> Self:
         """Return the client; leaving the block closes it (a view's block closes nothing, see :meth:`with_options`)."""
@@ -381,8 +393,8 @@ class AsyncBaseClient:
         call's own options win over the view's, and the view's over a :class:`~headgate.Route`'s.
 
         The view shares everything that makes calls cooperate: the connection pool and transport stack, so the rate
-        budget and the retry budget; the circuit breakers; the auth and its cached token; the observers. It is a
-        shallow copy, so a subclass's own attributes are shared too. **The client it was made from owns the pool**:
+        budget and the retry budget; the circuit breakers; the auth and its cached token; the observers. **The client it
+        was made from owns the pool**:
         closing a view, or leaving its ``async with`` block, closes nothing, and a view stops working once that client
         is closed.
 
@@ -396,12 +408,12 @@ class AsyncBaseClient:
         check_options("with_options", options, VIEW_KEYS)
         layered = self._view.layered(options)
         if self._response_check is not None and layered.follow_redirects is True:
-            msg = f"{self._source} has a response_check=, so no view may follow redirects"
+            msg = f"the client of {self._source} has a response_check=, so no view may follow redirects"
             raise ValueError(msg)
         if (timeout := options.get("timeout")) is not None:
             check_timeout_fits(timeout, self._policy.deadline if layered.deadline is KEEP else layered.deadline)
         view = copy.copy(self)
-        # A shallow copy shares the pool, the stack and any subclass state; only the view's own settings differ.
+        # A shallow copy shares the pool and the stack; only the view's own settings differ.
         vars(view).update(
             _view=layered,
             _owns_pool=False,
@@ -418,7 +430,7 @@ class AsyncBaseClient:
         expect: Reader[T] | Expect[T],
         **options: Unpack[RequestOptions],
     ) -> T:
-        """Send a GET and read the reply through *expect*. See :class:`AsyncBaseClient`."""
+        """Send a GET and read the reply through *expect*. See :class:`Client`."""
         call = _Call("GET", url, options)
         return await self._request(call, expect)
 
@@ -429,7 +441,7 @@ class AsyncBaseClient:
         expect: Reader[T] | Expect[T],
         **options: Unpack[RequestOptions],
     ) -> T:
-        """Send a DELETE and read the reply through *expect*. See :class:`AsyncBaseClient`."""
+        """Send a DELETE and read the reply through *expect*. See :class:`Client`."""
         call = _Call("DELETE", url, options)
         return await self._request(call, expect)
 
@@ -440,7 +452,7 @@ class AsyncBaseClient:
         expect: Reader[T] | Expect[T],
         **options: Unpack[RequestOptions],
     ) -> T:
-        """Send a POST and read the reply through *expect*. See :class:`AsyncBaseClient`."""
+        """Send a POST and read the reply through *expect*. See :class:`Client`."""
         call = _Call("POST", url, options)
         return await self._request(call, expect)
 
@@ -451,7 +463,7 @@ class AsyncBaseClient:
         expect: Reader[T] | Expect[T],
         **options: Unpack[RequestOptions],
     ) -> T:
-        """Send a PUT and read the reply through *expect*. See :class:`AsyncBaseClient`."""
+        """Send a PUT and read the reply through *expect*. See :class:`Client`."""
         call = _Call("PUT", url, options)
         return await self._request(call, expect)
 
@@ -462,7 +474,7 @@ class AsyncBaseClient:
         expect: Reader[T] | Expect[T],
         **options: Unpack[RequestOptions],
     ) -> T:
-        """Send a PATCH and read the reply through *expect*. See :class:`AsyncBaseClient`."""
+        """Send a PATCH and read the reply through *expect*. See :class:`Client`."""
         call = _Call("PATCH", url, options)
         return await self._request(call, expect)
 
@@ -627,13 +639,12 @@ class AsyncBaseClient:
         async def fetch_page(request: PageRequest[B]) -> tuple[P, httpx2.Response]:
             page_options = call_options.copy()
             page_options["params"] = request.params
-            # The verbs are the base class's, since a subclass may name an endpoint method get or post.
             if request.body is None:
-                return await AsyncBaseClient.get(self, request.url, expect=paired, **page_options)
+                return await self.get(request.url, expect=paired, **page_options)
             if fixed_key:
                 raise ValueError(_ONE_KEY_FOR_EVERY_PAGE)
             body = Json(request.body) if write is None else write(request.body)
-            return await AsyncBaseClient.post(self, request.url, expect=paired, body=body, **page_options)
+            return await self.post(request.url, expect=paired, body=body, **page_options)
 
         return PageWalk(fetch, pages, first, source=self._source, limit=limit)
 
@@ -765,7 +776,7 @@ class AsyncBaseClient:
         follow = self._follows(options)
         # The per-call half of the constructor's check: the client itself never follows with a response_check.
         if self._response_check is not None and follow:
-            msg = f"{self._source} has a response_check=, so no call may follow redirects"
+            msg = f"the client of {self._source} has a response_check=, so no call may follow redirects"
             raise ValueError(msg)
         params = options.get("params")
         body = lowered(options.get("body"))
@@ -1223,7 +1234,7 @@ def _stamp_headers(request: httpx2.Request, explicit: Mapping[str, str] | None, 
 
 
 def _charge_response(response: httpx2.Response, verdict: Verdict, context: CallContext) -> None:
-    """Mark *verdict* with what *response* says about its origin (see :meth:`AsyncBaseClient._sent`).
+    """Mark *verdict* with what *response* says about its origin (see :meth:`Client._sent`).
 
     A response another request's attempt produced (a cache hit, a stored response, a shared download) or that never
     reached the network (a middleware's own answer) is untested; a 5xx this request fetched itself is a failure; a 429
@@ -1238,7 +1249,7 @@ def _charge_response(response: httpx2.Response, verdict: Verdict, context: CallC
 
 
 def _network_failure_charges_origin(exc: Exception) -> bool:
-    """Return whether a network failure is the origin's, to charge its breaker with (see :meth:`AsyncBaseClient._sent`).
+    """Return whether a network failure is the origin's, to charge its breaker with (see :meth:`Client._sent`).
 
     Not when it is of our own side's making or a redirect loop (:data:`_LOCAL_FAILURES`), happened on a hop an auth
     flow made to mint a credential, or was shared by the cache from another request's attempt.

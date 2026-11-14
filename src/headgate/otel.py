@@ -6,7 +6,7 @@
 Pass it to the client twice, once as each of the two things it is::
 
     otel = OpenTelemetryObserver()
-    client = AsyncBaseClient(base_url=..., observers=(otel,), middleware=(otel,))
+    client = Client(base_url=..., observers=(otel,), middleware=(otel,))
 
 It is two things, so it goes in two places. As an :class:`~headgate.events.Observer` it turns a call's events into a
 span named by the HTTP client semantic conventions (``GET``, or ``GET series/{series_id}`` when the URL was a t-string)

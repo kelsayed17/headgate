@@ -22,14 +22,13 @@ import msgspec
 import pytest
 from pydantic import BaseModel
 
-from headgate import Codec, EncodedBody, HttpOptions, decode_with, nothing, reader_for, writer_for
+from headgate import Client, Codec, EncodedBody, HttpOptions, decode_with, nothing, reader_for, writer_for
 from headgate import msgspec as msgspec_flavor
 from headgate import pydantic as pydantic_flavor
 from headgate._failures import MESSAGE_TEXT_LIMIT
 from headgate.errors import DecodeError, ResponseParseError
 from headgate.msgspec import MsgspecCodec
 from headgate.testing import FakeTransport, check_codec
-from tests.support.clients import StubClient
 from tests.support.responses import response
 
 if TYPE_CHECKING:
@@ -103,7 +102,7 @@ def test_the_built_in_codecs_pass_the_conformance_check(codec: Codec, record: ty
 async def test_a_writer_sends_its_codecs_media_type() -> None:
     """Send the codec's bytes under the codec's media type."""
     fake = FakeTransport().reply("POST", "/rows", 201)
-    client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
+    client = Client(base_url="https://api.test", http=HttpOptions(transport=fake))
     await client.post("rows", body=writer_for(_TAGGED, _Row)(_Row(value=1)), expect=nothing)
 
     assert fake.calls[0].headers["content-type"] == "application/vnd.example+json"
@@ -113,7 +112,7 @@ async def test_a_writer_sends_its_codecs_media_type() -> None:
 async def test_a_codecs_own_error_is_a_parse_error_with_its_description() -> None:
     """Raise a library's own error as ``ResponseParseError``, described by the codec, never escaping the tree."""
     fake = FakeTransport().reply("GET", "/rows", httpx2.Response(200, json={"value": "one"}))
-    client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
+    client = Client(base_url="https://api.test", http=HttpOptions(transport=fake))
 
     with pytest.raises(ResponseParseError, match=r"shape: Expected `int`, got `str` - at `\$\.value`") as raised:
         await client.get("rows", expect=reader_for(_TAGGED, _Row))

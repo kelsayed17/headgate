@@ -24,13 +24,12 @@ from hishel import AsyncSqliteStorage
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from headgate import ClientConfigurationError, HttpOptions, StaticHeaderAuth, TransportPolicy
+from headgate import Client, ClientConfigurationError, HttpOptions, StaticHeaderAuth, TransportPolicy
 from headgate._core import CredentialStamper
 from headgate.cache import HttpCache, Partition
 from headgate.cache._credentials import CredentialScope, credential_scope
 from headgate.cache._transport import served_from_cache
 from tests.cache._helpers import accept, cache_transport, series_rules
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -120,9 +119,9 @@ def _client(
     partition: Partition = Partition.CREDENTIAL,
     http: HttpOptions | None = None,
     middleware: tuple[Middleware, ...] = (),
-) -> StubClient:
+) -> Client:
     """Build a client caching ``/series`` into *storage*, with *auth* and *partition*, and *http* over *network*."""
-    return StubClient(
+    return Client(
         base_url="https://x",
         auth=auth,
         policy=TransportPolicy(cache=HttpCache(**series_rules(), storage=storage, partition=partition)),
@@ -396,7 +395,7 @@ async def test_the_network_gets_the_request_exactly_as_an_uncached_client_sends_
     cached, uncached = _Recorder(), _Recorder()
 
     await _client(cached, storage, _KeyAuth("alice"), http=HttpOptions(headers=headers)).get(url, expect=RESPONSE)
-    await StubClient(
+    await Client(
         base_url="https://x",
         auth=_KeyAuth("alice"),
         http=HttpOptions(transport=uncached, headers=headers),

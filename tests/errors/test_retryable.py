@@ -19,6 +19,7 @@ import pytest
 
 from headgate import (
     BreakerPolicy,
+    Client,
     ClientError,
     HttpOptions,
     Json,
@@ -42,7 +43,6 @@ from headgate.errors import (
     ResponseTooLargeError,
 )
 from headgate.retry import Backoff, RetryPolicy
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -59,9 +59,9 @@ def _answering(status: int) -> httpx2.MockTransport:
     return httpx2.MockTransport(lambda _request: httpx2.Response(status, content=b"[1]"))
 
 
-def _client(status: int, *, http: HttpOptions | None = None, breaker: BreakerPolicy | None = None) -> StubClient:
+def _client(status: int, *, http: HttpOptions | None = None, breaker: BreakerPolicy | None = None) -> Client:
     """Return a client whose every request is answered *status*, retried once without waiting."""
-    return StubClient(
+    return Client(
         base_url=_BASE,
         policy=TransportPolicy(retry=_ONCE_MORE, breaker=breaker),
         http=http or HttpOptions(transport=_answering(status)),
@@ -117,7 +117,7 @@ _CASES: list[tuple[str, Callable[[], Awaitable[object]], type[ClientError], bool
     ),
     (
         "private destination",
-        lambda: StubClient(
+        lambda: Client(
             base_url="http://127.0.0.1",
             http=HttpOptions(transport=_answering(200), security=SecurityOptions(block_private_hosts=True)),
         ).get("orders", expect=as_bytes),
@@ -143,7 +143,7 @@ async def test_retryable_and_sent_for_each_kind_of_failure(
 _COOLDOWN = 3600.0
 
 
-def _broken(status: int = 503) -> StubClient:
+def _broken(status: int = 503) -> Client:
     """Return a client whose breaker opens on its first failure and stays open for :data:`_COOLDOWN`."""
     breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=BreakerRegistry())
     return _client(status, breaker=breaker)
@@ -165,7 +165,7 @@ async def test_an_open_breaker_is_retryable_after_its_cooldown() -> None:
 async def test_a_walk_past_its_page_limit_is_not_retryable_and_sent_nothing_of_its_own() -> None:
     """Say a page budget's refusal is not retryable, and leave ``sent`` unknown: no send of it failed."""
     transport = httpx2.MockTransport(lambda _request: httpx2.Response(200, json=[1]))
-    client = StubClient(base_url=_BASE, http=HttpOptions(transport=transport))
+    client = Client(base_url=_BASE, http=HttpOptions(transport=transport))
     pages = Offset(items=lambda page: page, page_size=1)
 
     with pytest.raises(PageLimitError) as raised:
@@ -213,7 +213,7 @@ async def test_the_docs_recipe_reports_a_problem_detail_and_raises_it() -> None:
     problem = httpx2.Response(
         400, json={"title": "out of credit"}, headers={"Content-Type": "application/problem+json"}
     )
-    client = StubClient(base_url=_BASE, http=HttpOptions(transport=httpx2.MockTransport(lambda _request: problem)))
+    client = Client(base_url=_BASE, http=HttpOptions(transport=httpx2.MockTransport(lambda _request: problem)))
     rescheduled: list[float | None] = []
     reported: list[str | None] = []
 

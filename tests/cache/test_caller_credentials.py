@@ -19,6 +19,7 @@ import pytest
 from headgate import (
     BearerAuth,
     CachedTokenAuth,
+    Client,
     HttpOptions,
     Minted,
     QueryParamAuth,
@@ -29,7 +30,6 @@ from headgate.cache import HttpCache, Partition
 from headgate.cache._credentials import CALLER_CREDENTIALS, CallerCredentials, CredentialScope, mark_caller_credentials
 from headgate.cache._transport import served_from_cache
 from tests.cache._helpers import series_rules
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 from tests.support.tokens import premint
 
@@ -62,9 +62,9 @@ class _Echo:
         return httpx2.Response(httpx2.codes.OK, headers={"Vary": "Authorization"}, text=self.sent[-1])
 
 
-def _client(echo: _Echo, storage: AsyncSqliteStorage, auth: httpx2.Auth) -> StubClient:
+def _client(echo: _Echo, storage: AsyncSqliteStorage, auth: httpx2.Auth) -> Client:
     """Build a client caching ``/series`` into *storage* with *auth*, over *echo*."""
-    return StubClient(
+    return Client(
         base_url="https://x",
         auth=auth,
         policy=TransportPolicy(cache=HttpCache(**series_rules(), storage=storage)),

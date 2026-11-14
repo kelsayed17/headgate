@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Server rate-limit feedback through ``AsyncBaseClient``: a pause every sharer honors, or raises past a deadline.
+"""Server rate-limit feedback through ``Client``: a pause every sharer honors, or raises past a deadline.
 
 The budgets here run on a fake clock and sleep, so a pause of minutes costs nothing; the module keeps the real
 ``RateBudget.wait`` (``transport_policy``), which is where the pause is enforced.
@@ -14,13 +14,12 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import HttpCache, HttpOptions, RateLimitError, TransportPolicy
+from headgate import Client, HttpCache, HttpOptions, RateLimitError, TransportPolicy
 from headgate._core import AttemptFinished, CallFinished, RateLimited, Timing
 from headgate.cache._transport import CACHE_DEGRADATIONS
 from headgate.ratelimit import Rate, RateBudget
 from headgate.testing import TestClock
 from tests.support.breakers import failures
-from tests.support.clients import StubClient
 from tests.support.events import Recorder
 from tests.support.responses import RESPONSE
 
@@ -58,9 +57,9 @@ def _budget(clock: TestClock) -> RateBudget:
 
 def _client(
     budget: RateBudget, server: _Server, *, cache: HttpCache | None = None, recorder: Recorder | None = None
-) -> StubClient:
+) -> Client:
     """Return a client spending *budget* against *server*, sending each call once."""
-    return StubClient(
+    return Client(
         base_url=f"https://{_HOST}",
         rate=budget,
         policy=TransportPolicy(retry=None, cache=cache),

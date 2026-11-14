@@ -17,6 +17,7 @@ import pytest
 
 from headgate import (
     CachedTokenAuth,
+    Client,
     ForbiddenDestinationError,
     HttpOptions,
     LinkHeader,
@@ -31,7 +32,6 @@ from headgate._core import CredentialStamper
 from headgate.msgspec import reader
 from headgate.security._credentials import CHAIN_ORIGIN, CredentialGuard
 from tests.security._web import BASE, Web
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 from tests.support.tokens import premint
 
@@ -219,7 +219,7 @@ async def test_a_body_keeps_its_content_type_on_a_foreign_origin() -> None:
     assert [request.headers.get("content-type") for request in web.sent] == ["application/json", "text/csv"]
 
 
-def _cookie_client(sent: list[httpx2.Request], headers: dict[str, str] | None = None) -> StubClient:
+def _cookie_client(sent: list[httpx2.Request], headers: dict[str, str] | None = None) -> Client:
     """Return a client with a cookie jar and *headers*, over a web where ``/login`` on any origin sets a cookie for it.
 
     Each request is recorded in *sent*.
@@ -232,7 +232,7 @@ def _cookie_client(sent: list[httpx2.Request], headers: dict[str, str] | None = 
         return httpx2.Response(httpx2.codes.OK, text="ok")
 
     http = HttpOptions(cookies=True, headers=headers or {}, transport=httpx2.MockTransport(answer))
-    return StubClient(base_url=BASE, policy=TransportPolicy(retry=None), http=http)
+    return Client(base_url=BASE, policy=TransportPolicy(retry=None), http=http)
 
 
 async def test_a_cookie_jar_sends_each_origin_its_own_cookies() -> None:
@@ -481,7 +481,7 @@ async def test_a_walks_own_headers_reach_a_later_page_only_on_the_first_pages_or
         return httpx2.Response(httpx2.codes.OK, json=[1], headers={"Link": link})
 
     http = HttpOptions(transport=httpx2.MockTransport(answer))
-    async with StubClient(base_url=BASE, policy=TransportPolicy(retry=None), http=http) as client:
+    async with Client(base_url=BASE, policy=TransportPolicy(retry=None), http=http) as client:
         pages = client.paginate(first, expect=reader(list[int]), pages=LinkHeader(items=list), headers={"X-Key": "k"})
         assert [item async for item in pages] == [1, 1]
 

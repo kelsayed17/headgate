@@ -24,8 +24,7 @@ from headgate import (
 from headgate.errors import CircuitOpenError, ClientTimeoutError, UpstreamStatusError
 from headgate.policy import policy_disabled
 from headgate.testing import FakeTransport
-from tests.observe._support import BASE, RATE, client
-from tests.support.clients import StubClient
+from tests.observe._support import client
 
 #: Long enough that a short deadline expires first, short enough to keep the suite fast when one does not.
 _SLOW_SEND = 0.05
@@ -211,29 +210,3 @@ async def test_closing_a_view_closes_nothing_and_the_client_closes_the_pool() ->
 
     await root.aclose()
     assert fake.closed
-
-
-class _Counting(StubClient):
-    """A client with state of its own, which views share."""
-
-    def __init__(self, transport: httpx2.AsyncBaseTransport) -> None:
-        """Build over *transport* with an empty log."""
-        super().__init__(base_url=BASE, rate=RATE, http=HttpOptions(transport=transport))
-        self.log: list[str] = []
-
-    async def fetch(self) -> None:
-        """Make one call, logging it."""
-        self.log.append("fetch")
-        await self.get("x", expect=nothing)
-
-
-async def test_a_view_is_the_same_subclass_sharing_its_state() -> None:
-    """Return the subclass, its methods using the view's defaults and its attributes shared."""
-    fake = FakeTransport().reply("GET", "/v1/x")
-    root = _Counting(fake)
-    view = root.with_options(headers={"X-View": "v"})
-    await view.fetch()
-
-    assert isinstance(view, _Counting)
-    assert root.log == ["fetch"]
-    assert fake.calls[0].headers["x-view"] == "v"

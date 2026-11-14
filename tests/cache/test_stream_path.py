@@ -20,14 +20,13 @@ from typing import TYPE_CHECKING, Final, override
 import httpx2
 import pytest
 
-from headgate import HttpCache, HttpOptions, Method, SecurityOptions, TransportPolicy, as_bytes
+from headgate import Client, HttpCache, HttpOptions, Method, SecurityOptions, TransportPolicy, as_bytes
 from headgate._core import CallContext, CallInfo
 from headgate.cache import Partition
 from headgate.cache._transport import CACHE_DEGRADATIONS
 from headgate.errors import ForbiddenDestinationError
 from tests.cache._helpers import NETWORK_BODY, FaultyStorage, Network, cache_transport, series_rules, stub_client
 from tests.observe.test_otel import Telemetry
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -260,7 +259,7 @@ async def test_traced_identical_gets_share_one_download(storage: AsyncSqliteStor
     """Share one download between identical GETs that OpenTelemetry gives different ``traceparent`` headers."""
     network = _Gated()
     telemetry = Telemetry()
-    client = StubClient(
+    client = Client(
         base_url="https://x",
         policy=TransportPolicy(cache=HttpCache(storage=storage)),
         http=HttpOptions(transport=network),
@@ -299,7 +298,7 @@ async def test_a_guarded_client_is_never_served_an_unguarded_clients_entry(
     """Refuse an internal host on a guarded client, though an unguarded one on its storage stored that host's body."""
     cache = HttpCache(storage=storage, partition=partition)
     unguarded = stub_client(transport=Network(), cache=cache)
-    guarded = StubClient(
+    guarded = Client(
         base_url="https://x",
         policy=TransportPolicy(cache=cache),
         http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=_Names(x="10.0.0.5"))),

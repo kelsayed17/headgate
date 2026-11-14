@@ -8,6 +8,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `headgate.testing.fake_network(transport)`: every `Client` built in its block sends on *transport* in place of the
+  network, even one an SDK gave a transport of its own, so an SDK need not forward `transport=` for its tests. Only the
+  network is replaced: the SDK's rate budget, cache, retries and breaker run over it.
 - `headgate.testing.breakers_of(client)`, the `BreakerRegistry` a client's breakers live in, or `None` for a client
   without a breaker.
 - `BreakerRegistry.bind(failure_threshold=, recovery_timeout=)`, which fixes the thresholds of every breaker the
@@ -69,6 +72,23 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- **`AsyncBaseClient` is `Client`, which an SDK holds rather than inherits from.** `Client` is final: subclassing it
+  raises `TypeError`. Write
+
+  ```python
+  class GitHub:
+      def __init__(self, token: str) -> None:
+          self._http = Client(base_url="https://api.github.com", auth=BearerAuth(token))
+
+      async def repository(self, owner: str, name: str) -> Repository:
+          return await self._http.get(t"repos/{owner}/{name}", expect=REPOSITORY)
+  ```
+
+  for `class GitHub(AsyncBaseClient)` calling `super().__init__(...)` and `self.get(...)`, and forward `async with`
+  and `aclose()` to the client (docs/configuration.md shows the three methods). `with_options` returns a `Client`.
+- A `ClientError`'s `source`, and the `[source]` prefix of its message, name the host of the client's `base_url`, with
+  a port other than the default (`[api.github.com] ...`, `[localhost:8000] ...`), rather than the client's class. A
+  token mint's failure still names the auth's class.
 - `TestClock.install()` puts the clients built in its block on a fixed wall clock, `epoch` (2027-01-15 by default)
   plus the test clock's reading, as well as its monotonic clock. A test that builds a `Retry-After` date or a
   `RateLimit` reset from `time.time()` builds it from `clock.wall_clock()` instead.
@@ -133,7 +153,7 @@ change the public API; such changes are listed under **Changed** and **Removed**
   leave it out, for `rate=UNLIMITED`. `TransportPolicy(retry=False)` raises `TypeError`.
 - `HttpOptions(timeout=...)` is `TransportPolicy(timeout=...)`, beside the `deadline` it is checked against, and a
   phase set longer than the deadline is refused where the policy is built, not in the client constructor.
-  `HttpOptions(observers=..., middleware=...)` is `AsyncBaseClient(..., observers=..., middleware=...)`: they are
+  `HttpOptions(observers=..., middleware=...)` is `Client(..., observers=..., middleware=...)`: they are
   parts of the stack, not settings of how a request is sent. Each takes a sequence; a lone observer or a `str` raises
   `TypeError`. The old `HttpOptions` keywords raise `TypeError`.
 - A walk of POSTs takes its body as `paginate(query=value)`, where it took `body=value` (encoded by the pager's
@@ -380,8 +400,6 @@ change the public API; such changes are listed under **Changed** and **Removed**
   what it takes: `rate=10` (a `Rate` or `RateBudget`), `TransportPolicy(retry=None)` (turn retries off with
   `NO_RETRY`), `TransportPolicy(breaker=3)`, and `timeout=5.0` on `HttpOptions`, `with_options` or a call. Each passed
   construction and failed at the first request with an `AttributeError`.
-- `paginate` fetches its pages through `AsyncBaseClient`'s own `get` and `post`, so a subclass whose endpoint method
-  is named `get` or `post` can still paginate. Before, every walk raised a `TypeError` from the subclass's method.
 - Concurrent GETs that a middleware gives different timeouts no longer share one download. When a shared download
   times out in a known phase, a waiting GET fetches for itself only if that phase was one the first request's deadline
   shortened, rather than if any phase was. A timeout of no known phase still hands off when any phase was shortened.

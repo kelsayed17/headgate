@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, TransportPolicy
+from headgate import Client, HttpOptions, TransportPolicy
 from headgate._core import (
     BREAKER_GATE,
     BudgetBacklogError,
@@ -35,7 +35,6 @@ from headgate.retry._tracking import head_size
 from headgate.retry._transport import RetryTransport
 from headgate.testing import FaultyTransport, Respond, TestClock
 from headgate.timing import Timing
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -855,7 +854,7 @@ async def test_a_hedge_cancelled_before_it_was_sent_gives_its_retry_budget_back(
     hedge's attempt as sent when it reaches the rate budget.
     """
     middleware = _SlowToSend()
-    client = StubClient(
+    client = Client(
         base_url="https://hedged.example",
         rate=Rate.per_second(1000),
         policy=TransportPolicy(

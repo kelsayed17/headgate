@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Streaming: the open response :meth:`AsyncBaseClient.stream <headgate.AsyncBaseClient.stream>` yields.
+"""Streaming: the open response :meth:`Client.stream <headgate.Client.stream>` yields.
 
 A body too large to hold, or one that never ends (server-sent events), is read through :class:`Stream` as it arrives
 instead of being buffered and capped like a verb's. :class:`StreamOptions` are the options ``stream()`` takes.

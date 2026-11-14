@@ -17,10 +17,9 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import CachedTokenAuth, HttpOptions, Raw, SigningAuth
+from headgate import CachedTokenAuth, Client, HttpOptions, Raw, SigningAuth
 from headgate._responses import nothing
 from headgate.errors import AuthError
-from tests.support.clients import StubClient
 from tests.support.tokens import premint
 
 if TYPE_CHECKING:
@@ -104,8 +103,8 @@ def _nothing_produced() -> None:
     _PRODUCED.clear()
 
 
-def _client(auth: httpx2.Auth, network: _Network) -> StubClient:
-    return StubClient(
+def _client(auth: httpx2.Auth, network: _Network) -> Client:
+    return Client(
         base_url=_BASE,
         auth=auth,
         http=HttpOptions(transport=network, max_response_bytes=_CAP),

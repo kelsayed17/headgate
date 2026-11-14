@@ -11,11 +11,10 @@ from typing import TYPE_CHECKING, Any, cast, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, Multipart, Raw, as_bytes, nothing
+from headgate import Client, HttpOptions, Multipart, Raw, as_bytes, nothing
 from headgate._core import CallContext
 from headgate.ratelimit import Rate
 from headgate.retry._policy import REPLAYABLE_BODY
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -49,9 +48,9 @@ class _Server(httpx2.AsyncBaseTransport):
         status = 503 if len(self.bodies) <= self._failures else 200
         return httpx2.Response(status, content=b"done", request=request)
 
-    def client(self) -> StubClient:
+    def client(self) -> Client:
         """Return a client sending to this server."""
-        return StubClient(base_url="https://x.test", rate=Rate.per_second(100), http=HttpOptions(transport=self))
+        return Client(base_url="https://x.test", rate=Rate.per_second(100), http=HttpOptions(transport=self))
 
 
 async def _chunks() -> AsyncIterator[bytes]:

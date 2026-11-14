@@ -4,7 +4,7 @@
 """Time for tests: a clock that moves only when told to, and retries that do not wait.
 
 Both plug into :func:`headgate._core.timing_override`, which sets the clock and sleep of the clients constructed inside
-a block, so they reach a client class that fixes its own options in ``super().__init__()``.
+a block, so they reach an SDK that fixes its client's options where it builds it.
 """
 
 from __future__ import annotations
