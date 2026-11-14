@@ -78,6 +78,15 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- `DEFAULT_TIMEOUTS` is `Timeouts.DEFAULT`, a class attribute with the same value (connect 10 s, read 30 s, write
+  10 s, pool 15 s). It is not a field, so `dataclasses.replace` and `fields(Timeouts)` are unchanged.
+- **Each top-level name is exported from the top level only.** `RetryPolicy`, `Rate`, `RateBudget`, `BreakerPolicy`,
+  `HttpCache` and `Paginated` are no longer re-exported by `headgate.retry`, `headgate.ratelimit`, `headgate.breaker`,
+  `headgate.cache` and `headgate.pagination`: write `from headgate import RetryPolicy`, since
+  `from headgate.retry import RetryPolicy` raises `ImportError`. The six top-level errors, `ClientError`,
+  `TransportError`, `ClientTimeoutError`, `UpstreamStatusError`, `AuthError` and `RateLimitError`, leave
+  `headgate.errors.__all__`: `from headgate.errors import ClientError` still works at run time, since the module
+  defines them, but type checkers and the docs now point to `headgate.ClientError`.
 - A `params=` value no query parameter can carry raises `TypeError` naming the parameter, before anything is sent,
   rather than going out as its Python `repr` (`filter=%7B%27a%27%3A+1%7D`). The refused shapes are:
   - a mapping (`dict`, or any other `Mapping`);
@@ -272,6 +281,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Removed
 
+- `MAX_MINT_RESPONSE_BYTES`, which no option sets: a mint hop's response is read up to 1 MiB, as the auth guide says.
+- `headgate.testing.faults`: import `FaultyTransport` and its steps from `headgate.testing`, which exports them all.
+- The pagers and the finer errors from `headgate`: each has one home now. Import `BodyCursor`, `BodyOffset`, `Cursor`,
+  `LinkHeader`, `NextUrl`, `Offset` and `PageNumber` from `headgate.pagination`, and `CircuitOpenError`,
+  `ClientConfigurationError`, `DecodeError`, `ForbiddenDestinationError`, `PageLimitError`, `ResponseParseError`,
+  `ResponseTooLargeError` and `Problem` from `headgate.errors`. `from headgate import Cursor` raises `ImportError`.
 - `PageLimit`, from `headgate` and `headgate.pagination`: pass `max_pages=` and `on_limit=` to `paginate`.
 - `headgate.breaker.DEFAULT_REGISTRY`, the process-wide registry: pass one `BreakerRegistry` to the clients that share
   it. `headgate.testing.isolated_breakers()`: each client's breakers are already its own; read them with

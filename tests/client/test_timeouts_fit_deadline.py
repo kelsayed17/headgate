@@ -17,7 +17,7 @@ import httpx2
 import pytest
 
 from headgate import Client, HttpOptions, RequestOptions, Timeouts, TransportPolicy, nothing
-from headgate._options import DEFAULT_TIMEOUTS, httpx_timeout
+from headgate._options import httpx_timeout
 from headgate.testing import FakeTransport
 
 if TYPE_CHECKING:
@@ -111,7 +111,7 @@ def test_no_limit_reaches_httpx2_as_none() -> None:
     timeout = httpx_timeout(_NO_READ_LIMIT)
 
     assert timeout.read is None
-    assert timeout.connect == DEFAULT_TIMEOUTS.connect
+    assert timeout.connect == Timeouts.DEFAULT.connect
 
 
 @pytest.mark.parametrize(

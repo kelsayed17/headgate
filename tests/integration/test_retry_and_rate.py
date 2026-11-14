@@ -12,9 +12,8 @@ from __future__ import annotations
 import httpx2
 import pytest
 
-from headgate import HttpOptions, RateBudget, nothing
+from headgate import HttpOptions, Rate, RateBudget, nothing
 from headgate.events import RateLimited, RetryScheduled
-from headgate.ratelimit import Rate
 from headgate.testing import FakeTransport, TestClock
 from headgate.timing import Timing
 from tests.integration._support import client

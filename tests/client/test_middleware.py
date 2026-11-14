@@ -19,9 +19,9 @@ from typing import TYPE_CHECKING, ClassVar, cast, override
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, Json, Rate, TransportPolicy, call_info, nothing
+from headgate import Client, HttpOptions, Json, Rate, RetryPolicy, TransportPolicy, call_info, nothing
 from headgate._core import CallContext
-from headgate.retry import Backoff, Hedge, RetryPolicy
+from headgate.retry import Backoff, Hedge
 from headgate.testing import FakeTransport, TestClock
 from tests.security._web import BASE, Web
 from tests.support.wire import Script

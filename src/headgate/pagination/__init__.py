@@ -3,10 +3,10 @@
 
 """Pagination: the strategies a paginated endpoint is followed with, and the lazy result of following it.
 
-``client.paginate(url, expect=..., pages=Cursor(...))`` returns a :class:`Paginated`, iterated with ``async for``. The
-strategies (:class:`Cursor`, :class:`Offset`, :class:`PageNumber`, :class:`LinkHeader`, :class:`NextUrl`, and
-:class:`BodyCursor` and :class:`BodyOffset` for a walk of POSTs) implement :class:`Pager`, which a custom scheme
-implements too, and those that can carry a body :class:`WritingPager`, whose ``write`` encodes it.
+``client.paginate(url, expect=..., pages=Cursor(...))`` returns a :class:`~headgate.Paginated`, iterated with
+``async for``. The strategies (:class:`Cursor`, :class:`Offset`, :class:`PageNumber`, :class:`LinkHeader`,
+:class:`NextUrl`, and :class:`BodyCursor` and :class:`BodyOffset` for a walk of POSTs) implement :class:`Pager`, which a
+custom scheme implements too, and those that can carry a body :class:`WritingPager`, whose ``write`` encodes it.
 :func:`parse_link_header` is the RFC 8288 parser :class:`LinkHeader` reads with.
 """
 
@@ -23,7 +23,6 @@ from headgate.pagination._pager import (
     PageRequest,
     WritingPager,
 )
-from headgate.pagination._paginated import Paginated
 
 __all__ = [
     "BodyCursor",
@@ -36,7 +35,6 @@ __all__ = [
     "PageNumber",
     "PageRequest",
     "Pager",
-    "Paginated",
     "WritingPager",
     "parse_link_header",
 ]

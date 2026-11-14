@@ -10,9 +10,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, QueryParamAuth, Rate, TransportPolicy
-from headgate.errors import ClientError
-from headgate.retry import RetryPolicy
+from headgate import Client, ClientError, HttpOptions, QueryParamAuth, Rate, RetryPolicy, TransportPolicy
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:

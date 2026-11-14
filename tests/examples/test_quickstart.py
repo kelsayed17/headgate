@@ -17,16 +17,8 @@ import pytest
 import quickstart
 from quickstart import CatalogClient
 
-from headgate import (
-    AuthError,
-    CircuitOpenError,
-    ClientConfigurationError,
-    ClientError,
-    ClientTimeoutError,
-    RateLimitError,
-    ResponseParseError,
-    UpstreamStatusError,
-)
+from headgate import AuthError, ClientError, ClientTimeoutError, RateLimitError, UpstreamStatusError
+from headgate.errors import CircuitOpenError, ClientConfigurationError, ResponseParseError
 from headgate.testing import FakeTransport, Respond, TestClock, fake_network
 
 pytestmark = pytest.mark.transport_policy

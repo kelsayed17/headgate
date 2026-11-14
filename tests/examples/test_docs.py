@@ -100,19 +100,43 @@ def _anchors(path: Path) -> set[str]:
 
 
 def _resolves(dotted: str) -> bool:
-    """Return whether *dotted* names a headgate module, or an attribute reached from the longest module prefix."""
+    """Return whether *dotted* names a headgate module, or an attribute reached from the longest module prefix.
+
+    The first attribute after the module must be one the module exports, so a name spelled from a module that is not
+    its one home (``headgate.ClientError``) does not resolve.
+    """
     parts = dotted.split(".")
     for split in range(len(parts), 0, -1):
         try:
             found: object = importlib.import_module(".".join(parts[:split]))
         except ImportError:
             continue
+        if split < len(parts) and parts[split] not in _exports(found):
+            return False
         for part in parts[split:]:
             if not hasattr(found, part):
                 return False
             found = getattr(found, part)
         return True
     return False
+
+
+def _exports(module: object) -> set[str]:
+    """Return the names *module* exports: its ``__all__``, or, for a module with none, its submodules' names only."""
+    return set(getattr(module, "__all__", ())) | {
+        info.name for info in pkgutil.iter_modules(getattr(module, "__path__", ())) if not info.name.startswith("_")
+    }
+
+
+def _misplaced(tree: ast.Module) -> list[str]:
+    """Return each ``from headgate… import X`` in *tree* whose module does not export ``X``: not its one home."""
+    return [
+        f"{node.module}.{alias.name}"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None and node.module.startswith("headgate")
+        for alias in node.names
+        if alias.name not in _exports(importlib.import_module(node.module))
+    ]
 
 
 _README_BLOCKS = _python_blocks(_README)
@@ -139,20 +163,19 @@ def test_every_readme_sample_is_tested_code(line: int, code: str) -> None:
         if not _found(statement, sources)
     ]
     assert not missing, f"README.md:{line}: not in examples/ or tests/examples/: {missing}"
+    assert not _misplaced(_parse(code, f"README.md:{line}")), f"README.md:{line}: imported from outside its one home"
 
 
 @pytest.mark.parametrize(
     ("path", "line", "code"), _DOC_BLOCKS, ids=[f"{path.name}:{line}" for path, line, _ in _DOC_BLOCKS]
 )
 def test_every_guide_sample_parses_and_imports_real_names(path: Path, line: int, code: str) -> None:
-    """Parse the sample at *path*:*line*, and find every name it imports from headgate."""
+    """Parse the sample at *path*:*line*, and find every name it imports from headgate in the module it lives in."""
     tree = _parse(code, f"{path.name}:{line}")
+    misplaced = _misplaced(tree)
+    assert not misplaced, f"{path.name}:{line}: not exported from where it is imported: {misplaced}"
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module is not None and node.module.startswith("headgate"):
-            module = importlib.import_module(node.module)
-            absent = [alias.name for alias in node.names if not hasattr(module, alias.name)]
-            assert not absent, f"{path.name}:{line}: {node.module} has no {absent}"
-        elif isinstance(node, ast.Import):
+        if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name.startswith("headgate"):
                     importlib.import_module(alias.name)

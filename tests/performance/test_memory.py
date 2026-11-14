@@ -23,8 +23,7 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage
 
-from headgate import Client, ClientError, HttpCache, HttpOptions, RetryPolicy, TransportPolicy, as_bytes
-from headgate.ratelimit import Rate
+from headgate import Client, ClientError, HttpCache, HttpOptions, Rate, RetryPolicy, TransportPolicy, as_bytes
 from tests.support.events import Recorder
 
 if TYPE_CHECKING:

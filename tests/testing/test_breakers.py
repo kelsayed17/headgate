@@ -9,9 +9,9 @@ import pytest
 
 import headgate.breaker
 import headgate.testing
-from headgate import BreakerPolicy, Client, HttpOptions, Rate, TransportPolicy, nothing
+from headgate import BreakerPolicy, Client, HttpOptions, Rate, TransportPolicy, UpstreamStatusError, nothing
 from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
-from headgate.errors import CircuitOpenError, UpstreamStatusError
+from headgate.errors import CircuitOpenError
 from headgate.health import BreakerSnapshot, breaker_states
 from headgate.testing import FakeTransport, TestClock, breakers_of
 from tests.support.breakers import registry_of

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
+from headgate import RetryPolicy
 from headgate._core import (
     BREAKER_GATE,
     BudgetBacklogError,
@@ -24,7 +25,7 @@ from headgate._core import (
     Emitter,
     RetryScheduled,
 )
-from headgate.retry import Backoff, Hedge, RetryPolicy, RetryShare
+from headgate.retry import Backoff, Hedge, RetryShare
 from headgate.retry._policy import REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE, RetryOutcome
 from headgate.retry._transport import RetryTransport
 from headgate.testing import (

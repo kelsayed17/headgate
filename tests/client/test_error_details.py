@@ -21,17 +21,13 @@ import pytest
 
 from headgate import (
     BreakerPolicy,
-    CircuitOpenError,
     Client,
     ClientError,
     HttpOptions,
     Json,
-    Problem,
     Rate,
     RateLimitError,
     Reader,
-    ResponseParseError,
-    ResponseTooLargeError,
     RetryPolicy,
     TransportError,
     TransportPolicy,
@@ -41,7 +37,7 @@ from headgate import (
 )
 from headgate._core import CallContext
 from headgate.breaker import BreakerRegistry
-from headgate.errors import RefusedError
+from headgate.errors import CircuitOpenError, Problem, RefusedError, ResponseParseError, ResponseTooLargeError
 from tests.support.breakers import failures
 from tests.support.wire import Script
 

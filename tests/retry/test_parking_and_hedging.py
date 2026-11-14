@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, override
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, TransportPolicy
+from headgate import Client, HttpOptions, Rate, RetryPolicy, TransportPolicy
 from headgate._core import (
     BREAKER_GATE,
     BudgetBacklogError,
@@ -29,8 +29,7 @@ from headgate._core import (
     Emitter,
     RetryScheduled,
 )
-from headgate.ratelimit import Rate
-from headgate.retry import Backoff, Hedge, RetryBudget, RetryPolicy, RetryShare
+from headgate.retry import Backoff, Hedge, RetryBudget, RetryShare
 from headgate.retry._tracking import head_size
 from headgate.retry._transport import RetryTransport
 from headgate.testing import FaultyTransport, Respond, TestClock

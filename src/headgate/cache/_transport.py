@@ -16,12 +16,12 @@ what the caller built.
 **Stored on accept.** hishel writes a miss to storage as it passes through. Here the storage defers that write: the
 response handed up carries it (:func:`store_accepted`), and ``Client`` makes it only once the call's reader
 accepted the response. A refusal inside a 200, an undecodable body or an undeclared status is never stored, so it is not
-served again for the entry's lifetime. :class:`~headgate.cache.HttpCache` still decides what may be stored at all: a
+served again for the entry's lifetime. :class:`~headgate.HttpCache` still decides what may be stored at all: a
 request it does not name is sent past hishel, and a status it does not name is never written. A body past the size cap
 is not held here, so it is not stored, and neither is a stream's miss, whose body is never held.
 
 **Lifetimes.** An entry's TTL rides hishel's ``caching`` request extension (:func:`stamp_ttl`):
-:class:`ResilientCacheTransport` stamps :class:`~headgate.cache.HttpCache`'s ``ttl``, and ``Client`` stamps a
+:class:`ResilientCacheTransport` stamps :class:`~headgate.HttpCache`'s ``ttl``, and ``Client`` stamps a
 per-call ``cache_ttl=``, which wins. hishel reports a hit in the response extension of the same name
 (:func:`served_from_cache`).
 
@@ -99,7 +99,7 @@ def stamp_ttl(request: httpx2.Request, ttl: float | None, *, keep: bool = False)
 
     The settings are copied, never changed in place, since a retry re-sends the same request object. *ttl* is
     checked where it is given: a call's by :func:`~headgate._call_options.check_overrides`, the cache's by
-    :class:`~headgate.cache.HttpCache`.
+    :class:`~headgate.HttpCache`.
     """
     settings = dict(request.extensions.get(CACHING_EXT, {}))
     if not (keep and "ttl" in settings):
@@ -672,8 +672,8 @@ class ResilientCacheTransport(AsyncCacheTransport):
     of every request (:class:`~headgate.cache._credentials.CredentialScope`). A transport built without one caches as a
     client without auth would.
 
-    **The client's default TTL** (:class:`~headgate.cache.HttpCache`'s ``ttl``) is stamped (:func:`stamp_ttl`) on each
-    request that does not already carry one from a per-call ``cache_ttl=``. :class:`~headgate.cache.HttpCache`'s rules,
+    **The client's default TTL** (:class:`~headgate.HttpCache`'s ``ttl``) is stamped (:func:`stamp_ttl`) on each
+    request that does not already carry one from a per-call ``cache_ttl=``. :class:`~headgate.HttpCache`'s rules,
     not the TTL, decide what is stored: a request they do not name is sent straight past hishel.
 
     **Simultaneous identical GETs share one download.** hishel has no request coalescing, so an identical GET that

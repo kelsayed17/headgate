@@ -7,9 +7,8 @@ from __future__ import annotations
 
 import httpx2
 
-from headgate import BearerAuth, Client, HttpOptions, TransportPolicy, nothing
+from headgate import BearerAuth, Client, HttpOptions, Rate, TransportPolicy, nothing
 from headgate.events import CallFinished
-from headgate.ratelimit import Rate
 from tests.support.events import Recorder
 
 _BASE = "https://api.test/"

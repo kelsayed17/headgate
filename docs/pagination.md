@@ -9,7 +9,7 @@ endpoint whose query is a request body is walked with POSTs instead, given that 
 [Walks of POSTs](#walks-of-posts).
 
 ```python
-from headgate import Cursor
+from headgate.pagination import Cursor
 from headgate.msgspec import reader
 
 
@@ -55,7 +55,7 @@ A walk ends at its last page, but a server bug, an unordered dataset or a too-br
 for as long as you keep asking. `max_pages=` bounds the walk:
 
 ```python
-from headgate import PageLimitError
+from headgate.errors import PageLimitError
 from headgate.msgspec import reader
 
 orders = client.paginate("orders", expect=reader(Page), pages=ORDER_PAGES, max_pages=50)
@@ -145,7 +145,7 @@ pager, so it is built once beside them.
 ```python
 import msgspec
 
-from headgate import BodyCursor, BodyOffset
+from headgate.pagination import BodyCursor, BodyOffset
 from headgate.msgspec import reader, writer
 
 QUERY = writer(Query)

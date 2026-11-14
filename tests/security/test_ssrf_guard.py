@@ -19,8 +19,8 @@ import pytest
 from headgate import (
     BreakerPolicy,
     Client,
-    ForbiddenDestinationError,
     HttpOptions,
+    Rate,
     RetryPolicy,
     SecurityOptions,
     TransportError,
@@ -28,7 +28,7 @@ from headgate import (
 )
 from headgate.breaker import BreakerRegistry
 from headgate.curl import AsyncCurlTransport
-from headgate.ratelimit import Rate
+from headgate.errors import ForbiddenDestinationError
 from tests.security._servers import serving
 from tests.security._web import BASE, Web
 from tests.support.responses import RESPONSE

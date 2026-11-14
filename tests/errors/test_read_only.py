@@ -10,16 +10,8 @@ import pickle
 
 import pytest
 
-from headgate.errors import (
-    AuthError,
-    ClientError,
-    PageLimitError,
-    Problem,
-    RateLimitError,
-    RefusedError,
-    ResponseParseError,
-    UpstreamStatusError,
-)
+from headgate import AuthError, ClientError, RateLimitError, UpstreamStatusError
+from headgate.errors import PageLimitError, Problem, RefusedError, ResponseParseError
 
 #: The attributes every ``ClientError`` has.
 _CALL = ("source", "method", "url", "request_id", "attempts", "retryable", "retry_after")

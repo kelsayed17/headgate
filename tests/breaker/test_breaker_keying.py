@@ -10,12 +10,19 @@ import contextlib
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, Client, HttpOptions, Json, TransportPolicy
+from headgate import (
+    BreakerPolicy,
+    Client,
+    ClientError,
+    HttpOptions,
+    Json,
+    Rate,
+    RetryPolicy,
+    TransportError,
+    TransportPolicy,
+)
 from headgate._responses import nothing
 from headgate.breaker import BreakerState
-from headgate.errors import ClientError, TransportError
-from headgate.ratelimit import Rate
-from headgate.retry import RetryPolicy
 from tests.support.breakers import failures, has_breaker, registry_of
 from tests.support.responses import RESPONSE
 

@@ -9,7 +9,7 @@ import httpx2
 import pytest
 import series_client as example
 
-from headgate import ResponseParseError
+from headgate.errors import ResponseParseError
 from headgate.testing import FakeTransport, fake_network
 
 _PATH = "/v1/series/GDP"

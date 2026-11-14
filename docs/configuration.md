@@ -54,7 +54,7 @@ What the stack does to every request.
 | Field | Default | |
 | --- | --- | --- |
 | `retry` | `RetryPolicy()` | how a call is re-sent, or `None` to send every call once; see [retries](retries.md) |
-| `timeout` | `Timeouts()` | per-phase timeouts; a phase left unset takes its default, `math.inf` is no limit, and a phase set longer than `deadline` is refused |
+| `timeout` | `Timeouts()` | per-phase timeouts; a phase left unset takes its default from `Timeouts.DEFAULT`, `math.inf` is no limit, and a phase set longer than `deadline` is refused |
 | `deadline` | `60.0` | seconds the whole call may take, or `None`; see [deadlines](deadlines.md) |
 | `breaker` | `BreakerPolicy()` | the per-origin breaker, or `None`; see [breaker](breaker.md) |
 | `cache` | `None` | an `HttpCache`; see [caching](caching.md) |

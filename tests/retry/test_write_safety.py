@@ -24,11 +24,11 @@ from headgate import (
     Multipart,
     Raw,
     RetryPolicy,
+    TransportError,
     TransportPolicy,
     UpstreamStatusError,
     nothing,
 )
-from headgate.errors import TransportError
 from headgate.retry import Hedge
 from headgate.testing import FakeTransport, TestClock
 from tests.integration._support import client

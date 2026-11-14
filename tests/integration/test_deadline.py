@@ -16,6 +16,7 @@ import pytest
 
 from headgate import (
     ClientTimeoutError,
+    Rate,
     RateBudget,
     RateLimitError,
     RetryPolicy,
@@ -23,7 +24,6 @@ from headgate import (
     UpstreamStatusError,
     nothing,
 )
-from headgate.ratelimit import Rate
 from headgate.retry import Backoff
 from headgate.testing import FakeTransport, TestClock
 from headgate.timing import Timing

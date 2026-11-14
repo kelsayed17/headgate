@@ -25,20 +25,21 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, Client, HttpOptions, TransportPolicy
-from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
-from headgate.errors import (
-    CircuitOpenError,
-    ClientConfigurationError,
+from headgate import (
+    BreakerPolicy,
+    Client,
     ClientError,
     ClientTimeoutError,
-    ResponseTooLargeError,
+    HttpOptions,
+    Rate,
+    RetryPolicy,
     TransportError,
+    TransportPolicy,
     UpstreamStatusError,
 )
+from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
+from headgate.errors import CircuitOpenError, ClientConfigurationError, ResponseTooLargeError
 from headgate.policy import policy_disabled
-from headgate.ratelimit import Rate
-from headgate.retry import RetryPolicy
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:

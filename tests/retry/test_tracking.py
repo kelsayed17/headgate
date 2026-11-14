@@ -16,11 +16,9 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import Client, IdempotencyKeys, Json, TransportPolicy, nothing
+from headgate import Client, IdempotencyKeys, Json, Rate, RetryPolicy, TransportError, TransportPolicy, nothing
 from headgate._core import CallContext, CallInfo, SendProgress
-from headgate.errors import TransportError
-from headgate.ratelimit import Rate
-from headgate.retry import Hedge, RetryPolicy
+from headgate.retry import Hedge
 from headgate.retry._tracking import SendTrackingTransport, head_size
 from headgate.retry._transport import RetryTransport
 

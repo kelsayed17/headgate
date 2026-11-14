@@ -19,20 +19,23 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Client, Expect, HttpOptions, Reader, StaticHeaderAuth, TransportPolicy
-from headgate._failures import MESSAGE_TEXT_LIMIT, CallSite, transport_error
-from headgate._responses import as_bytes
-from headgate.errors import (
+from headgate import (
     AuthError,
+    Client,
     ClientError,
-    DecodeError,
+    Expect,
+    HttpOptions,
     RateLimitError,
-    RefusedError,
-    ResponseParseError,
+    Reader,
+    RetryPolicy,
+    StaticHeaderAuth,
     TransportError,
+    TransportPolicy,
     UpstreamStatusError,
 )
-from headgate.retry import RetryPolicy
+from headgate._failures import MESSAGE_TEXT_LIMIT, CallSite, transport_error
+from headgate._responses import as_bytes
+from headgate.errors import DecodeError, RefusedError, ResponseParseError
 from tests.support.breakers import failures
 
 if TYPE_CHECKING:

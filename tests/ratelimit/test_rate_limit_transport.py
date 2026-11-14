@@ -28,13 +28,10 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage
 
-from headgate import Client, HttpOptions, Route, TransportPolicy
-from headgate.cache import HttpCache
-from headgate.ratelimit import Rate
+from headgate import Client, HttpCache, HttpOptions, Rate, RetryPolicy, Route, TransportPolicy
 from headgate.ratelimit._budget import Pacer, pacer_of
 from headgate.ratelimit._budgets import Lane, PathBudgets
 from headgate.ratelimit._transport import RateLimitTransport
-from headgate.retry import RetryPolicy
 from tests.support.budgets import default_budget, rate_limit_transport
 from tests.support.responses import RESPONSE
 

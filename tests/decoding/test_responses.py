@@ -14,16 +14,9 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate import Client, HttpOptions, _responses, body_reader
+from headgate import Client, ClientError, HttpOptions, RateLimitError, UpstreamStatusError, _responses, body_reader
 from headgate._responses import Expect, Reader, as_bytes, as_json, nothing
-from headgate.errors import (
-    ClientError,
-    DecodeError,
-    RateLimitError,
-    RefusedError,
-    ResponseParseError,
-    UpstreamStatusError,
-)
+from headgate.errors import DecodeError, RefusedError, ResponseParseError
 from headgate.msgspec import decode, reader
 from headgate.testing import FakeTransport
 from tests.support.responses import response

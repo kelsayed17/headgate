@@ -16,10 +16,10 @@ from typing import TYPE_CHECKING, Final, override
 
 import httpx2
 
-from headgate import HttpCache, as_bytes
+from headgate import HttpCache, RetryPolicy, as_bytes
 from headgate.cache import Partition
 from headgate.cache._transport import served_from_cache
-from headgate.retry import Hedge, RetryPolicy
+from headgate.retry import Hedge
 from tests.cache._helpers import stub_client
 from tests.support.responses import RESPONSE
 

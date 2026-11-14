@@ -11,8 +11,17 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Client, Form, HttpOptions, Rate, TransportPolicy, as_bytes, nothing
-from headgate.errors import TransportError, UpstreamStatusError
+from headgate import (
+    Client,
+    Form,
+    HttpOptions,
+    Rate,
+    TransportError,
+    TransportPolicy,
+    UpstreamStatusError,
+    as_bytes,
+    nothing,
+)
 from headgate.testing import FakeTransport, Respond, UnmatchedRequestError
 from tests.support.responses import RESPONSE
 

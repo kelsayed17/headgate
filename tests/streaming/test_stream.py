@@ -11,18 +11,19 @@ from typing import TYPE_CHECKING, assert_type, override
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, Client, HttpOptions, TransportPolicy
-from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
-from headgate.errors import (
+from headgate import (
+    BreakerPolicy,
+    Client,
     ClientError,
     ClientTimeoutError,
-    RefusedError,
-    ResponseParseError,
-    ResponseTooLargeError,
+    HttpOptions,
+    Rate,
     TransportError,
+    TransportPolicy,
     UpstreamStatusError,
 )
-from headgate.ratelimit import Rate
+from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
+from headgate.errors import RefusedError, ResponseParseError, ResponseTooLargeError
 from headgate.streaming import DEFAULT_MAX_EVENT_SIZE, Stream
 from tests.support.breakers import failures
 

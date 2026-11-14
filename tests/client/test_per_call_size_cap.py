@@ -15,9 +15,8 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx2
 import pytest
 
-from headgate import Expect, HttpOptions, as_bytes, nothing
-from headgate.cache import HttpCache
-from headgate.errors import ResponseTooLargeError, UpstreamStatusError
+from headgate import Expect, HttpCache, HttpOptions, UpstreamStatusError, as_bytes, nothing
+from headgate.errors import ResponseTooLargeError
 from tests.cache._helpers import TrackingNetwork, every_get_rules, stub_client
 
 if TYPE_CHECKING:

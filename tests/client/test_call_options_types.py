@@ -17,9 +17,8 @@ _PRELUDE = dedent(
     """
     from typing import LiteralString, Unpack
 
-    from headgate import CallOptions, RequestOptions, nothing
-    from headgate.pagination import NextUrl, Paginated
-    from headgate import Client
+    from headgate import CallOptions, Client, Paginated, RequestOptions, nothing
+    from headgate.pagination import NextUrl
 
     PAGES = NextUrl[None, object](items=lambda _page: (), next=lambda _page: None)
 

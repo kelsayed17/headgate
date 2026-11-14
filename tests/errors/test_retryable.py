@@ -18,12 +18,14 @@ import httpx2
 import pytest
 
 from headgate import (
+    AuthError,
     BreakerPolicy,
     Client,
     ClientError,
     HttpOptions,
     Json,
-    Offset,
+    RateLimitError,
+    RetryPolicy,
     SecurityOptions,
     TransportPolicy,
     UpstreamStatusError,
@@ -33,15 +35,14 @@ from headgate import (
 )
 from headgate.breaker import BreakerRegistry
 from headgate.errors import (
-    AuthError,
     CircuitOpenError,
     ForbiddenDestinationError,
     PageLimitError,
-    RateLimitError,
     ResponseParseError,
     ResponseTooLargeError,
 )
-from headgate.retry import Backoff, RetryPolicy
+from headgate.pagination import Offset
+from headgate.retry import Backoff
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable

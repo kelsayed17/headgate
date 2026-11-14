@@ -10,8 +10,7 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate import Client, HttpOptions, TransportPolicy
-from headgate.ratelimit import Rate
+from headgate import Client, HttpOptions, Rate, TransportPolicy
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

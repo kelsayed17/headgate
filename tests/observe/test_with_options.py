@@ -13,15 +13,17 @@ import pytest
 
 from headgate import (
     BreakerPolicy,
+    ClientTimeoutError,
     HttpOptions,
     RetryPolicy,
     Route,
     Timeouts,
     TransportPolicy,
+    UpstreamStatusError,
     as_bytes,
     nothing,
 )
-from headgate.errors import CircuitOpenError, ClientTimeoutError, UpstreamStatusError
+from headgate.errors import CircuitOpenError
 from headgate.policy import policy_disabled
 from headgate.testing import FakeTransport
 from tests.observe._support import client

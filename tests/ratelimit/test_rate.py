@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from headgate.ratelimit import Adaptive, Rate
+from headgate import Rate
+from headgate.ratelimit import Adaptive
 
 #: A rate whose burst is several requests, and one below a request per period.
 _BURST = 5

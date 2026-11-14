@@ -127,9 +127,9 @@ from headgate.errors import (
 )
 from headgate.pagination import PageRequest, WritingPager
 from headgate.pagination._paginated import PageWalk, check_page_budget
-from headgate.ratelimit import Rate, RateBudget
-from headgate.ratelimit._budget import BudgetPausedError
+from headgate.ratelimit._budget import BudgetPausedError, RateBudget
 from headgate.ratelimit._budgets import CALL_BUDGET, Lane, PathBudgets
+from headgate.ratelimit._rate import Rate
 from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE
 from headgate.streaming._stream import OpenStream
 
@@ -144,9 +144,10 @@ if TYPE_CHECKING:
     from headgate._responses import ResponseCheck
     from headgate.breaker._breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
-    from headgate.cache import HttpCache
-    from headgate.pagination import Pager, Paginated
-    from headgate.retry import RetryPolicy
+    from headgate.cache._policy import HttpCache
+    from headgate.pagination import Pager
+    from headgate.pagination._paginated import Paginated
+    from headgate.retry._policy import RetryPolicy
     from headgate.streaming import Stream
 
 __all__ = ["Built", "Client", "Method", "built_with"]
@@ -259,11 +260,11 @@ class Client:
     """An HTTP API client, configured through ``__init__``, which builds the transport stack once.
 
     An SDK holds one rather than inheriting from it (``self._http = Client(...)``), and calls its verbs; subclassing
-    it raises ``TypeError``. Every :class:`~headgate.errors.ClientError` it raises names its ``base_url``'s host as
+    it raises ``TypeError``. Every :class:`~headgate.ClientError` it raises names its ``base_url``'s host as
     its ``source``.
 
     **Failure policy.** Every verb takes the call's declared responses as ``expect=`` and returns what the matching
-    reader read, or raises a :class:`~headgate.errors.ClientError` subtype:
+    reader read, or raises a :class:`~headgate.ClientError` subtype:
 
     * ``TransportError`` / ``ClientTimeoutError``: a network failure or timeout, or the call's deadline passing;
     * ``CircuitOpenError``: the origin's breaker refused the call without sending it;
@@ -639,11 +640,12 @@ class Client:
         (:class:`~headgate.CallOptions`) apply to every page, as they do to one :meth:`get` (or :meth:`post`).
 
         A walk of POSTs passes its body as ``query=``: the raw value the pager rewrites page by page (a
-        :class:`~headgate.BodyCursor` or :class:`~headgate.BodyOffset` needs the value, not its bytes), ``None`` for
-        none. The pager's ``write`` (a flavor's ``writer``, see :class:`~headgate.pagination.WritingPager`) encodes it
-        for each page, since the writer belongs to the endpoint, like the reader and the pager; a pager without one
-        sends the value as JSON, so it must be builtins. A page with a body is then a :meth:`post` in every respect: in
-        particular it is re-sent only when that is safe, unless ``retry=`` says otherwise.
+        :class:`~headgate.pagination.BodyCursor` or :class:`~headgate.pagination.BodyOffset` needs the value, not its
+        bytes), ``None`` for none. The pager's ``write`` (a flavor's ``writer``, see
+        :class:`~headgate.pagination.WritingPager`) encodes it for each page, since the writer belongs to the endpoint,
+        like the reader and the pager; a pager without one sends the value as JSON, so it must be builtins. A page
+        with a body is then a :meth:`post` in every respect: in particular it is re-sent only when that is safe,
+        unless ``retry=`` says otherwise.
 
         *max_pages* is a page budget: at most that many pages are fetched. When more would follow, the walk raises
         :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or with ``on_limit="stop"`` ends
@@ -955,7 +957,7 @@ class Client:
     async def _reported(self, prepared: _Prepared) -> AsyncGenerator[None]:
         """Emit ``CallStarted`` and, on the way out, ``CallFinished``; add the call's notes to a ``ClientError``.
 
-        A ``ClientError`` leaving the call takes the call's :attr:`~headgate.errors.ClientError.sent`, whichever layer
+        A ``ClientError`` leaving the call takes the call's :attr:`~headgate.ClientError.sent`, whichever layer
         raised it, since what a caller needs to know is whether the call's own request can have left.
         """
         context = prepared.context

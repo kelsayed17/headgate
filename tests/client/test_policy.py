@@ -16,16 +16,13 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import HttpOptions, Route, TransportPolicy
+from headgate import HttpOptions, Rate, RetryPolicy, Route, TransportPolicy, UpstreamStatusError
 from headgate._client import Client
 from headgate._core import policy_is_disabled
 from headgate._responses import nothing
-from headgate.errors import UpstreamStatusError
 from headgate.policy import policy_disabled
-from headgate.ratelimit import Rate
 from headgate.ratelimit._budget import Pacer
 from headgate.ratelimit._rate import UNPACED
-from headgate.retry import RetryPolicy
 from headgate.testing import breakers_of
 
 if TYPE_CHECKING:

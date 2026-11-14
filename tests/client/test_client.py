@@ -22,22 +22,30 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 import headgate
-from headgate import CachedTokenAuth, Client, Form, HttpOptions, Json, Minted, Reader, Timeouts, TransportPolicy
+from headgate import (
+    AuthError,
+    CachedTokenAuth,
+    Client,
+    Form,
+    HttpOptions,
+    Json,
+    Minted,
+    Rate,
+    RateLimitError,
+    Reader,
+    RetryPolicy,
+    Timeouts,
+    TransportError,
+    TransportPolicy,
+    UpstreamStatusError,
+)
 from headgate import pydantic as pydantic_flavor
 from headgate._auth import AUTH_HOP, StaticHeaderAuth
 from headgate._responses import Expect, ResponseCheck, as_bytes, nothing
-from headgate.errors import (
-    AuthError,
-    RateLimitError,
-    RefusedError,
-    ResponseParseError,
-    TransportError,
-    UpstreamStatusError,
-)
+from headgate.errors import RefusedError, ResponseParseError
 from headgate.msgspec import reader
-from headgate.ratelimit import Rate
 from headgate.ratelimit._budget import Pacer
-from headgate.retry import Backoff, RetryPolicy
+from headgate.retry import Backoff
 from headgate.testing import FakeTransport, TestClock
 from tests.support.breakers import failures
 from tests.support.responses import RESPONSE

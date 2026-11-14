@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
+from headgate import Rate
 from headgate._client import Client
-from headgate.ratelimit import Rate
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:

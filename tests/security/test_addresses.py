@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from headgate import ForbiddenDestinationError
+from headgate.errors import ForbiddenDestinationError
 from headgate.security import AddressGuard, forbidden_reason, resolve_with_loop
 
 if TYPE_CHECKING:

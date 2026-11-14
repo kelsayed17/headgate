@@ -296,9 +296,9 @@ def _summary(resp: httpx2.Response, problem: Problem | None) -> str | None:
 def status_error(resp: httpx2.Response, site: CallSite) -> UpstreamStatusError:
     """Build the ``ClientError`` for a non-success status the call did not declare: the status ladder.
 
-    401/403 become :class:`~headgate.errors.AuthError`, because a bad credential is this client's configuration
+    401/403 become :class:`~headgate.AuthError`, because a bad credential is this client's configuration
     failing against the upstream, not the caller's request. Any other status becomes
-    :class:`~headgate.errors.UpstreamStatusError`. Both carry the real status, the problem detail if the body is one,
+    :class:`~headgate.UpstreamStatusError`. Both carry the real status, the problem detail if the body is one,
     and a bounded summary of the body.
     """
     kind = AuthError if resp.status_code in _AUTH_STATUSES else UpstreamStatusError
@@ -349,7 +349,7 @@ def transport_error(exc: httpx2.HTTPError | OSError, site: CallSite) -> Transpor
     httpx2 names the URL in most of its own messages but a bare ``OSError`` names nothing, so the request line is
     stated explicitly. Many httpx2 exceptions stringify to ``""`` (a dropped connection, a read timeout), and the type
     name is then the only record of what failed. A timeout, httpx2's or the built-in ``TimeoutError`` a middleware or
-    transport's own ``asyncio.timeout`` raises, becomes :class:`~headgate.errors.ClientTimeoutError`.
+    transport's own ``asyncio.timeout`` raises, becomes :class:`~headgate.ClientTimeoutError`.
 
     An ``httpx2.LocalProtocolError`` gets a fixed message instead (see :func:`_unsendable_detail`): it is the HTTP
     library refusing to encode the request, and its own message quotes the offending header value, which is usually
@@ -387,8 +387,8 @@ def _unsendable_detail(exc: httpx2.LocalProtocolError) -> str:
 def transient_status_error(resp: httpx2.Response, site: CallSite) -> UpstreamStatusError:
     """Build the ``ClientError`` for a 429 or 5xx that reached the client, past whatever retries the policy made.
 
-    A 429 becomes :class:`~headgate.errors.RateLimitError`, anything else
-    :class:`~headgate.errors.UpstreamStatusError`. *resp* carries a bounded head of the body, which becomes the
+    A 429 becomes :class:`~headgate.RateLimitError`, anything else
+    :class:`~headgate.UpstreamStatusError`. *resp* carries a bounded head of the body, which becomes the
     summary, as it does for :func:`status_error`. The message calls the status ``transient`` when the retry policy
     counts it as a failure to re-send (:meth:`CallSite.retries_status`), and ``upstream`` otherwise (a 501, a 505). The
     error is retryable when the retry policy would re-send after *resp* (see :meth:`CallSite.details`): a 5xx outside

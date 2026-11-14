@@ -21,11 +21,21 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, CachedTokenAuth, Client, HttpOptions, Minted, TransportPolicy
+from headgate import (
+    BreakerPolicy,
+    CachedTokenAuth,
+    Client,
+    ClientError,
+    ClientTimeoutError,
+    HttpOptions,
+    Minted,
+    Rate,
+    TransportError,
+    TransportPolicy,
+    UpstreamStatusError,
+)
 from headgate._core import BreakerState, CallFinished
 from headgate.breaker import BreakerRegistry, CircuitBreaker
-from headgate.errors import ClientError, ClientTimeoutError, TransportError, UpstreamStatusError
-from headgate.ratelimit import Rate
 from headgate.testing import TestClock
 from headgate.timing import Timing
 from tests.support.events import Recorder

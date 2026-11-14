@@ -17,8 +17,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions
-from headgate.ratelimit import Rate, RateBudget
+from headgate import Client, HttpOptions, Rate, RateBudget
 from headgate.ratelimit._budgets import PathBudgets
 from headgate.ratelimit._inflight import InFlightLimit
 from headgate.ratelimit._transport import RateLimitTransport

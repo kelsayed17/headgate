@@ -22,11 +22,19 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import Client, HttpCache, HttpOptions, Timeouts, TransportError, TransportPolicy, UpstreamStatusError
+from headgate import (
+    Client,
+    HttpCache,
+    HttpOptions,
+    RetryPolicy,
+    Timeouts,
+    TransportError,
+    TransportPolicy,
+    UpstreamStatusError,
+)
 from headgate._core import CallContext, CallInfo
 from headgate._responses import as_bytes
 from headgate.cache._transport import CACHE_DEGRADED_EXT, host_untested, stamp_ttl
-from headgate.retry import RetryPolicy
 from headgate.retry._policy import RETRY_POLICY
 from tests.cache._helpers import CacheRules, FaultyStorage, TrackingNetwork, cache_transport, every_get_rules
 from tests.support.breakers import failures

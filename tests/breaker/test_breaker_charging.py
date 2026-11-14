@@ -18,11 +18,18 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, Client, HttpOptions, TransportPolicy
+from headgate import (
+    BreakerPolicy,
+    Client,
+    ClientError,
+    HttpOptions,
+    Rate,
+    RateLimitError,
+    TransportPolicy,
+    UpstreamStatusError,
+)
 from headgate._core import BREAKER_GATE, BreakerChanged, BreakerState, CallContext
 from headgate.breaker import BreakerRegistry
-from headgate.errors import ClientError, RateLimitError, UpstreamStatusError
-from headgate.ratelimit import Rate
 from headgate.testing import TestClock
 from headgate.timing import Timing
 from tests.support.breakers import failures

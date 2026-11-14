@@ -20,11 +20,10 @@ storage fault degrades to the network instead of failing the call.
 """
 
 from headgate.cache._conditional import Fresh, NotModified, Validator, conditional
-from headgate.cache._policy import HttpCache, Partition
+from headgate.cache._policy import Partition
 
 __all__ = [
     "Fresh",
-    "HttpCache",
     "NotModified",
     "Partition",
     "Validator",

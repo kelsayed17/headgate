@@ -13,7 +13,7 @@ import httpx2
 
 from headgate._stack import NETWORK_OVERRIDE
 from headgate._url import sanitize_url
-from headgate.testing.faults import Respond
+from headgate.testing._faults import Respond
 
 __all__ = ["FakeTransport", "Reply", "UnmatchedRequestError", "fake_network"]
 

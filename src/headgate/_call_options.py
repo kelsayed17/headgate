@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Final
 from typing_extensions import TypedDict
 
 from headgate._core import check_kind
-from headgate.retry import RetryPolicy
+from headgate.retry._policy import RetryPolicy
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

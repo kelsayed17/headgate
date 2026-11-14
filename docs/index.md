@@ -151,8 +151,9 @@ from typing import Self
 
 import msgspec
 
-from headgate import BearerAuth, Client, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
+from headgate import BearerAuth, Client, Expect, HttpOptions, Rate, RateBudget, nothing
 from headgate.msgspec import reader
+from headgate.pagination import LinkHeader
 
 
 class Repository(msgspec.Struct, frozen=True):

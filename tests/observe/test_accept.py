@@ -8,9 +8,9 @@ from __future__ import annotations
 import httpx2
 import pytest
 
-from headgate import Expect, HttpOptions, Reader, as_bytes, as_json, nothing
+from headgate import Expect, HttpOptions, Reader, UpstreamStatusError, as_bytes, as_json, nothing
 from headgate._responses import accepts
-from headgate.errors import DecodeError, ResponseParseError, UpstreamStatusError
+from headgate.errors import DecodeError, ResponseParseError
 from headgate.testing import FakeTransport
 from tests.observe._support import client
 

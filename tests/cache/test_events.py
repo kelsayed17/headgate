@@ -10,8 +10,7 @@ from typing import TYPE_CHECKING, override
 
 import httpx2
 
-from headgate import Client, HttpOptions, TransportError, TransportPolicy
-from headgate.cache import HttpCache
+from headgate import Client, HttpCache, HttpOptions, TransportError, TransportPolicy
 from headgate.cache._transport import served_from_cache
 from headgate.events import CacheOutcome, CacheResult, Event
 from tests.cache._helpers import FaultyStorage, Network, every_get_rules

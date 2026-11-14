@@ -12,15 +12,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from headgate.errors import (
-    AuthError,
-    ClientError,
-    ClientTimeoutError,
-    RateLimitError,
-    ResponseParseError,
-    TransportError,
-    UpstreamStatusError,
-)
+from headgate import AuthError, ClientError, ClientTimeoutError, RateLimitError, TransportError, UpstreamStatusError
+from headgate.errors import ResponseParseError
 
 if TYPE_CHECKING:
     from collections.abc import Callable

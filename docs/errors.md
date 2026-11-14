@@ -1,6 +1,30 @@
 # Errors
 
-Every failure a client raises is a `headgate.errors.ClientError`, and the shape of the tree is part of the contract:
+Every error class has one module to import it from:
+
+| Error | Import it from |
+| --- | --- |
+| `ClientError` | `headgate` |
+| `TransportError` | `headgate` |
+| `ClientTimeoutError` | `headgate` |
+| `CircuitOpenError` | `headgate.errors` |
+| `UpstreamStatusError` | `headgate` |
+| `AuthError` | `headgate` |
+| `RateLimitError` | `headgate` |
+| `ResponseParseError` | `headgate.errors` |
+| `ResponseTooLargeError` | `headgate.errors` |
+| `ForbiddenDestinationError` | `headgate.errors` |
+| `PageLimitError` | `headgate.errors` |
+| `ClientConfigurationError` | `headgate.errors` |
+| `DecodeError` | `headgate.errors` |
+| `RefusedError` | `headgate.errors` |
+| `UnmatchedRequestError` | `headgate.testing` |
+
+The six a caller catches most are at the top level, the test kit's own is in `headgate.testing`, and the rest live in
+`headgate.errors`. `headgate.errors` also defines the six, so `from headgate.errors import ClientError` still works,
+but type checkers and these docs name `headgate.ClientError`.
+
+Every failure a client raises is a `headgate.ClientError`, and the shape of the tree is part of the contract:
 an application boundary can map it onto its own answers without knowing which client failed.
 
 ```text

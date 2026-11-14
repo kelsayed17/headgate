@@ -18,10 +18,9 @@ import httpcore2
 import httpx2
 import pytest
 
-from headgate import Client, ForbiddenDestinationError, HttpOptions, Timeouts, TransportError
+from headgate import Client, ClientTimeoutError, HttpOptions, Rate, Timeouts, TransportError
 from headgate._options import DEFAULT_LIMITS, TransportPolicy
-from headgate.errors import ClientTimeoutError
-from headgate.ratelimit import Rate
+from headgate.errors import ForbiddenDestinationError
 from headgate.security import AddressGuard, PinnedHTTPTransport
 from headgate.security._transport import _VettingBackend
 from tests.security._servers import client_ssl_context, serving

@@ -15,10 +15,10 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import HttpCache, Reader, as_bytes
+from headgate import ClientError, HttpCache, Reader, as_bytes
 from headgate.cache import Partition
 from headgate.cache._transport import ResilientCacheTransport
-from headgate.errors import ClientError, RefusedError
+from headgate.errors import RefusedError
 from tests.cache._helpers import GENEROUS_CAP, FaultyStorage, accept, cache_transport, every_get_rules, stub_client
 
 if TYPE_CHECKING:

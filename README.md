@@ -58,8 +58,9 @@ part of [`examples/github_client.py`](https://github.com/kelsayed17/headgate/blo
 tested client for the GitHub REST API:
 
 ```python
-from headgate import BearerAuth, Client, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
+from headgate import BearerAuth, Client, Expect, HttpOptions, Rate, RateBudget, nothing
 from headgate.msgspec import reader
+from headgate.pagination import LinkHeader
 
 # Readers and pagers are values: build them once, at import, where a bad declaration fails.
 REPOSITORY = reader(Repository)
@@ -178,8 +179,9 @@ from typing import TYPE_CHECKING, Self
 
 import msgspec
 
-from headgate import BearerAuth, Client, Cursor, Expect, Rate, nothing
+from headgate import BearerAuth, Client, Expect, Rate, nothing
 from headgate.msgspec import reader
+from headgate.pagination import Cursor
 
 if TYPE_CHECKING:
     from headgate import Paginated

@@ -21,7 +21,8 @@ import contextlib
 
 import pytest
 
-from headgate.breaker import BreakerPolicy, BreakerRegistry, BreakerState, CircuitBreaker
+from headgate import BreakerPolicy
+from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
 from headgate.breaker._breaker import BreakerOpenError, Transition
 from headgate.breaker._registry import NO_BREAKER
 from headgate.timing import Timing

@@ -11,9 +11,8 @@ from typing import TYPE_CHECKING, Any, cast, override
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, Multipart, Raw, as_bytes, nothing
+from headgate import Client, HttpOptions, Multipart, Rate, Raw, as_bytes, nothing
 from headgate._core import CallContext
-from headgate.ratelimit import Rate
 from headgate.retry._policy import REPLAYABLE_BODY
 
 if TYPE_CHECKING:

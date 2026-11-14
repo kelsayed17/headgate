@@ -16,8 +16,10 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate import Client, ForbiddenDestinationError, HttpOptions, NextUrl, SecurityOptions, StaticHeaderAuth, nothing
+from headgate import Client, HttpOptions, SecurityOptions, StaticHeaderAuth, nothing
+from headgate.errors import ForbiddenDestinationError
 from headgate.msgspec import reader
+from headgate.pagination import NextUrl
 from headgate.testing import FakeTransport
 from tests.integration._support import BASE, FAST, Page, client, items_of, next_of
 

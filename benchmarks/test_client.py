@@ -22,19 +22,10 @@ import httpx2
 import msgspec
 from hishel import AsyncBaseStorage, Entry, Headers, Request, Response
 
-from headgate import (
-    Client,
-    HttpCache,
-    HttpOptions,
-    LinkHeader,
-    QueryParamAuth,
-    Rate,
-    RetryPolicy,
-    TransportPolicy,
-    as_bytes,
-)
+from headgate import Client, HttpCache, HttpOptions, QueryParamAuth, Rate, RetryPolicy, TransportPolicy, as_bytes
 from headgate import msgspec as msgspec_flavor
 from headgate._core import Timing, timing_override
+from headgate.pagination import LinkHeader
 
 if TYPE_CHECKING:
     from collections.abc import Callable

@@ -11,8 +11,7 @@ from typing import TYPE_CHECKING, TypedDict, override
 import httpx2
 from hishel import AsyncBaseStorage, AsyncSqliteStorage, Entry, Request, Response
 
-from headgate import Client, HttpOptions, TransportPolicy
-from headgate.cache import HttpCache
+from headgate import Client, HttpCache, HttpOptions, TransportPolicy
 from headgate.cache._transport import ResilientCacheTransport, store_accepted
 
 if TYPE_CHECKING:
