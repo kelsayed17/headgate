@@ -27,7 +27,7 @@ Requires the ``msgspec`` extra: ``pip install headgate[msgspec]``.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, ClassVar, Final, overload
+from typing import TYPE_CHECKING, ClassVar, Final, cast, overload
 
 try:
     import msgspec
@@ -82,10 +82,10 @@ class MsgspecCodec:
     def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
         """Return a ``msgspec.json.Decoder`` for *type_*'s decode, built once.
 
-        msgspec's stubs type a non-``type[T]`` argument as ``Any``; the annotation records that the decoder decodes into
+        msgspec's stubs type a non-``type[T]`` argument as ``Any``; the cast records that the decoder decodes into
         exactly the type expression it was built from.
         """
-        json_decoder: msgspec.json.Decoder[T] = msgspec.json.Decoder(type_, strict=self._strict)
+        json_decoder = cast("msgspec.json.Decoder[T]", msgspec.json.Decoder(type_, strict=self._strict))
         return json_decoder.decode
 
     def encoder[T](self, type_: TypeForm[T], /) -> Callable[[T], bytes]:
