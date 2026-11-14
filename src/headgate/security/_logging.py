@@ -7,6 +7,9 @@ httpx2 logs ``HTTP Request: GET <url> "HTTP/1.1 200 OK"`` at INFO for each respo
 ``QueryParamAuth`` key or a ``SigningAuth`` query signature in clear, for any application that records INFO. Importing
 headgate adds :class:`RedactedUrls` to the ``httpx2`` logger, so the URL is logged through
 :func:`~headgate._url.sanitize_url`. It only ever replaces values with ``***``, so it changes nothing else a log shows.
+
+**The filter is process-wide.** A logger is global, so it applies to every httpx2 client in the process, not only
+headgate's: an ``httpx2.AsyncClient`` the application builds itself logs its URLs redacted too.
 """
 
 from __future__ import annotations
@@ -33,5 +36,8 @@ class RedactedUrls(logging.Filter):
 
 
 def redact_httpx2_log() -> None:
-    """Add :class:`RedactedUrls` to the ``httpx2`` logger. Importing :mod:`headgate.security` calls it once."""
+    """Add :class:`RedactedUrls` to the ``httpx2`` logger, for every httpx2 client in the process.
+
+    Importing :mod:`headgate.security` calls it once.
+    """
     logging.getLogger("httpx2").addFilter(RedactedUrls())

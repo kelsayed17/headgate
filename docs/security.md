@@ -148,7 +148,8 @@ Nothing headgate raises or reports carries a credential in clear:
 `QueryParamAuth` puts the key in the URL, and URLs are not secret to every tool: a tracing integration that records full
 request URLs records it. Exclude such hosts from URL capture, or prefer a header. httpx2's own `HTTP Request:` log line
 (INFO, on the `httpx2` logger) is redacted: importing headgate adds a filter to that logger that replaces the URL's
-secret values with `***`, so a key or a query signature does not reach an application's INFO log.
+secret values with `***`, so a key or a query signature does not reach an application's INFO log. The filter is
+process-wide: it applies to every httpx2 client in the process, not only headgate's.
 
 ## Hermetic by default
 

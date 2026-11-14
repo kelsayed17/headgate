@@ -23,7 +23,10 @@ if TYPE_CHECKING:
 
 
 async def test_httpx2s_request_line_logs_the_url_with_its_secrets_redacted(caplog: pytest.LogCaptureFixture) -> None:
-    """Log the request line with the key's value replaced, and every other part of the URL as it was sent."""
+    """Log the request line with the key's value replaced, and every other part of the URL as it was sent.
+
+    A real request through httpx2's own logger, so a renamed logger leaves no record and fails the test.
+    """
     web = Web()
     with caplog.at_level(logging.INFO, logger="httpx2"):
         async with web.client(auth=QueryParamAuth({"api_key": "S3CR3T"})) as client:
