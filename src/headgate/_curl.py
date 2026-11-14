@@ -259,6 +259,8 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
             raise httpx2.UnsupportedProtocol(msg, request=request)
         # Read from the stream on every send, as a native transport does: `aread()` would keep the first read and send
         # it again, hiding a one-shot body sent twice.
+        # shortcut: the body counts as written before curl connects, so an unkeyed POST that never connected is not
+        # retried; stream it to curl once curl_cffi's read-callback errors are tested to reach the caller.
         body = b"".join([chunk async for chunk in cast("httpx2.AsyncByteStream", request.stream)])
         if self._default_headers:
             for name, value in _httpx_default_headers():
