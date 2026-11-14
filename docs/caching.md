@@ -38,11 +38,12 @@ policy = TransportPolicy(cache=cache)
   body; any other status raises `ValueError`, rather than being accepted and never stored.
 - **`caches_request(method, path)` and `stores_status(status)`** say what the three decide. A request they do not
   name is sent straight past hishel: never looked up, never stored.
-- **`Vary` is honored.** An entry answers only a request whose headers named in the response's `Vary` match the ones
-  it was stored with, compared as keyed digests (see below). A response that could never be matched is not stored:
-  one with `Vary: *`, and, under `Partition.SHARED`, one varying on a header the cache never stores (`Authorization`,
-  a cookie, a declared credential) that the request sent. Under the default credential partition such a header's
-  value already keeps entries apart, so those responses are stored.
+- **`Vary` is honored, and `Accept` always counts.** An entry answers only a request whose `Accept`, and whose
+  headers named in the response's `Vary`, match the ones it was stored with, compared as keyed digests (see below), so
+  a JSON and a CSV of one URL are two entries. A response that could never be matched is not stored: one with
+  `Vary: *`, and, under `Partition.SHARED`, one varying on a header the cache never stores (`Authorization`, a cookie,
+  a declared credential) that the request sent. Nor does such an entry answer a request that sends that header. Under
+  the default credential partition such a header's value already keeps entries apart, so those responses are stored.
 - **Stored on accept.** A response the rules allow is written to storage only once the call's `expect=` reader has
   accepted it. A call whose reader raises stores nothing, so the cache never serves an answer the client refused:
   a refusal inside a 200 that a reader's `refuse` catches, an undecodable body, an undeclared status. A
@@ -51,7 +52,7 @@ policy = TransportPolicy(cache=cache)
   [storage faults](#storage-faults)), or when it is still running at the call's deadline, which bounds it. Until then,
   hishel's `caching` report on the response says `stored: False`.
 - **A `stream()` is never buffered.** It is served from a hit, but a miss goes up as it arrives and is not stored. A
-  POST, or any request the rules do not name, goes to the network unread and unshared.
+  POST, a request with a `Range`, or any request the rules do not name, goes to the network unread and unshared.
 - **`ttl`** is the client's default lifetime in seconds; a call's `cache_ttl=` overrides it. Either must be a positive
   finite number: anything else raises before the call is sent.
 - **TTL, not revalidation.** An entry is served until its lifetime ends and is never revalidated with the origin. For

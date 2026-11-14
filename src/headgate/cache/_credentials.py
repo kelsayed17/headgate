@@ -194,6 +194,7 @@ class CredentialScope:
         self._represented_params = frozenset(represented_params)
         self._client_headers = frozenset(name.lower() for name in client_headers) - self._dropped_headers
         self._partitioned = partition is Partition.CREDENTIAL
+        # One label for every guarded client, since they all vet addresses alike; a configurable check needs its own.
         self._guarded = (b"guarded",) if guarded else ()
 
     def view(self, request: httpx2.Request) -> tuple[httpx2.URL, httpx2.Headers]:
