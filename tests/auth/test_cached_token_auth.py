@@ -19,7 +19,7 @@ import pytest
 
 from headgate import HttpOptions, _auth
 from headgate._auth import AUTH_HOP, FRESH_TOKEN_S, CachedTokenAuth, Minted, failed_on_auth_hop
-from headgate.errors import AuthError, ClientConfigurationError
+from headgate.errors import AuthError, ClientConfigurationError, TransportError
 from headgate.ratelimit import UNLIMITED
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
@@ -186,6 +186,86 @@ def held_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
     fresh-token window rather than wait it out. ``TestAFreshTokenIsNotReMinted`` covers the window.
     """
     monkeypatch.setattr(_auth, "FRESH_TOKEN_S", 0.0)
+
+
+class _FailsAfterFirst(_CountingAuth):
+    """Mint ``tok-1``, then fail every later exchange after *delay* seconds, as a token host that went down."""
+
+    def __init__(self, *, delay: float = 0.0) -> None:
+        """Fail every exchange after the first, each taking *delay* seconds."""
+        super().__init__(delay=delay)
+        self.attempts = 0
+
+    @override
+    async def mint_token(self) -> tuple[str, float]:
+        self.attempts += 1
+        if self.attempts > 1:
+            if self._delay:
+                await asyncio.sleep(self._delay)
+            msg = "token host unreachable"
+            raise TransportError(msg, source="_FailsAfterFirst")
+        return await super().mint_token()
+
+
+class _FailsEveryTime(_CountingAuth):
+    """Fail every exchange after *delay* seconds, as a token host that is down."""
+
+    @override
+    async def mint_token(self) -> tuple[str, float]:
+        self.mints += 1
+        await asyncio.sleep(self._delay)
+        msg = "token host unreachable"
+        raise TransportError(msg, source="_FailsEveryTime")
+
+
+class TestAFailedMint:
+    """A failed mint is shared by the calls that waited for it, and a token still valid outlives a failed refresh."""
+
+    async def test_a_failed_refresh_inside_the_margin_keeps_using_the_valid_token(
+        self, client_factory: _Factory, clock: _Clock
+    ) -> None:
+        """Send the held token when its early refresh fails, since it has not expired; raise once it has."""
+        auth = _FailsAfterFirst()
+        client = client_factory(auth, _ok)
+        await client.get("/x")
+
+        clock.advance(_LIFETIME_S - 1)
+        resp = await client.get("/x")
+        assert resp.json() == {"seen": "Bearer tok-1"}
+        assert auth.attempts == _MINT_AND_RE_MINT, "the refresh was tried"
+
+        clock.advance(1)
+        with pytest.raises(TransportError):
+            await client.get("/x")
+
+    async def test_the_calls_queued_behind_a_failed_refresh_use_the_valid_token_too(
+        self, client_factory: _Factory, clock: _Clock
+    ) -> None:
+        """Send the held token on every call that waited for a refresh that failed, trying the refresh once."""
+        auth = _FailsAfterFirst(delay=0.01)
+        client = client_factory(auth, _ok)
+        await client.get("/x")
+
+        clock.advance(_LIFETIME_S - 1)
+        responses = await asyncio.gather(*(client.get("/x") for _ in range(3)))
+
+        assert [resp.json() for resp in responses] == [{"seen": "Bearer tok-1"}] * 3
+        assert auth.attempts == _MINT_AND_RE_MINT
+
+    async def test_the_calls_queued_behind_a_failed_mint_share_its_failure(self, client_factory: _Factory) -> None:
+        """Fail every call that waited for a mint with that mint's error, instead of each minting again in turn."""
+        auth = _FailsEveryTime(delay=0.01)
+        client = client_factory(auth, _ok)
+
+        results = await asyncio.gather(*(client.get("/x") for _ in range(4)), return_exceptions=True)
+
+        assert auth.mints == 1
+        assert all(isinstance(result, TransportError) for result in results)
+        assert len({id(result) for result in results}) == len(results), "each call raises its own copy"
+
+        with pytest.raises(TransportError):
+            await client.get("/x")
+        assert auth.mints == _MINT_AND_RE_MINT, "a call that starts after the failure mints again"
 
 
 @pytest.mark.usefixtures("held_tokens")

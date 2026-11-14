@@ -279,6 +279,20 @@ change the public API; such changes are listed under **Changed** and **Removed**
   timeout, past the call's deadline.
 - An explicit `CurlOpt.PROXY` in `AsyncCurlTransport(curl_options=...)` is used for every host. The transport's
   `NOPROXY="*"`, which keeps the environment's proxy out, bypassed it too; a `CurlOpt.NOPROXY` of your own is kept.
+- A 401 that `SigningAuth` or `CachedTokenAuth` answers by re-sending the request is dropped unread. httpx2 read it in
+  full, below `max_response_bytes`: a 66 MiB 401 body was read under a 1 MiB cap.
+- A token response that `MAX_MINT_RESPONSE_BYTES` refuses by its `Content-Length` closes its connection. It was left
+  open, so each such mint kept a pooled connection until the pool ran out.
+- When a token mint fails, every call that was waiting for it fails with the same error. Each waiting call used to
+  try the mint again, one after another, so a token host that was down cost one timeout per queued call.
+- A token refresh that fails inside `refresh_margin` sends the held token, which has not expired yet, instead of
+  failing the call.
+- A `mint_flow` hop that fails on the network (a refused connection, a timeout) is reported as the token mint's
+  `TransportError`, named for the auth class and the token endpoint. It was reported as the API call's, naming the
+  call's URL.
+- Under a headgate client, `CachedTokenAuth` no longer reads a streamed upload into memory before sending it. A body
+  that can be sent again (bytes, a factory, a rewindable `files=` upload) is still re-sent after a 401 re-mint; a
+  one-shot stream's 401 reaches the caller as `AuthError`, and the next call mints a new token.
 
 ### Security
 
