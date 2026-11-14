@@ -28,7 +28,10 @@ from headgate._core import Clock, RandomSource, Slot, system_random
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from headgate._core import CallContext
+
 __all__ = [
+    "IDEMPOTENCY_HEADER",
     "IDEMPOTENT_METHODS",
     "NETWORK_ERRORS",
     "NEVER_SENT_ERRORS",
@@ -43,6 +46,7 @@ __all__ = [
     "RetryBudget",
     "RetryOutcome",
     "RetryPolicy",
+    "is_keyed",
 ]
 
 #: The methods RFC 9110 defines as idempotent that the client sends: re-sent after any retryable failure.
@@ -242,6 +246,19 @@ class RetryOutcome:
 
 #: The policy that sends once and never re-sends: what ``retry=False`` installs for a call.
 NO_RETRY = RetryPolicy(attempts=1)
+
+#: The header an idempotency key is read from when the call names none (a request no client call built).
+IDEMPOTENCY_HEADER: Final = "Idempotency-Key"
+
+
+def is_keyed(context: CallContext, request: httpx2.Request) -> bool:
+    """Return whether *request*, of the call *context*, carries an idempotency key, which makes it safe to re-send.
+
+    The key is the call's own, else the ``Idempotency-Key`` header. An empty or blank key identifies nothing.
+    """
+    key = context.idempotency_key or request.headers.get(IDEMPOTENCY_HEADER)
+    return bool(key and key.strip())
+
 
 #: The call's own retry policy, when it overrides the client's (``retry=False`` or a ``RetryPolicy``).
 RETRY_POLICY = Slot[RetryPolicy]("retry")
