@@ -146,6 +146,19 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `#` was shown.
 - A `Retry-After` HTTP-date is measured from the response's `Date` header, so a local clock ahead of the server's no
   longer shortens the wait to nothing, and one behind no longer stretches it.
+- An `Offset`, `PageNumber` or `BodyOffset` walk whose server ignores the paging parameter raises `ClientError` at
+  the second page, which repeats the first page's body. Before, it fetched the same page forever.
+- `Offset` starts at the offset the caller's `params=` give, as `PageNumber` starts at the caller's page, instead of
+  overwriting it with `start`.
+- `Offset(start=1, total=...)` no longer loses a 1-based walk's last item. With `total`, `Offset` and `BodyOffset`
+  walk to the total even when the server caps its pages below `page_size`, ending early only at an empty page.
+- A next-page URL that httpx2 cannot parse raises `ClientError`, not a bare `httpx2.InvalidURL`.
+- `LinkHeader` skips a `rel="next"` link whose `anchor` names another resource. By RFC 8288 it is the next page of
+  that resource, not of this one.
+- A next-page URL that leads back to the walk's first page is caught one page sooner. The first page is now
+  remembered by the URL it was sent to as well as by the relative URL it was written as.
+- A walk remembers a 16-byte digest of each page's request, and keeps only the last 4096, instead of every request
+  whole. A walk of large POST bodies held all of them.
 - A one-shot `content=` stream is never sent twice below the retry layer either. When an HTTP/2 GOAWAY moved the
   request to a new connection, an async-iterable file went out empty and the server processed an empty POST, and an
   async generator raised a raw `httpx2.StreamConsumed`. The second read is now refused, and the call raises
