@@ -70,6 +70,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   same for `headgate.pydantic`. A reader's refusal check is spelled `refuse=` where it was `refusal_check=`, on
   `reader_for`, the flavors' `reader` and `body_reader`. `Codec.decoder` and `Codec.encoder` keep their
   names.
+- A call costs about 6% less CPU in headgate's own code. A client's timeouts are resolved once, not on every call,
+  and fitting a call's timeouts to its deadline no longer sorts them. Behavior is unchanged.
 
 ### Removed
 
