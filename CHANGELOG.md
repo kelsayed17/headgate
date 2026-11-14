@@ -140,6 +140,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A cached call is answered only by an entry stored for the same `Accept`, so a CSV and a JSON of one URL no longer
+  answer each other. A request with a `Range` goes to the network, since no whole stored body answers it.
+- Under `Partition.SHARED`, a call that sends `Authorization` (or a cookie, or a declared credential) is never answered
+  by a stored entry that varies on it. An anonymous call's answer was served to an authenticated one.
+- A send that waits for its rate-budget turn while a hedge starts beside it records its connection and the bytes it
+  writes into its own attempt. They went into the hedge's attempt, whichever send wrote them.
 - A problem+json error body with an extension nested hundreds of levels deep, about 1 KB, raised a raw
   `RecursionError` from every call. It is now read as no problem detail, and the status error names the body.
 - An error body declaring `charset=idna` or `charset=undefined` raised a bare `UnicodeError`. It is read as UTF-8,
