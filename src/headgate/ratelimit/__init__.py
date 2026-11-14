@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Rate limiting: the budgets a client spends: :class:`Rate`, :class:`RateBudget` and :class:`Adaptive`.
+"""Rate limiting: :class:`Adaptive`, how a :class:`~headgate.Rate` or :class:`~headgate.RateBudget` adapts to pushback.
 
 A path's own budget is set by its :class:`~headgate.Route` (``Route("/exports", rate=Rate.per_minute(6))``).
 

@@ -360,7 +360,7 @@ class TransportPolicy:
 
     * ``retry``: how a call is re-sent (:class:`~headgate.RetryPolicy`), or ``None`` to send every call once. A call
       opts out with ``retry=None``, and a call's or a route's policy replaces this one.
-    * ``timeout``: :class:`Timeouts`; a phase it leaves unset takes its default (:data:`Timeouts.DEFAULT`). A phase it
+    * ``timeout``: :class:`Timeouts`; a phase it leaves unset takes its default (:attr:`Timeouts.DEFAULT`). A phase it
       sets may not be longer than ``deadline``, since it could never take effect.
     * ``deadline``: seconds the whole logical call may take, every attempt, wait and the body read included; ``None``
       for none. Past it the call raises ``ClientTimeoutError``. A call overrides it with ``deadline=``.

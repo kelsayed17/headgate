@@ -260,11 +260,11 @@ class Client:
     """An HTTP API client, configured through ``__init__``, which builds the transport stack once.
 
     An SDK holds one rather than inheriting from it (``self._http = Client(...)``), and calls its verbs; subclassing
-    it raises ``TypeError``. Every :class:`~headgate.errors.ClientError` it raises names its ``base_url``'s host as
+    it raises ``TypeError``. Every :class:`~headgate.ClientError` it raises names its ``base_url``'s host as
     its ``source``.
 
     **Failure policy.** Every verb takes the call's declared responses as ``expect=`` and returns what the matching
-    reader read, or raises a :class:`~headgate.errors.ClientError` subtype:
+    reader read, or raises a :class:`~headgate.ClientError` subtype:
 
     * ``TransportError`` / ``ClientTimeoutError``: a network failure or timeout, or the call's deadline passing;
     * ``CircuitOpenError``: the origin's breaker refused the call without sending it;
@@ -957,7 +957,7 @@ class Client:
     async def _reported(self, prepared: _Prepared) -> AsyncGenerator[None]:
         """Emit ``CallStarted`` and, on the way out, ``CallFinished``; add the call's notes to a ``ClientError``.
 
-        A ``ClientError`` leaving the call takes the call's :attr:`~headgate.errors.ClientError.sent`, whichever layer
+        A ``ClientError`` leaving the call takes the call's :attr:`~headgate.ClientError.sent`, whichever layer
         raised it, since what a caller needs to know is whether the call's own request can have left.
         """
         context = prepared.context

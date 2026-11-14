@@ -59,8 +59,8 @@ tested client for the GitHub REST API:
 
 ```python
 from headgate import BearerAuth, Client, Expect, HttpOptions, Rate, RateBudget, nothing
-from headgate.pagination import LinkHeader
 from headgate.msgspec import reader
+from headgate.pagination import LinkHeader
 
 # Readers and pagers are values: build them once, at import, where a bad declaration fails.
 REPOSITORY = reader(Repository)
@@ -180,8 +180,8 @@ from typing import TYPE_CHECKING, Self
 import msgspec
 
 from headgate import BearerAuth, Client, Expect, Rate, nothing
-from headgate.pagination import Cursor
 from headgate.msgspec import reader
+from headgate.pagination import Cursor
 
 if TYPE_CHECKING:
     from headgate import Paginated

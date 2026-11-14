@@ -3,6 +3,10 @@
 
 """The failure taxonomy: raised by clients, caught by their callers.
 
+This module defines every error class. The six a caller catches most, ``ClientError``, ``TransportError``,
+``ClientTimeoutError``, ``UpstreamStatusError``, ``AuthError`` and ``RateLimitError``, are exported from ``headgate``;
+the rest from here.
+
 Every layer above a client imports this module, so it imports nothing at runtime beyond the standard library.
 
 The shape of the tree is part of the contract, as well as the names: a boundary handler can map

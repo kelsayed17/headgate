@@ -103,7 +103,7 @@ def _resolves(dotted: str) -> bool:
     """Return whether *dotted* names a headgate module, or an attribute reached from the longest module prefix.
 
     The first attribute after the module must be one the module exports, so a name spelled from a module that is not
-    its one home (``headgate.errors.ClientError``) does not resolve.
+    its one home (``headgate.ClientError``) does not resolve.
     """
     parts = dotted.split(".")
     for split in range(len(parts), 0, -1):

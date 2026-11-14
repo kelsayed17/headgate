@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The circuit breaker: :class:`BreakerPolicy` configures it, :class:`BreakerRegistry` holds it.
+"""The circuit breaker: :class:`~headgate.BreakerPolicy` configures it, :class:`BreakerRegistry` holds it.
 
 A registry hands out one :class:`CircuitBreaker` per origin, whose :class:`BreakerState` it reports. Each client keeps a
 registry of its own; clients given one registry pool their failures in it.

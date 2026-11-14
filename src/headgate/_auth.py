@@ -210,7 +210,7 @@ class _Recorded(httpx2.AsyncByteStream):
 
 
 async def _read_hop(response: httpx2.Response, source: str) -> httpx2.Response:
-    """Read the response to a mint flow's hop, up to :data:`_MAX_MINT_RESPONSE_BYTES` (1 MiB), and return it read.
+    """Read the response to a mint flow's hop, up to 1 MiB, and return it read.
 
     httpx2 hands an auth flow each response unread, and reads it itself only after the flow has answered, so the flow
     would see ``ResponseNotRead`` on ``.content`` or ``.json()``. The body is read through a copy that counts the
@@ -520,7 +520,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     class and the token endpoint, chained to the original. It is raised from the auth flow, so the API host's circuit
     breaker records nothing for it. A hop :meth:`mint_flow` yields travels the owning client's stack; a network
     failure there is reported the same way, as ``TransportError`` naming this auth class and the hop's endpoint
-    (:func:`mint_hop_failure`), and reading its response (bounded at 1 MiB, :data:`_MAX_MINT_RESPONSE_BYTES`) fails
+    (:func:`mint_hop_failure`), and reading its response (bounded at 1 MiB) fails
     through the same mapping, so a body that is too large is ``ResponseTooLargeError`` and a dropped connection
     ``TransportError``.
     """
@@ -612,7 +612,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     ) -> AsyncGenerator[httpx2.Request | Minted[TokenT], httpx2.Response]:
         """Mint through the owning client's stack: yield each request the exchange needs, end with :class:`Minted`.
 
-        Each response is sent back in already read (up to 1 MiB, :data:`_MAX_MINT_RESPONSE_BYTES`), so ``.content`` and
+        Each response is sent back in already read (up to 1 MiB), so ``.content`` and
         ``.json()`` work on it. A hop that sets no ``timeout`` extension is sent with the call's timeouts, and every
         hop's timeouts are cut to what the call's deadline leaves. *request* is the call that needs the credential, for
         a hop that wants another of its extensions. Called with the lock held, like :meth:`mint_token`; the default
