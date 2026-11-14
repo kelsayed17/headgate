@@ -135,6 +135,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A cached call is answered only by an entry stored for the same `Accept`, so a CSV and a JSON of one URL no longer
+  answer each other. A request with a `Range` goes to the network, since no whole stored body answers it.
+- Under `Partition.SHARED`, a call that sends `Authorization` (or a cookie, or a declared credential) is never answered
+  by a stored entry that varies on it. An anonymous call's answer was served to an authenticated one.
 - A one-shot `content=` stream is never sent twice below the retry layer either. When an HTTP/2 GOAWAY moved the
   request to a new connection, an async-iterable file went out empty and the server processed an empty POST, and an
   async generator raised a raw `httpx2.StreamConsumed`. The second read is now refused, and the call raises
