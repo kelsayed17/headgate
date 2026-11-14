@@ -58,7 +58,14 @@ from headgate._core import (
 )
 from headgate.retry._budget import RetryLedger
 from headgate.retry._classify import Attempted, Verdict, classify
-from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, RetryOutcome
+from headgate.retry._policy import (
+    NETWORK_ERRORS,
+    REPLAYABLE_BODY,
+    RETRY_OUTCOME,
+    RETRY_POLICY,
+    RetryOutcome,
+    is_keyed,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -73,9 +80,6 @@ _PARKED_BODY_BYTES: Final = 64 * 1024
 
 #: Headers describing the on-the-wire encoding, dropped from a parked response because its body is already decoded.
 _WIRE_ENCODING_HEADERS: Final = frozenset({"content-encoding", "content-length", "transfer-encoding"})
-
-#: The header an idempotency key is read from on a request no client call built.
-_IDEMPOTENCY_HEADER: Final = "Idempotency-Key"
 
 #: The reason a ``RetryScheduled`` event gives for a hedge.
 _HEDGE_REASON: Final = "hedge"
@@ -196,9 +200,7 @@ class _Sequence:
         self._policy = policy
         self._timeout = request.extensions.get("timeout")
         self._method = request.method.upper()
-        key = context.idempotency_key or request.headers.get(_IDEMPOTENCY_HEADER)
-        # An empty or blank key identifies nothing, so it makes no request safe to re-send.
-        self._keyed = bool(key and key.strip())
+        self._keyed = is_keyed(context, request)
         self._replayable = context.get(REPLAYABLE_BODY) is not False
         self._ledger = ledger
         self._sent = 0

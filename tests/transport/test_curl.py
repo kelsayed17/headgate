@@ -600,6 +600,7 @@ class TestRealCurl:
         ("headers", "methods", "posts"),
         [
             pytest.param({}, None, 1, id="an-unkeyed-post-is-sent-once"),
+            pytest.param({"Idempotency-Key": " "}, None, 1, id="a-blank-keyed-post-is-sent-once"),
             pytest.param({"Idempotency-Key": "k"}, None, 2, id="a-keyed-post-may-be-sent-again"),
             pytest.param({}, frozenset({"POST"}), 2, id="a-post-the-policy-calls-idempotent-may-be-sent-again"),
         ],

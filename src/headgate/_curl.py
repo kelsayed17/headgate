@@ -85,7 +85,7 @@ import httpx2
 
 from headgate._core import CallContext
 from headgate._user_agent import DEFAULT_USER_AGENT
-from headgate.retry._policy import IDEMPOTENT_METHODS, RETRY_POLICY
+from headgate.retry._policy import IDEMPOTENT_METHODS, RETRY_POLICY, is_keyed
 
 try:
     import certifi
@@ -146,9 +146,6 @@ _HTTP_VERSIONS: dict[int, bytes] = {
 _WIRE_ENCODING_HEADERS = ("content-encoding", "content-length")
 
 _METHODS: dict[str, HttpMethod] = {method: method for method in get_args(HttpMethod)}
-
-#: The header the retry layer reads as an idempotency key when the call names none.
-_IDEMPOTENCY_HEADER = "Idempotency-Key"
 
 
 @dataclass
@@ -342,8 +339,7 @@ def _replay_safe(request: httpx2.Request) -> bool:
     context = CallContext.of(request)
     policy = context.get(RETRY_POLICY)
     methods = IDEMPOTENT_METHODS if policy is None else policy.methods
-    keyed = (context.idempotency_key or request.headers.get(_IDEMPOTENCY_HEADER)) is not None
-    return request.method in methods or keyed
+    return request.method in methods or is_keyed(context, request)
 
 
 def _httpx_error(request: httpx2.Request, exc: _RequestError) -> httpx2.RequestError:
