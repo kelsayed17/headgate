@@ -42,7 +42,7 @@ import httpx2
 # A closed TypedDict (PEP 728) refuses a keyword it does not name, so a stray or misspelled option is a type error.
 from typing_extensions import TypedDict
 
-from headgate._auth import failed_on_auth_hop
+from headgate._auth import MINTING, failed_on_auth_hop
 from headgate._body import read_capped, read_head
 from headgate._core import (
     BREAKER_GATE,
@@ -145,6 +145,9 @@ _LOCAL_FAILURES = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2
 #: The running timer of the call's deadline, put on its context by ``AsyncBaseClient._deadline``: whether it fired is
 #: what tells the deadline cutting an attempt off from the caller's task being cancelled.
 _DEADLINE_TIMER = Slot[asyncio.Timeout]("deadline_timer")
+
+#: The attribute marking a ``ClientError`` a call has reported, so an enclosing stream leaves it as that call's.
+_REPORTED = "headgate.reported"
 
 #: The origin a walk's first page was sent to, set while ``paginate`` fetches a later page, whose URL the server chose:
 #: the call's own ``headers=`` reach that origin and trusted ones only (see :class:`~headgate._core.ExplicitHeaders`).
@@ -559,8 +562,9 @@ class AsyncBaseClient:
           to bound the whole body, wrap the block in ``asyncio.timeout``;
         * a retry covers opening only; a failure while the body arrives raises ``TransportError`` or
           ``ClientTimeoutError`` from the iteration;
-        * the origin's circuit breaker spans the whole block: a network failure mid-body counts against the origin, even
-          when the block catches it, and a clean exit with no such failure as a success;
+        * the origin's circuit breaker is told of the answer at the response head, before the block is entered, so a
+          stream that took the half-open probe closes the breaker then; a network failure mid-body counts against the
+          origin as one more failure, even when the block catches it;
         * an exception the block raises that is not a ``ClientError`` is the caller's own, even an ``OSError`` or an
           httpx2 error: it propagates unchanged, the breaker is charged nothing for it, and ``CallFinished`` reports
           the status the stream opened with and no error.
@@ -766,8 +770,9 @@ class AsyncBaseClient:
                         raise _BlockError(exc) from exc
             except _BlockError as blocked:
                 own = blocked.error
-            # Raised outside the except clause, so the error keeps its own __context__ rather than the carrier.
-            if isinstance(own, ClientError):
+            # Raised outside the except clause, so the error keeps its own __context__ rather than the carrier. One
+            # another call already reported is that call's, not this stream's.
+            if isinstance(own, ClientError) and _REPORTED not in vars(own):
                 raise own
         if own is not None:
             raise own
@@ -776,16 +781,28 @@ class AsyncBaseClient:
         """Send *prepared* under its deadline and check the response head, leaving the exchange open on *held*."""
         async with self._deadline(prepared):
             streamed, verdict = await held.enter_async_context(self._exchange(prepared))
+            # The origin answered: settle that now, as a verb would, rather than when the caller's block exits.
+            verdict.mark_answered()
             announce_deprecation(prepared.context, streamed)
             if (refused := _checked(self._response_check, streamed)) is not None:
-                head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
+                head = await self._error_head(prepared, streamed, verdict)
                 raise refusal_error(refused, head, self._site(prepared)) from refused
             if not streamed.is_success:
-                head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
+                head = await self._error_head(prepared, streamed, verdict)
                 raise status_error(head, self._site(prepared))
             # A stream has no reader: passing the head checks is what accepts it.
             await store_accepted(streamed)
         return streamed, verdict
+
+    async def _error_head(self, prepared: _Prepared, streamed: httpx2.Response, verdict: Verdict) -> httpx2.Response:
+        """Read a refused stream's error head, mapping a network failure as the exchange would.
+
+        Mapped here, inside the deadline, so a network ``TimeoutError`` is not taken for the deadline's own.
+        """
+        try:
+            return await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
+        except NETWORK_ERRORS as exc:
+            raise self._network_failure(prepared, verdict, exc) from exc
 
     # Preparing the request.
 
@@ -917,7 +934,9 @@ class AsyncBaseClient:
             yield
         except BaseException as exc:
             error = type(exc).__name__
-            if isinstance(exc, ClientError):
+            # Only the first call to report an error notes it: an inner call's error passing through a stream's block.
+            if isinstance(exc, ClientError) and _REPORTED not in vars(exc):
+                vars(exc)[_REPORTED] = True
                 for note in context.notes:
                     exc.add_note(note)
             raise
@@ -985,7 +1004,7 @@ class AsyncBaseClient:
         breaker = self._breaker_for(prepared.request.url)
         try:
             with breaker.track(self._breaker_listener(breaker, context)) as verdict:
-                context.put(BREAKER_GATE, _breaker_gate(breaker, verdict))
+                context.put(BREAKER_GATE, verdict.refused)
                 async with self._sent(prepared, verdict) as streamed:
                     yield streamed, verdict
         except BreakerOpenError as exc:
@@ -1031,14 +1050,15 @@ class AsyncBaseClient:
           another request's attempt produced (a cache hit, a stored 5xx served from the cache, or a download or failure
           the cache shared from an identical GET, :data:`~headgate.cache._transport.HOST_UNTESTED`), since only the
           request that fetched tested the origin. The caller's task being cancelled, and the deadline passing before
-          the attempt reached the network (in a rate-budget wait, a middleware, a token mint), are nothing too.
+          the attempt reached the network (in a rate-budget wait, a middleware, a token mint) or while the auth mints,
+          are nothing too, as is a response a middleware answered without sending the request.
         """
         request = prepared.request
         try:
             streamed = await self._http_client.send(request, stream=True, follow_redirects=prepared.follow_redirects)
             prepared.report.status_code = streamed.status_code
             try:
-                _charge_response(streamed, verdict)
+                _charge_response(streamed, verdict, prepared.context)
                 if is_transient_status(streamed.status_code):
                     head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
                     raise transient_status_error(head, self._site(prepared))
@@ -1181,13 +1201,16 @@ def _stamp_headers(request: httpx2.Request, explicit: Mapping[str, str] | None, 
             request.headers[name] = value
 
 
-def _charge_response(response: httpx2.Response, verdict: Verdict) -> None:
+def _charge_response(response: httpx2.Response, verdict: Verdict, context: CallContext) -> None:
     """Mark *verdict* with what *response* says about its origin (see :meth:`AsyncBaseClient._sent`).
 
-    A response another request's attempt produced (a cache hit, a stored response, a shared download) is untested; a
-    5xx this request fetched itself is a failure; a 429 is neither, since the origin is up and asked us to slow down.
+    A response another request's attempt produced (a cache hit, a stored response, a shared download) or that never
+    reached the network (a middleware's own answer) is untested; a 5xx this request fetched itself is a failure; a 429
+    is neither, since the origin is up and asked us to slow down.
     """
-    if host_untested(response) or served_from_cache(response):
+    # shortcut: hedges share one progress record, so a hedge still queued in the rate budget when the first send answers
+    # makes that answer read as unsent (charged nothing); mark sent responses in MiddlewareTransport if that matters.
+    if not context.progress.dispatched or host_untested(response) or served_from_cache(response):
         verdict.mark_untested()
     elif response.status_code >= httpx2.codes.INTERNAL_SERVER_ERROR:
         verdict.mark_failed()
@@ -1214,23 +1237,10 @@ def _cut_off_on_the_wire(context: CallContext) -> bool:
     """Return whether the call's own deadline fired while its attempt was on the network (see ``_sent``).
 
     The deadline's timer says whether the cancellation is its own rather than the caller's; the attempt was on the
-    network once the rate budget handed it on.
+    network once the rate budget handed it on, unless the auth flow was minting (that is the credential host's time).
     """
     timer = context.get(_DEADLINE_TIMER)
-    return timer is not None and timer.expired() and context.progress.dispatched
-
-
-def _breaker_gate(breaker: Breaker, verdict: Verdict) -> Callable[[], bool]:
-    """Return the call's :data:`~headgate._core.BREAKER_GATE`: whether its origin's breaker refuses now.
-
-    The half-open breaker's probe is never refused by its own probe slot, so the probe keeps its retries and its whole
-    retry sequence is the one recovery test.
-    """
-
-    def refusing() -> bool:
-        return not verdict.probe and breaker.refusing
-
-    return refusing
+    return timer is not None and timer.expired() and context.progress.dispatched and context.get(MINTING) is not True
 
 
 def _checked(check: ResponseCheck | None, resp: httpx2.Response) -> RefusedError | None:

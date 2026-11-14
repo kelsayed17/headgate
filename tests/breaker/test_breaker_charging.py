@@ -203,6 +203,28 @@ async def test_the_gate_opens_when_another_call_trips_the_breaker_mid_call() -> 
     assert (healthy.readings, tripping.readings) == ([False], [True])
 
 
+async def test_the_gate_stays_shut_for_a_call_from_before_the_trip() -> None:
+    """Read true for a call admitted before the breaker opened, even once a probe would be admitted.
+
+    Its retries would otherwise reach the recovering origin beside the probe.
+    """
+    clock = TestClock()
+    registry = BreakerRegistry(clock=clock)
+    breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=registry)
+
+    def trip_and_cool_down() -> None:
+        tripped = registry.breaker_for(_ORIGIN, failure_threshold=1, recovery_timeout=_COOLDOWN)
+        with contextlib.suppress(RuntimeError), tripped.track() as verdict:
+            verdict.mark_failed()
+            raise RuntimeError
+        clock.advance(_COOLDOWN)
+
+    stale = _GateReader(200, before=trip_and_cool_down)
+    await _gated_client(stale, TransportPolicy(retry=NO_RETRY, breaker=breaker)).get("x", expect=RESPONSE)
+
+    assert stale.readings == [True]
+
+
 async def test_the_probe_is_not_stopped_by_its_own_probe_slot() -> None:
     """Read false for the half-open breaker's probe, so its own retries are its one recovery test."""
     clock = TestClock()

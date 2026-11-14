@@ -96,6 +96,22 @@ change the public API; such changes are listed under **Changed** and **Removed**
   read `request.content` failed every hedged call with `RequestNotRead`, and two sends read one file at once.
 - An empty or blank idempotency key is refused: `idempotency_key=""`, or an `IdempotencyKeys` factory returning one,
   raises `ValueError`. An empty `Idempotency-Key` header no longer makes a POST retryable.
+- A `stream()` that became the half-open breaker's probe settles it at its response head. It used to hold the probe
+  until its block exited, so every other call to that origin, from every client sharing the registry, was refused
+  with `CircuitOpenError` for as long as the stream was read. A network failure mid-body now counts as one ordinary
+  failure.
+- A call admitted before its origin's breaker opened no longer changes the breaker when it finishes, even after the
+  probe has closed it again, and its retries are refused once the cooldown elapses. Such a call failing late used to
+  open the recovered breaker for another full cooldown, and its retries reached the origin beside the probe.
+- A breaker transition listener (an observer of `BreakerChanged`) that raises when the probe is taken no longer leaves
+  the breaker refusing every call forever.
+- The call's deadline passing while `CachedTokenAuth` re-mints a token after a 401, or waits for another call's mint,
+  is no longer charged to the API origin's breaker. Five such calls opened it for the whole process.
+- A response a middleware answers itself, without sending the request, is no longer charged to the origin's breaker.
+- `stream()` charges the breaker as a verb does: a stream that opens with a 4xx or a `response_check` refusal counts as
+  the origin answering, and a network `TimeoutError` while reading the error's body is a transport failure rather than
+  "deadline exceeded". A `ClientError` another call raises inside a stream's block is no longer reported as the
+  stream's error, nor given the stream's notes.
 - A view's headers (`with_options(headers=...)`) partition the cache, as `HttpOptions(headers=...)` does. Two views
   with different `X-Api-Key` values on one client were served each other's cached entries.
 - A view's headers are withheld from untrusted origins, as client-wide ones are, and a call's own `headers=` from a
