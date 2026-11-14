@@ -4,7 +4,8 @@
 """An error response's body is read as text whatever ``charset`` it declares, so its error stays a ``ClientError``.
 
 httpx2 takes any codec Python registers as a response's encoding, among them bytes-to-bytes ones (``base64``, ``hex``,
-``zlib``) and the text-to-text ``rot13``, which ``bytes.decode`` refuses with a ``LookupError``.
+``zlib``) and the text-to-text ``rot13``, which ``bytes.decode`` refuses with a ``LookupError``, and ``idna`` and
+``undefined``, which refuse with a ``UnicodeError``.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from headgate.retry import RetryPolicy
 from tests.support.clients import StubClient
 
 #: Codecs Python registers that are not text encodings.
-_NOT_TEXT = ["base64", "hex", "rot13", "zlib", "no-such-charset"]
+_NOT_TEXT = ["base64", "hex", "rot13", "zlib", "idna", "undefined", "no-such-charset"]
 
 
 @pytest.mark.parametrize("charset", _NOT_TEXT)
@@ -36,9 +37,13 @@ _NAMES_THE_BODY = r"\(status=\d+\) — gone\n"
 _STATUSES = [httpx2.codes.NOT_FOUND, httpx2.codes.SERVICE_UNAVAILABLE]
 
 
-def _client(status: int) -> StubClient:
-    """Return a client answering every request once with *status* and a body declared ``charset=base64``."""
-    headers = {"Content-Type": "text/plain; charset=base64"}
+#: A charset of each way a codec refuses: a ``LookupError``, and a ``UnicodeError``.
+_REFUSING = ["base64", "idna"]
+
+
+def _client(status: int, charset: str) -> StubClient:
+    """Return a client answering every request once with *status* and a body declared in *charset*."""
+    headers = {"Content-Type": f"text/plain; charset={charset}"}
     return StubClient(
         base_url="https://api.example.test",
         rate=UNLIMITED,
@@ -55,15 +60,19 @@ async def _open_stream(client: StubClient) -> None:
         pass
 
 
+@pytest.mark.parametrize("charset", _REFUSING)
 @pytest.mark.parametrize("status", _STATUSES)
-async def test_an_error_in_a_charset_that_is_no_text_encoding_is_a_status_error(status: int) -> None:
-    """Raise the status error, its body named, rather than the ``LookupError`` the charset would raise."""
+async def test_an_error_in_a_charset_that_is_no_text_encoding_is_a_status_error(status: int, charset: str) -> None:
+    """Raise the status error, its body named, rather than the error the charset's codec would raise."""
     with pytest.raises(UpstreamStatusError, match=_NAMES_THE_BODY):
-        await _client(status).get("x", expect=as_bytes)
+        await _client(status, charset).get("x", expect=as_bytes)
 
 
+@pytest.mark.parametrize("charset", _REFUSING)
 @pytest.mark.parametrize("status", _STATUSES)
-async def test_a_streamed_error_in_a_charset_that_is_no_text_encoding_is_a_status_error(status: int) -> None:
+async def test_a_streamed_error_in_a_charset_that_is_no_text_encoding_is_a_status_error(
+    status: int, charset: str
+) -> None:
     """Raise the status error from a stream's head too."""
     with pytest.raises(UpstreamStatusError, match=_NAMES_THE_BODY):
-        await _open_stream(_client(status))
+        await _open_stream(_client(status, charset))

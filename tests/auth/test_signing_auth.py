@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import HttpCache, HttpOptions, Next, RetryPolicy, SigningAuth, TransportPolicy
+from headgate import HttpCache, HttpOptions, Json, Next, RetryPolicy, SigningAuth, TransportPolicy
 from headgate._core import CredentialStamper, Timing
 from headgate._url import is_secret_param
 from headgate.errors import AuthError
@@ -100,7 +100,7 @@ async def test_every_request_is_signed_over_its_body() -> None:
     auth = _Signer()
     client, sent = _client(auth, _ok)
     async with client:
-        await client.post("orders", json={"qty": 1}, expect=RESPONSE)
+        await client.post("orders", body=Json({"qty": 1}), expect=RESPONSE)
         await client.get("orders/7", expect=RESPONSE)
 
     assert [request.headers["X-Signature"] for request in sent] == [

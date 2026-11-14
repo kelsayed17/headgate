@@ -10,6 +10,7 @@ mapping (and the breaker charge that goes with a network failure) is the client'
 
 from __future__ import annotations
 
+import codecs
 import functools
 from typing import TYPE_CHECKING, Final, Protocol, final
 
@@ -33,6 +34,9 @@ type NetworkFailure = Callable[[httpx2.HTTPError | OSError], ClientError]
 
 #: The largest server-sent event :meth:`Stream.aiter_events` buffers by default: httpx2's own default, 1 MiB.
 DEFAULT_MAX_EVENT_SIZE: Final = 1024 * 1024
+
+#: Every character ``str.splitlines`` ends a line at, as httpx2's ``aiter_lines`` does.
+_LINE_ENDS: Final = "\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
 
 #: The media type an event stream must declare.
 _EVENT_STREAM: Final = "text/event-stream"
@@ -86,8 +90,14 @@ class Stream(Protocol):
         """Iterate the body as bytes, in chunks as they arrive or of *chunk_size* bytes."""
         ...
 
-    def aiter_lines(self) -> AsyncIterator[str]:
-        """Iterate the body as decoded text lines, without their line endings."""
+    def aiter_lines(self, *, max_line_size: int | None = DEFAULT_MAX_EVENT_SIZE) -> AsyncIterator[str]:
+        """Iterate the body as decoded text lines, without their line endings, split as ``str.splitlines`` splits.
+
+        A line past *max_line_size* characters (1 MiB by default, as an event; ``None`` for no limit) raises
+        ``ResponseTooLargeError``, before it ends if it never does. The body is decoded by its ``charset``; one that is
+        no text encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is, and a body its ``charset``
+        cannot decode raises ``ResponseParseError``.
+        """
         ...
 
     def aiter_events(
@@ -158,9 +168,19 @@ class OpenStream:
         """Iterate the body as bytes, in chunks as they arrive or of *chunk_size* bytes."""
         return _Guarded(self._response.aiter_bytes(chunk_size), self._fail)
 
-    def aiter_lines(self) -> AsyncIterator[str]:
-        """Iterate the body as decoded text lines, without their line endings."""
-        return _Guarded(self._response.aiter_lines(), self._fail)
+    def aiter_lines(self, *, max_line_size: int | None = DEFAULT_MAX_EVENT_SIZE) -> AsyncIterator[str]:
+        """Iterate the body as decoded text lines, without their line endings, split as ``str.splitlines`` splits.
+
+        A line past *max_line_size* characters (1 MiB by default, as an event; ``None`` for no limit) raises
+        ``ResponseTooLargeError``, before it ends if it never does. The body is decoded by its ``charset``; one that is
+        no text encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is, and a body its ``charset``
+        cannot decode raises ``ResponseParseError``.
+        """
+        decoder = _text_decoder(self._response.encoding)
+        chunks = _Guarded(self._response.aiter_bytes(), self._fail)
+        unreadable = functools.partial(parse_error, resp=self._response, site=self._site)
+        too_large = functools.partial(self._too_large, f"line over {max_line_size} characters")
+        return _lines(chunks, decoder, max_line_size, unreadable, too_large)
 
     def aiter_events(
         self, *, max_event_size: int | None = DEFAULT_MAX_EVENT_SIZE
@@ -180,12 +200,58 @@ class OpenStream:
             raise parse_error(error, self._response, self._site)
         self._events = EventParser(max_event_size)
         chunks = _Guarded(self._response.aiter_bytes(), self._fail)
-        return _Events(chunks, self._events, functools.partial(self._too_large, max_event_size))
+        too_large = functools.partial(self._too_large, f"server-sent event over {max_event_size} bytes")
+        return _Events(chunks, self._events, too_large)
 
-    def _too_large(self, max_event_size: int | None) -> ClientError:
-        """Return the error for an event past *max_event_size* bytes: the body's fault, so it charges no breaker."""
-        message = f"server-sent event over {max_event_size} bytes from {self._site.method} {self._site.url}"
+    def _too_large(self, what: str) -> ClientError:
+        """Return the error for *what* outgrew its limit: the body's fault, so it charges no breaker."""
+        message = f"{what} from {self._site.method} {self._site.url}"
         return ResponseTooLargeError(message, **self._site.details(self._response))
+
+
+def _text_decoder(encoding: str | None) -> codecs.IncrementalDecoder:
+    """Return an incremental decoder for *encoding*, or UTF-8's when it decodes no text (``base64``, ``undefined``)."""
+    name = encoding or "utf-8"
+    try:
+        # One byte, since a codec that is no text encoding refuses only a non-empty body.
+        b"a".decode(name, "replace")
+    except LookupError, UnicodeError:
+        name = "utf-8"
+    return codecs.getincrementaldecoder(name)("replace")
+
+
+async def _lines(
+    chunks: AsyncIterator[bytes],
+    decoder: codecs.IncrementalDecoder,
+    max_line_size: int | None,
+    unreadable: Callable[[Exception], ClientError],
+    too_large: Callable[[], ClientError],
+) -> AsyncIterator[str]:
+    """Yield the lines *chunks* decode to, raising what *too_large* builds for one past *max_line_size* characters.
+
+    shortcut: the line still arriving is re-split with each chunk, quadratic for a long one; it is bounded by
+    *max_line_size* unless that is ``None``, so only an unbounded caller pays.
+    """
+    pending = ""
+    ended = False
+    while not ended:
+        chunk = await anext(chunks, None)
+        ended = chunk is None
+        try:
+            pending += decoder.decode(chunk or b"", final=ended)
+        except UnicodeError as exc:
+            raise unreadable(exc) from exc
+        lines = pending.splitlines(keepends=True)
+        # The last piece waits for more: a line not yet ended, or a CR that may be the first half of a CRLF.
+        waiting = not ended and lines and (lines[-1][-1] not in _LINE_ENDS or lines[-1].endswith("\r"))
+        pending = lines.pop() if waiting else ""
+        for line in lines:
+            text = line.splitlines()[0]
+            if max_line_size is not None and len(text) > max_line_size:
+                raise too_large()
+            yield text
+        if max_line_size is not None and len(pending.removesuffix("\r")) > max_line_size:
+            raise too_large()
 
 
 class _Guarded[T]:
