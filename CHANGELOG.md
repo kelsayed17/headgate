@@ -89,8 +89,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   request to a new connection, an async-iterable file went out empty and the server processed an empty POST, and an
   async generator raised a raw `httpx2.StreamConsumed`. The second read is now refused, and the call raises
   `TransportError`.
-- A `files=` upload of a file that cannot seek, such as a pipe, is sent once, like a one-shot `content=` stream. A
-  retry or a followed 307 or 308 sent it again with an empty file.
+- A `files=` upload of a file that cannot be rewound, such as a pipe or a socket, is sent once, like a one-shot
+  `content=` stream. A retry or a followed 307 or 308 sent it again with an empty file. A file object counts as
+  rewindable only if it is a regular file on disk or an in-memory file that can seek.
 - A hedge sends its own copy of an in-memory body, and a streamed or multipart body is never hedged. A middleware that
   read `request.content` failed every hedged call with `RequestNotRead`, and two sends read one file at once.
 - An empty or blank idempotency key is refused: `idempotency_key=""`, or an `IdempotencyKeys` factory returning one,

@@ -26,6 +26,7 @@ from tests.integration._support import client
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterator
+    from pathlib import Path
 
     from headgate._middleware import Next
 
@@ -123,12 +124,24 @@ async def test_an_upload_of_a_file_that_cannot_rewind_is_not_sent_again(pipe: Bi
     assert "the request body is a one-shot stream, so it is not sent again" in raised.value.__notes__
 
 
-async def test_an_upload_of_a_file_that_can_rewind_is_sent_whole_again() -> None:
-    """Retry a ``files=`` upload of a ``BytesIO``: it rewinds, so the retry sends the whole file."""
+@pytest.fixture(params=["in-memory", "regular-file"])
+def rewindable(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[BinaryIO]:
+    """Yield a file holding the body that can be read again from its start: a ``BytesIO``, or a file on disk."""
+    if request.param == "in-memory":
+        yield io.BytesIO(_BODY)
+        return
+    path = tmp_path / "data.bin"
+    path.write_bytes(_BODY)
+    with path.open("rb") as file:
+        yield file
+
+
+async def test_an_upload_of_a_file_that_can_rewind_is_sent_whole_again(rewindable: BinaryIO) -> None:
+    """Retry a ``files=`` upload of a ``BytesIO`` or a file on disk: it rewinds, so the retry sends the whole file."""
     fake = FakeTransport().reply("POST", "/v1/upload", 502, 201)
     built = client(fake)
 
-    await built.post("upload", files={"file": ("data.bin", io.BytesIO(_BODY))}, idempotency_key="k", expect=nothing)
+    await built.post("upload", files={"file": ("data.bin", rewindable)}, idempotency_key="k", expect=nothing)
 
     assert len(fake.calls) == len(("failed", "retried"))
     assert all(_BODY in request.content for request in fake.calls)

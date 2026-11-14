@@ -15,6 +15,8 @@ A ``files=`` upload is replayable unless one of its files is a file object that 
 
 from __future__ import annotations
 
+import os
+import stat
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import IO, override
@@ -107,13 +109,26 @@ def request_content(body: Body | None) -> tuple[bytes | AsyncIterable[bytes] | N
     return _Replayed(body), True
 
 
+def _rewinds(file: IO[bytes]) -> bool:
+    """Return whether *file* can be read again from its start: a regular file, or an in-memory one that can seek.
+
+    A descriptor is judged by its type, not by ``seekable()``: on Windows a pipe reports itself seekable, though
+    seeking it rewinds nothing.
+    """
+    try:
+        descriptor = file.fileno()
+    except OSError:  # io.UnsupportedOperation: no descriptor, such as a BytesIO
+        return file.seekable()
+    return stat.S_ISREG(os.fstat(descriptor).st_mode)
+
+
 def files_replayable(files: UploadFiles | None) -> bool:
-    """Return whether every file in *files* can be read again: bytes, text, or a file object that can seek."""
+    """Return whether every file in *files* can be read again: bytes, text, a regular file or an in-memory one."""
     if files is None:
         return True
     values = files.values() if isinstance(files, Mapping) else (value for _, value in files)
     contents = (value[1] if isinstance(value, tuple) else value for value in values)
-    return all(isinstance(content, bytes | str) or content.seekable() for content in contents)
+    return all(isinstance(content, bytes | str) or _rewinds(content) for content in contents)
 
 
 def check_one_body(

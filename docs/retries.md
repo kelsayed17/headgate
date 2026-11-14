@@ -58,10 +58,10 @@ Each attempt's result is classified, in this order:
    began is safe; a `ReadTimeout` after the body was sent is not. A custom transport that reports no progress is judged
    by the exception's type instead.
 
-A request whose body is a one-shot stream (`content=` an async iterable, or a `files=` upload of a file that cannot
-seek, such as a pipe) is never sent twice; the error notes why. That holds below the retry layer too: when an HTTP/2
-server's GOAWAY moves the request to a new connection, the body refuses a second read and the call raises
-`TransportError` rather than sending it empty. Give `content=` a factory instead to keep it retryable (see
+A request whose body is a one-shot stream (`content=` an async iterable, or a `files=` upload of a file that is neither
+a regular file nor in memory, such as a pipe) is never sent twice; the error notes why. That holds below the retry
+layer too: when an HTTP/2 server's GOAWAY moves the request to a new connection, the body refuses a second read and the
+call raises `TransportError` rather than sending it empty. Give `content=` a factory instead to keep it retryable (see
 [streaming](streaming.md#request-bodies)).
 
 The retry policy applies to each request the client sends: a followed redirect's hop, and a token-mint hop of a
