@@ -213,8 +213,14 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - An explicit `CurlOpt.PROXY` in `AsyncCurlTransport(curl_options=...)` is used for every host. The transport's
   `NOPROXY="*"`, which keeps the environment's proxy out, bypassed it too; a `CurlOpt.NOPROXY` of your own is kept.
 
+- `AsyncCurlTransport` reads a request's body from its stream on every send, as httpx2's own transport does. It read
+  the body once and sent that copy again, so a one-shot body sent a second time was not refused.
+
 ### Security
 
+- `AsyncCurlTransport(curl_options={CurlOpt.FOLLOWLOCATION: True})` raises `ValueError`. curl followed each redirect
+  itself, below every headgate hook, so the credential guard never saw the hop and a credential went to whatever
+  origin the redirect named. headgate follows redirects itself (`HttpOptions(follow_redirects=...)`).
 - `AsyncCurlTransport` verifies TLS against the Mozilla CA bundle `curl_cffi` installs. It took its trust store from
   `SSL_CERT_FILE`, `CURL_CA_BUNDLE` or `REQUESTS_CA_BUNDLE`, which a native transport ignores; pass `CurlOpt.CAINFO`
   in `curl_options` for a bundle of your own. libcurl still writes TLS session keys to the file `SSLKEYLOGFILE` names,
