@@ -33,8 +33,13 @@ ladder as a verb, except that:
 - the client's `response_check` runs on the response head, before the block is entered.
 
 A `Stream` has `status_code`, `headers` and `request_id`, and three ways to read the body, one per stream:
-`aiter_bytes(chunk_size=None)` (decoded bytes as they arrive), `aiter_lines()` (decoded text lines) and
-`aiter_events()`.
+`aiter_bytes(chunk_size=None)` (decoded bytes as they arrive), `aiter_lines(max_line_size=1 MiB)` (decoded text lines)
+and `aiter_events()`.
+
+`aiter_lines` splits where `str.splitlines` does, as httpx2's does, and raises `ResponseTooLargeError` for a line past
+`max_line_size` characters (`None` for no limit), before it ends if it never does. It decodes by the response's
+`charset`: one that is no text encoding (`base64`, `rot13`) is read as UTF-8, as no `charset` is, and a body the
+`charset` cannot decode raises `ResponseParseError`.
 
 ## Server-sent events
 
@@ -53,13 +58,15 @@ an `httpx2.ServerSentEvent`: `event`, `data` (multi-line joined), `id` and the `
 UTF-8 whatever its `charset` says, a leading byte order mark is skipped, and a block without data (an `event: ping`
 heartbeat, a `retry:` or `id:` alone) is not an event, so `event.data` is always what a `data:` field sent. A response
 that does not declare `text/event-stream` raises `ResponseParseError` at once; an event larger than `max_event_size`
-(`None` for no limit) raises `ResponseTooLargeError`. The 1 MiB default is `headgate.streaming.DEFAULT_MAX_EVENT_SIZE`.
+(`None` for no limit) raises `ResponseTooLargeError`, however the body is cut into chunks. A comment is never part of an
+event, and is dropped as it arrives. The 1 MiB default is `headgate.streaming.DEFAULT_MAX_EVENT_SIZE`.
 
 `stream.last_event_id` is the id the server last set, `None` until it sets one and `""` once it resets it with an
 empty `id`. Pass it as `last_event_id=` when re-opening, and the request carries `Last-Event-ID` (none when it is
 empty) so the server resumes after it. `stream.retry` is the reconnection time in milliseconds the server last set,
 `None` until a `retry:` sets one: it holds across blocks, a `retry:` alone included, as a browser keeps it, while an
-event's own `retry` is only the field its block named. Wait that long before re-opening.
+event's own `retry` is only the field its block named. A `retry:` past 2**63 - 1 is held at that. Wait that long
+before re-opening.
 
 For an event stream that is short and bounded, the buffered `event_stream` reader returns every event in a body, parsed
 the same way (see [responses](responses.md#readers)).

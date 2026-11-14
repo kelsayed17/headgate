@@ -407,7 +407,7 @@
   class Stream(Protocol)(*args, **kwargs)
       def aiter_bytes(self, chunk_size: 'int | None' = None) -> 'AsyncIterator[bytes]'
       def aiter_events(self, *, max_event_size: 'int | None' = 1048576) -> 'AsyncIterator[httpx2.ServerSentEvent]'
-      def aiter_lines(self) -> 'AsyncIterator[str]'
+      def aiter_lines(self, *, max_line_size: 'int | None' = 1048576) -> 'AsyncIterator[str]'
       property headers
       property last_event_id
       property request_id
