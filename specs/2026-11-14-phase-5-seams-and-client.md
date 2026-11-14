@@ -17,7 +17,7 @@
 ## Global Constraints
 
 - Python 3.14 or newer; httpx2 2.16 or newer; hishel 2.
-- Base branch: `origin/main` at or after `9379587` (#94).
+- Base branch: `origin/main` after Phase 6 (errors) has merged. **Do not start Task 2 before it has.** The plan itself is written over `9379587` (#94).
 - Clean break: no deprecation aliases, and no old spelling kept next to the new one.
 - Gates for every task:
   - `uv run ruff check`
@@ -34,24 +34,30 @@
 - The property tests in `tests/retry/test_properties.py` keep their properties and assertions. Only their spellings change (`clock=` → `timing=`, the client class).
 - The verb-path benchmarks (`benchmarks/test_client.py`, `benchmarks/test_hot_paths.py`) show no regression against `origin/main`.
 - Out of scope:
-  - Errors: `retryable`, `sent`, read-only attributes (phase 6, see **Coordination with Phase 6**).
+  - Errors (phase 6, merged first): this phase only renames what Phase 6's code calls `AsyncBaseClient` and changes the value of `source` (see **Coordination with Phase 6**).
   - Streams, pages, `query()`, `Timeouts.UNBOUNDED` (phase 7).
   - The top-level trim (phase 8): a name this phase adds is exported where its neighbors are.
 
 ## Coordination with Phase 6
 
-The error-paths session plans Phase 6 (design section 6) in parallel. Both phases touch these files:
+Phase 6 (errors, design section 6) is coded first and merges before any of this phase's code. This plan assumes it has merged. That means:
+- every `ClientError` attribute is a read-only property, `source` included;
+- `ClientError` has `sent: bool`, and `ErrorDetails` carries it;
+- `retryable` has one meaning, so `CircuitOpenError` and a budget pause are `retryable=True`;
+- `UpstreamStatusError.status_code` is `int | None`, with `None` only for headgate's own rate budget's refusal;
+- `CallContext` has a call-level `sent` flag that `SendProgress.add_sent` sets.
 
-| File | Phase 5 | Phase 6 |
-| --- | --- | --- |
-| `src/headgate/_client.py` | the class becomes `Client`; `_source`; `_effective_policy`'s registry; `paginate` calls `self.get` directly | `sent`; mapping failures to errors; a budget pause's `retryable` |
-| `src/headgate/breaker/` | the registry: `_registry.py`, `_policy.py`, `_scope.py` (deleted) | `CircuitOpenError` becomes `retryable=True` (`_breaker.py`, `errors.py`) |
-| `src/headgate/retry/_policy.py`, `_budget.py`, `_transport.py` | `RetryBudget` becomes live; `jitter=` moves to `Timing` | `classify` and the `retryable` rule, if it lives there |
-| `src/headgate/ratelimit/_budget.py` | `timing=` takes the wall clock; `wall_clock=` goes | its own refusal carries `status_code=None` |
-| `src/headgate/errors.py`, `_failures.py` | only `source`'s value (see **Decisions**) | every attribute read-only; `sent` |
-| `tests/**` | `StubClient` and every `AsyncBaseClient` subclass become a held `Client` (Task 6) | new error tests |
+Phase 5 then applies over that, touching Phase 6's lines only as follows:
 
-**Recommended order:** Phase 6 merges first, or at least before Task 6 here. Tasks 2–5 touch only the lines above that Phase 6 leaves alone, so they can be written in parallel with it. Task 6 (the rename) is the one that touches every test file, so it is done last, once, on top of whatever Phase 6 has merged. Phase 6's new tests are then re-spelled by Task 6's mechanical pass, rather than Phase 6 rebasing over a renamed test suite.
+| File | What Phase 5 changes, over Phase 6 |
+| --- | --- |
+| `src/headgate/errors.py`, `docs/errors.md` | only docstrings and prose that name `AsyncBaseClient` (Task 6) |
+| `src/headgate/_failures.py` | nothing: `source`'s value changes where the client sets it, in `__init__` |
+| `src/headgate/_client.py` | `__init__` (registry, timing, `_source`), `_effective_policy`, `paginate`'s body, the class line and docstring, and `__init_subclass__`. The breaker and budget `except` arms, `_site` and `_unsent_site` stay as Phase 6 leaves them. |
+| `src/headgate/_core/_context.py` | a new `call_info()` beside `CallContext`, reading `attempt` and `remaining()`. `sent` and `SendProgress` are untouched, and `CallView` does not expose `sent`: an error carries it, and a middleware has the response. |
+| `src/headgate/breaker/_breaker.py` | `CircuitBreaker.__init__`'s `clock=` becomes `timing=`; `CircuitOpenError`'s `retryable` is Phase 6's |
+| `src/headgate/retry/`, `src/headgate/ratelimit/_budget.py` | `RetryShare` and the live `RetryBudget`; `timing=` in place of `jitter=` and `wall_clock=`. Phase 6's `retryable` and `status_code=None` are not in these lines. |
+| `tests/**` | Task 6's mechanical pass, `StubClient` → a held `Client`, runs over Phase 6's new tests too. The error-message snapshot's `[StubClient]` prefixes become hosts. |
 
 **Pagination:** this phase touches `pagination/` only in `paginate`'s body in `_client.py`. Its calls to `AsyncBaseClient.get(self, ...)`, which guarded against a subclass's own `get`, become `self.get(...)`.
 
@@ -167,7 +173,7 @@ The design leaves these to the builder, or does not settle them. Each is the pla
   - **Keying.** Breakers are keyed by origin alone, no longer by origin and thresholds.
 - **One `Timing`, with four seams.** `wall_clock` joins it, because a budget reads `Retry-After` dates and `RateLimit` epochs in Unix time, and `random` joins it, because backoff jitter is randomness that a test pins. `RetryPolicy(jitter=)` goes, since a policy is configuration and a random source is a seam. `Timing(...)` can be passed in each class's `timing=`. `None` there reads `headgate.timing.current_timing()` once, when the object is built, as a client does today. That is what makes `TestClock.install()` reach a token auth, a shared budget or a registry built in its block, which closes L16 and L35. `timing_override` moves to `headgate.timing` beside `current_timing`, so a test kit of the user's own can install a clock as `TestClock` does.
 - **`call_info(request)` returns a snapshot, `CallView`.** The design names its return type `CallInfo`, but `CallInfo` is the record events carry, made once when a call starts. The attempt number and the time left change while the call runs. So `call_info` returns a fresh, frozen `CallView(call: CallInfo, attempt, remaining)` each time it is called, `None` for a request no client call built, and `CallView` lives in `headgate.events` beside `CallInfo`. `CallContext` stays private. The design's 5.1 is amended in Task 1.
-- **`Client`'s errors name its origin, not a class.** A `ClientError`'s `source`, its `[source]` prefix, named the subclass (`[GitHub]`). A final `Client` would make every message read `[Client]`, which tells nobody anything. So the source is the `base_url`'s host (`[api.github.com]`), which still tells two SDKs apart and needs no new argument. The constructor stays at seven. This is the one line of `_failures.py` Phase 5 touches (see **Coordination with Phase 6**). The error-message snapshot is updated with it.
+- **`Client`'s errors name its origin, not a class.** A `ClientError`'s `source`, its `[source]` prefix, named the subclass (`[GitHub]`). A final `Client` would make every message read `[Client]`, which tells nobody anything. So the source is the `base_url`'s host (`[api.github.com]`), which still tells two SDKs apart and needs no new argument. The constructor stays at seven. It is set where the client sets `_source`, so `_failures.py` and Phase 6's read-only `source` property are untouched (see **Coordination with Phase 6**). The error-message snapshot is updated with it.
 - **`fake_network(transport)` replaces the transport of every `Client` built in its block,** even one that sets `HttpOptions(transport=...)` itself. That is the point: an SDK that fixes `AsyncCurlTransport` in its constructor can still be tested over a `FakeTransport`. The override replaces only the network transport, so the stack above it (rate, cache, retry, breaker) is the SDK's own. It nests with `TestClock.install()`, `instant_retries()` and `policy_disabled()`, like them a construction-time switch, and yields the transport. It is in `headgate.testing`, which is where the design says the builder picks its shape.
 - **The live objects show their state.** `RateBudget`, `RetryBudget` and `BreakerRegistry` gain a `repr` that shows their state, as 5.2 asks:
   - `RateBudget(rate=Rate(10/s), effective=8.0/s, in_flight=2, paused=0.0s)`;
@@ -338,7 +344,7 @@ These six cases are not covered by the design's own examples and are the most li
 
 ### Task 6: `Client`, held rather than inherited
 
-Do this task last, after Phase 6 has merged (see **Coordination with Phase 6**).
+Do this task last, so its mechanical pass over `tests/` runs once, over everything Phase 6 added.
 
 **Files:**
 - Modify: `src/headgate/_client.py`:
