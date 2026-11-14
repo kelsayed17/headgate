@@ -239,7 +239,7 @@ class _ApiThenHangingTokenHost(httpx2.AsyncBaseTransport):
 
 
 @pytest.mark.parametrize("hop", [False, True], ids=["mint_token", "mint_flow hop"])
-async def test_a_deadline_passing_during_a_401_re_mint_is_not_charged_to_the_origin(hop: bool) -> None:  # noqa: FBT001
+async def test_a_deadline_passing_during_a_401_re_mint_is_not_charged_to_the_origin(*, hop: bool) -> None:
     """Charge the API origin nothing when the deadline cuts off a re-mint: the token host is what hung."""
     breakers = _Breakers(threshold=1)
     client = StubClient(

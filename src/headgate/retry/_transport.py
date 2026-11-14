@@ -49,6 +49,7 @@ import httpx2
 
 from headgate._core import (
     BREAKER_GATE,
+    SENDING,
     BudgetBacklogError,
     BudgetPausedError,
     CallContext,
@@ -66,7 +67,6 @@ from headgate.retry._policy import (
     RetryOutcome,
     is_keyed,
 )
-from headgate.retry._tracking import SENDING
 
 if TYPE_CHECKING:
     from collections.abc import Callable

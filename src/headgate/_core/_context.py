@@ -23,6 +23,7 @@ read and write it through its methods, never through extension keys of their own
 from __future__ import annotations
 
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, cast, override
 
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
     from headgate._core._events import Emitter, Event
     from headgate._core._time import Clock
 
-__all__ = ["CallContext", "SendProgress", "Slot"]
+__all__ = ["SENDING", "CallContext", "SendProgress", "Slot", "progress_of"]
 
 #: The one request extension headgate keeps its per-call state in.
 _EXTENSION: Final = "headgate.call"
@@ -281,3 +282,14 @@ class CallContext:
     def put[T](self, slot: Slot[T], value: T) -> None:
         """Put *value* in *slot*."""
         self._slots[slot] = value
+
+
+#: The call and attempt progress the current task is sending for, set by the retry layer around each send. Every
+#: hedge sends in a task of its own, so each sees its own attempt here, while the call's ``progress`` is the latest.
+SENDING: Final = ContextVar[tuple[CallContext, SendProgress] | None]("headgate_sending", default=None)
+
+
+def progress_of(context: CallContext) -> SendProgress:
+    """Return the progress of the attempt this task sends for *context* (:data:`SENDING`), else its latest attempt's."""
+    sending = SENDING.get()
+    return sending[1] if sending is not None and sending[0] is context else context.progress
