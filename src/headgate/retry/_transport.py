@@ -66,6 +66,7 @@ from headgate.retry._policy import (
     RetryOutcome,
     is_keyed,
 )
+from headgate.retry._tracking import SENDING
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -246,6 +247,8 @@ class _Sequence:
         started = context.clock()
         prefix = f"attempt {number}/{self._policy.attempts}{' (hedge)' if hedge else ''}"
         result: httpx2.Response | Exception
+        # Names this send's attempt to the layers below, which a hedge begun meanwhile would otherwise take as theirs.
+        sending = SENDING.set((context, progress))
         try:
             result = await self._transport.handle_async_request(request)
         except NETWORK_ERRORS as exc:
@@ -264,6 +267,8 @@ class _Sequence:
             if paid and not progress.dispatched:
                 self._refund()
             raise
+        finally:
+            SENDING.reset(sending)
         verdict = classify(result, self._attempted(progress), self._policy)
         context.add_note(f"{prefix}: {_describe(result, verdict)} after {_rounded(context.clock() - started)}")
         return _Attempt(result, verdict, request)

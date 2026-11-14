@@ -137,6 +137,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A send that waits for its rate-budget turn while a hedge starts beside it records its connection and the bytes it
+  writes into its own attempt. They went into the hedge's attempt, whichever send wrote them.
 - A problem+json error body with an extension nested hundreds of levels deep, about 1 KB, raised a raw
   `RecursionError` from every call. It is now read as no problem detail, and the status error names the body.
 - An error body declaring `charset=idna` or `charset=undefined` raised a bare `UnicodeError`. It is read as UTF-8,
