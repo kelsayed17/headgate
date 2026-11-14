@@ -14,8 +14,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `max_response_bytes=` on a call (#57) raises or lowers the client's body cap for that call alone, as `timeout=` and
   `deadline=` already can: higher for one large file on a host whose other files are small, lower for an endpoint that
   should stay small. It is checked as a positive `int`. A cached client holds the body up to the call's cap, so the
-  entry is stored, and every read of an entry is checked against the cap of the call reading it. `stream()` takes no
-  cap, since its body is never buffered.
+  entry is stored, and every read of an entry is checked against the cap of the call reading it. An undeclared error
+  status keeps the client's cap, so it still raises as its status. `stream()` takes no cap, since its body is never
+  buffered.
 - `CallOptions`, the TypedDict of every per-call option but the body, which every verb and `paginate()` take, and
   `headgate.streaming.StreamOptions`, the options of `stream()`. `with_options(follow_redirects=...)` sets a view's
   redirect choice, and is refused on a client with a `response_check`, as each of its calls would be.
@@ -45,10 +46,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `null` where `json=None` sent no body. A `Raw` content that is no body (a `str`, a `bytearray`, a list) raises
   `TypeError` when the `Raw` is built, and a `body=` that is no `Body` (bare `bytes`, a `dict`) raises `TypeError`
   naming it.
-- **A call's explicit `retry=None` now sends once; it used to mean "take the view's or the client's policy".**
-  `retry` is a call option now, where leaving it out inherits and `None` is off. A forwarding wrapper whose own
-  default is `None` (`retry=retry`) is the usual case: type it on `**options: Unpack[CallOptions]` and forward
-  `**options`, or leave `retry` out when it is `None`. Find affected calls with
+- **A call's or a view's explicit `retry=None` now sends once; it used to mean "take the view's or the client's
+  policy".** `with_options(retry=None)` ignored the `None` and kept the client's policy; it now sends each of the
+  view's calls once. `retry` is a call option now, where leaving it out inherits and `None` is off. A forwarding
+  wrapper whose own default is `None` (`retry=retry`) is the usual case: type it on `**options: Unpack[CallOptions]`
+  and forward `**options`, or leave `retry` out when it is `None`. Find affected calls and views with
   `grep -rnE "(retry|cache_ttl)=(None|[a-z_]+)\b"`.
 - **A call's explicit `cache_ttl=None` now stores without a lifetime limit; it used to mean "the cache's `ttl`".** It
   removes headgate's lifetime only: the cache is TTL-only and still never reads a response's own cache headers, so such

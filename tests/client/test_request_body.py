@@ -216,3 +216,11 @@ async def test_a_one_shot_raw_body_is_sent_once_and_bytes_are_sent_again() -> No
     await _client(twice).post("orders", expect=nothing, body=Raw(b"once"), idempotency_key="k")
 
     assert (len(once.sent), [request.content for request in twice.sent]) == (1, [b"once", b"once"])
+
+
+def test_a_multipart_body_needs_a_file() -> None:
+    """Refuse a ``Multipart`` with no files, which httpx2 would send as a form: fields alone are a ``Form``."""
+    with pytest.raises(
+        ValueError, match=r"^Multipart needs at least one file; send form fields alone as Form\(fields\)$"
+    ):
+        Multipart({}, {"a": "1"})

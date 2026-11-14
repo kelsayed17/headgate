@@ -280,8 +280,9 @@ def test_a_stream_a_walk_and_a_view_refuse_an_old_override_value(options: dict[s
         (0, ValueError, r"^cache_ttl must be a positive finite number of seconds, or None \(got 0\)$"),
         (math.inf, ValueError, r"^cache_ttl must be a positive finite number of seconds, or None \(got inf\)$"),
         ("60", TypeError, r"^cache_ttl= takes seconds, or None for no lifetime limit \(got str\)$"),
+        (True, TypeError, r"^cache_ttl= takes seconds, or None for no lifetime limit \(got bool\)$"),
     ],
-    ids=["zero", "infinite", "str"],
+    ids=["zero", "infinite", "str", "bool"],
 )
 async def test_a_bad_cache_ttl_is_refused(ttl: object, error: type[Exception], message: str) -> None:
     """Refuse a lifetime no entry could live by, as ``HttpCache(ttl=)`` does, sending nothing."""

@@ -142,14 +142,19 @@ class Multipart:
     file object. The body can be sent again (:attr:`replayable`) unless a file object cannot be rewound.
 
     :raises TypeError: for *fields* that are not a mapping.
+    :raises ValueError: for no files, which httpx2 would send as a form, not as ``multipart/form-data``: send fields
+        alone as :class:`Form`.
     """
 
     files: UploadFiles
     fields: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Refuse fields that are not a mapping."""
+        """Refuse fields that are not a mapping, and a body with no files."""
         check_kind("fields", self.fields, Mapping, "a mapping of field names to values")
+        if not self.files:
+            msg = "Multipart needs at least one file; send form fields alone as Form(fields)"
+            raise ValueError(msg)
 
     @property
     def replayable(self) -> bool:

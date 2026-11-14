@@ -651,7 +651,10 @@ class AsyncBaseClient:
         async with self._reported(prepared):
             async with self._deadline(prepared), self._exchange(prepared) as (streamed, _):
                 announce_deprecation(prepared.context, streamed)
-                resp = await read_capped(streamed, cap or self._max_response_bytes, self._site(prepared))
+                # The call's cap is for the answers it reads; an undeclared error keeps the client's, so it still
+                # raises as its status, not as a body too large for an answer it never asked for.
+                answer_cap = cap if streamed.is_success or streamed.status_code in spec.answers else None
+                resp = await read_capped(streamed, answer_cap or self._max_response_bytes, self._site(prepared))
             answer = self._dispatch(resp, spec, self._site(prepared))
             # Only now that the reader accepted it may a cached miss be stored.
             await store_accepted(resp)

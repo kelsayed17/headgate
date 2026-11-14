@@ -88,7 +88,8 @@ class CallOptions(_Buffered, total=False, closed=True):
       ``IdempotencyKeys`` header (``Idempotency-Key`` by default).
     * ``max_response_bytes``: the cap on this call's body, counted after decompression, in place of
       ``HttpOptions.max_response_bytes``: higher for one large file, or lower for an endpoint that should stay small. A
-      cached client holds the body up to it too.
+      cached client holds the body up to it too. It caps the answers the call reads, a 2xx or a declared status; an
+      undeclared error keeps the client's cap, so it raises as its status.
     """
 
 
@@ -97,9 +98,9 @@ class RequestOptions(_Buffered, _Bodies, total=False, closed=True):
 
     * ``body``: a :data:`~headgate.Body`, whose class says how it is sent: an :class:`~headgate.EncodedBody` a
       flavor's ``writer`` wrote (``body=NEW_ORDER(order)``), :class:`~headgate.Json`, :class:`~headgate.Form`,
-      :class:`~headgate.Multipart` or :class:`~headgate.Raw`; ``None`` is no body. An ``EncodedBody`` or a ``Json``
-      is sent with its ``Content-Type`` unless ``headers=`` (the call's or its view's, not the client's defaults) sets
-      one.
+      :class:`~headgate.Multipart` or :class:`~headgate.Raw`; ``None`` is no body. Every body but ``Raw`` is sent
+      with its own ``Content-Type`` over the client's default, unless ``headers=`` (the call's or its view's) sets
+      one; a ``Multipart`` body then loses the boundary its type names, so leave its ``Content-Type`` to headgate.
     """
 
 
@@ -161,8 +162,9 @@ def check_overrides(options: Mapping[str, object]) -> None:
     if "follow_redirects" in options:
         check_kind("follow_redirects", options["follow_redirects"], bool, "a bool; leave it out to inherit")
     ttl = options.get("cache_ttl")
-    if ttl is not None:
-        check_kind("cache_ttl", ttl, (int, float), "seconds, or None for no lifetime limit")
+    if isinstance(ttl, bool) or (ttl is not None and not isinstance(ttl, int | float)):
+        # No kind at all, so check_kind refuses a bool too, in its own words.
+        check_kind("cache_ttl", ttl, (), "seconds, or None for no lifetime limit")
     if isinstance(ttl, int | float) and not (ttl > 0 and math.isfinite(ttl)):
         msg = f"cache_ttl must be a positive finite number of seconds, or None (got {ttl})"
         raise ValueError(msg)

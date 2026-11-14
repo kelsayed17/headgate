@@ -12,11 +12,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Final
 
+import httpx2
 import pytest
 
-from headgate import HttpOptions, as_bytes
+from headgate import Expect, HttpOptions, as_bytes, nothing
 from headgate.cache import HttpCache
-from headgate.errors import ResponseTooLargeError
+from headgate.errors import ResponseTooLargeError, UpstreamStatusError
 from tests.cache._helpers import TrackingNetwork, every_get_rules, stub_client
 
 if TYPE_CHECKING:
@@ -106,3 +107,18 @@ def test_a_stream_takes_no_cap() -> None:
 
     with pytest.raises(TypeError, match=r"^stream\(\) got an unexpected keyword argument 'max_response_bytes'$"):
         client.stream("file", **options)
+
+
+async def test_an_undeclared_error_keeps_the_clients_cap() -> None:
+    """Raise an undeclared 404 as its status under a low call cap, and cap a declared 404 as the answer it is.
+
+    The call's cap is for the answers it reads; a 1 KiB HTML error page past it is still the 404 it is.
+    """
+    network = TrackingNetwork(_BODY, status=404)
+    client = _client(network, cap=_LARGE, storage=None)
+
+    with pytest.raises(UpstreamStatusError) as raised:
+        await client.get("file", expect=as_bytes, max_response_bytes=_SMALL)
+    assert raised.value.status_code == httpx2.codes.NOT_FOUND
+    with pytest.raises(ResponseTooLargeError):
+        await client.get("file", expect=Expect(nothing).on(404, as_bytes), max_response_bytes=_SMALL)
