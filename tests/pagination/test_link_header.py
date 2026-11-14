@@ -93,9 +93,28 @@ def test_a_header_cut_short_keeps_what_it_says(header: str, params: dict[str, st
 def test_the_next_link_is_found_across_several_link_fields() -> None:
     """Find ``rel="next"`` in any of the response's ``Link`` fields, the first one winning."""
     headers = httpx2.Headers([("link", '<a>; rel="prev"'), ("Link", '<b>; rel="next", <c>; rel="next"')])
-    assert next_link(headers) == "b"
-    assert next_link(httpx2.Headers({"link": '<a>; rel="last"'})) is None
-    assert next_link(httpx2.Headers()) is None
+    assert next_link(headers, _PAGE) == "b"
+    assert next_link(httpx2.Headers({"link": '<a>; rel="last"'}), _PAGE) is None
+    assert next_link(httpx2.Headers(), _PAGE) is None
+
+
+#: The URL of the page a ``Link`` header came with.
+_PAGE = httpx2.URL("https://api.test/items?page=1")
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ('<b>; rel="next"; anchor="https://api.test/other", <c>; rel="next"', "c"),
+        ('<b>; rel="next"; anchor="#section"', None),
+        ('<b>; rel="next"; anchor="http://[::1"', None),
+        ('<b>; rel="next"; anchor="https://api.test/items?page=1"', "b"),
+        ('<b>; rel="next"; anchor="?page=1"', "b"),
+    ],
+)
+def test_a_next_link_anchored_to_another_resource_is_not_this_pages(header: str, expected: str | None) -> None:
+    """Skip a ``rel="next"`` whose ``anchor`` names another resource: by RFC 8288 it is that resource's next."""
+    assert next_link(httpx2.Headers({"link": header}), _PAGE) == expected
 
 
 #: A URI reference as a server writes one in ``<...>``: anything but ``>`` and the characters around it in the grammar.

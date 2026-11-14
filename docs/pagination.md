@@ -28,7 +28,10 @@ async for item in client.paginate("items", expect=reader(Page), pages=ITEM_PAGES
 Nothing is fetched until iteration starts, no page is kept once the iteration moves past it, stopping early fetches
 nothing more, and iterating again starts again from the first page. A page that leads back to a request already made
 (a cursor or next URL that repeats) raises `ClientError` instead of looping forever. A request is remembered by its URL,
-query and, for a POST, the bytes its body is sent as, so two bodies are one page exactly when they are sent alike.
+as written and as sent, its query and, for a POST, the bytes its body is sent as, so two bodies are one page exactly
+when they are sent alike. `Offset`, `PageNumber` and `BodyOffset` build each request from the last, so a server that
+ignores the paging parameter would answer the same page forever: a page with items whose body repeats an earlier
+page's raises `ClientError` too. A walk remembers a fixed-size digest of each, for its last 4096 pages.
 
 ## Collecting into a list
 
@@ -83,7 +86,7 @@ redirect raise as its 3xx, and `cache_ttl=` is each page's cache lifetime.
 | `Cursor(items=, next=, param=)` | the same request with `param` set to the cursor `next(page)` returns | `next` returns `None` or `""`, or a page with no items |
 | `Offset(items=, page_size=, param="offset", start=0, total=None)` | the same request with `param` advanced by the items this page held | a page with fewer than `page_size` items, or one that reaches `total` |
 | `PageNumber(items=, more=, param="page", start=1)` | the same request with `param` one higher | `more` returns `False`, or a page with no items |
-| `LinkHeader(items=)` | the target of the response's `Link: <...>; rel="next"` (RFC 8288) | no `rel="next"` link, or a page with no items |
+| `LinkHeader(items=)` | the target of the response's `Link: <...>; rel="next"` (RFC 8288), unless its `anchor` names another resource | no `rel="next"` link, or a page with no items |
 | `NextUrl(items=, next=)` | the URL `next(page)` returns, absolute or relative | `next` returns `None` or `""`, or a page with no items |
 | `BodyCursor(items=, next=, put=)` | the same POST with its body `put(body, cursor)` | as `Cursor` |
 | `BodyOffset(items=, page_size=, offset=, put=, total=None)` | the same POST with its body `put(body, offset(body) + items)` | as `Offset` |
@@ -93,9 +96,10 @@ advances while returning nothing makes no progress, and following it spends the 
 endpoint that sends empty pages mid-walk, pass `stop_on_empty=False`.
 
 `Offset` sends only the offset; the page size goes in `params=`, under whatever name the endpoint uses (`limit`,
-`per_page`, `page_size`). Where a page reports how many items the whole walk holds, `total=` reads it, and the walk ends
-once the offset reaches it, instead of asking for the empty page past a last page that happened to be full. A `total`
-that returns `None` (a count the server gives only as "at least", say) leaves the walk to end at a short page:
+`per_page`, `page_size`). The walk starts at the offset your own `params=` give, else at `start` (`1` for a 1-based
+API). Where a page reports how many items the whole walk holds, `total=` reads it, and the walk ends once it has
+passed that many items, or at an empty page: it does not ask for the empty page past a last page that happened to be
+full, and a server that caps its pages below `page_size` is still walked to the end. A `total` that returns `None` (a count the server gives only as "at least", say) leaves the walk to end at a short page:
 
 ```python
 def exact_total(page: SearchPage) -> int | None:

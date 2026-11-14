@@ -15,10 +15,10 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+import httpx2
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
-
-    import httpx2
 
 __all__ = ["Link", "next_link", "parse_link_header"]
 
@@ -66,13 +66,28 @@ def parse_link_header(value: str) -> list[Link]:
     return links
 
 
-def next_link(headers: httpx2.Headers) -> str | None:
-    """Return the target of the first ``rel="next"`` link in *headers*' ``Link`` fields, or ``None``."""
+def next_link(headers: httpx2.Headers, url: httpx2.URL) -> str | None:
+    """Return the target of the first ``rel="next"`` link in *headers*' ``Link`` fields, or ``None``.
+
+    *url* is the page the headers came with. A link whose ``anchor`` names another resource is that resource's next
+    page, not this one's (RFC 8288 section 3.2), so it is skipped.
+    """
     for value in headers.get_list("link"):
         for link in parse_link_header(value):
-            if "next" in link.rels:
+            if "next" in link.rels and _anchored_at(link, url):
                 return link.target
     return None
+
+
+def _anchored_at(link: Link, url: httpx2.URL) -> bool:
+    """Return whether *link*'s context is *url*: it has no ``anchor``, or one that resolves to *url*."""
+    anchor = link.params.get("anchor")
+    if anchor is None:
+        return True
+    try:
+        return url.join(anchor) == url
+    except httpx2.InvalidURL:
+        return False
 
 
 def _skip(value: str, i: int, chars: str) -> int:
