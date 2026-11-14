@@ -30,7 +30,7 @@ from headgate._core import (
     RetryScheduled,
 )
 from headgate.ratelimit import Rate
-from headgate.retry import Backoff, Hedge, RetryBudget, RetryPolicy
+from headgate.retry import Backoff, Hedge, RetryBudget, RetryPolicy, RetryShare
 from headgate.retry._tracking import head_size
 from headgate.retry._transport import RetryTransport
 from headgate.testing import FaultyTransport, Respond, TestClock
@@ -339,7 +339,7 @@ async def test_a_retryable_failure_in_a_hedged_round_waits_for_the_other_send() 
 @pytest.mark.parametrize(
     "policy",
     [
-        RetryPolicy(hedge=Hedge(after=_HEDGE_AFTER), budget=RetryBudget(ratio=0.0, min_per_second=0.0)),
+        RetryPolicy(hedge=Hedge(after=_HEDGE_AFTER), budget=RetryShare(ratio=0.0, min_per_second=0.0)),
         RetryPolicy(hedge=Hedge(after=_HEDGE_AFTER), budget=None, min_attempt_time=2.0),
     ],
     ids=["no-budget", "no-time"],
@@ -676,7 +676,7 @@ async def test_a_hedge_refused_after_the_first_send_failed_ends_with_that_failur
 
 def _one_retry(clock: TestClock) -> RetryBudget:
     """Return a budget on *clock* that admits one retry at a time over its window."""
-    return RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0, clock=clock)
+    return RetryBudget(RetryShare(ratio=0.0, min_per_second=0.1, window=10.0), timing=Timing(clock=clock))
 
 
 #: The send :class:`_RefusesTheSecondSend` refuses: the first call's hedge.
@@ -859,7 +859,7 @@ async def test_a_hedge_cancelled_before_it_was_sent_gives_its_retry_budget_back(
         base_url="https://hedged.example",
         rate=Rate.per_second(1000),
         policy=TransportPolicy(
-            retry=RetryPolicy(hedge=Hedge(after=0.001), budget=RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0))
+            retry=RetryPolicy(hedge=Hedge(after=0.001), budget=RetryShare(ratio=0.0, min_per_second=0.1, window=10.0))
         ),
         http=HttpOptions(
             transport=httpx2.MockTransport(lambda request: httpx2.Response(200, content=b"{}", request=request))

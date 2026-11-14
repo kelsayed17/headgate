@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import headgate.retry
-from headgate.retry import IDEMPOTENT_METHODS, RETRY_STATUSES, Backoff, Hedge, RetryBudget, RetryPolicy
+from headgate.retry import IDEMPOTENT_METHODS, RETRY_STATUSES, Backoff, Hedge, RetryPolicy, RetryShare
 from headgate.timing import Timing
 
 if TYPE_CHECKING:
@@ -34,9 +34,9 @@ _FACTOR = 0.5
         (lambda: RetryPolicy(min_attempt_time=float("nan")), "min_attempt_time"),
         (lambda: Backoff(factor=-1.0), "factor"),
         (lambda: Backoff(max_wait=float("inf")), "max_wait"),
-        (lambda: RetryBudget(ratio=-0.1), "ratio"),
-        (lambda: RetryBudget(min_per_second=-1.0), "min_per_second"),
-        (lambda: RetryBudget(window=0.0), "window"),
+        (lambda: RetryShare(ratio=-0.1), "ratio"),
+        (lambda: RetryShare(min_per_second=-1.0), "min_per_second"),
+        (lambda: RetryShare(window=0.0), "window"),
         (lambda: Hedge(after=0.0), "after"),
         (lambda: Hedge(max_extra=0), "max_extra"),
     ],
@@ -67,7 +67,7 @@ def test_the_defaults_are_the_documented_ones() -> None:
 
     assert policy.methods == IDEMPOTENT_METHODS == frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
     assert policy.statuses == RETRY_STATUSES == frozenset({408, 425, 429, 500, 502, 503, 504})
-    assert policy.budget == RetryBudget(ratio=0.2, min_per_second=10, window=10.0)
+    assert policy.budget == RetryShare(ratio=0.2, min_per_second=10, window=10.0)
     assert policy.hedge is None
     assert not hasattr(headgate.retry, "NO_RETRY")
 
@@ -118,9 +118,9 @@ def test_wait_after_waits_a_retry_after_exactly_and_backs_off_otherwise() -> Non
     [
         (lambda: Backoff(factor=-1), "factor must be >= 0 and finite (got -1)"),
         (lambda: Backoff(max_wait=-1), "max_wait must be >= 0 and finite (got -1)"),
-        (lambda: RetryBudget(ratio=-1), "ratio must be >= 0 and finite (got -1)"),
-        (lambda: RetryBudget(min_per_second=-1), "min_per_second must be >= 0 and finite (got -1)"),
-        (lambda: RetryBudget(window=0), "window must be > 0 and finite (got 0)"),
+        (lambda: RetryShare(ratio=-1), "ratio must be >= 0 and finite (got -1)"),
+        (lambda: RetryShare(min_per_second=-1), "min_per_second must be >= 0 and finite (got -1)"),
+        (lambda: RetryShare(window=0), "window must be > 0 and finite (got 0)"),
         (lambda: Hedge(after=0), "after must be > 0 and finite (got 0)"),
         (lambda: RetryPolicy(max_retry_after=-1), "max_retry_after must be >= 0 and finite (got -1)"),
         (lambda: RetryPolicy(min_attempt_time=-1), "min_attempt_time must be >= 0 and finite (got -1)"),

@@ -59,14 +59,15 @@ from headgate._core import (
     Sleep,
     Timing,
 )
-from headgate.retry._budget import RetryLedger
 from headgate.retry._classify import Attempted, Verdict, classify
 from headgate.retry._policy import (
     NETWORK_ERRORS,
     REPLAYABLE_BODY,
     RETRY_OUTCOME,
     RETRY_POLICY,
+    RetryBudget,
     RetryOutcome,
+    RetryShare,
     is_keyed,
 )
 
@@ -74,7 +75,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from headgate._core import SendProgress
-    from headgate.retry._policy import Hedge, RetryBudget, RetryPolicy
+    from headgate.retry._policy import Hedge, RetryPolicy
 
 __all__ = ["RetryTransport"]
 
@@ -192,11 +193,11 @@ class _Sequence:
         policy: RetryPolicy,
         *,
         via: _Via,
-        ledger: RetryLedger | None,
+        budget: RetryBudget | None,
     ) -> None:
         """Prepare to send *request*, whose call is *context*, under *policy*, *via* the layer below.
 
-        *ledger* is the retry budget's account, if the policy has a budget.
+        *budget* is the retry budget the call spends, if the policy has one.
         """
         self._transport = via.transport
         self._sleep = via.sleep
@@ -209,7 +210,7 @@ class _Sequence:
         self._method = request.method.upper()
         self._keyed = is_keyed(context, request)
         self._replayable = context.get(REPLAYABLE_BODY) is not False
-        self._ledger = ledger
+        self._retry_budget = budget
         self._sent = 0
         self._retries = 0
 
@@ -350,7 +351,7 @@ class _Sequence:
         """
         if self._sent >= self._policy.attempts or self._stop_reason() is not None:
             return False
-        if self._ledger is not None and not self._ledger.try_spend():
+        if self._retry_budget is not None and not self._retry_budget.try_spend():
             return False
         self._scheduled(after, _HEDGE_REASON)
         return True
@@ -395,14 +396,14 @@ class _Sequence:
             return "deadline exhausted"
         if (reason := self._stop_reason()) is not None:
             return reason
-        if self._ledger is not None and not self._ledger.try_spend():
+        if self._retry_budget is not None and not self._retry_budget.try_spend():
             return "retry budget exhausted"
         return None
 
     def _refund(self) -> None:
         """Give back the retry budget a retry or hedge spent and then never sent."""
-        if self._ledger is not None:
-            self._ledger.refund()
+        if self._retry_budget is not None:
+            self._retry_budget.refund()
 
     def _scheduled(self, delay: float, reason: str) -> None:
         """Emit ``RetryScheduled`` for the attempt about to be scheduled, when anyone is listening."""
@@ -414,8 +415,8 @@ class _Sequence:
 
     async def run(self) -> httpx2.Response:
         """Send until an answer, or a failure the policy does not retry; return the response or raise the exception."""
-        if self._ledger is not None:
-            self._ledger.record_first()
+        if self._retry_budget is not None:
+            self._retry_budget.record_first()
         try:
             attempt = await self._round()
             while True:
@@ -516,9 +517,10 @@ async def _cancel_losers(tasks: list[asyncio.Task[_Attempt] | asyncio.Task[None]
 class RetryTransport(httpx2.AsyncBaseTransport):
     """Re-send a request when its policy says it is safe and worthwhile, and close what it wraps.
 
-    See the module docstring for the sequence it runs. One :class:`~headgate.retry._budget.RetryLedger` is kept per
-    distinct :class:`~headgate.retry.RetryBudget`, shared by every call through this transport (one client and its
-    views).
+    See the module docstring for the sequence it runs. A policy's :class:`~headgate.retry.RetryShare` is spent from a
+    :class:`~headgate.retry.RetryBudget` this transport keeps, one per distinct share, shared by every call through it
+    (one client and its views and routes); a policy's own ``RetryBudget`` is spent as it is, shared with whoever else
+    holds it.
     """
 
     def __init__(
@@ -532,23 +534,23 @@ class RetryTransport(httpx2.AsyncBaseTransport):
         self._transport = transport
         self._via = _Via(transport, timing.sleep, timing.random, timing.wall_clock)
         self.policy = policy
-        self._clock = timing.clock
-        self._ledgers: dict[RetryBudget, RetryLedger] = {}
+        self._timing = timing
+        self._budgets: dict[RetryShare, RetryBudget] = {}
 
-    def _ledger(self, budget: RetryBudget | None) -> RetryLedger | None:
-        """Return the ledger this transport keeps for *budget*, created on first use; ``None`` without a budget."""
-        if budget is None:
-            return None
-        ledger = self._ledgers.get(budget)
-        if ledger is None:
-            ledger = self._ledgers[budget] = RetryLedger(budget, self._clock)
-        return ledger
+    def _budget(self, budget: RetryShare | RetryBudget | None) -> RetryBudget | None:
+        """Return the budget a policy's *budget* names: a shared one as it is, this client's for a share; or none."""
+        if budget is None or isinstance(budget, RetryBudget):
+            return budget
+        own = self._budgets.get(budget)
+        if own is None:
+            own = self._budgets[budget] = RetryBudget(budget, timing=self._timing)
+        return own
 
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         context = CallContext.of(request)
         policy = context.get(RETRY_POLICY) or self.policy
-        sequence = _Sequence(request, context, policy, via=self._via, ledger=self._ledger(policy.budget))
+        sequence = _Sequence(request, context, policy, via=self._via, budget=self._budget(policy.budget))
         return await sequence.run()
 
     @override

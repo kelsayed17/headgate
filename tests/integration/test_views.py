@@ -26,14 +26,14 @@ from headgate import (
 )
 from headgate.events import RateLimited
 from headgate.ratelimit import Rate
-from headgate.retry import RetryBudget
+from headgate.retry import RetryShare
 from headgate.testing import FakeTransport, TestClock, isolated_breakers
 from headgate.timing import Timing
 from tests.integration._support import client
 from tests.support.events import Recorder
 
 #: A budget that admits exactly one retry per window, whatever the traffic: no ratio, a floor of one.
-_ONE_RETRY = RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0)
+_ONE_RETRY = RetryShare(ratio=0.0, min_per_second=0.1, window=10.0)
 
 #: The pause a 429 asks for.
 _PAUSE = 5.0

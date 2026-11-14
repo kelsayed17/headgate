@@ -10,13 +10,13 @@ turn it off with `retry=None`, or set it per route with `Route(fragment, retry=.
 
 ```python
 from headgate import RetryPolicy, TransportPolicy
-from headgate.retry import Backoff, Hedge, RetryBudget
+from headgate.retry import Backoff, Hedge, RetryShare
 
 policy = TransportPolicy(
     retry=RetryPolicy(
         attempts=4,
         backoff=Backoff(factor=0.25, max_wait=8.0),
-        budget=RetryBudget(ratio=0.1),
+        budget=RetryShare(ratio=0.1),
         hedge=Hedge(after=0.8),
     )
 )
@@ -29,7 +29,7 @@ policy = TransportPolicy(
 | `statuses` | `408 425 429 500 502 503 504` | the statuses that are retryable failures |
 | `backoff` | `Backoff(factor=0.5, max_wait=5.0)` | the wait when the response names none |
 | `max_retry_after` | `30.0` | the longest `Retry-After` that is waited |
-| `budget` | `RetryBudget(ratio=0.2, min_per_second=10, window=10)` | the share of traffic retries may add, or `None` |
+| `budget` | `RetryShare(ratio=0.2, min_per_second=10, window=10)` | the share of traffic retries may add; a shared `RetryBudget`; or `None` |
 | `respect_should_retry` | `True` | follow a server's `x-should-retry: true` or `false` |
 | `hedge` | `None` | an opt-in `Hedge` for slow idempotent requests |
 | `min_attempt_time` | `0.05` | the least time left before the deadline that a retry, a hedge or a wait starts with |
@@ -91,12 +91,26 @@ cap on a pause, which only a `max_retry_after` past an hour can exceed).
 
 Retries may add at most `ratio` of the first attempts made over the last `window` seconds, plus a floor of
 `min_per_second · window` so a quiet client can still retry: with the defaults, 20% plus 10 a second. Hedges spend the
-same budget. A client keeps one account per distinct `RetryBudget` value, shared by every call it makes and by its
-`with_options` views, so once traffic is above the floor a failing upstream sees about 1.2 times its normal load from
-a client, not three times. A call that finds the budget
-spent raises its last failure with the note `retry budget exhausted`. A retry or hedge that is never sent (the breaker
+same budget. A client keeps one budget per distinct `RetryShare`, shared by every call it makes, by its
+`with_options` views and by every route that names an equal share, so once traffic is above the floor a failing
+upstream sees about 1.2 times its normal load from a client, not three times. A call that finds the budget spent raises
+its last failure with the note `retry budget exhausted`. A retry or hedge that is never sent (the breaker
 opened or the deadline came during the wait, the rate budget could not send it in time, or it or the call was
 cancelled before the rate budget let it out) gives its share back. `budget=None` removes the cap.
+
+A `RetryShare` is a value, as a `Rate` is: two clients given equal shares keep a budget each. To cap the retries of
+several clients together, as a `RateBudget` paces them together, build one live `RetryBudget` from the share and give
+each client the same object:
+
+```python
+from headgate import RetryPolicy, TransportPolicy
+from headgate.retry import RetryBudget, RetryShare
+
+shared = RetryBudget(RetryShare(ratio=0.1))  # its window runs on the current timing, as TestClock.install() sets it
+policy = TransportPolicy(retry=RetryPolicy(budget=shared))  # every client built with it spends one budget
+```
+
+Its `repr` shows the share and what the window holds now (`RetryBudget(RetryShare(...), retries=3, firsts=40)`).
 
 ## Deadlines and the breaker
 

@@ -8,6 +8,7 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `RetryShare`, the frozen share of traffic retries may add, from which each client builds a budget of its own.
 - `headgate.call_info(request)`, a middleware's read-only view of its call: a `headgate.events.CallView` holding the
   call's `CallInfo` (its route template among it), its `attempt` and the seconds `remaining` before its deadline,
   taken when asked, or `None` for a request no client call built. A middleware no longer imports the private
@@ -47,6 +48,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- `RetryBudget(ratio=..., min_per_second=..., window=...)` as a policy value is `RetryShare(...)`, with the same
+  fields and the same per-client meaning: a client keeps one budget per distinct share, spent by its calls, views and
+  routes. `RetryBudget` is now live shared state, as `RateBudget` is: `RetryBudget(share, *, timing=None)`, and every
+  client whose policy names the same object spends one window. `RetryPolicy(budget=)` takes a `RetryShare`, a
+  `RetryBudget` or `None` (no cap). The old keywords raise `TypeError`, and `RetryBudget(clock=)` is
+  `RetryBudget(share, timing=Timing(clock=...))`.
 - Every clock is one `timing=`, and `None` reads the current timing when the object is built:
   - `BreakerRegistry(clock=c)` and `CircuitBreaker(clock=c)` are `timing=Timing(clock=c)`;
   - `RateBudget(wall_clock=w)` is `timing=Timing(wall_clock=w)`;

@@ -23,7 +23,7 @@ from headgate import (
 from headgate._core import RetryScheduled, Timing, timing_override
 from headgate.errors import TransportError
 from headgate.ratelimit import Rate
-from headgate.retry import Backoff, RetryBudget
+from headgate.retry import Backoff, RetryShare
 from headgate.testing import ConnectFail, DropMidBody, FaultyTransport, Respond, Slow, TestClock
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
@@ -173,7 +173,7 @@ async def test_a_whole_retry_sequence_counts_once_toward_the_breaker() -> None:
 
 async def test_the_budget_is_shared_by_every_call_of_a_client() -> None:
     """Refuse the second call's retry once the first call spent the client's budget."""
-    budget = RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0)
+    budget = RetryShare(ratio=0.0, min_per_second=0.1, window=10.0)
     network = FaultyTransport(schedule=[Respond(503), Respond(200), Respond(503)])
     client = _client(network, RetryPolicy(backoff=_FULL, budget=budget))
 

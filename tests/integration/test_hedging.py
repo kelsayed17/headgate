@@ -18,7 +18,7 @@ import pytest
 from headgate import BreakerPolicy, ClientError, HttpOptions, RetryPolicy, TransportPolicy, nothing
 from headgate.breaker import BreakerState
 from headgate.events import RetryScheduled
-from headgate.retry import Hedge, RetryBudget
+from headgate.retry import Hedge, RetryShare
 from headgate.testing import FakeTransport, TestClock, isolated_breakers
 from tests.integration._support import BASE, client
 from tests.support.events import Recorder
@@ -26,7 +26,7 @@ from tests.support.events import Recorder
 _HEDGE = Hedge(after=0.5)
 
 #: A budget that admits exactly one retry or hedge per window, whatever the traffic.
-_ONE_RETRY = RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0)
+_ONE_RETRY = RetryShare(ratio=0.0, min_per_second=0.1, window=10.0)
 
 #: How long a slow first send takes, on the test clock: longer than the hedge's ``after``.
 _SLOW = 1.0

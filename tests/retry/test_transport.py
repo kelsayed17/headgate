@@ -24,7 +24,7 @@ from headgate._core import (
     Emitter,
     RetryScheduled,
 )
-from headgate.retry import Backoff, Hedge, RetryBudget, RetryPolicy
+from headgate.retry import Backoff, Hedge, RetryPolicy, RetryShare
 from headgate.retry._policy import REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE, RetryOutcome
 from headgate.retry._transport import RetryTransport
 from headgate.testing import (
@@ -548,7 +548,7 @@ async def test_a_closed_breaker_lets_the_retries_run() -> None:
 async def test_a_spent_budget_stops_the_sequence_and_the_error_stays_retryable() -> None:
     """Stop when the budget has no room, noting it, with the failure still marked retryable."""
     clock = TestClock()
-    budget = RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0)
+    budget = RetryShare(ratio=0.0, min_per_second=0.1, window=10.0)
     policy = RetryPolicy(backoff=_FULL, budget=budget)
     retry, network = _transport([Respond(503), Respond(503), Respond(200)], clock, policy)
     request, context = _request(clock=clock)
@@ -567,13 +567,13 @@ async def test_a_spent_budget_stops_the_sequence_and_the_error_stays_retryable()
 async def test_one_budget_is_shared_by_every_call_through_the_transport() -> None:
     """Charge every call's retries to the transport's one ledger for an equal budget value."""
     clock = TestClock()
-    policy = RetryPolicy(backoff=_FULL, budget=RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0))
+    policy = RetryPolicy(backoff=_FULL, budget=RetryShare(ratio=0.0, min_per_second=0.1, window=10.0))
     retry, network = _transport([Respond(503), Respond(200), Respond(503)], clock, policy)
 
     first, _ = _request(clock=clock)
     await (await retry.handle_async_request(first)).aclose()
     second, second_context = _request(clock=clock)
-    second_context.put(RETRY_POLICY, RetryPolicy(backoff=_FULL, budget=RetryBudget(ratio=0.0, min_per_second=0.1)))
+    second_context.put(RETRY_POLICY, RetryPolicy(backoff=_FULL, budget=RetryShare(ratio=0.0, min_per_second=0.1)))
     await (await retry.handle_async_request(second)).aclose()
 
     assert len(network.calls) == _THREE_SENDS, "the second call's retry finds the shared budget spent"
@@ -581,7 +581,7 @@ async def test_one_budget_is_shared_by_every_call_through_the_transport() -> Non
 
 
 #: A budget with room for exactly one retry over its window, whatever the traffic.
-_ONE_RETRY = RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0)
+_ONE_RETRY = RetryShare(ratio=0.0, min_per_second=0.1, window=10.0)
 
 
 class _Answers(httpx2.AsyncBaseTransport):
@@ -954,7 +954,7 @@ async def test_an_answer_before_the_hedge_delay_cancels_the_timer() -> None:
 async def test_a_hedge_is_not_started_without_budget() -> None:
     """Skip the hedge when the budget has no room, and wait for the first send alone."""
     clock = TestClock()
-    policy = RetryPolicy(hedge=Hedge(after=_HEDGE_AFTER), budget=RetryBudget(ratio=0.0, min_per_second=0.0))
+    policy = RetryPolicy(hedge=Hedge(after=_HEDGE_AFTER), budget=RetryShare(ratio=0.0, min_per_second=0.0))
     retry, network = _transport([Slow(seconds=1), Respond(200)], clock, policy)
     request, _ = _request(clock=clock)
 

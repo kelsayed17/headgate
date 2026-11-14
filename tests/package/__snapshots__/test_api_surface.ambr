@@ -355,7 +355,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.retry]
   '''
   module headgate.retry
-  __all__ = ['IDEMPOTENT_METHODS', 'RETRY_STATUSES', 'Backoff', 'Hedge', 'RetryBudget', 'RetryPolicy']
+  __all__ = ['IDEMPOTENT_METHODS', 'RETRY_STATUSES', 'Backoff', 'Hedge', 'RetryBudget', 'RetryPolicy', 'RetryShare']
   IDEMPOTENT_METHODS = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'})
   RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
   class Backoff(object)(*, factor: 'float' = 0.5, max_wait: 'float' = 5.0) -> 'None'
@@ -365,22 +365,26 @@
   class Hedge(object)(*, after: 'float' = 0.5, max_extra: 'int' = 1) -> 'None'
       field after: float = 0.5
       field max_extra: int = 1
-  class RetryBudget(object)(*, ratio: 'float' = 0.2, min_per_second: 'float' = 10.0, window: 'float' = 10.0, clock: 'Clock | None' = None) -> 'None'
-      field ratio: float = 0.2
-      field min_per_second: float = 10.0
-      field window: float = 10.0
-      field clock: Clock | None = None
-  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
+  class RetryBudget(object)(share: 'RetryShare' = RetryShare(ratio=0.2, min_per_second=10.0, window=10.0), *, timing: 'Timing | None' = None) -> 'None'
+      def record_first(self) -> 'None'
+      def refund(self) -> 'None'
+      property share
+      def try_spend(self) -> 'bool'
+  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryShare | RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
       field attempts: int = 3
       field methods: frozenset[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'})
       field statuses: frozenset[int] = frozenset({408, 425, 429, 500, 502, 503, 504})
       field backoff: Backoff = <factory>
       field max_retry_after: float = 30.0
-      field budget: RetryBudget | None = <factory>
+      field budget: RetryShare | RetryBudget | None = <factory>
       field respect_should_retry: bool = True
       field hedge: Hedge | None = None
       field min_attempt_time: float = 0.05
       def wait_after(self, retry_after: 'float | None', retry: 'int', draw: 'float') -> 'float'
+  class RetryShare(object)(*, ratio: 'float' = 0.2, min_per_second: 'float' = 10.0, window: 'float' = 10.0) -> 'None'
+      field ratio: float = 0.2
+      field min_per_second: float = 10.0
+      field window: float = 10.0
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.security]
@@ -513,7 +517,7 @@
   __all__ = ['DEFAULT_TIMEOUTS', 'MAX_MINT_RESPONSE_BYTES', 'AsyncBaseClient', 'AuthError', 'BearerAuth', 'Body', 'BodyCursor', 'BodyOffset', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CircuitOpenError', 'ClientConfigurationError', 'ClientError', 'ClientTimeoutError', 'Codec', 'Cursor', 'DecodeError', 'EncodedBody', 'Expect', 'ForbiddenDestinationError', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'LinkHeader', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'NextUrl', 'Offset', 'PageLimit', 'PageLimitError', 'PageNumber', 'Paginated', 'Problem', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'ResponseParseError', 'ResponseTooLargeError', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_json', 'body_reader', 'call_info', 'decode_with', 'event_stream', 'nothing', 'reader_for', 'writer_for']
   DEFAULT_TIMEOUTS = Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)
   MAX_MINT_RESPONSE_BYTES = 1048576
-  class AsyncBaseClient(object)(*, base_url: 'str', rate: 'Rate | RateBudget | None' = None, auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryBudget(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), timeout=Timeouts(connect=None, read=None, write=None, pool=None), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=<headgate.breaker._registry.BreakerRegistry object at 0x…>), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, response_check=None, security=SecurityOptions(trusted_origins=frozenset(), block_private_hosts=False, resolver=None), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')), observers: 'Sequence[Observer]' = (), middleware: 'Sequence[Middleware]' = ()) -> 'None'
+  class AsyncBaseClient(object)(*, base_url: 'str', rate: 'Rate | RateBudget | None' = None, auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryShare(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), timeout=Timeouts(connect=None, read=None, write=None, pool=None), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=<headgate.breaker._registry.BreakerRegistry object at 0x…>), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, response_check=None, security=SecurityOptions(trusted_origins=frozenset(), block_private_hosts=False, resolver=None), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')), observers: 'Sequence[Observer]' = (), middleware: 'Sequence[Middleware]' = ()) -> 'None'
       def aclose(self) -> 'None'
       def delete(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def get(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
@@ -741,13 +745,13 @@
       property content_type
       property status_code
   class ResponseTooLargeError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
+  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryShare | RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
       field attempts: int = 3
       field methods: frozenset[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'})
       field statuses: frozenset[int] = frozenset({408, 425, 429, 500, 502, 503, 504})
       field backoff: Backoff = <factory>
       field max_retry_after: float = 30.0
-      field budget: RetryBudget | None = <factory>
+      field budget: RetryShare | RetryBudget | None = <factory>
       field respect_should_retry: bool = True
       field hedge: Hedge | None = None
       field min_attempt_time: float = 0.05
