@@ -32,7 +32,7 @@ names.
 | `method`, `url` | the request line of the call, the URL as the call gave it, with credentials redacted and cut to 300 characters |
 | `request_id` | the upstream's request id, from the first of `HttpOptions.request_id_headers` the response carried |
 | `attempts` | how many sends the call made, retries and followed redirects included |
-| `retryable` | whether the call's `RetryPolicy` would re-send after this outcome: a status in its `statuses` or a network failure, and only when sending again is safe for the method (see [retries](retries.md#what-retryable-means)) |
+| `retryable` | whether sending the call again later could succeed and is safe as it stands: for a status or a network failure, the call's `RetryPolicy` verdict, and `True` for the refusals headgate makes before sending (an open breaker, a rate budget past the deadline) (see [retries](retries.md#what-retryable-means)) |
 | `retry_after` | the seconds the upstream (or an open breaker, or a paused budget) asked to wait, or `None` |
 | `sent` | whether any byte of the call can have reached the network, by any send, retry or followed redirect: `False` only when none can have, so the call is safe to send again whatever its method; `True` when some may have, so a write may have been processed; `None` on an error no client call raised. A token mint's own requests never count |
 | notes | one line per attempt, and the reason the retries stopped (see [retries](retries.md#attempt-history)) |
@@ -61,22 +61,21 @@ engine.
 ## Reading a failure
 
 ```python
-from headgate import ClientError, RateLimitError, UpstreamStatusError
+from headgate import ClientError, UpstreamStatusError
 
 try:
     series = await catalog.get_series("GDP")
-except RateLimitError as exc:
-    reschedule(after=exc.retry_after)
-except UpstreamStatusError as exc:
-    if exc.problem is not None:
-        report(exc.problem.title, exc.problem.detail)
-    raise
 except ClientError as exc:
-    if exc.retryable:
-        reschedule(after=exc.retry_after)
-    else:
+    if not exc.retryable:
+        if isinstance(exc, UpstreamStatusError) and exc.problem is not None:
+            report(exc.problem.title, exc.problem.detail)
         raise
+    reschedule(after=exc.retry_after)
 ```
+
+`retryable` covers every error the same way, so one check reschedules a surviving 503 on a GET, a 429, an open
+breaker and a rate budget's own refusal, each after its `retry_after`. A write that is not retryable re-raises, and its
+`sent` says whether it may have reached the server, which is what decides whether to reconcile before trying again.
 
 ## Messages are safe to show
 

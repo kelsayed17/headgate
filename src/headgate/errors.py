@@ -17,6 +17,15 @@ too deep to parse.
 :class:`RefusedError` is deliberately not a ``ClientError`` either. A reader or a client's ``response_check`` produces
 it, and the base client converts it into the ``ClientError`` its ``kind`` names, so a caller of a client never sees it.
 
+``retryable`` has one meaning on every error: sending the call again later could succeed, and is safe as the call
+stands (an idempotent method, an idempotency key, or nothing of it sent). For a status or a network failure it is the
+call's retry policy's verdict. The refusals the client makes before sending, :class:`CircuitOpenError` and the rate
+budget's own :class:`RateLimitError` and :class:`ClientTimeoutError`, are retryable after their ``retry_after``.
+:class:`ForbiddenDestinationError`, :class:`ResponseTooLargeError`, :class:`ResponseParseError`,
+:class:`ClientConfigurationError` and :class:`PageLimitError` are not: sending again meets the same refusal.
+``sent`` says whether any byte of the call can have reached the network, so a write that is not retryable may still
+have been processed when it is ``True``.
+
 Every ``ClientError`` pickles, so it can cross a process or a durable-workflow boundary. The default exception reduce,
 ``(cls, self.args)``, re-runs ``__init__``: that fails on a required keyword-only argument (``status_code``) and would
 prefix the message a second time. :meth:`ClientError.__reduce__` rebuilds the instance without ``__init__`` instead.

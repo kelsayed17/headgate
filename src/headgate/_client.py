@@ -973,7 +973,9 @@ class AsyncBaseClient:
                 async with self._sent(prepared, verdict) as streamed:
                     yield streamed, verdict
         except BreakerOpenError as exc:
+            # Refused unsent, so sending again is safe whatever the method, and admitted once the cooldown has passed.
             details = self._site(prepared).details(retry_after=exc.retry_after)
+            details["retryable"] = True
             raise CircuitOpenError(str(exc), **details) from None
         except BudgetBacklogError as exc:
             # Our own pacing, not the provider's: the call was never sent (the retry layer withdrew the attempt), and

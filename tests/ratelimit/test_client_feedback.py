@@ -99,7 +99,7 @@ async def test_a_pause_past_the_deadline_raises_rate_limit_error_without_sending
         await client.get("x", expect=RESPONSE, deadline=_DEADLINE)
 
     error = raised.value
-    assert (error.status_code, error.retryable, error.retry_after) == (429, True, _PAUSE)
+    assert (error.status_code, error.retryable, error.retry_after, error.sent) == (429, True, _PAUSE, False)
     assert (error.attempts, getattr(error, "__notes__", [])) == (0, []), "an attempt never sent is no attempt"
     assert "past the call's deadline" in str(error)
     assert server.received == 1, "the refused call never reached the server"

@@ -154,7 +154,7 @@
     'problem': None,
     'request_id': None,
     'retry_after': 30.0,
-    'retryable': False,
+    'retryable': True,
     'source': 'StubClient',
     'type': 'CircuitOpenError',
     'url': 'orders?api_key=%2A%2A%2A',

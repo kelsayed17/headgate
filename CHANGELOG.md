@@ -42,6 +42,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- `retryable` has one meaning on every error: sending the call again later could succeed, and is safe as the call
+  stands. `CircuitOpenError.retryable` is now `True`, with the cooldown left as `retry_after`, as the rate budget's
+  own refusals already were. The recipe in `docs/errors.md` reschedules it rather than re-raising it.
 - Every error attribute is read-only: `source`, `UpstreamStatusError.status_code` and `.code`,
   `PageLimitError.pages`, and `RefusedError.message`, `.code` and `.kind` join the ones that already were. Assigning
   one raises `AttributeError`; build a new error with the value instead.
