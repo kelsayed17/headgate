@@ -26,6 +26,7 @@ from hishel import AsyncSqliteStorage
 from headgate import ClientError, HttpCache, HttpOptions, RetryPolicy, TransportPolicy, as_bytes
 from headgate.ratelimit import Rate
 from tests.support.clients import StubClient
+from tests.support.events import Recorder
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -65,13 +66,21 @@ def _ok(request: httpx2.Request) -> httpx2.Response:
     return httpx2.Response(httpx2.codes.OK, content=_BODY, request=request)
 
 
-def _client(handler: Callable[[httpx2.Request], httpx2.Response] = _ok, cache: HttpCache | None = None) -> StubClient:
-    """Build a client over an in-memory transport that never throttles, with no retry budget to run out of."""
+def _client(
+    handler: Callable[[httpx2.Request], httpx2.Response] = _ok,
+    cache: HttpCache | None = None,
+    *,
+    observed: bool = False,
+) -> StubClient:
+    """Build a client over an in-memory transport that never throttles, with no retry budget to run out of.
+
+    An *observed* client has an observer, which makes every call build its events and its breaker listener.
+    """
     return StubClient(
         base_url="https://api.example.test",
         rate=_FAST,
         policy=TransportPolicy(retry=RetryPolicy(budget=None), cache=cache),
-        http=HttpOptions(transport=httpx2.MockTransport(handler)),
+        http=HttpOptions(transport=httpx2.MockTransport(handler), observers=(Recorder(),) if observed else ()),
     )
 
 
@@ -141,6 +150,12 @@ async def test_repeated_gets_retain_nothing() -> None:
 async def test_a_get_leaves_no_reference_cycle() -> None:
     """Free everything a successful GET allocated when it returns, by reference counting alone."""
     client = _client()
+    assert await _garbage_per_call(lambda: client.get("series", expect=as_bytes)) == 0
+
+
+async def test_an_observed_get_leaves_no_reference_cycle() -> None:
+    """Free everything an observed GET allocated, its breaker listener and the gate its context holds included."""
+    client = _client(observed=True)
     assert await _garbage_per_call(lambda: client.get("series", expect=as_bytes)) == 0
 
 
