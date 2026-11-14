@@ -72,6 +72,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- A `stream()` call's own read timeout may be longer than its deadline, which bounds only opening the stream. Once
+  the head has arrived, only the per-read timeout bounds a stream, and `asyncio.timeout` around the block bounds the
+  whole of it. `stream(..., deadline=5, timeout=Timeouts(read=60))` used to raise `ValueError`.
 - **`AsyncBaseClient` is `Client`, which an SDK holds rather than inherits from.** `Client` is final: subclassing it
   raises `TypeError`. Write
 

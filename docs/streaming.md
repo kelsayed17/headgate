@@ -21,8 +21,9 @@ except that:
   bounded head of its body in the error. A 3xx raises unless redirects are followed.
 - **the body is never buffered and never capped**, and the response is closed when the block exits, read to the end or
   not.
-- **the deadline bounds opening the stream** (every attempt, backoff and the head checks), not reading it. Each read is
-  bounded by the read timeout; wrap the block in `asyncio.timeout` to bound the whole body.
+- **the deadline bounds opening the stream** (every attempt, backoff and the head checks), not reading it. Once the
+  response head has arrived, only the per-read timeout bounds the stream, so a stream's own read timeout may be longer
+  than its deadline. Wrap the block in `asyncio.timeout` to bound the whole stream.
 - **a retry covers opening only.** A failure while the body arrives raises `TransportError` or `ClientTimeoutError`
   from the iteration, after the chunks before it were delivered. Resuming is the caller's decision.
 - **the origin's breaker is told of the answer at the response head**, before the block is entered, so a stream that

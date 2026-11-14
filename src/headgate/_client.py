@@ -522,8 +522,9 @@ class Client:
         * a 2xx is the only success: there is no ``expect=``, and a 3xx raises unless redirects are followed;
         * the client's ``response_check`` runs on the response head, before the block is entered;
         * the deadline bounds opening the stream (every attempt, backoff and the head checks), not reading it, since
-          the caller's pace of iteration decides how long the body takes. Each read is bounded by the read timeout;
-          to bound the whole body, wrap the block in ``asyncio.timeout``;
+          the caller's pace of iteration decides how long the body takes. Once the head has arrived, only the read
+          timeout bounds each read, so a call's read timeout may be longer than its deadline; to bound the whole
+          stream, wrap the block in ``asyncio.timeout``;
         * a retry covers opening only; a failure while the body arrives raises ``TransportError`` or
           ``ClientTimeoutError`` from the iteration;
         * the origin's circuit breaker is told of the answer at the response head, before the block is entered, so a
@@ -709,8 +710,7 @@ class Client:
         ``ClientError`` is raised inside the report, as the call's error; any other exception after it, so the call
         reports the exchange it was.
         """
-        prepared = self._prepare(call)
-        prepared.context.put(STREAMED, value=True)
+        prepared = self._prepare(call, streamed=True)
         own: Exception | None = None
         async with self._reported(prepared):
             try:
@@ -759,8 +759,10 @@ class Client:
 
     # Preparing the request.
 
-    def _prepare(self, call: _Call) -> _Prepared:
-        """Build *call*'s request and stamp its context on it.
+    def _prepare(self, call: _Call, *, streamed: bool = False) -> _Prepared:
+        """Build *call*'s request and stamp its context on it; a *streamed* call's context says so (``STREAMED``).
+
+        A stream's own read timeout may be longer than its deadline, which bounds only opening the stream.
 
         Raises ``ValueError`` for a t-string value no path segment can hold, for a call that would follow redirects
         on a client with a ``response_check``, for a ``deadline=`` that is not positive and finite and for a ``Json``
@@ -812,8 +814,11 @@ class Client:
         route_options = {} if route_policy is None else route_policy.options
         deadline = self._deadline_of(call, route_options)
         if (timeout := options.get("timeout")) is not None:
-            check_timeout_fits(timeout, deadline)
+            # Its kind was checked building the request (httpx_timeout), so a stream's is a Timeouts here.
+            check_timeout_fits(replace(timeout, read=None) if streamed else timeout, deadline)
         context = CallContext(info, clock=self._timing.clock, deadline_after=deadline, emitter=self._emitter)
+        if streamed:
+            context.put(STREAMED, value=True)
         context.follow_redirects = follow
         self._stamp_route(context, call, route_options, path)
         if not body.replayable:
