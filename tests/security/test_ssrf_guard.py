@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``SecurityOptions(allow_private_hosts=False)``: a client refuses every hop to a non-global address.
+"""``SecurityOptions(block_private_hosts=True)``: a client refuses every hop to a non-global address.
 
 Over the default transport the refusal comes from the connection itself (nothing reaches the server); over a custom
 transport (a test double, the curl transport) a request hook refuses the hop before it is sent. Either way the call
@@ -61,7 +61,7 @@ def _guarded(base_url: str, policy: TransportPolicy | None = None) -> StubClient
         base_url=base_url,
         rate=Rate.per_second(1000),
         policy=policy or TransportPolicy(),
-        http=HttpOptions(security=SecurityOptions(allow_private_hosts=False)),
+        http=HttpOptions(security=SecurityOptions(block_private_hosts=True)),
     )
 
 
@@ -101,7 +101,7 @@ async def test_a_refusal_is_not_retried_and_not_charged_to_the_breaker() -> None
 async def test_a_name_resolving_to_a_private_address_is_refused() -> None:
     """Resolve through ``HttpOptions.resolver`` and refuse a name that answers with a private address."""
     options = HttpOptions(
-        security=SecurityOptions(allow_private_hosts=False, resolver=_Names(internal_example="10.0.0.5"))
+        security=SecurityOptions(block_private_hosts=True, resolver=_Names(internal_example="10.0.0.5"))
     )
     async with StubClient(base_url="https://internal.example", rate=Rate.per_second(1000), http=options) as client:
         with pytest.raises(ForbiddenDestinationError, match=r"internal\.example: it resolves to 10\.0\.0\.5"):
@@ -111,7 +111,7 @@ async def test_a_name_resolving_to_a_private_address_is_refused() -> None:
 def _web_client(web: Web, resolver: _Names, *, base_url: str = BASE) -> StubClient:
     """Return a guarded client on *base_url* over *web*, a custom transport, resolving through *resolver*."""
     return web.client(
-        http=HttpOptions(security=SecurityOptions(allow_private_hosts=False, resolver=resolver)), base_url=base_url
+        http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=resolver)), base_url=base_url
     )
 
 
@@ -156,7 +156,7 @@ async def test_the_curl_transport_is_vetted_before_it_sends() -> None:
     """Refuse a loopback hop over the curl transport before curl connects (curl resolves names itself, unpinned)."""
     async with serving() as server:
         options = HttpOptions(
-            transport=AsyncCurlTransport(impersonate="chrome"), security=SecurityOptions(allow_private_hosts=False)
+            transport=AsyncCurlTransport(impersonate="chrome"), security=SecurityOptions(block_private_hosts=True)
         )
         async with StubClient(base_url=server.url(), rate=Rate.per_second(1000), http=options) as client:
             with pytest.raises(ForbiddenDestinationError):
@@ -168,9 +168,9 @@ async def test_the_curl_transport_is_vetted_before_it_sends() -> None:
 @pytest.mark.parametrize(
     ("options", "message"),
     [
-        (lambda: HttpOptions(security=SecurityOptions(resolver=_Names())), "needs allow_private_hosts=False"),
+        (lambda: HttpOptions(security=SecurityOptions(resolver=_Names())), "needs block_private_hosts=True"),
         (
-            lambda: HttpOptions(proxy="http://proxy.example:3128", security=SecurityOptions(allow_private_hosts=False)),
+            lambda: HttpOptions(proxy="http://proxy.example:3128", security=SecurityOptions(block_private_hosts=True)),
             "proxy",
         ),
     ],

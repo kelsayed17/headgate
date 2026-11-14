@@ -30,12 +30,14 @@ setting.
 
 What "off" means:
 
-* ``TransportPolicy(retry=NO_RETRY)``: no request is retried, whatever a call or a route asks for. Stronger than an
-  instant sleep, which keeps the retries and makes them instant; a suite testing retry behavior wants that instead.
+* no request is retried, whatever the policy, a route, a view or a call asks for. Stronger than an instant sleep,
+  which keeps the retries and makes them instant; a suite testing retry behavior wants that instead. (Outside the
+  switch, ``TransportPolicy(retry=None)`` sends every call once unless the call, its view or its route gives a policy
+  of its own.)
 * ``TransportPolicy(breaker=None)``: the client never reads a breaker registry, so it cannot be refused by a breaker
   another client opened on the same host.
-* an effectively unlimited rate, enforced where a budget is built, so it also covers the budgets a client's
-  ``rate_limits`` rules build, and a shared ``RateBudget`` passed in.
+* a budget that paces nothing, enforced where a budget is built, so it also covers the budgets a client's
+  routes build from ``rate=``, and a shared ``RateBudget`` passed in.
 """
 
 from headgate._core import policy_disabled

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from headgate import DEFAULT_TIMEOUTS, HttpCache, Rate, RateBudget, RateRule, Timeouts, TransportPolicy
+from headgate import DEFAULT_TIMEOUTS, HttpCache, Rate, RateBudget, Route, Timeouts, TransportPolicy
 from headgate.testing import budget_for, cache_of
 from tests.support.clients import StubClient
 
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from hishel import AsyncSqliteStorage
 
 _BASE = "https://api.example/v1/"
-_CANDLES = RateRule("candles", Rate.per_second(1))
+_CANDLES = Route("candles", rate=Rate.per_second(1))
 
 
 def test_the_cache_a_client_was_built_with_is_read_back(storage: AsyncSqliteStorage) -> None:
@@ -35,13 +35,13 @@ def test_the_cache_a_client_was_built_with_is_read_back(storage: AsyncSqliteStor
 def test_the_budget_a_request_spends_from_is_read_back() -> None:
     """Return the default budget without a URL, and the budget a rule names for a URL its path matches."""
     shared = RateBudget(Rate.per_second(2))
-    client = StubClient(base_url=_BASE, rate=shared, policy=TransportPolicy(rate_limits=(_CANDLES,)))
+    client = StubClient(base_url=_BASE, rate=shared, policy=TransportPolicy(routes=(_CANDLES,)))
 
     assert budget_for(client) is shared
     assert budget_for(client, "products/BTC-USD") is shared
     candles = budget_for(client, "products/BTC-USD/candles")
     assert candles is not shared
-    assert candles.rate == _CANDLES.rate
+    assert candles.rate == _CANDLES.options["rate"]
     assert budget_for(client, "https://api.example/v1/products/BTC-USD/candles") is candles
 
 

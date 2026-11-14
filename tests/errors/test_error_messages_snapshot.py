@@ -37,8 +37,7 @@ from headgate import (
 )
 from headgate.breaker import BreakerRegistry
 from headgate.errors import RefusedError
-from headgate.ratelimit import UNLIMITED
-from headgate.retry import NO_RETRY, Backoff
+from headgate.retry import Backoff
 from headgate.testing import TestClock
 from tests.support.clients import StubClient
 from tests.support.wire import Script
@@ -96,9 +95,8 @@ def _client(
     options = http or HttpOptions()
     return StubClient(
         base_url=_BASE,
-        rate=UNLIMITED,
         auth=auth,
-        policy=policy or TransportPolicy(retry=NO_RETRY, breaker=None),
+        policy=policy or TransportPolicy(retry=None, breaker=None),
         http=HttpOptions(
             transport=options.transport or transport,
             max_response_bytes=options.max_response_bytes,
@@ -257,8 +255,7 @@ async def _deadline_exceeded() -> None:
     """Hang past the call's deadline: ``ClientTimeoutError`` naming the request line."""
     async with StubClient(
         base_url=_BASE,
-        rate=UNLIMITED,
-        policy=TransportPolicy(retry=NO_RETRY, breaker=None),
+        policy=TransportPolicy(retry=None, breaker=None),
         http=HttpOptions(transport=_Hanging()),
     ) as client:
         await client.get("orders" + _KEYED_QUERY, expect=nothing, deadline=_DEADLINE)
@@ -268,7 +265,7 @@ async def _open_breaker() -> None:
     """Call an origin whose breaker a 503 opened: ``CircuitOpenError`` with the whole cooldown left."""
     registry = BreakerRegistry(clock=lambda: 0.0)
     policy = TransportPolicy(
-        retry=NO_RETRY, breaker=BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=registry)
+        retry=None, breaker=BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=registry)
     )
     async with _client(503, policy=policy) as client:
         with pytest.raises(ClientError):
@@ -280,9 +277,8 @@ async def _forbidden_destination() -> None:
     """Call a loopback address with the SSRF guard on: ``ForbiddenDestinationError`` before anything is sent."""
     async with StubClient(
         base_url="https://127.0.0.1:8443",
-        rate=UNLIMITED,
-        policy=TransportPolicy(retry=NO_RETRY, breaker=None),
-        http=HttpOptions(transport=Script().transport(), security=SecurityOptions(allow_private_hosts=False)),
+        policy=TransportPolicy(retry=None, breaker=None),
+        http=HttpOptions(transport=Script().transport(), security=SecurityOptions(block_private_hosts=True)),
     ) as client:
         await client.get("admin" + _KEYED_QUERY, expect=nothing)
 

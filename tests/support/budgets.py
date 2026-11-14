@@ -49,5 +49,5 @@ def rate_limit_transport(client: AsyncBaseClient) -> RateLimitTransport:
 
 
 def default_budget(client: AsyncBaseClient) -> RateBudget:
-    """Return the budget *client* spends a request from when no ``rate_limits`` rule matches it."""
+    """Return the budget *client* spends a request from when no route sets a rate for it."""
     return rate_limit_transport(client).budgets.default

@@ -23,7 +23,6 @@ from headgate import (
 )
 from headgate.errors import CircuitOpenError, ClientTimeoutError, UpstreamStatusError
 from headgate.policy import policy_disabled
-from headgate.retry import NO_RETRY
 from headgate.testing import FakeTransport, isolated_breakers
 from tests.observe._support import BASE, RATE, client
 from tests.support.clients import StubClient
@@ -76,7 +75,9 @@ async def test_the_client_itself_is_unchanged() -> None:
 async def test_a_view_replaces_only_the_phases_it_sets() -> None:
     """Keep the client's other timeouts and replace the one the view sets."""
     fake = FakeTransport().reply("GET", "/v1/x")
-    root = client(fake, http=HttpOptions(timeout=Timeouts(connect=1.0, read=2.0, write=3.0, pool=4.0)))
+    root = client(
+        fake, http=HttpOptions(), policy=TransportPolicy(timeout=Timeouts(connect=1.0, read=2.0, write=3.0, pool=4.0))
+    )
     await root.with_options(timeout=Timeouts(read=9.0)).get("x", expect=nothing)
     assert _sent_timeout(fake.calls[0]) == {"connect": 1.0, "read": 9.0, "write": 3.0, "pool": 4.0}
 
@@ -84,7 +85,7 @@ async def test_a_view_replaces_only_the_phases_it_sets() -> None:
 async def test_each_layer_replaces_the_phases_it_sets_and_a_call_wins() -> None:
     """Lay the view's phases over the client's and the defaults; a call's own phases then win over both."""
     fake = FakeTransport().reply("GET", "/v1/x")
-    view = client(fake, http=HttpOptions(timeout=Timeouts(read=5.0))).with_options(
+    view = client(fake, http=HttpOptions(), policy=TransportPolicy(timeout=Timeouts(read=5.0))).with_options(
         timeout=Timeouts(connect=1.0, read=2.0)
     )
     await view.get("x", expect=nothing)
@@ -97,7 +98,7 @@ async def test_each_layer_replaces_the_phases_it_sets_and_a_call_wins() -> None:
 async def test_phases_no_layer_sets_keep_the_defaults() -> None:
     """Send the default timeout for every phase that neither the client nor the view sets."""
     fake = FakeTransport().reply("GET", "/v1/x")
-    root = client(fake, http=HttpOptions(timeout=Timeouts(read=5.0)))
+    root = client(fake, http=HttpOptions(), policy=TransportPolicy(timeout=Timeouts(read=5.0)))
     await root.with_options(timeout=Timeouts(read=6.0)).get("x", expect=nothing)
     assert _sent_timeout(fake.calls[0]) == {"connect": 10.0, "read": 6.0, "write": 10.0, "pool": 15.0}
 
@@ -154,7 +155,7 @@ async def test_retry_none_sends_once() -> None:
 async def test_a_view_policy_wins_over_the_routes_and_loses_to_the_calls() -> None:
     """Retry under the view's policy despite a no-retry route, and not at all when the call says so."""
     fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
-    policy = TransportPolicy(routes=(Route("/x", retry=NO_RETRY),))
+    policy = TransportPolicy(routes=(Route("/x", retry=None),))
     view = client(fake, policy=policy).with_options(retry=RetryPolicy(attempts=2))
     await view.get("x", expect=nothing)
     assert len(fake.calls) == len(("503", "200"))
@@ -190,7 +191,7 @@ async def test_a_view_cannot_retry_a_client_built_with_its_policy_off() -> None:
 async def test_a_view_shares_the_breakers() -> None:
     """Refuse a view's call once the client's own calls opened the host's breaker."""
     fake = FakeTransport().reply("GET", "/v1/x", 503)
-    policy = TransportPolicy(retry=NO_RETRY, breaker=BreakerPolicy(failure_threshold=1))
+    policy = TransportPolicy(retry=None, breaker=BreakerPolicy(failure_threshold=1))
     with isolated_breakers():
         root = client(fake, policy=policy)
     with pytest.raises(UpstreamStatusError):

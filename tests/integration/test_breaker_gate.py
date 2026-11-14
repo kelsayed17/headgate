@@ -58,7 +58,7 @@ async def test_a_half_open_probe_keeps_its_retries() -> None:
     recorder = Recorder()
     fake = FakeTransport().reply("GET", _PATH, 503, 502, 200)
     with clock.install(), isolated_breakers() as registry:
-        built = client(fake, policy=_POLICY, http=HttpOptions(observers=(recorder,)))
+        built = client(fake, policy=_POLICY, http=HttpOptions(), observers=(recorder,))
     breaker = registry.breaker_for(BASE, failure_threshold=1, recovery_timeout=_COOLDOWN)
     _fail_once(breaker)
     clock.advance(_COOLDOWN)

@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from headgate.retry import IDEMPOTENT_METHODS, NO_RETRY, RETRY_STATUSES, Backoff, Hedge, RetryBudget, RetryPolicy
+import headgate.retry
+from headgate.retry import IDEMPOTENT_METHODS, RETRY_STATUSES, Backoff, Hedge, RetryBudget, RetryPolicy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -67,7 +68,7 @@ def test_the_defaults_are_the_documented_ones() -> None:
     assert policy.statuses == RETRY_STATUSES == frozenset({408, 425, 429, 500, 502, 503, 504})
     assert policy.budget == RetryBudget(ratio=0.2, min_per_second=10, window=10.0)
     assert policy.hedge is None
-    assert NO_RETRY.attempts == 1
+    assert not hasattr(headgate.retry, "NO_RETRY")
 
 
 # --- Backoff ---

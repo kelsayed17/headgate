@@ -5,7 +5,7 @@
 
 ``AsyncBaseClient`` installs all of it from :class:`~headgate.SecurityOptions`; nothing here needs calling directly.
 Credentials are sent only to ``base_url``'s origin and ``SecurityOptions.trusted_origins``, on every hop, and a
-redirect from ``https`` to ``http`` is not followed. The SSRF guard (``SecurityOptions(allow_private_hosts=False)``)
+redirect from ``https`` to ``http`` is not followed. The SSRF guard (``SecurityOptions(block_private_hosts=True)``)
 refuses hosts that are, or resolve to, addresses that are not globally routable, raising
 :class:`~headgate.errors.ForbiddenDestinationError`.
 

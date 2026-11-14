@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 from headgate import HttpOptions, RequestOptions, Timeouts, TransportPolicy, nothing
-from headgate.ratelimit import UNLIMITED
 from headgate.testing import FakeTransport
 from tests.support.clients import StubClient
 
@@ -33,9 +32,8 @@ def _client(*, timeout: Timeouts = _DEFAULTS, deadline: float | None = 60.0) -> 
     fake = FakeTransport().reply("GET", "/x", 200)
     return StubClient(
         base_url="https://api.example.test",
-        rate=UNLIMITED,
-        policy=TransportPolicy(deadline=deadline),
-        http=HttpOptions(transport=fake, timeout=timeout),
+        policy=TransportPolicy(deadline=deadline, timeout=timeout),
+        http=HttpOptions(transport=fake),
     )
 
 

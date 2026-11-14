@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from typing import Any, Final, NewType, TypeAliasType, get_origin
 
-__all__ = ["check_kind", "type_text"]
+__all__ = ["check_callable", "check_collection", "check_int", "check_kind", "check_names", "type_text"]
 
 #: In a type expression's ``repr``, a quoted string (group 1, kept) or a run of dotted prefixes (dropped): the module
 #: and enclosing names before a class, ``<locals>`` included.
@@ -51,5 +52,53 @@ def check_kind(option: str, value: object, kind: type | tuple[type, ...], wanted
         <name>`` for a class, and its type's name for anything else.
     """
     if not isinstance(value, kind):
+        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        raise TypeError(msg)
+
+
+def check_int(option: str, value: object, wanted: str) -> None:
+    """Refuse a *value* for *option* that is not an ``int``, a ``bool`` included, which ``isinstance`` takes for one.
+
+    :raises TypeError: naming the option, what it takes (*wanted*) and what it got.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        raise TypeError(msg)
+
+
+def check_callable(option: str, value: object, wanted: str) -> None:
+    """Refuse a *value* for *option* that cannot be called, such as a string where a function goes.
+
+    :raises TypeError: naming the option, what it takes (*wanted*) and what it got.
+    """
+    if not callable(value):
+        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        raise TypeError(msg)
+
+
+def check_collection(option: str, value: object, wanted: str) -> None:
+    """Refuse a *value* for *option* that is not a collection: a bare ``str`` above all, and a one-shot iterator.
+
+    A ``str`` would be read one character at a time, and reading an iterator to check it would empty it.
+
+    :raises TypeError: naming the option, what it takes (*wanted*) and what it got.
+    """
+    if isinstance(value, str | bytes) or not isinstance(value, Collection):
+        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        raise TypeError(msg)
+
+
+def check_names(option: str, value: object, wanted: str) -> None:
+    """Refuse a *value* for *option* that is not a collection of names, a bare ``str`` or a one-shot iterator above all.
+
+    A ``str`` would be read as one name per character, and reading an iterator to check it would empty it.
+
+    :raises TypeError: naming the option, what it takes (*wanted*) and what it got.
+    """
+    if (
+        isinstance(value, str | bytes)
+        or not isinstance(value, Collection)
+        or not all(isinstance(name, str) for name in value)
+    ):
         msg = f"{option}= takes {wanted} (got {_named(value)})"
         raise TypeError(msg)

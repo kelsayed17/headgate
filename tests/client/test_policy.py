@@ -16,15 +16,16 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import HttpOptions, TransportPolicy
+from headgate import HttpOptions, Route, TransportPolicy
 from headgate._client import AsyncBaseClient
 from headgate._core import policy_is_disabled
 from headgate._responses import nothing
 from headgate.breaker._registry import DEFAULT_REGISTRY
 from headgate.errors import TransportError, UpstreamStatusError
 from headgate.policy import policy_disabled
-from headgate.ratelimit import UNLIMITED, Rate, RateRule
+from headgate.ratelimit import Rate
 from headgate.ratelimit._budget import Pacer
+from headgate.ratelimit._rate import UNPACED
 from headgate.retry import RetryPolicy
 
 if TYPE_CHECKING:
@@ -61,15 +62,13 @@ class _Client(AsyncBaseClient):
     def __init__(self, wire: Callable[[httpx2.Request], httpx2.Response]) -> None:
         """Build over *wire*, with a secondary budget for ``/r``.
 
-        The ``rate_limits`` rule is why the switch is enforced where budgets are built rather than by overriding the
+        The route's ``rate=`` is why the switch is enforced where budgets are built rather than by overriding the
         client's ``rate=``, which would leave the secondary budget throttled.
         """
         super().__init__(
             base_url=f"https://{_HOST}",
             rate=_RATE,
-            policy=TransportPolicy(
-                retry=RetryPolicy(attempts=_MAX_ATTEMPTS), rate_limits=(RateRule("/r", _RULE_RATE),)
-            ),
+            policy=TransportPolicy(retry=RetryPolicy(attempts=_MAX_ATTEMPTS), routes=(Route("/r", rate=_RULE_RATE),)),
             http=HttpOptions(transport=httpx2.MockTransport(wire)),
         )
 
@@ -138,7 +137,7 @@ class TestPolicyOff:
             (_RATE.requests, _RATE.period),
             (_RULE_RATE.requests, _RULE_RATE.period),
         ], "control"
-        assert await rates(_built_off(_Wire(httpx2.codes.OK))) == [(UNLIMITED.requests, UNLIMITED.period)] * 2
+        assert await rates(_built_off(_Wire(httpx2.codes.OK))) == [(UNPACED.requests, UNPACED.period)] * 2
 
 
 class TestItIsReadAtConstruction:

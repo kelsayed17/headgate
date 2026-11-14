@@ -17,7 +17,6 @@ import httpx2
 import pytest
 
 from headgate import ClientTimeoutError, HttpOptions, Rate, Route, TransportPolicy, nothing
-from headgate.retry import NO_RETRY
 from headgate.testing import TestClock
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
@@ -53,7 +52,7 @@ def _client(policy: TransportPolicy, delay: float = 3600.0) -> StubClient:
 
 async def test_the_policy_deadline_bounds_a_call_that_hangs() -> None:
     """Raise ``ClientTimeoutError`` naming the request once the policy's deadline passes, and charge the host."""
-    client = _client(TransportPolicy(deadline=_SHORT, retry=NO_RETRY))
+    client = _client(TransportPolicy(deadline=_SHORT, retry=None))
 
     with pytest.raises(ClientTimeoutError, match="deadline exceeded") as raised:
         await client.get("series", expect=nothing)
@@ -128,7 +127,7 @@ async def test_the_deadline_message_writes_the_elapsed_time_plainly(spent: float
         client = StubClient(
             base_url=f"https://{_HOST}",
             rate=Rate.per_second(1000),
-            policy=TransportPolicy(deadline=_SHORT, retry=NO_RETRY),
+            policy=TransportPolicy(deadline=_SHORT, retry=None),
             http=HttpOptions(transport=_HourLongNetwork(clock, spent)),
         )
         with pytest.raises(ClientTimeoutError) as raised:

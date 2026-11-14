@@ -30,7 +30,6 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
-from headgate.ratelimit import UNLIMITED
 from headgate.retry import RetryPolicy
 from headgate.testing import FakeTransport
 from tests.support.breakers import failures
@@ -87,7 +86,6 @@ def _api(auth: httpx2.Auth, handler: Callable[[httpx2.Request], httpx2.Response]
     """Return a client of the API host signing with *auth*, every API call answering 200 unless *handler* says."""
     return StubClient(
         base_url=f"https://{_API_HOST}",
-        rate=UNLIMITED,
         auth=auth,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(transport=httpx2.MockTransport(handler or (lambda _r: httpx2.Response(httpx2.codes.OK)))),
@@ -290,7 +288,7 @@ def _hopping_client(max_redirects: int) -> tuple[StubClient, FakeTransport]:
         fake.reply("GET", f"/step/{hop}", 200)
     auth = _ThreeHops()
     http = HttpOptions(transport=fake, max_redirects=max_redirects)
-    return StubClient(base_url="https://api.example.test/v1", rate=UNLIMITED, auth=auth, http=http), fake
+    return StubClient(base_url="https://api.example.test/v1", auth=auth, http=http), fake
 
 
 async def test_a_mints_hops_count_toward_max_redirects() -> None:
@@ -439,10 +437,9 @@ async def _hop_timeouts(auth: CachedTokenAuth, *, deadline: float | None) -> dic
 
     client = StubClient(
         base_url=f"https://{_API_HOST}",
-        rate=UNLIMITED,
         auth=auth,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), deadline=None),
-        http=HttpOptions(transport=httpx2.MockTransport(handle), timeout=_CALL_TIMEOUTS),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1), deadline=None, timeout=_CALL_TIMEOUTS),
+        http=HttpOptions(transport=httpx2.MockTransport(handle)),
     )
     async with client:
         # Per call: a client whose own timeouts outlast its deadline is refused when it is built.

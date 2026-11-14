@@ -21,9 +21,10 @@ import pytest
 
 from headgate._core import BudgetBacklogError, CallContext, CallInfo, Emitter, RateLimited, Timing
 from headgate.policy import policy_disabled
-from headgate.ratelimit import UNLIMITED, Adaptive, Rate, RateBudget, RateRule
+from headgate.ratelimit import Adaptive, Rate, RateBudget
 from headgate.ratelimit._budget import MAX_PAUSE, BudgetPausedError, Pacer, pacer_of
-from headgate.ratelimit._budgets import PathBudgets
+from headgate.ratelimit._budgets import Lane, PathBudgets
+from headgate.ratelimit._rate import UNPACED
 from headgate.ratelimit._transport import RateLimitTransport
 from headgate.testing import TestClock
 from tests.support.events import Recorder
@@ -748,7 +749,9 @@ async def test_a_budget_without_a_cap_lends_no_slot() -> None:
 def test_a_shared_budget_is_used_as_it_is_and_rules_can_share_one() -> None:
     """Resolve a given budget to itself, so two clients or two rules given one budget spend from it together."""
     shared = RateBudget(_RATE)
-    budgets = PathBudgets(default=shared, rules=[RateRule("/a", shared), RateRule("/b", Rate.per_second(1))])
+    budgets = PathBudgets(
+        default=shared, lanes=[Lane("/a", shared, sets_rate=True), Lane("/b", Rate.per_second(1), sets_rate=True)]
+    )
     a = budgets.for_request(httpx2.Request("GET", "https://x/a"))
     b = budgets.for_request(httpx2.Request("GET", "https://x/b"))
     assert budgets.default is shared
@@ -761,7 +764,10 @@ def test_path_budgets_pick_the_first_matching_rule_and_default_otherwise() -> No
     """Route a path to the first rule whose fragment it contains, and any other path to the default."""
     budgets = PathBudgets(
         default=Rate.per_second(1000),
-        rules=[RateRule("/candles", Rate.per_second(1000)), RateRule("/api", Rate.per_second(1000))],
+        lanes=[
+            Lane("/candles", Rate.per_second(1000), sets_rate=True),
+            Lane("/api", Rate.per_second(1000), sets_rate=True),
+        ],
     )
     candles = budgets.for_request(httpx2.Request("GET", "https://x/candles"))
     api = budgets.for_request(httpx2.Request("GET", "https://x/api/ticker"))
@@ -774,7 +780,7 @@ def test_path_budgets_pick_the_first_matching_rule_and_default_otherwise() -> No
 
 def test_an_escaped_slash_in_a_value_does_not_pick_another_paths_rule() -> None:
     """Keep a ``%2F`` a t-string value escaped inside its segment, so ``/files/exports%2Fq3`` is not ``/exports``."""
-    budgets = PathBudgets(default=Rate.per_second(1000), rules=[RateRule("/exports", Rate.per_second(1))])
+    budgets = PathBudgets(default=Rate.per_second(1000), lanes=[Lane("/exports", Rate.per_second(1), sets_rate=True)])
     assert budgets.for_request(httpx2.Request("GET", "https://x/files/exports%2Fq3")) is budgets.default
     assert budgets.for_request(httpx2.Request("GET", "https://x/v1/exports/q3")) is not budgets.default
 
@@ -798,11 +804,11 @@ def test_budgets_built_with_policy_off_are_private_and_unlimited() -> None:
     """Replace every budget, a shared one included, with a private unlimited one that never throttles."""
     shared = RateBudget(Rate.per_second(1), max_in_flight=1)
     with policy_disabled():
-        budgets = PathBudgets(default=shared, rules=[RateRule("/r", Rate.per_second(1))])
+        budgets = PathBudgets(default=shared, lanes=[Lane("/r", Rate.per_second(1), sets_rate=True)])
     rule = budgets.for_request(httpx2.Request("GET", "https://x/r"))
     for budget in (budgets.default, rule):
         assert budget is not shared
-        assert (budget.rate, budget.adaptive, budget.max_in_flight) == (UNLIMITED, None, None)
+        assert (budget.rate, budget.adaptive, budget.max_in_flight) == (UNPACED, None, None)
 
 
 # --- Sharing across loops and threads ---

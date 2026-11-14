@@ -77,7 +77,7 @@ class HttpCache:
     What is stored: a request whose method is in ``methods`` (``GET`` by default; ``GET`` and ``HEAD`` only, since the
     URL is the key) and whose path matches one of ``paths`` (any path by default), answered with a status in
     ``statuses`` (200 by default). A string in ``paths`` is one or more whole segments, matched as
-    :class:`~headgate.RateRule` matches; a compiled pattern is searched for in the path, for what segments cannot say,
+    :class:`~headgate.Route` matches; a compiled pattern is searched for in the path, for what segments cannot say,
     such as a file name's prefix or extension. An empty collection matches nothing, so stores
     nothing. :meth:`caches_request` and :meth:`stores_status` say what the three decide.
 

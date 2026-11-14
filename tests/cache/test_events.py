@@ -14,8 +14,6 @@ from headgate import HttpOptions, TransportError, TransportPolicy
 from headgate.cache import HttpCache
 from headgate.cache._transport import served_from_cache
 from headgate.events import CacheOutcome, CacheResult, Event
-from headgate.ratelimit import UNLIMITED
-from headgate.retry import NO_RETRY
 from tests.cache._helpers import FaultyStorage, Network, every_get_rules
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
@@ -64,9 +62,9 @@ def _client(network: httpx2.AsyncBaseTransport, storage: AsyncBaseStorage, recor
     """Build a client caching every GET into *storage*, reporting to *recorder*, retrying nothing."""
     return StubClient(
         base_url="https://x",
-        rate=UNLIMITED,
-        policy=TransportPolicy(retry=NO_RETRY, cache=HttpCache(**every_get_rules(), storage=storage)),
-        http=HttpOptions(transport=network, observers=(recorder,)),
+        policy=TransportPolicy(retry=None, cache=HttpCache(**every_get_rules(), storage=storage)),
+        http=HttpOptions(transport=network),
+        observers=(recorder,),
     )
 
 
@@ -133,7 +131,6 @@ async def test_a_client_without_observers_emits_nothing(storage: AsyncSqliteStor
     network = Network()
     client = StubClient(
         base_url="https://x",
-        rate=UNLIMITED,
         policy=TransportPolicy(cache=HttpCache(**every_get_rules(), storage=storage)),
         http=HttpOptions(transport=network),
     )

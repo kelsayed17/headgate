@@ -3,10 +3,10 @@
 
 """OpenTelemetry for headgate clients: one CLIENT span and one duration measurement per logical call.
 
-Install it once on the client's options::
+Pass it to the client twice, once as each of the two things it is::
 
     otel = OpenTelemetryObserver()
-    http = otel.install(HttpOptions(...))      # adds it to observers= and middleware=
+    client = AsyncBaseClient(base_url=..., observers=(otel,), middleware=(otel,))
 
 It is two things, so it goes in two places. As an :class:`~headgate.events.Observer` it turns a call's events into a
 span named by the HTTP client semantic conventions (``GET``, or ``GET series/{series_id}`` when the URL was a t-string)
@@ -46,7 +46,7 @@ Requires the ``otel`` extra: ``pip install headgate[otel]`` (``opentelemetry-api
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Final
 from urllib.parse import urlsplit
 
@@ -72,7 +72,6 @@ if TYPE_CHECKING:
 
     from headgate._core import Event
     from headgate._middleware import Next
-    from headgate._options import HttpOptions
 
 __all__ = ["OpenTelemetryObserver"]
 
@@ -182,10 +181,6 @@ class OpenTelemetryObserver:
         )
         self._propagator = propagator or TraceContextTextMapPropagator()
         self._live: dict[int, _LiveCall] = {}
-
-    def install(self, http: HttpOptions) -> HttpOptions:
-        """Return *http* with this observer added as an observer and as the outermost middleware."""
-        return replace(http, observers=(*http.observers, self), middleware=(self, *http.middleware))
 
     def notify(self, event: Event) -> None:
         """Open a span on ``CallStarted``; close it and record the duration on ``CallFinished``."""

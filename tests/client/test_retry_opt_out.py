@@ -20,8 +20,7 @@ from headgate._client import AsyncBaseClient
 from headgate._core import CallContext
 from headgate.errors import UpstreamStatusError
 from headgate.ratelimit import Rate
-from headgate.retry import NO_RETRY
-from headgate.retry._policy import RETRY_POLICY
+from headgate.retry._policy import RETRY_POLICY, SEND_ONCE
 from tests.cache._helpers import stamped_ttl
 from tests.support.responses import RESPONSE
 
@@ -97,4 +96,4 @@ async def test_retry_none_and_a_cache_ttl_are_both_stamped(httpx2_mock: HTTPXMoc
     context = CallContext.find(sent)
     assert stamped_ttl(sent.extensions) == ttl
     assert context is not None
-    assert context.get(RETRY_POLICY) is NO_RETRY
+    assert context.get(RETRY_POLICY) is SEND_ONCE

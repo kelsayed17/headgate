@@ -10,7 +10,6 @@ import httpx2
 from headgate import BearerAuth, HttpOptions, TransportPolicy, nothing
 from headgate.events import CallFinished
 from headgate.ratelimit import Rate
-from headgate.retry import NO_RETRY
 from tests.support.clients import StubClient
 from tests.support.events import Recorder
 
@@ -28,8 +27,9 @@ def _client(sent: list[httpx2.Request], recorder: Recorder, *, auth: httpx2.Auth
         base_url=_BASE,
         rate=Rate.per_second(1000),
         auth=auth,
-        policy=TransportPolicy(retry=NO_RETRY),
-        http=HttpOptions(transport=httpx2.MockTransport(handle), observers=(recorder,)),
+        policy=TransportPolicy(retry=None),
+        http=HttpOptions(transport=httpx2.MockTransport(handle)),
+        observers=(recorder,),
     )
 
 

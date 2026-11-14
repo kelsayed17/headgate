@@ -293,7 +293,8 @@ async def test_a_deadline_passing_before_the_send_counts_nothing(breaker: Circui
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER, deadline=_DEADLINE),
-        http=HttpOptions(transport=transport, middleware=(_StallingMiddleware(),)),
+        http=HttpOptions(transport=transport),
+        middleware=(_StallingMiddleware(),),
     )
 
     with pytest.raises(ClientTimeoutError, match="deadline exceeded"):

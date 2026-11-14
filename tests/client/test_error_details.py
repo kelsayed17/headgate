@@ -41,7 +41,6 @@ from headgate import (
 from headgate._core import CallContext
 from headgate.breaker import BreakerRegistry
 from headgate.errors import RefusedError
-from headgate.retry import NO_RETRY
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
 from tests.support.wire import Script
@@ -66,7 +65,7 @@ def _client(script: Script | httpx2.MockTransport) -> StubClient:
     return StubClient(
         base_url=_BASE,
         rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=NO_RETRY),
+        policy=TransportPolicy(retry=None),
         http=HttpOptions(transport=transport),
     )
 
@@ -266,7 +265,7 @@ async def test_an_open_breaker_raises_circuit_open_error_with_its_cooldown() -> 
     client = StubClient(
         base_url=_BASE,
         rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=NO_RETRY, breaker=breaker),
+        policy=TransportPolicy(retry=None, breaker=breaker),
         http=HttpOptions(transport=script.transport()),
     )
     await _raised(client)
@@ -309,8 +308,9 @@ async def test_notes_a_layer_added_reach_the_error() -> None:
     client = StubClient(
         base_url=_BASE,
         rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=NO_RETRY),
-        http=HttpOptions(transport=Script(404).transport(), middleware=(Annotate(),)),
+        policy=TransportPolicy(retry=None),
+        http=HttpOptions(transport=Script(404).transport()),
+        middleware=(Annotate(),),
     )
     error = await _raised(client)
 

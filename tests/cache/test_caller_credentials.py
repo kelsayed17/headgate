@@ -28,7 +28,6 @@ from headgate import (
 from headgate.cache import HttpCache, Partition
 from headgate.cache._credentials import CALLER_CREDENTIALS, CallerCredentials, CredentialScope, mark_caller_credentials
 from headgate.cache._transport import served_from_cache
-from headgate.ratelimit import UNLIMITED
 from tests.cache._helpers import series_rules
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
@@ -67,7 +66,6 @@ def _client(echo: _Echo, storage: AsyncSqliteStorage, auth: httpx2.Auth) -> Stub
     """Build a client caching ``/series`` into *storage* with *auth*, over *echo*."""
     return StubClient(
         base_url="https://x",
-        rate=UNLIMITED,
         auth=auth,
         policy=TransportPolicy(cache=HttpCache(**series_rules(), storage=storage)),
         http=HttpOptions(transport=httpx2.MockTransport(echo)),

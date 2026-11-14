@@ -17,7 +17,7 @@ import ssl
 import uuid
 from dataclasses import replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, override
 
 import httpx2
 import pytest
@@ -25,8 +25,8 @@ import pytest
 from headgate import (
     HttpOptions,
     IdempotencyKeys,
+    Next,
     Rate,
-    RateRule,
     RetryPolicy,
     Route,
     SecurityOptions,
@@ -38,15 +38,13 @@ from headgate import (
 )
 from headgate._options import DEFAULT_LIMITS
 from headgate._user_agent import DEFAULT_USER_AGENT, headgate_version
-from headgate.retry import NO_RETRY
+from headgate.testing import budget_for
 from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
-    from headgate import Middleware
-    from headgate.events import Observer
 
 _RATE = Rate.per_second(1000)
 _BASE = "https://api.example.test"
@@ -107,8 +105,12 @@ _UpstreamHook.__module__ = "httpx._client"
     ("build", "what"),
     [
         pytest.param(lambda: HttpOptions(transport=_UpstreamTransport()), "transport", id="transport"),
-        pytest.param(lambda: HttpOptions(observers=(_UpstreamObserver(),)), "observers", id="observer"),
-        pytest.param(lambda: HttpOptions(middleware=(_UpstreamHook(),)), "middleware", id="event-hook"),
+        pytest.param(
+            lambda: StubClient(base_url=_BASE, rate=_RATE, observers=(_UpstreamObserver(),)), "observers", id="observer"
+        ),
+        pytest.param(
+            lambda: StubClient(base_url=_BASE, rate=_RATE, middleware=(_UpstreamHook(),)), "middleware", id="event-hook"
+        ),
         pytest.param(lambda: StubClient(base_url=_BASE, rate=_RATE, auth=_UpstreamAuth()), "auth", id="auth"),
     ],
 )
@@ -199,20 +201,18 @@ def test_default_transport_settings_cannot_ride_a_custom_transport(build: Callab
 def test_options_freeze_and_normalize_what_they_are_given() -> None:
     """Copy headers into a read-only mapping, normalize origins and request-id names, and make sequences tuples."""
     headers = {"X-A": "1"}
-    rules = [RateRule("/r", _RATE)]
-    routes = [Route("/reports")]
+    routes = [Route("/r", rate=_RATE), Route("/reports")]
     origins = frozenset({"HTTPS://CDN.example.test:443/", "http://files.example.test:8080"})
     options = HttpOptions(
         headers=headers, request_id_headers=("X-Trace-Id",), security=SecurityOptions(trusted_origins=origins)
     )
-    policy = TransportPolicy(rate_limits=tuple(rules), routes=tuple(routes))
+    policy = TransportPolicy(routes=tuple(routes))
     headers["X-A"] = "changed"
 
     assert isinstance(options.headers, MappingProxyType)
     assert options.headers == {"X-A": "1"}
     assert options.security.trusted_origins == {"https://cdn.example.test", "http://files.example.test:8080"}
     assert options.request_id_headers == ("x-trace-id",)
-    assert policy.rate_limits == tuple(rules)
     assert policy.routes == tuple(routes)
 
 
@@ -303,7 +303,7 @@ async def test_a_caller_set_cookie_header_is_still_sent() -> None:
 async def test_max_redirects_bounds_a_redirect_chain() -> None:
     """Raise once a redirect chain exceeds ``max_redirects``."""
     script = Script(httpx2.Response(302, headers={"Location": f"{_BASE}/next"}))
-    client = _client(script, policy=TransportPolicy(retry=NO_RETRY, breaker=None), http=HttpOptions(max_redirects=1))
+    client = _client(script, policy=TransportPolicy(retry=None, breaker=None), http=HttpOptions(max_redirects=1))
 
     with pytest.raises(TransportError, match="redirect"):
         await client.get("start", expect=nothing)
@@ -435,7 +435,7 @@ async def test_every_place_a_deadline_is_set_refuses_the_same_values(
 async def test_a_route_gives_matching_paths_their_own_retry_policy() -> None:
     """Send a matching path under the route's retry policy and every other path under the client's."""
     script = Script(503)
-    policy = TransportPolicy(retry=RetryPolicy(attempts=3), routes=(Route("/reports", retry=NO_RETRY), Route("/x")))
+    policy = TransportPolicy(retry=RetryPolicy(attempts=3), routes=(Route("/reports", retry=None), Route("/x")))
     client = _client(script, policy=policy)
     with pytest.raises(UpstreamStatusError):
         await client.get("v1/reports/daily", expect=nothing)
@@ -444,13 +444,13 @@ async def test_a_route_gives_matching_paths_their_own_retry_policy() -> None:
         await client.get("v1/series", expect=nothing)
 
     assert sends_on_the_route == 1
-    assert len(script.sent) - sends_on_the_route == policy.retry.attempts
+    assert len(script.sent) - sends_on_the_route == len(("503", "503", "503"))
 
 
 async def test_a_calls_retry_policy_wins_over_its_route() -> None:
     """Let a call's ``retry=RetryPolicy(...)`` win over the route's policy."""
     script = Script(503)
-    client = _client(script, policy=TransportPolicy(routes=(Route("/reports", retry=NO_RETRY),)))
+    client = _client(script, policy=TransportPolicy(routes=(Route("/reports", retry=None),)))
     with pytest.raises(UpstreamStatusError):
         await client.get("reports", expect=nothing, retry=RetryPolicy(attempts=2))
 
@@ -461,12 +461,9 @@ async def test_a_calls_retry_policy_wins_over_its_route() -> None:
 
 
 def test_the_security_options_have_safe_defaults() -> None:
-    """Trust no extra origin and allow private hosts until configured, with no observers or middleware."""
+    """Trust no extra origin and allow private hosts until configured."""
     options = HttpOptions()
-    observers: tuple[Observer, ...] = ()
-    middleware: tuple[Middleware, ...] = ()
-    assert options.security == SecurityOptions(trusted_origins=frozenset(), allow_private_hosts=True, resolver=None)
-    assert (options.observers, options.middleware) == (observers, middleware)
+    assert options.security == SecurityOptions(trusted_origins=frozenset(), block_private_hosts=False, resolver=None)
 
 
 class _CountingNetwork(httpx2.AsyncBaseTransport):
@@ -509,4 +506,182 @@ def test_check_kind_names_what_it_got(value: object, named: str) -> None:
     """Name a class, a type expression and a plain value apart, so a refusal says which mistake it was."""
     with pytest.raises(TypeError) as caught:
         StubClient(base_url=_BASE, rate=cast("Any", value))
-    assert str(caught.value) == f"rate= takes a Rate, such as Rate.per_second(10), or a RateBudget (got {named})"
+    assert str(caught.value) == f"rate= takes a Rate, such as Rate.per_second(10), a RateBudget or None (got {named})"
+
+
+# Phase 4's moves: timeouts sit with the deadline, observers and middleware with the client.
+
+
+def test_a_timeout_is_checked_against_the_deadline_of_its_policy() -> None:
+    """Refuse a policy whose timeout is longer than its deadline where both are written, not in the client."""
+    with pytest.raises(ValueError, match=r"^read timeout 120s is longer than the 60s deadline"):
+        TransportPolicy(timeout=Timeouts(read=120.0), deadline=60.0)
+    assert TransportPolicy(timeout=Timeouts(read=120.0), deadline=None).timeout == Timeouts(read=120.0)
+
+
+@pytest.mark.parametrize("name", ["timeout", "observers", "middleware"])
+def test_http_options_no_longer_take_what_moved(name: str) -> None:
+    """Refuse ``HttpOptions(timeout=)``, ``observers=`` and ``middleware=``: they are the policy's and the client's."""
+    moved: dict[str, Any] = {name: ()}
+    with pytest.raises(TypeError, match=name):
+        HttpOptions(**moved)
+
+
+@pytest.mark.parametrize("name", ["observers", "middleware"])
+@pytest.mark.parametrize(
+    ("value", "got"),
+    [("x", "str"), (object(), "object")],
+    ids=["str", "lone"],
+)
+def test_the_client_takes_observers_and_middleware_as_sequences(name: str, value: object, got: str) -> None:
+    """Refuse a lone observer or middleware, or a ``str``, where the client takes a sequence of them."""
+    given: dict[str, Any] = {name: value}
+    with pytest.raises(TypeError, match=rf"^{name}= takes a sequence, such as a tuple, of them \(got {got}\)$"):
+        StubClient(base_url=_BASE, rate=_RATE, **given)
+
+
+async def test_the_clients_observers_hear_its_calls() -> None:
+    """Report a call to an observer given to the client, and run a middleware given to it on every attempt."""
+    heard: list[str] = []
+    seen: list[str] = []
+
+    class _Observer:
+        def notify(self, event: object) -> None:
+            heard.append(type(event).__name__)
+
+    class _Middleware:
+        credential_headers: ClassVar = frozenset[str]()
+        credential_params: ClassVar = frozenset[str]()
+
+        async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+            seen.append(request.method)
+            return await call_next(request)
+
+    script = Script()
+    client = StubClient(
+        base_url=_BASE,
+        rate=_RATE,
+        http=HttpOptions(transport=script.transport()),
+        observers=[_Observer()],
+        middleware=[_Middleware()],
+    )
+    await client.get("x", expect=nothing)
+
+    assert ("CallStarted" in heard, "CallFinished" in heard, seen) == (True, True, ["GET"])
+
+
+async def test_a_policy_of_no_retries_sends_once_and_a_calls_own_policy_wins() -> None:
+    """Send every call once under ``TransportPolicy(retry=None)``, unless the call gives a policy of its own."""
+    script = Script(503, 503, 200)
+    client = _client(script, policy=TransportPolicy(retry=None))
+
+    with pytest.raises(UpstreamStatusError):
+        await client.get("x", expect=nothing)
+    assert len(script.sent) == 1
+
+    await client.get("x", expect=nothing, retry=RetryPolicy(attempts=3))
+    assert len(script.sent) == len(("the first call's 503", "503", "200"))
+
+
+@pytest.mark.parametrize("rate", [None, "absent"], ids=["none", "absent"])
+def test_no_rate_paces_nothing_of_its_own(rate: str | None) -> None:
+    """Build an unpaced budget of the client's own for ``rate=None`` and for no ``rate=`` at all, the same budget."""
+    given: dict[str, Any] = {} if rate == "absent" else {"rate": None}
+    client = StubClient(base_url=_BASE, **given)
+
+    budget = budget_for(client)
+    assert (budget.rate, budget.max_in_flight) == (Rate.per_second(1_000_000), None)
+
+
+#: ``True`` where a value of another kind goes, typed so the call type-checks.
+_TRUE: Any = True
+
+#: Each configuration value of the wrong kind, the option the refusal names, and what it says it takes. The first
+#: five are review finding M22's, which used to pass construction and fail at the first request, or be misread.
+_WRONG_KINDS: Final[list[tuple[Callable[[], object], str]]] = [
+    (lambda: TransportPolicy(idempotency=_TRUE), r"^idempotency= takes IdempotencyKeys\(\), or None"),
+    (lambda: TransportPolicy(routes=cast("Any", ("/x",))), r"^routes= takes a tuple of Route"),
+    (lambda: HttpOptions(transport=cast("Any", httpx2.HTTPTransport())), r"^transport= takes an httpx2\.AsyncBase"),
+    (lambda: HttpOptions(request_id_headers=cast("Any", "x-request-id")), r"^request_id_headers= takes a tuple of"),
+    (lambda: SecurityOptions(trusted_origins=cast("Any", "https://cdn.example")), r"^trusted_origins= takes a frozen"),
+    (lambda: TransportPolicy(cache=cast("Any", "memory")), r"^cache= takes an HttpCache, or None"),
+    (lambda: TransportPolicy(deadline=cast("Any", "60")), r"^deadline= takes seconds, or None for no deadline"),
+    (lambda: TransportPolicy(deadline=_TRUE), r"^deadline= takes seconds, or None for no deadline"),
+    (lambda: HttpOptions(headers=cast("Any", [("a", "b")])), r"^headers= takes a mapping of header names to values"),
+    (lambda: HttpOptions(follow_redirects=cast("Any", "no")), r"^follow_redirects= takes a bool"),
+    (lambda: HttpOptions(max_redirects=_TRUE), r"^max_redirects= takes a number of hops, an int"),
+    (lambda: HttpOptions(max_response_bytes=cast("Any", 1.5)), r"^max_response_bytes= takes a number of bytes, an int"),
+    (lambda: HttpOptions(response_check=cast("Any", "strict")), r"^response_check= takes a function of the response"),
+    (lambda: HttpOptions(security=cast("Any", {})), r"^security= takes SecurityOptions\(\.\.\.\)"),
+    (lambda: HttpOptions(ssl_context=_TRUE), r"^ssl_context= takes an ssl\.SSLContext, or None"),
+    (lambda: HttpOptions(limits=cast("Any", 10)), r"^limits= takes httpx2\.Limits\(\.\.\.\)"),
+    (lambda: HttpOptions(proxy=cast("Any", 8080)), r"^proxy= takes a proxy URL, or None"),
+    (lambda: HttpOptions(user_agent=cast("Any", 1)), r"^user_agent= takes a product token, or None"),
+    (lambda: HttpOptions(cookies=cast("Any", "yes")), r"^cookies= takes a bool"),
+    (lambda: SecurityOptions(block_private_hosts=cast("Any", "no")), r"^block_private_hosts= takes a bool"),
+    (lambda: SecurityOptions(block_private_hosts=True, resolver=cast("Any", "8.8.8.8")), r"^resolver= takes a resol"),
+    (lambda: IdempotencyKeys(header=cast("Any", 1)), r"^header= takes a header name"),
+    (lambda: IdempotencyKeys(factory=cast("Any", "uuid")), r"^factory= takes a function returning a fresh key"),
+    (lambda: StubClient(base_url=cast("Any", None)), r"^base_url= takes the API root"),
+    (lambda: Route(cast("Any", None)), r"^fragment= takes path segments, such as '/exports' \(got NoneType\)$"),
+    (lambda: TransportPolicy(routes=cast("Any", Route("/x"))), r"^routes= takes a tuple of Route.*\(got Route\)$"),
+    (lambda: StubClient(base_url=_BASE, policy=cast("Any", {})), r"^policy= takes TransportPolicy\(\.\.\.\)"),
+    (lambda: StubClient(base_url=_BASE, http=cast("Any", {})), r"^http= takes HttpOptions\(\.\.\.\)"),
+]
+_WRONG_KIND_IDS: Final = [
+    "idempotency",
+    "routes",
+    "sync-transport",
+    "request-id-str",
+    "origins-str",
+    "cache",
+    "deadline-str",
+    "deadline-bool",
+    "headers",
+    "follow-redirects",
+    "max-redirects-bool",
+    "max-response-bytes-float",
+    "response-check",
+    "security",
+    "ssl-context",
+    "limits",
+    "proxy",
+    "user-agent",
+    "cookies",
+    "allow-private-hosts",
+    "resolver",
+    "header",
+    "factory",
+    "base-url",
+    "route-fragment",
+    "lone-route",
+    "policy",
+    "http",
+]
+
+
+@pytest.mark.parametrize(("build", "message"), _WRONG_KINDS, ids=_WRONG_KIND_IDS)
+def test_every_option_is_checked_for_its_kind(build: Callable[[], object], message: str) -> None:
+    """Refuse a configuration value of the wrong kind where it is written, naming the option and what it takes."""
+    with pytest.raises(TypeError, match=message):
+        build()
+
+
+def test_a_one_shot_iterator_of_names_is_refused() -> None:
+    """Refuse an iterator where names go, since reading it to check it would leave nothing to keep."""
+    with pytest.raises(TypeError, match=r"^request_id_headers= takes a tuple of header names.*\(got generator\)$"):
+        HttpOptions(request_id_headers=cast("Any", (name for name in ("x-trace-id",))))
+
+
+def test_the_ssrf_guard_is_switched_on_by_block_private_hosts() -> None:
+    """Refuse the old double negative, ``allow_private_hosts=``, and keep the guard off unless asked for."""
+    old: dict[str, Any] = {"allow_private_hosts": False}
+    with pytest.raises(TypeError, match="allow_private_hosts"):
+        SecurityOptions(**old)
+    assert SecurityOptions().block_private_hosts is False
+
+
+def test_a_trusted_origin_may_be_a_url() -> None:
+    """Take an ``httpx2.URL`` among the trusted origins at runtime, as main did, and normalize it as text is."""
+    options = SecurityOptions(trusted_origins=cast("Any", frozenset({httpx2.URL("HTTPS://CDN.example:443/")})))
+    assert options.trusted_origins == {"https://cdn.example"}

@@ -18,7 +18,6 @@ from headgate import HttpOptions, QueryParamAuth, Rate, RetryPolicy, TransportPo
 from headgate.errors import TransportError, UpstreamStatusError
 from headgate.events import AttemptFinished, CallFinished, CallInfo, CallStarted, Event
 from headgate.health import observer_failures
-from headgate.retry import NO_RETRY
 from headgate.testing import FakeTransport, Reply, TestClock
 from tests.support.clients import StubClient
 from tests.support.events import Recorder
@@ -74,7 +73,8 @@ def _client(
         rate=_RATE,
         auth=auth,
         policy=policy or TransportPolicy(),
-        http=HttpOptions(transport=fake, observers=observers),
+        http=HttpOptions(transport=fake),
+        observers=observers,
     )
 
 
@@ -134,7 +134,7 @@ async def test_a_failed_call_reports_the_error_types() -> None:
     """Name what a send raised on its attempt, and the ``ClientError`` the call raised on its end."""
     recorder = Recorder()
     with pytest.raises(TransportError):
-        await _client(_get("x", _refuse), recorder, policy=TransportPolicy(retry=NO_RETRY)).get("x", expect=nothing)
+        await _client(_get("x", _refuse), recorder, policy=TransportPolicy(retry=None)).get("x", expect=nothing)
 
     _, attempt, finished = recorder.events
     assert isinstance(attempt, AttemptFinished)

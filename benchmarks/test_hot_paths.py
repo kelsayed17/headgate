@@ -28,9 +28,9 @@ from headgate._core import SendProgress, retry_after_of
 from headgate._failures import CallSite, status_error
 from headgate._url import escape_segment, redact_secrets, render_path, sanitize_url
 from headgate.breaker import CircuitBreaker
-from headgate.ratelimit import Rate, RateRule
+from headgate.ratelimit import Rate
 from headgate.ratelimit._budget import Pacer
-from headgate.ratelimit._budgets import PathBudgets
+from headgate.ratelimit._budgets import Lane, PathBudgets
 from headgate.retry import RetryPolicy
 from headgate.retry._classify import Attempted, classify
 
@@ -161,9 +161,9 @@ def test_retry_classify_batch(benchmark: BenchmarkFixture) -> None:
 
 
 def test_path_budget_lookup_batch(benchmark: BenchmarkFixture) -> None:
-    """Measure choosing a budget by URL path among ten rules, where the last rule matches."""
-    rules = [RateRule(f"/endpoint-{i}", Rate.per_second(10)) for i in range(10)]
-    budgets = PathBudgets(default=Rate.per_second(100), rules=rules)
+    """Measure choosing a budget by URL path among ten routes, where the last route matches."""
+    lanes = [Lane(f"/endpoint-{i}", Rate.per_second(10), sets_rate=True) for i in range(10)]
+    budgets = PathBudgets(default=Rate.per_second(100), lanes=lanes)
     request = httpx2.Request("GET", "https://api.example.test/v1/endpoint-9/items")
     benchmark(_batched(budgets.for_request, request))
 

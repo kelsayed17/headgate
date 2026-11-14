@@ -10,8 +10,8 @@ here is what a client is written with:
 
 * the client and its options: :class:`AsyncBaseClient`, :data:`Method`, :class:`RequestOptions`,
   :class:`CallOptions`, :class:`ViewOptions`, :class:`TransportPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`,
-  :class:`Timeouts` and :data:`DEFAULT_TIMEOUTS`, :class:`IdempotencyKeys`, :class:`Route`, :class:`Middleware` and
-  :data:`Next` (what a middleware calls to continue);
+  :class:`Timeouts` and :data:`DEFAULT_TIMEOUTS`, :class:`IdempotencyKeys`, :class:`Route` and its
+  :class:`RouteOptions`, :class:`Middleware` and :data:`Next` (what a middleware calls to continue);
 * declared responses: :class:`Expect`, :class:`Reader` and the readers (:data:`as_json` among them),
   :data:`ResponseCheck`;
 * codecs: :class:`Codec`, and :func:`reader_for`, :func:`writer_for` and :func:`decode_with`, which build a reader, a
@@ -22,12 +22,12 @@ here is what a client is written with:
   :class:`CachedTokenAuth`,
   :class:`Minted`, :data:`MAX_MINT_RESPONSE_BYTES`;
 * the policy values a client usually sets: :class:`RetryPolicy`, :class:`BreakerPolicy`, :class:`Rate`,
-  :class:`RateBudget`, :class:`RateRule` and :class:`HttpCache`;
+  :class:`RateBudget` and :class:`HttpCache`;
 * pages: :meth:`AsyncBaseClient.paginate`'s :class:`Paginated`, its pagers and :class:`PageLimit`;
 * the errors, all under :class:`ClientError`.
 
 Everything else lives once, in its layer's subpackage: the finer policy values (:mod:`headgate.retry`'s ``Backoff``,
-``Hedge``, ``RetryBudget`` and ``NO_RETRY``; :mod:`headgate.ratelimit`'s ``Adaptive``; :mod:`headgate.breaker`'s
+``Hedge`` and ``RetryBudget``; :mod:`headgate.ratelimit`'s ``Adaptive``; :mod:`headgate.breaker`'s
 ``BreakerRegistry``), the cache's filters, partitions and conditional reads (:mod:`headgate.cache`), what a custom
 pager is written with (:mod:`headgate.pagination`), ``Stream`` (:mod:`headgate.streaming`), :mod:`headgate.security`,
 events and their ``Observer`` (:mod:`headgate.events`) and the testing kit (:mod:`headgate.testing`).
@@ -51,6 +51,7 @@ from headgate._options import (
     HttpOptions,
     IdempotencyKeys,
     Route,
+    RouteOptions,
     SecurityOptions,
     Timeouts,
     TransportPolicy,
@@ -96,7 +97,7 @@ from headgate.pagination import (
     PageNumber,
     Paginated,
 )
-from headgate.ratelimit import Rate, RateBudget, RateRule
+from headgate.ratelimit import Rate, RateBudget
 from headgate.retry import RetryPolicy
 
 __all__ = [
@@ -143,7 +144,6 @@ __all__ = [
     "Rate",
     "RateBudget",
     "RateLimitError",
-    "RateRule",
     "Raw",
     "Reader",
     "RequestOptions",
@@ -152,6 +152,7 @@ __all__ = [
     "ResponseTooLargeError",
     "RetryPolicy",
     "Route",
+    "RouteOptions",
     "SecurityOptions",
     "SigningAuth",
     "StaticHeaderAuth",

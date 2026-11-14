@@ -12,7 +12,6 @@ from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
 from headgate.breaker._registry import DEFAULT_REGISTRY
 from headgate.errors import CircuitOpenError, UpstreamStatusError
 from headgate.health import breaker_states
-from headgate.retry import NO_RETRY
 from headgate.testing import FakeTransport, TestClock, isolated_breakers
 from tests.support.clients import StubClient
 
@@ -28,7 +27,7 @@ def _client(fake: FakeTransport, breaker: BreakerPolicy = _TRIP_AT_ONCE) -> Stub
     return StubClient(
         base_url=f"https://{_HOST}",
         rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=NO_RETRY, breaker=breaker),
+        policy=TransportPolicy(retry=None, breaker=breaker),
         http=HttpOptions(transport=fake),
     )
 
@@ -67,7 +66,7 @@ async def test_a_client_without_a_breaker_stays_without_one() -> None:
         client = StubClient(
             base_url=f"https://{_HOST}",
             rate=Rate.per_second(1000),
-            policy=TransportPolicy(retry=NO_RETRY, breaker=None),
+            policy=TransportPolicy(retry=None, breaker=None),
             http=HttpOptions(transport=fake),
         )
     with pytest.raises(UpstreamStatusError):

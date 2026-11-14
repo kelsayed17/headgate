@@ -4,10 +4,12 @@
 AsyncBaseClient(
     *,
     base_url: str,
-    rate: Rate | RateBudget = UNLIMITED,
+    rate: Rate | RateBudget | None = None,
     auth: httpx2.Auth | None = None,
     policy: TransportPolicy = TransportPolicy(),
     http: HttpOptions = HttpOptions(),
+    observers: Sequence[Observer] = (),
+    middleware: Sequence[Middleware] = (),
 )
 ```
 
@@ -22,6 +24,9 @@ built, so a bad value fails where it is written, and freezes the collections it 
   given the same instance. See [rate budgets](rate-budgets.md).
 - **`auth`**: an `httpx2.Auth`, usually one of headgate's. See [auth](auth.md). An upstream `httpx` object raises
   `TypeError`.
+- **`observers`**: receive the client's [events](observability.md#events).
+- **`middleware`**: per-attempt hooks; see [middleware](#middleware). They are parts of the stack, not settings of how a
+  request is sent, so they are the client's own rather than `HttpOptions` fields.
 
 ## TransportPolicy
 
@@ -29,22 +34,34 @@ What the stack does to every request.
 
 | Field | Default | |
 | --- | --- | --- |
-| `retry` | `RetryPolicy()` | how a call is re-sent; see [retries](retries.md) |
+| `retry` | `RetryPolicy()` | how a call is re-sent, or `None` to send every call once; see [retries](retries.md) |
+| `timeout` | `Timeouts()` | per-phase timeouts; a phase left unset takes its default, and a phase set longer than `deadline` is refused |
 | `deadline` | `60.0` | seconds the whole call may take, or `None`; see [deadlines](deadlines.md) |
 | `breaker` | `BreakerPolicy()` | the per-origin breaker, or `None`; see [breaker](breaker.md) |
-| `rate_limits` | `()` | `RateRule`s: per-path budgets; see [rate budgets](rate-budgets.md#per-path-lanes) |
 | `cache` | `None` | an `HttpCache`; see [caching](caching.md) |
 | `idempotency` | `None` | `IdempotencyKeys()` stamps a key on every POST and PATCH; see [retries](retries.md#idempotency-keys) |
-| `routes` | `()` | `Route(fragment, retry=..., deadline=...)`: per-path overrides, first match wins |
+| `routes` | `()` | `Route(fragment, retry=..., deadline=..., rate=..., cache=...)`: the per-path rules, first match wins |
 
-A `Route` changes an endpoint's retry policy or deadline in configuration, so the endpoint method stays one line:
+A `Route` changes an endpoint's retry policy, deadline, rate or caching in configuration, so the endpoint method stays
+one line:
 
 ```python
-from headgate import Route, TransportPolicy
-from headgate.retry import NO_RETRY
+from headgate import Rate, Route, TransportPolicy
 
-policy = TransportPolicy(routes=(Route("/charges", retry=NO_RETRY), Route("/reports", deadline=300.0)))
+policy = TransportPolicy(
+    routes=(
+        Route("/charges", retry=None),  # sent once
+        Route("/reports", deadline=300.0, rate=Rate.per_minute(6)),  # a long deadline and a lane of its own
+        Route("/live", cache=None),  # never cached
+    )
+)
 ```
+
+`Route(fragment, /, **options)` takes `RouteOptions`. An option left out takes the policy's (or, for `rate`, the
+client's budget), and `None` turns it off: `retry=None` sends once, `deadline=None` sets no deadline, `rate=None`
+paces nothing of the route's own, and `cache=None` keeps the paths out of the cache. The first route whose fragment a
+call's path holds is the call's route, whole; two routes never combine. A call's own options, and its view's, win
+over its route's. An unknown option, or a value of the wrong kind (`retry=False`), raises `TypeError`.
 
 ## HttpOptions
 
@@ -54,7 +71,6 @@ How requests are sent and responses read.
 | --- | --- | --- |
 | `transport` | `None` | a custom network transport (a test double, `headgate.curl.AsyncCurlTransport`); the default is an HTTP/2 `httpx2.AsyncHTTPTransport` |
 | `headers` | `{}` | sent on every request to `base_url`'s origin and the `trusted_origins`; any other origin gets only `User-Agent` and the `Accept` headers among them ([security](security.md)); any header the call implies or sets wins a clash (see [precedence](#precedence)) |
-| `timeout` | `Timeouts()` | per-phase timeouts; a phase left unset takes its default |
 | `follow_redirects` | `True` | the client's default; a call can override it |
 | `max_redirects` | `5` | the hop limit, auth-flow hops included |
 | `max_response_bytes` | 32 MiB | the cap on a buffered body, counted after decompression; a call's own `max_response_bytes=` replaces it for that call; `stream()` is uncapped |
@@ -66,8 +82,6 @@ How requests are sent and responses read.
 | `user_agent` | `None` | your product token, sent before headgate's |
 | `cookies` | `False` | `True` keeps httpx2's cookie jar; by default no cookie is stored or sent back |
 | `request_id_headers` | `x-request-id`, `request-id`, `x-amzn-requestid`, `x-ms-request-id`, `cf-ray` | where `request_id` is read from |
-| `observers` | `()` | receive the client's [events](observability.md#events) |
-| `middleware` | `()` | per-attempt hooks; see [middleware](#middleware) |
 
 `SecurityOptions`, passed as `HttpOptions(security=SecurityOptions(...))`, groups the settings that decide where
 requests and credentials may go:
@@ -75,7 +89,7 @@ requests and credentials may go:
 | Field | Default | |
 | --- | --- | --- |
 | `trusted_origins` | `frozenset()` | origins besides `base_url`'s that may receive credentials |
-| `allow_private_hosts` | `True` | `False` turns on the SSRF guard |
+| `block_private_hosts` | `False` | `True` turns on the SSRF guard |
 | `resolver` | `None` | how the SSRF guard resolves names; only with the guard on |
 
 `ssl_context`, `limits` and `proxy` configure the default transport, so passing any of them with `transport=` is a
@@ -159,7 +173,7 @@ A middleware runs inside the transport stack, below the [credential guard](secur
 the client runs as a request hook, so the guard runs again below the last middleware. The headers and query parameters a
 middleware declares in `credential_headers` and `credential_params` are removed there from any hop not addressed to
 `base_url`'s origin or a trusted one, a cross-origin redirect hop included. Both are required, each a `frozenset` of
-names, empty when the middleware stamps none, as a class attribute or a property; `HttpOptions` raises `TypeError` for a
+names, empty when the middleware stamps none, as a class attribute or a property; the client raises `TypeError` for a
 middleware that lacks either, and for a plain function. `request.content` is available for a
 buffered body; a streamed body is not readable there. A middleware that replaces the request
 (`call_next(httpx2.Request(...))`) keeps `request.extensions` on the new one, or a `SigningAuth` cannot sign that

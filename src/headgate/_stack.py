@@ -8,7 +8,7 @@
 
     RetryTransport(                    # re-sends per the RetryPolicy; begins each attempt on the call's context
       AttemptTransport(                # AttemptFinished per send (only with observers)
-        MiddlewareTransport(           # HttpOptions.middleware, once per attempt, then the credential guard again
+        MiddlewareTransport(           # the client's middleware, once per attempt, then the credential guard again
           ResilientCacheTransport(     # opt-in response cache; a hit stops here
             RateLimitTransport(        # the rate budget: every network send takes its turn and feeds back
               MiddlewareTransport(     # a SigningAuth's signature, once per send, then the credential guard again
@@ -24,7 +24,7 @@ signs each send, so a request that waited for its turn is signed when it goes ou
 
 * request hooks: the credential guard (:class:`~headgate.security.CredentialGuard`, which also runs below the last
   middleware and below the signature, where what they stamp is visible), then, over a custom network
-  transport with ``SecurityOptions(allow_private_hosts=False)``, the SSRF guard's vetting
+  transport with ``SecurityOptions(block_private_hosts=True)``, the SSRF guard's vetting
   (:func:`~headgate.security.address_hook`); the default transport pins vetted addresses itself
   (:class:`~headgate.security.PinnedHTTPTransport`);
 * response hooks: the https-downgrade refusal, the refusal to re-send a one-shot body on a redirect, and the drop of a
@@ -54,6 +54,7 @@ from headgate._user_agent import user_agent
 from headgate.cache._credentials import credential_scope, mark_caller_credentials
 from headgate.cache._transport import ResilientCacheTransport
 from headgate.ratelimit._transport import RateLimitTransport
+from headgate.retry._policy import SEND_ONCE
 from headgate.retry._tracking import SendTrackingTransport
 from headgate.retry._transport import RetryTransport
 from headgate.security import AddressGuard, PinnedHTTPTransport
@@ -65,7 +66,8 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from headgate._core import Timing
-    from headgate._options import HttpOptions, TransportPolicy
+    from headgate._middleware import Middleware
+    from headgate._options import HttpOptions, Timeouts, TransportPolicy
     from headgate.ratelimit._budgets import PathBudgets
 
 __all__ = ["Credentials", "build_http_client", "build_transport_stack"]
@@ -76,20 +78,23 @@ _RESPONSE_HOOKS = (refuse_https_downgrade, refuse_unreplayable_redirect, drop_fo
 
 @dataclass(frozen=True, slots=True)
 class Credentials:
-    """A client's credentials as its stack sees them: the auth, the guard that keeps them on trusted origins, the jar.
+    """A client's credentials as its stack sees them: the auth, the guard keeping them on trusted origins, the jar.
 
-    The same guard runs as the first request hook and below the last middleware and a ``SigningAuth``'s signature
-    (see :func:`build_transport_stack`).
-    The jar is the client's: one that stores nothing unless ``HttpOptions(cookies=True)``, and the guard sends an
-    untrusted origin only that jar's cookies for it.
+    The middleware is here too, since the guard keeps what each declares on trusted origins as well. The same guard
+    runs as the first request hook and below the last middleware and a ``SigningAuth``'s signature (see
+    :func:`build_transport_stack`). The jar is the client's: one that stores nothing unless
+    ``HttpOptions(cookies=True)``, and the guard sends an untrusted origin only that jar's cookies for it.
     """
 
     auth: httpx2.Auth | None
     guard: CredentialGuard
     cookie_jar: CookieJar
+    middleware: tuple[Middleware, ...] = ()
 
     @classmethod
-    def of(cls, *, base_url: str, auth: httpx2.Auth | None, http: HttpOptions) -> Credentials:
+    def of(
+        cls, *, base_url: str, auth: httpx2.Auth | None, http: HttpOptions, middleware: tuple[Middleware, ...]
+    ) -> Credentials:
         """Return *auth*, with a guard keeping its, the middleware's and client-wide credentials on trusted origins."""
         # httpx2.Cookies() makes the jar httpx2 would make for itself.
         jar = httpx2.Cookies().jar if http.cookies else _refusing_jar()
@@ -97,13 +102,19 @@ class Credentials:
             auth=auth,
             base_url=httpx2.URL(base_url),
             http=http,
+            middleware=middleware,
             cookie_jar=jar if http.cookies else None,
         )
-        return cls(auth, guard, jar)
+        return cls(auth, guard, jar, middleware)
 
 
 def build_http_client(
-    *, base_url: str, credentials: Credentials, http: HttpOptions, transport: httpx2.AsyncBaseTransport
+    *,
+    base_url: str,
+    credentials: Credentials,
+    http: HttpOptions,
+    timeout: Timeouts,
+    transport: httpx2.AsyncBaseTransport,
 ) -> httpx2.AsyncClient:
     """Build a client's ``httpx2.AsyncClient`` over *transport*, the stack :func:`build_transport_stack` built."""
     # httpx2 joins a relative path onto base_url only when base_url ends with "/".
@@ -120,7 +131,7 @@ def build_http_client(
             "request": _request_hooks(credentials.guard, http),
             "response": list(_RESPONSE_HOOKS),
         },
-        timeout=httpx_timeout(http.timeout),
+        timeout=httpx_timeout(timeout),
         trust_env=False,
     )
 
@@ -131,12 +142,15 @@ def build_transport_stack(
     http: HttpOptions,
     timing: Timing,
     credentials: Credentials,
+    *,
+    observed: bool,
 ) -> httpx2.AsyncBaseTransport:
     """Build the layers under ``httpx2.AsyncClient``, bottom-up: each statement wraps the layer before it.
 
     The rate-limit layer spends from *budgets*. The cache partitions its entries by *credentials*' auth. A
     ``SigningAuth`` signs each send below the rate layer, after its wait, and the middleware layer is built for
-    middleware; the guard runs again below each, so what they stamp stays on trusted origins too.
+    *credentials*' middleware; the guard runs again below each, so what they stamp stays on trusted origins too. An
+    *observed* client's attempts are reported (``AttemptFinished``).
     """
     layer = SendTrackingTransport(transport=_network(http))
     if isinstance(signer := credentials.auth, SigningAuth):
@@ -146,16 +160,17 @@ def build_transport_stack(
         scope = credential_scope(
             cache,
             credentials.auth,
-            middleware=http.middleware,
+            middleware=credentials.middleware,
             headers=http.headers,
-            guarded=not http.security.allow_private_hosts,
+            guarded=http.security.block_private_hosts,
         )
         layer = ResilientCacheTransport(layer, cache, max_body_bytes=http.max_response_bytes, scope=scope)
-    if http.middleware:
-        layer = MiddlewareTransport(transport=layer, middleware=http.middleware, guard=credentials.guard, signer=None)
-    if http.observers:
+    if middleware := credentials.middleware:
+        layer = MiddlewareTransport(transport=layer, middleware=middleware, guard=credentials.guard, signer=None)
+    if observed:
         layer = AttemptTransport(transport=layer)
-    return RetryTransport(transport=layer, policy=policy.retry, sleep=timing.sleep, clock=timing.clock)
+    retry = SEND_ONCE if policy.retry is None else policy.retry
+    return RetryTransport(transport=layer, policy=retry, sleep=timing.sleep, clock=timing.clock)
 
 
 def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
@@ -177,7 +192,7 @@ def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
 def _address_guard(http: HttpOptions) -> AddressGuard | None:
     """Return the SSRF guard *http* asks for, or ``None`` when it allows private hosts."""
     security = http.security
-    if security.allow_private_hosts:
+    if not security.block_private_hosts:
         return None
     return AddressGuard() if security.resolver is None else AddressGuard(security.resolver)
 

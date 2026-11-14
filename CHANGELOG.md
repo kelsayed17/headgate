@@ -11,6 +11,7 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `CassetteFilter(replaying=True)`, for replaying a cassette (`record_mode="none"`): a token mint fails the test with
   an `AssertionError` saying to seed the auth. A mint is never recorded, so vcrpy let an unseeded one reach the
   network, with the auth's secret.
+- `RouteOptions`, the closed TypedDict of what a `Route` sets: `retry`, `deadline`, `rate` and `cache`.
 - `Body`, the union of `EncodedBody`, `Json`, `Form`, `Multipart` and `Raw`, the body classes a call's `body=` takes.
   `Raw(...).replayable` and `Multipart(...).replayable` say whether a retry or a 307/308 redirect can send the body
   again: not for a `Raw` async iterable, nor a `Multipart` holding a file that cannot be rewound.
@@ -37,6 +38,31 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- `SecurityOptions(allow_private_hosts=False)` is `SecurityOptions(block_private_hosts=True)`, which says what it
+  turns on without a double negative. The guard is still off by default. `allow_private_hosts=` raises `TypeError`.
+- **A route's explicit `retry=None` now sends once, and its explicit `deadline=None` now sets no deadline.** Each
+  meant "keep the policy's", and now means off, as a call's does: `Route` takes `**options: Unpack[RouteOptions]`, so
+  leaving an option out inherits. Find them with `grep -rnE "Route\([^)]*(retry|deadline)=None"`, and leave the
+  option out where you meant the policy's.
+- **`RateRule` and `TransportPolicy(rate_limits=)` are gone: a path's budget is its route's `rate=`.** This is not
+  silent: `rate_limits=` raises `TypeError`, so every configuration that used it has to be rewritten. Write
+  `TransportPolicy(routes=(Route(fragment, rate=rate),))` for `rate_limits=(RateRule(fragment, rate),)`, merged into
+  the route for that fragment if there is one. A call's first matching route is its route, whole: its retry, deadline,
+  rate and caching come from that route alone, and what it leaves out from the policy and the client's budget, so a
+  path that a route and a separate rate rule both matched now needs one route that sets everything. A route's
+  `rate=None` paces nothing of its own there, while the server's pauses still apply; `cache=None` keeps its paths out
+  of the cache. A redirect's later hops keep the call's route, and its budget, where a hop to another path could pick
+  another rule. `Route(fragment, retry=False)`, which retried, raises `TypeError`, as do an unknown option and a
+  `routes=` entry that is not a `Route`.
+- `None` is the one spelling of off. `TransportPolicy(retry=NO_RETRY)` is `TransportPolicy(retry=None)`, which sends
+  every call once unless the call gives a policy of its own. A client's `rate=` defaults to `None`, a budget that paces
+  nothing of its own but still waits out the server's pauses, where it defaulted to `UNLIMITED`; write `rate=None`, or
+  leave it out, for `rate=UNLIMITED`. `TransportPolicy(retry=False)` raises `TypeError`.
+- `HttpOptions(timeout=...)` is `TransportPolicy(timeout=...)`, beside the `deadline` it is checked against, and a
+  phase set longer than the deadline is refused where the policy is built, not in the client constructor.
+  `HttpOptions(observers=..., middleware=...)` is `AsyncBaseClient(..., observers=..., middleware=...)`: they are
+  parts of the stack, not settings of how a request is sent. Each takes a sequence; a lone observer or a `str` raises
+  `TypeError`. The old `HttpOptions` keywords raise `TypeError`.
 - A walk of POSTs takes its body as `paginate(query=value)`, where it took `body=value` (encoded by the pager's
   `write=`) or `json=value` (builtins): the pager's `write=` encodes the value when it has one, and without one the
   value is sent as JSON. So `body=` means one thing everywhere, the request body. `paginate(body=...)` and
@@ -126,6 +152,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Removed
 
+- `RateRule` and `TransportPolicy.rate_limits`: write `Route(fragment, rate=...)` in `routes=`.
+- `headgate.retry.NO_RETRY`: write `retry=None`. `headgate.ratelimit.UNLIMITED`: leave `rate=` out, or write
+  `rate=None`.
+- `OpenTelemetryObserver.install()`: pass the observer to the client twice, as `observers=(otel,)` and
+  `middleware=(otel,)`, since it is both.
 - `retry=True` on a call, which undid its view's `retry=`: make the call on the client instead of the view.
 - `PageOptions`: `paginate()` takes `CallOptions`, which has the same keys plus `retry`.
 - `HttpCache(policy=...)` and `HttpCache.filter_policy()`, and `headgate.cache.MethodFilter`, `PathFragmentFilter` and
@@ -151,7 +182,7 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `X-RateLimit-Reset` already was.
 - `Rate` refuses an infinite request count, and one so small that the spacing between requests overflows, with
   `ValueError`. Either turned every send time into NaN, which paced nothing.
-- Rate rules, `Route`s and the cache's `paths` fragments no longer match a `/` inside a t-string value: the path is
+- `Route`s and the cache's `paths` fragments no longer match a `/` inside a t-string value: the path is
   split into segments before they are decoded, so `t"/files/{name}"` with `name="exports/q3"` sends
   `/files/exports%2Fq3`, which is not an `/exports` request. A regular expression in the cache's `paths` still
   searches the decoded path.
@@ -167,6 +198,15 @@ change the public API; such changes are listed under **Changed** and **Removed**
   by a stored entry that varies on it. An anonymous call's answer was served to an authenticated one.
 - A send that waits for its rate-budget turn while a hedge starts beside it records its connection and the bytes it
   writes into its own attempt. They went into the hedge's attempt, whichever send wrote them.
+- Every configuration value is checked for its kind where it is written, with a `TypeError` naming the option and what
+  it takes, where some passed construction and failed at the first request or were misread:
+  `TransportPolicy(idempotency=True)`, `routes=("/x",)`, a synchronous `HttpOptions(transport=)` and a `cache=` that is
+  no `HttpCache` failed at the first request with an `AttributeError`; `request_id_headers="x-request-id"` and
+  `trusted_origins="https://cdn.example"` were read as one name per character; and `deadline=True`,
+  `max_redirects=True` and a `str` where a `bool` goes were taken as numbers or truths. A one-shot iterator where names
+  go is refused, since checking it would empty it. Some values main converted are now refused, each with what to
+  write: `HttpOptions(headers=)` takes a mapping, not a list of pairs; `max_response_bytes=` an `int`, not a float;
+  `transport=` an `httpx2.AsyncBaseTransport` subclass, not a look-alike; and `follow_redirects=` a `bool`, not `1`.
 - A problem+json error body with an extension nested hundreds of levels deep, about 1 KB, raised a raw
   `RecursionError` from every call. It is now read as no problem detail, and the status error names the body.
 - An error body declaring `charset=idna` or `charset=undefined` raised a bare `UnicodeError`. It is read as UTF-8,

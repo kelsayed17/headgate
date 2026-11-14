@@ -14,7 +14,6 @@ from hishel import AsyncBaseStorage, AsyncSqliteStorage, Entry, Request, Respons
 from headgate import HttpOptions, TransportPolicy
 from headgate.cache import HttpCache
 from headgate.cache._transport import ResilientCacheTransport, store_accepted
-from headgate.ratelimit import UNLIMITED
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
@@ -62,17 +61,19 @@ def stub_client(
     *,
     transport: httpx2.AsyncBaseTransport | None = None,
     cache: HttpCache | None = None,
-    rate: Rate = UNLIMITED,
+    rate: Rate | None = None,
     http: HttpOptions | None = None,
+    policy: TransportPolicy | None = None,
 ) -> StubClient:
     """Build a client for ``https://x`` over *transport*, caching through *cache* when given.
 
-    *http* carries any other HTTP setting; its ``transport`` is replaced by the one given here.
+    *http* carries any other HTTP setting; its ``transport`` is replaced by the one given here. *policy* carries any
+    other policy setting; its ``cache`` is replaced by *cache*.
     """
     return StubClient(
         base_url="https://x",
         rate=rate,
-        policy=TransportPolicy(cache=cache),
+        policy=dataclasses.replace(policy or TransportPolicy(), cache=cache),
         http=dataclasses.replace(http or HttpOptions(), transport=transport),
     )
 

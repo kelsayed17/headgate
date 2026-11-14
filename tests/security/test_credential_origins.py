@@ -29,8 +29,6 @@ from headgate import (
 )
 from headgate._core import CredentialStamper
 from headgate.msgspec import reader
-from headgate.ratelimit import UNLIMITED
-from headgate.retry import NO_RETRY
 from headgate.security._credentials import CHAIN_ORIGIN, CredentialGuard
 from tests.security._web import BASE, Web
 from tests.support.clients import StubClient
@@ -234,7 +232,7 @@ def _cookie_client(sent: list[httpx2.Request], headers: dict[str, str] | None = 
         return httpx2.Response(httpx2.codes.OK, text="ok")
 
     http = HttpOptions(cookies=True, headers=headers or {}, transport=httpx2.MockTransport(answer))
-    return StubClient(base_url=BASE, rate=UNLIMITED, policy=TransportPolicy(retry=NO_RETRY), http=http)
+    return StubClient(base_url=BASE, policy=TransportPolicy(retry=None), http=http)
 
 
 async def test_a_cookie_jar_sends_each_origin_its_own_cookies() -> None:
@@ -348,7 +346,7 @@ def _signed(request: httpx2.Request) -> set[str]:
 async def test_a_middlewares_declared_credentials_stay_off_a_foreign_redirect_hop() -> None:
     """Withhold what a middleware declares from a hop to another origin, though it signs the hop after the hook ran."""
     web = Web({f"{BASE}/start": "https://files.example/signed"})
-    async with web.client(http=HttpOptions(middleware=(_Signer(),))) as client:
+    async with web.client(http=HttpOptions(), middleware=(_Signer(),)) as client:
         resp = await client.get("start", expect=RESPONSE)
 
     first, hop = web.sent
@@ -360,10 +358,8 @@ async def test_a_middlewares_declared_credentials_stay_off_a_foreign_redirect_ho
 async def test_a_middlewares_credentials_reach_a_trusted_origin() -> None:
     """Keep a middleware's credentials on a hop to an origin in ``trusted_origins``."""
     web = Web({f"{BASE}/start": "https://files.example/signed"})
-    http = HttpOptions(
-        middleware=(_Signer(),), security=SecurityOptions(trusted_origins=frozenset({"https://files.example"}))
-    )
-    async with web.client(http=http) as client:
+    http = HttpOptions(security=SecurityOptions(trusted_origins=frozenset({"https://files.example"})))
+    async with web.client(http=http, middleware=(_Signer(),)) as client:
         await client.get("start", expect=RESPONSE)
 
     assert all(_signed(request) == {"X-Signature", "sig"} for request in web.sent)
@@ -372,7 +368,7 @@ async def test_a_middlewares_credentials_reach_a_trusted_origin() -> None:
 async def test_a_middlewares_credentials_stay_off_a_mint_hops_token_host() -> None:
     """Withhold a middleware's credentials from a mint hop, whose origin is trusted for the mint's credentials only."""
     web = Web()
-    async with web.client(auth=_MintingAuth(), http=HttpOptions(middleware=(_Signer(),))) as client:
+    async with web.client(auth=_MintingAuth(), http=HttpOptions(), middleware=(_Signer(),)) as client:
         await client.get("data", expect=RESPONSE)
 
     mint_hop, call = web.sent
@@ -485,7 +481,7 @@ async def test_a_walks_own_headers_reach_a_later_page_only_on_the_first_pages_or
         return httpx2.Response(httpx2.codes.OK, json=[1], headers={"Link": link})
 
     http = HttpOptions(transport=httpx2.MockTransport(answer))
-    async with StubClient(base_url=BASE, rate=UNLIMITED, policy=TransportPolicy(retry=NO_RETRY), http=http) as client:
+    async with StubClient(base_url=BASE, policy=TransportPolicy(retry=None), http=http) as client:
         pages = client.paginate(first, expect=reader(list[int]), pages=LinkHeader(items=list), headers={"X-Key": "k"})
         assert [item async for item in pages] == [1, 1]
 
