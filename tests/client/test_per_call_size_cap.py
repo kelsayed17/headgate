@@ -23,7 +23,7 @@ from tests.cache._helpers import TrackingNetwork, every_get_rules, stub_client
 if TYPE_CHECKING:
     from hishel import AsyncSqliteStorage
 
-    from tests.support.clients import StubClient
+    from headgate import Client
 
 _KIB: Final = 1024
 #: The body every request is answered with: past one cap, inside the other.
@@ -32,7 +32,7 @@ _SMALL: Final = _KIB
 _LARGE: Final = 4 * _KIB
 
 
-def _client(network: TrackingNetwork, *, cap: int, storage: AsyncSqliteStorage | None) -> StubClient:
+def _client(network: TrackingNetwork, *, cap: int, storage: AsyncSqliteStorage | None) -> Client:
     """Return a client capped at *cap* over *network*, caching every GET into *storage* when given."""
     cache = None if storage is None else HttpCache(**every_get_rules(), storage=storage)
     return stub_client(transport=network, cache=cache, http=HttpOptions(max_response_bytes=cap))

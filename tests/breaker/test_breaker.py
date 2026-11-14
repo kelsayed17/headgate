@@ -3,7 +3,7 @@
 
 """The circuit breaker's state machine, driven directly.
 
-The seam it is driven through (one ``with breaker.track()`` block per fetch inside ``AsyncBaseClient._exchange``,
+The seam it is driven through (one ``with breaker.track()`` block per fetch inside ``Client._exchange``,
 spanning the body read) is covered end-to-end in ``test_breaker_integration.py``.
 
 The outcome of a block is decided by the ``Verdict`` it marks, not by what escapes it: only a marked raise is a host
@@ -46,7 +46,7 @@ class _BoomError(Exception):
 
 
 def _raise_marked(cb: CircuitBreaker) -> None:
-    """Run one tracked fetch that marks a wire failure and raises, as ``AsyncBaseClient`` does for one."""
+    """Run one tracked fetch that marks a wire failure and raises, as ``Client`` does for one."""
     with cb.track() as verdict:
         verdict.mark_failed()
         msg = "nope"

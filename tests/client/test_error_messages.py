@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Expect, HttpOptions, Reader, StaticHeaderAuth, TransportPolicy
+from headgate import Client, Expect, HttpOptions, Reader, StaticHeaderAuth, TransportPolicy
 from headgate._failures import MESSAGE_TEXT_LIMIT, CallSite, transport_error
 from headgate._responses import as_bytes
 from headgate.errors import (
@@ -34,7 +34,6 @@ from headgate.errors import (
 )
 from headgate.retry import RetryPolicy
 from tests.support.breakers import failures
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -50,9 +49,9 @@ _URL_IN_MESSAGE = 400
 
 def _client(
     handler: Callable[[httpx2.Request], httpx2.Response], *, response_check: ResponseCheck | None = None
-) -> StubClient:
+) -> Client:
     """Return a client over *handler* that sends each request once."""
-    return StubClient(
+    return Client(
         base_url=f"https://{_HOST}",
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(
@@ -97,7 +96,7 @@ async def test_a_header_value_the_http_library_refuses_is_never_quoted(local_ser
 
     The message is fixed and value-free, and nothing is chained, since the cause carries the same text.
     """
-    client = StubClient(
+    client = Client(
         base_url=local_server,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         auth=StaticHeaderAuth({"Authorization": f"Bearer {_CANARY}\n"}),
@@ -160,7 +159,7 @@ async def test_a_surviving_transient_status_names_the_method_the_relative_url_an
             await client.get("series?api_key=SECRET", expect=as_bytes)
 
     assert str(raised.value) == (
-        f'[StubClient] transient {status} for GET series?api_key=%2A%2A%2A (status={status}) — {{"error": '
+        f'[example.test] transient {status} for GET series?api_key=%2A%2A%2A (status={status}) — {{"error": '
         '"maintenance until 5pm"}'
     )
 

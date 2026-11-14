@@ -85,11 +85,11 @@ def _rebuild_client_error(cls: type[ClientError], args: tuple[object, ...], stat
 class ErrorDetails(TypedDict, total=False):
     """What a ``ClientError`` records about the call that raised it, beyond its message; every key is optional.
 
-    ``source`` names the client that raised it. ``url`` is sanitized and bounded. ``attempts`` counts the call's sends;
-    ``retryable`` says whether the call's retry policy would re-send after the outcome that raised the error (a status
-    in its ``statuses`` or a network failure, and only when sending again is safe for the method); ``retry_after`` is
-    the delay the upstream asked for, in seconds; ``sent`` says whether any byte of the call can have reached the
-    network.
+    ``source`` names the client that raised it, by its ``base_url``'s host. ``url`` is sanitized and bounded.
+    ``attempts`` counts the call's sends; ``retryable`` says whether the call's retry policy would re-send after the
+    outcome that raised the error (a status in its ``statuses`` or a network failure, and only when sending again is
+    safe for the method); ``retry_after`` is the delay the upstream asked for, in seconds; ``sent`` says whether any
+    byte of the call can have reached the network.
     """
 
     source: str | None
@@ -105,7 +105,8 @@ class ErrorDetails(TypedDict, total=False):
 class ClientError(Exception):
     """Base for every transport-layer failure.
 
-    ``source`` names the originating client and prefixes the message as ``[source]``. Subclasses distinguish failure
+    ``source`` names the originating client by its ``base_url``'s host (``api.github.com``), and prefixes the message
+    as ``[source]``. Subclasses distinguish failure
     modes so callers can branch on them. The read-only attributes :attr:`source`, :attr:`method`, :attr:`url`,
     :attr:`request_id`, :attr:`attempts`, :attr:`retryable`, :attr:`retry_after` and :attr:`sent` describe the call (see
     :class:`ErrorDetails`); each is ``None`` (``retryable``: ``False``) when the raiser did not know it. Every attribute
@@ -126,7 +127,7 @@ class ClientError(Exception):
 
     @property
     def source(self) -> str | None:
-        """The name of the client that raised the error, which also prefixes its message."""
+        """The host of the ``base_url`` of the client that raised the error, which also prefixes its message."""
         return self._source
 
     @property

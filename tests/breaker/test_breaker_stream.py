@@ -21,14 +21,13 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, CachedTokenAuth, HttpOptions, Minted, TransportPolicy
+from headgate import BreakerPolicy, CachedTokenAuth, Client, HttpOptions, Minted, TransportPolicy
 from headgate._core import BreakerState, CallFinished
 from headgate.breaker import BreakerRegistry, CircuitBreaker
 from headgate.errors import ClientError, ClientTimeoutError, TransportError, UpstreamStatusError
 from headgate.ratelimit import Rate
 from headgate.testing import TestClock
 from headgate.timing import Timing
-from tests.support.clients import StubClient
 from tests.support.events import Recorder
 from tests.support.responses import RESPONSE
 
@@ -63,9 +62,9 @@ class _Breakers:
         *,
         observers: tuple[Recorder, ...] = (),
         middleware: tuple[Middleware, ...] = (),
-    ) -> StubClient:
+    ) -> Client:
         """Return a client over *transport* that sends each call once, on this registry."""
-        return StubClient(
+        return Client(
             base_url=_ORIGIN,
             rate=_RATE,
             policy=TransportPolicy(retry=None, breaker=self.policy),
@@ -104,7 +103,7 @@ class _DiesMidBody(httpx2.AsyncByteStream):
         raise httpx2.ReadError(msg)
 
 
-async def _drain(client: StubClient) -> None:
+async def _drain(client: Client) -> None:
     """Stream ``events`` and read its whole body."""
     async with client.stream("events") as stream:
         async for _ in stream.aiter_bytes():
@@ -153,7 +152,7 @@ async def test_a_stream_opened_with_a_4xx_is_the_origin_answering() -> None:
 async def test_a_timeout_reading_an_error_head_is_the_networks_not_the_deadline() -> None:
     """Map a network ``TimeoutError`` in a refused stream's error head as the exchange does, not as the deadline."""
     breakers = _Breakers(threshold=2)
-    client = StubClient(
+    client = Client(
         base_url=_ORIGIN,
         rate=_RATE,
         policy=TransportPolicy(retry=None, breaker=breakers.policy, deadline=60.0),
@@ -244,7 +243,7 @@ class _ApiThenHangingTokenHost(httpx2.AsyncBaseTransport):
 async def test_a_deadline_passing_during_a_401_re_mint_is_not_charged_to_the_origin(*, hop: bool) -> None:
     """Charge the API origin nothing when the deadline cuts off a re-mint: the token host is what hung."""
     breakers = _Breakers(threshold=1)
-    client = StubClient(
+    client = Client(
         base_url=_ORIGIN,
         rate=_RATE,
         auth=_HangingMint(hop=hop),

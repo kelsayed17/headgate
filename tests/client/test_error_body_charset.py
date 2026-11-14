@@ -13,11 +13,10 @@ from __future__ import annotations
 import httpx2
 import pytest
 
-from headgate import HttpOptions, TransportPolicy, as_bytes
+from headgate import Client, HttpOptions, TransportPolicy, as_bytes
 from headgate._failures import body_snippet
 from headgate.errors import UpstreamStatusError
 from headgate.retry import RetryPolicy
-from tests.support.clients import StubClient
 
 #: Codecs Python registers that are not text encodings.
 _NOT_TEXT = ["base64", "hex", "rot13", "zlib", "idna", "undefined", "no-such-charset"]
@@ -40,10 +39,10 @@ _STATUSES = [httpx2.codes.NOT_FOUND, httpx2.codes.SERVICE_UNAVAILABLE]
 _REFUSING = ["base64", "idna"]
 
 
-def _client(status: int, charset: str) -> StubClient:
+def _client(status: int, charset: str) -> Client:
     """Return a client answering every request once with *status* and a body declared in *charset*."""
     headers = {"Content-Type": f"text/plain; charset={charset}"}
-    return StubClient(
+    return Client(
         base_url="https://api.example.test",
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(
@@ -52,7 +51,7 @@ def _client(status: int, charset: str) -> StubClient:
     )
 
 
-async def _open_stream(client: StubClient) -> None:
+async def _open_stream(client: Client) -> None:
     """Open a stream of ``GET x`` on *client*, and close it."""
     async with client.stream("x"):
         pass

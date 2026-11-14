@@ -18,14 +18,13 @@ import httpcore2
 import httpx2
 import pytest
 
-from headgate import ForbiddenDestinationError, HttpOptions, Timeouts, TransportError
+from headgate import Client, ForbiddenDestinationError, HttpOptions, Timeouts, TransportError
 from headgate._options import DEFAULT_LIMITS, TransportPolicy
 from headgate.errors import ClientTimeoutError
 from headgate.ratelimit import Rate
 from headgate.security import AddressGuard, PinnedHTTPTransport
 from headgate.security._transport import _VettingBackend
 from tests.security._servers import client_ssl_context, serving
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -58,10 +57,10 @@ class _Resolver:
         return self.answer
 
 
-def _client(base_url: str, guard: AddressGuard, *, tls: bool = False, timeout: Timeouts | None = None) -> StubClient:
+def _client(base_url: str, guard: AddressGuard, *, tls: bool = False, timeout: Timeouts | None = None) -> Client:
     """Build a client over a pinned transport through *guard*, sending each call once."""
     transport = PinnedHTTPTransport(guard, ssl_context=client_ssl_context() if tls else None, limits=DEFAULT_LIMITS)
-    return StubClient(
+    return Client(
         base_url=base_url,
         rate=Rate.per_second(1000),
         policy=TransportPolicy(retry=None, timeout=timeout or Timeouts()),

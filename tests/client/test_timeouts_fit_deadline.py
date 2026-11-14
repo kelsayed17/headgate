@@ -16,10 +16,9 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import HttpOptions, RequestOptions, Timeouts, TransportPolicy, nothing
+from headgate import Client, HttpOptions, RequestOptions, Timeouts, TransportPolicy, nothing
 from headgate._options import DEFAULT_TIMEOUTS, httpx_timeout
 from headgate.testing import FakeTransport
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -30,10 +29,10 @@ _LONG = Timeouts(read=120.0)
 _DEFAULTS = Timeouts()
 
 
-def _client(*, timeout: Timeouts = _DEFAULTS, deadline: float | None = 60.0) -> StubClient:
+def _client(*, timeout: Timeouts = _DEFAULTS, deadline: float | None = 60.0) -> Client:
     """Build a client answering every GET with 200, with *timeout* under *deadline*."""
     fake = FakeTransport().reply("GET", "/x", 200)
-    return StubClient(
+    return Client(
         base_url="https://api.example.test",
         policy=TransportPolicy(deadline=deadline, timeout=timeout),
         http=HttpOptions(transport=fake),
@@ -135,7 +134,7 @@ async def test_no_limit_under_a_deadline_is_cut_to_the_time_left() -> None:
         seen.append(request.extensions["timeout"]["read"])
         return httpx2.Response(200)
 
-    client = StubClient(
+    client = Client(
         base_url="https://api.example.test",
         policy=TransportPolicy(deadline=_SHORT),
         http=HttpOptions(transport=httpx2.MockTransport(record)),

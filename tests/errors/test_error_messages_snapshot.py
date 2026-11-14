@@ -24,6 +24,7 @@ from headgate import (
     AuthError,
     BreakerPolicy,
     CachedTokenAuth,
+    Client,
     ClientError,
     HttpOptions,
     Json,
@@ -40,7 +41,6 @@ from headgate.breaker import BreakerRegistry
 from headgate.errors import RefusedError
 from headgate.testing import TestClock
 from headgate.timing import Timing, current_timing, timing_override
-from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
@@ -90,11 +90,11 @@ def _client(
     policy: TransportPolicy | None = None,
     http: HttpOptions | None = None,
     auth: httpx2.Auth | None = None,
-) -> StubClient:
+) -> Client:
     """Return a client over a script serving *responses*, sending each call once unless *policy* says otherwise."""
     transport = Script(*responses).transport()
     options = http or HttpOptions()
-    return StubClient(
+    return Client(
         base_url=_BASE,
         auth=auth,
         policy=policy or TransportPolicy(retry=None, breaker=None),
@@ -119,7 +119,7 @@ def _fail(exc_type: type[httpx2.TransportError], message: str) -> httpx2.MockTra
     return httpx2.MockTransport(handler)
 
 
-async def _get(client: StubClient, *, expect: Reader[object] = nothing) -> None:
+async def _get(client: Client, *, expect: Reader[object] = nothing) -> None:
     """Send one GET for an order through *client*, with a credential in its query, closing the client afterwards."""
     async with client:
         await client.get("orders" + _KEYED_QUERY, expect=expect)
@@ -254,7 +254,7 @@ class _Hanging(httpx2.AsyncBaseTransport):
 
 async def _deadline_exceeded() -> None:
     """Hang past the call's deadline: ``ClientTimeoutError`` naming the request line."""
-    async with StubClient(
+    async with Client(
         base_url=_BASE,
         policy=TransportPolicy(retry=None, breaker=None),
         http=HttpOptions(transport=_Hanging()),
@@ -276,7 +276,7 @@ async def _open_breaker() -> None:
 
 async def _forbidden_destination() -> None:
     """Call a loopback address with the SSRF guard on: ``ForbiddenDestinationError`` before anything is sent."""
-    async with StubClient(
+    async with Client(
         base_url="https://127.0.0.1:8443",
         policy=TransportPolicy(retry=None, breaker=None),
         http=HttpOptions(transport=Script().transport(), security=SecurityOptions(block_private_hosts=True)),

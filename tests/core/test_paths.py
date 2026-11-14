@@ -13,13 +13,12 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage
 
-from headgate import HttpOptions, Route, TransportPolicy
+from headgate import Client, HttpOptions, Route, TransportPolicy
 from headgate._core import CallContext, check_fragment, path_has_fragment, url_path
 from headgate.cache import HttpCache
 from headgate.errors import UpstreamStatusError
 from headgate.ratelimit import Rate
 from headgate.retry import RetryPolicy
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -92,7 +91,7 @@ def test_a_fragment_that_names_no_segment_is_refused(build: Callable[[], object]
 async def test_an_escaped_slash_in_a_value_does_not_pick_another_paths_route() -> None:
     """Leave ``t"/files/{name}"`` with ``name="exports/q3"`` to the client's retries, not the ``/exports`` route's."""
     wire = _Counting(503)
-    client = StubClient(
+    client = Client(
         base_url="https://x.example",
         rate=Rate.per_second(1000),
         policy=TransportPolicy(retry=RetryPolicy(attempts=2), routes=(Route("/exports", retry=None),)),
@@ -117,7 +116,7 @@ async def test_the_cache_filter_matches_fragments_by_segment_and_patterns_on_the
     """Keep an escaped ``/`` inside its segment for a fragment; let a pattern see the path decoded, as it is written."""
     wire = _Counting(200)
     storage = AsyncSqliteStorage(connection=await anysqlite.connect(":memory:"))
-    client = StubClient(
+    client = Client(
         base_url="https://x.example",
         rate=Rate.per_second(1000),
         policy=TransportPolicy(cache=HttpCache(storage=storage, paths=(rule,), ttl=60)),

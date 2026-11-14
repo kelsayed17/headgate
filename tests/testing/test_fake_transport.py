@@ -11,10 +11,9 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Form, HttpOptions, Rate, TransportPolicy, as_bytes, nothing
+from headgate import Client, Form, HttpOptions, Rate, TransportPolicy, as_bytes, nothing
 from headgate.errors import TransportError, UpstreamStatusError
 from headgate.testing import FakeTransport, Respond, UnmatchedRequestError
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -24,9 +23,9 @@ _BASE = "https://api.example.test/v1"
 _RATE = Rate.per_second(1000)
 
 
-def _client(fake: FakeTransport, *, policy: TransportPolicy | None = None) -> StubClient:
+def _client(fake: FakeTransport, *, policy: TransportPolicy | None = None) -> Client:
     """Build a client over *fake*."""
-    return StubClient(base_url=_BASE, rate=_RATE, policy=policy or TransportPolicy(), http=HttpOptions(transport=fake))
+    return Client(base_url=_BASE, rate=_RATE, policy=policy or TransportPolicy(), http=HttpOptions(transport=fake))
 
 
 async def test_a_route_serves_its_replies_in_order_and_repeats_the_last() -> None:

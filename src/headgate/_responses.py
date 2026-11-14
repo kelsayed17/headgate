@@ -9,7 +9,7 @@ a ``ClientError``. So each call declares, where it is made, what it can get back
 * a :class:`Reader` for any 2xx, the success reader: a function of the response, wrapped as ``Reader(fn)``;
 * optionally an :class:`Expect`, which adds the exact non-2xx statuses the provider documents as answers.
 
-Anything a call did not declare raises through the base client's status ladder. There is no raw mode, so no call can
+Anything a call did not declare raises through the client's status ladder. There is no raw mode, so no call can
 receive an undeclared status. A refusal the provider writes inside a body is raised by the reader as
 :class:`RefusedError`, and the base client turns it into a ``ClientError`` carrying the status the wire sent.
 
@@ -125,7 +125,7 @@ type ResponseCheck = Callable[[httpx2.Response], RefusedError | None]
 It names a refusal the status line alone cannot show, such as a key-error redirect, and returns ``None`` for
 everything else; raising the :class:`RefusedError` instead of returning it is treated the same. It reads the status
 line and headers, never the body: a refusal written in a body is its reader's to raise. A client carrying one does not
-follow redirects (the base client enforces it), because the check sees only the final response.
+follow redirects (the client enforces it), because the check sees only the final response.
 """
 
 
@@ -135,7 +135,7 @@ class Expect[T]:
     """One endpoint's documented responses: a success reader for any 2xx, plus exact-status answers.
 
     ``answers`` holds the statuses the provider documents as answers, each declared with :meth:`on` in the client
-    method whose endpoint returns it. The base client reads an exact declared status first, applies its status ladder
+    method whose endpoint returns it. The client reads an exact declared status first, applies its status ladder
     to any other non-2xx, and hands every other 2xx to :attr:`ok`. A declared non-2xx whose body its reader cannot
     decode falls through to the ladder with its real status, so a claim covers only the body shape it names: a declared
     business 403 never swallows a real permission 403.

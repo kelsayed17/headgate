@@ -12,10 +12,10 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Unpack
 
+from headgate import Client
 from headgate._auth import QueryParamAuth, StaticHeaderAuth
 from headgate._url import is_secret_param
 from headgate.ratelimit import Rate
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 async def _sent(httpx2_mock: HTTPXMock, auth: httpx2.Auth, **options: Unpack[RequestOptions]) -> httpx2.Request:
     """Send one GET through a client using *auth*, with the call *options*, and return the request that went out."""
     httpx2_mock.add_response(json={})
-    client = StubClient(rate=Rate.per_second(100), base_url="https://api.example", auth=auth)
+    client = Client(rate=Rate.per_second(100), base_url="https://api.example", auth=auth)
     await client.get("x", expect=RESPONSE, **options)
     return httpx2_mock.get_requests()[0]
 

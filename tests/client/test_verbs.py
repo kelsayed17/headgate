@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The verb methods on ``AsyncBaseClient``: get/post/put/patch/delete/head.
+"""The verb methods on ``Client``: get/post/put/patch/delete/head.
 
 A recording ``MockTransport`` captures every outgoing ``httpx2.Request``, so each test asserts the verb maps to the
 right HTTP method and threads its arguments through. Every verb takes the call's declared responses as ``expect=``
@@ -25,7 +25,7 @@ import pytest
 
 from headgate import EncodedBody, Expect, Form, HttpOptions, Json, Multipart, Raw, TransportPolicy, Writer
 from headgate import msgspec as flavor
-from headgate._client import AsyncBaseClient
+from headgate._client import Client
 from headgate._responses import as_bytes, nothing
 from headgate.errors import AuthError, UpstreamStatusError
 from headgate.msgspec import reader
@@ -70,9 +70,9 @@ class _Wire:
         return self.sent[-1]
 
 
-def _client(wire: _Wire) -> AsyncBaseClient:
-    """Return an ``AsyncBaseClient`` whose network is *wire*, sending each request once."""
-    return AsyncBaseClient(
+def _client(wire: _Wire) -> Client:
+    """Return an ``Client`` whose network is *wire*, sending each request once."""
+    return Client(
         base_url="https://example.test",
         rate=Rate.per_second(2),
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
@@ -154,9 +154,9 @@ async def test_a_calls_content_type_wins_over_the_writers() -> None:
     assert wire.last.headers["content-type"] == "application/merge-patch+json"
 
 
-def _defaulting(wire: _Wire, headers: dict[str, str]) -> AsyncBaseClient:
+def _defaulting(wire: _Wire, headers: dict[str, str]) -> Client:
     """Return a client over *wire* sending *headers* on every call, as client-wide defaults."""
-    return AsyncBaseClient(
+    return Client(
         base_url="https://example.test", http=HttpOptions(transport=httpx2.MockTransport(wire), headers=headers)
     )
 
@@ -216,7 +216,7 @@ async def test_an_encoded_body_is_sent_again_on_a_retry() -> None:
         sent.append(request.content)
         return httpx2.Response(next(statuses))
 
-    client = AsyncBaseClient(base_url="https://example.test", http=HttpOptions(transport=httpx2.MockTransport(answer)))
+    client = Client(base_url="https://example.test", http=HttpOptions(transport=httpx2.MockTransport(answer)))
     async with client:
         await client.put("orders/1", body=_NEW_ORDER(_Order(sku="A-1", note=None)), expect=nothing)
 

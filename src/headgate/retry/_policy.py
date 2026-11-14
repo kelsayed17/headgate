@@ -60,7 +60,7 @@ RETRY_STATUSES: Final = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 #: The exceptions the retry layer considers at all, matched with ``isinstance``: every httpx2 error and every
 #: ``OSError``. The one definition of a network failure: the cache shares exactly these between waiting requests, and
-#: ``AsyncBaseClient`` maps exactly these onto ``TransportError``.
+#: ``Client`` maps exactly these onto ``TransportError``.
 NETWORK_ERRORS: tuple[type[httpx2.HTTPError], type[OSError]] = (httpx2.HTTPError, OSError)
 
 #: Failures that prove the request never left: no connection was obtained, so no byte of it was written. The fallback

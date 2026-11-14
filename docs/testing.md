@@ -3,24 +3,28 @@
 `headgate.testing` tests a client through its real stack (retries, the rate budget, the breaker, the error mapping)
 with nothing private patched. Two seams make that possible:
 
-- **the network** is `HttpOptions(transport=...)`. Have the client accept a transport and pass it through, as the
-  [examples](https://github.com/kelsayed17/headgate/tree/main/examples) do: `CatalogClient(api_key, transport=fake)`;
-- **time** is read when a client is **constructed**, from a context variable the kit's context managers set. Build the
-  client inside them; entering one around a client that already exists changes nothing. Breaker state needs no seam:
-  each client keeps its own.
+- **the network**: `fake_network(transport)` sends every `Client` built in its block on *transport*, in place of the
+  network, even one the SDK gave a transport of its own (`HttpOptions(transport=AsyncCurlTransport(...))`). Only the
+  network is replaced: the SDK's rate budget, cache, retries and breaker run over the fake as they would in production;
+- **time**: `TestClock.install()` and `instant_retries()` set the timing the clients built in their block run on.
+
+All three are read when a client is **constructed**, so build the SDK inside them; entering one around a client that
+already exists changes nothing, and the block need not stay open while the client is used. Breaker state needs no
+seam: each client keeps its own.
 
 ```python
 from collections.abc import Iterator
 
 import pytest
 
-from headgate.testing import FakeTransport, Respond, instant_retries
+from headgate.testing import FakeTransport, Respond, fake_network, instant_retries
 
 
 @pytest.fixture
 def catalog() -> Iterator[CatalogClient]:
-    with instant_retries():
-        yield CatalogClient("test-key", transport=FakeTransport().reply("GET", "/v1/series/GDP", Respond(json=GDP)))
+    fake = FakeTransport().reply("GET", "/v1/series/GDP", Respond(json=GDP))
+    with fake_network(fake), instant_retries():
+        yield CatalogClient("test-key")
 ```
 
 ## FakeTransport

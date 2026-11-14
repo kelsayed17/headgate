@@ -16,6 +16,7 @@ import httpx2
 import pytest
 
 from headgate import (
+    Client,
     HttpCache,
     HttpOptions,
     Rate,
@@ -32,7 +33,6 @@ from headgate.errors import RateLimitError
 from headgate.ratelimit._budgets import CALL_BUDGET
 from headgate.testing import budget_for
 from tests.cache._helpers import every_get_rules, stub_client
-from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
@@ -45,9 +45,9 @@ _THREE: Final = RetryPolicy(attempts=3)
 
 def _client(
     script: Script, *routes: Route, retry: RetryPolicy | None = _THREE, deadline: float | None = 60.0
-) -> StubClient:
+) -> Client:
     """Return a client over *script* with *routes*, a policy *retry* and *deadline*, and no breaker."""
-    return StubClient(
+    return Client(
         base_url=_BASE,
         rate=_RATE,
         policy=TransportPolicy(retry=retry, deadline=deadline, breaker=None, routes=routes),

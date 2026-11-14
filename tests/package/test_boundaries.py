@@ -94,7 +94,7 @@ def test_a_bounded_package_imports_only_what_its_boundary_allows(package: str) -
 @pytest.mark.parametrize(
     "source",
     [
-        pytest.param("from headgate._client import AsyncBaseClient\n", id="the-client"),
+        pytest.param("from headgate._client import Client\n", id="the-client"),
         pytest.param("import headgate._stack\n", id="the-stack"),
         pytest.param("from headgate import _cache\n", id="the-cache-by-from-import"),
         pytest.param("from headgate.breaker import CircuitBreaker\n", id="another-policy-package"),

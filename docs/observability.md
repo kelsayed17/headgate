@@ -9,7 +9,7 @@ demand. What to record, where, and at what level is the application's decision.
 An observer is any object with a `notify(event)` method, passed to the client as `observers=(...)`:
 
 ```python
-from headgate import AsyncBaseClient
+from headgate import Client
 from headgate.events import CallFinished, Event, RateLimited
 
 
@@ -24,7 +24,7 @@ class Metrics:
                 pass
 
 
-client = AsyncBaseClient(base_url="https://api.example", observers=(Metrics(),))
+client = Client(base_url="https://api.example", observers=(Metrics(),))
 ```
 
 | Event | When | Carries |
@@ -55,11 +55,11 @@ observer raises never reaches the call: it is swallowed and counted per observer
 `pip install 'headgate[otel]'` (it needs only `opentelemetry-api`; bring your own SDK):
 
 ```python
-from headgate import AsyncBaseClient
+from headgate import Client
 from headgate.otel import OpenTelemetryObserver
 
 otel = OpenTelemetryObserver()  # the global tracer and meter providers by default
-client = AsyncBaseClient(base_url="https://api.example", observers=(otel,), middleware=(otel,))
+client = Client(base_url="https://api.example", observers=(otel,), middleware=(otel,))
 ```
 
 It is both an observer, which turns a call's events into its span, and a middleware, which writes the span's trace

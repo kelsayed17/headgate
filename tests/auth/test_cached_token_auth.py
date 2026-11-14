@@ -17,11 +17,10 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, _auth
+from headgate import Client, HttpOptions, _auth
 from headgate._auth import AUTH_HOP, FRESH_TOKEN_S, CachedTokenAuth, Minted, failed_on_auth_hop
 from headgate.errors import AuthError, ClientConfigurationError, TransportError
 from headgate.testing import TestClock
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 from tests.support.tokens import TEST_BEARER, premint
 
@@ -396,7 +395,7 @@ class TestAFreshTokenIsNotReMinted:
             return httpx2.Response(httpx2.codes.UNAUTHORIZED)
 
         auth = premint(_CountingAuth())
-        client = StubClient(
+        client = Client(
             base_url="https://api.example",
             auth=auth,
             http=HttpOptions(transport=httpx2.MockTransport(answer)),

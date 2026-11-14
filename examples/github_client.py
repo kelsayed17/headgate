@@ -16,16 +16,14 @@ endpoint method stays one line:
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 
 import msgspec
 
-from headgate import AsyncBaseClient, BearerAuth, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
+from headgate import BearerAuth, Client, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
 from headgate.msgspec import reader
 
 if TYPE_CHECKING:
-    import httpx2
-
     from headgate import Paginated
 
 API = "https://api.github.com"
@@ -60,27 +58,38 @@ ISSUES = reader(list[Issue])
 ISSUE_PAGES = LinkHeader(items=_issues)
 
 
-class GitHub(AsyncBaseClient):
+class GitHub:
     """Read repositories and their open issues from the GitHub REST API."""
 
-    def __init__(self, token: str, *, transport: httpx2.AsyncBaseTransport | None = None) -> None:
-        """Authenticate with *token*; *transport* replaces the network, as a test does."""
-        super().__init__(
+    def __init__(self, token: str) -> None:
+        """Authenticate with *token*."""
+        self._http = Client(
             base_url=API,
             # Well under the 5,000 requests an hour a token gets, and never more than 50 at once.
             rate=RateBudget(Rate.per_second(10), max_in_flight=50),
             auth=BearerAuth(token),
             http=HttpOptions(
-                transport=transport,
                 headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
             ),
         )
 
+    async def __aenter__(self) -> Self:
+        """Return the client; leaving the block closes it."""
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        """Close the client."""
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        """Close the connection pool."""
+        await self._http.aclose()
+
     async def repository(self, owner: str, name: str) -> Repository | None:
         """Return the repository *owner*/*name*, or ``None`` when it does not exist or the token cannot see it."""
-        return await self.get(t"repos/{owner}/{name}", expect=REPOSITORY_OR_NONE)
+        return await self._http.get(t"repos/{owner}/{name}", expect=REPOSITORY_OR_NONE)
 
     def open_issues(self, owner: str, name: str) -> Paginated[list[Issue], Issue]:
         """Return the open issues (and pull requests) of *owner*/*name*, 100 a page, fetched as they are iterated."""
         params = {"state": "open", "per_page": 100}
-        return self.paginate(t"repos/{owner}/{name}/issues", expect=ISSUES, pages=ISSUE_PAGES, params=params)
+        return self._http.paginate(t"repos/{owner}/{name}/issues", expect=ISSUES, pages=ISSUE_PAGES, params=params)

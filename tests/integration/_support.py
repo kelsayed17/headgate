@@ -10,9 +10,8 @@ from typing import TYPE_CHECKING, override
 
 import msgspec
 
-from headgate import CachedTokenAuth, HttpOptions, QueryParamAuth, Rate, StaticHeaderAuth, TransportPolicy
+from headgate import CachedTokenAuth, Client, HttpOptions, QueryParamAuth, Rate, StaticHeaderAuth, TransportPolicy
 from headgate._core import CredentialStamper
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -38,10 +37,10 @@ def client(
     rate: Rate | RateBudget = FAST,
     observers: Sequence[Observer] = (),
     middleware: Sequence[Middleware] = (),
-) -> StubClient:
+) -> Client:
     """Build a client for :data:`BASE` over *transport*, spending *rate*, with *http*'s other options."""
     options = http or HttpOptions()
-    return StubClient(
+    return Client(
         base_url=BASE,
         rate=rate,
         auth=auth,

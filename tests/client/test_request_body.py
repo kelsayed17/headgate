@@ -17,9 +17,8 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import pytest
 
-from headgate import EncodedBody, Form, HttpOptions, Json, Multipart, Rate, Raw, TransportPolicy, nothing
+from headgate import Client, EncodedBody, Form, HttpOptions, Json, Multipart, Rate, Raw, TransportPolicy, nothing
 from headgate.errors import UpstreamStatusError
-from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
@@ -30,9 +29,9 @@ if TYPE_CHECKING:
 _VERBS: Final[tuple[Method, ...]] = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD")
 
 
-def _client(script: Script) -> StubClient:
+def _client(script: Script) -> Client:
     """Return a client over *script*."""
-    return StubClient(
+    return Client(
         base_url="https://api.example.test",
         rate=Rate.per_second(1000),
         policy=TransportPolicy(breaker=None),

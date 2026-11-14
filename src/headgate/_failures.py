@@ -5,7 +5,7 @@
 
 Each builder returns its error rather than raising it, so the caller raises it with the right cause (``from exc`` for
 a transport failure, ``from refused`` for a reader's :class:`~headgate.errors.RefusedError`). Each takes the
-:class:`CallSite` it failed at: the client class's name, the request line and the attempt count, which every
+:class:`CallSite` it failed at: the client's host, the request line and the attempt count, which every
 ``ClientError`` carries with the response's request id, whether a retry could succeed, and any ``Retry-After``.
 
 An ``application/problem+json`` body (RFC 9457) is parsed into a :class:`~headgate.errors.Problem` on the status

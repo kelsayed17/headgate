@@ -11,14 +11,14 @@ rejects, links its pages with a ``Link`` header, and serves large exports as CSV
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, Self, override
 
 import httpx2
 import msgspec
 
 from headgate import (
-    AsyncBaseClient,
     CachedTokenAuth,
+    Client,
     Expect,
     HttpOptions,
     IdempotencyKeys,
@@ -107,7 +107,7 @@ ORDER_OR_REJECTION = Expect(ORDER).on(HTTPStatus.UNPROCESSABLE_ENTITY, reader(Re
 ORDER_PAGES = LinkHeader(items=orders_on)
 
 
-class OrdersClient(AsyncBaseClient):
+class OrdersClient:
     """The shop's order API."""
 
     def __init__(
@@ -116,10 +116,9 @@ class OrdersClient(AsyncBaseClient):
         client_secret: str,
         *,
         observers: tuple[Observer, ...] = (),
-        transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
-        """Mint tokens with *client_id* and *client_secret*; report to *observers*; *transport* replaces the network."""
-        super().__init__(
+        """Mint tokens with *client_id* and *client_secret*; report to *observers*."""
+        self._http = Client(
             base_url="https://api.shop.example/v2",
             rate=Rate.per_second(20),
             auth=ShopTokenAuth(client_id, client_secret),
@@ -131,29 +130,41 @@ class OrdersClient(AsyncBaseClient):
                 # the export endpoint gets a slower lane and a longer deadline
                 routes=(Route("/exports", rate=Rate.per_minute(6), deadline=300.0),),
             ),
-            http=HttpOptions(transport=transport, user_agent="shop-sync/1.4"),
+            http=HttpOptions(user_agent="shop-sync/1.4"),
             observers=observers,
         )
 
+    async def __aenter__(self) -> Self:
+        """Return the client; leaving the block closes it."""
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        """Close the client."""
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        """Close the connection pool."""
+        await self._http.aclose()
+
     async def get_order(self, order_id: str) -> Order:
         """Return the order *order_id*."""
-        return await self.get(t"orders/{order_id}", expect=ORDER)
+        return await self._http.get(t"orders/{order_id}", expect=ORDER)
 
     async def place_order(self, order: NewOrder) -> Order | Rejection:
         """Place *order*: the order as created, or the API's documented rejection."""
-        return await self.post("orders", body=NEW_ORDER(order), expect=ORDER_OR_REJECTION)
+        return await self._http.post("orders", body=NEW_ORDER(order), expect=ORDER_OR_REJECTION)
 
     async def cancel_order(self, order_id: str) -> None:
         """Cancel the order *order_id*."""
-        await self.delete(t"orders/{order_id}", expect=nothing)
+        await self._http.delete(t"orders/{order_id}", expect=nothing)
 
     def orders(self, *, status: str) -> Paginated[list[Order], Order]:
         """Return the orders in *status*, a page of 100 at a time."""
         query = {"status": status, "per_page": 100}
-        return self.paginate("orders", expect=reader(list[Order]), pages=ORDER_PAGES, params=query)
+        return self._http.paginate("orders", expect=reader(list[Order]), pages=ORDER_PAGES, params=query)
 
     async def export_orders(self, write: Callable[[bytes], object]) -> None:
         """Stream the CSV export of every order into *write*, a chunk at a time, never holding it whole."""
-        async with self.stream("exports/orders.csv") as export:
+        async with self._http.stream("exports/orders.csv") as export:
             async for chunk in export.aiter_bytes():
                 write(chunk)

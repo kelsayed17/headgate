@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``AsyncBaseClient``'s failure ladder: every failure raises the matching ``ClientError`` subtype.
+"""``Client``'s failure ladder: every failure raises the matching ``ClientError`` subtype.
 
 Every call declares its ``expect=`` reader, and an undeclared non-success status always raises rather than returning
 ``None`` or a raw ``Response``. Deciding that a response means "no data" is a content judgment left to the caller.
@@ -13,7 +13,7 @@ import httpx2
 import pytest
 
 from headgate import HttpOptions, TransportPolicy
-from headgate._client import AsyncBaseClient
+from headgate._client import Client
 from headgate.errors import (
     AuthError,
     ClientTimeoutError,
@@ -29,9 +29,9 @@ from headgate.retry import RetryPolicy
 _POLICY = TransportPolicy(retry=RetryPolicy(attempts=1))
 
 
-def _client(transport: httpx2.MockTransport) -> AsyncBaseClient:
+def _client(transport: httpx2.MockTransport) -> Client:
     """Return a client over *transport* that sends each request once."""
-    return AsyncBaseClient(
+    return Client(
         base_url="https://example.test", rate=Rate.per_second(2), policy=_POLICY, http=HttpOptions(transport=transport)
     )
 
@@ -125,23 +125,15 @@ async def test_bad_request_raises_upstream_status() -> None:
         assert ei.value.status_code == httpx2.codes.BAD_REQUEST
 
 
-async def test_the_error_names_the_client_class_that_raised_it() -> None:
-    """Check that ``source`` names the subclass that raised, not the base.
-
-    That attribution is how a caller tells which upstream failed from the error alone, so it is pinned on a
-    subclass rather than on ``AsyncBaseClient`` itself.
-    """
-
-    class NamedClient(AsyncBaseClient):
-        """A subclass whose name the error must carry."""
-
+async def test_the_error_names_the_host_of_the_client_that_raised_it() -> None:
+    """Check that ``source`` names the client's ``base_url`` host, which tells a caller which upstream failed."""
     transport = _answering(500)
-    async with NamedClient(
+    async with Client(
         rate=Rate.per_second(2), base_url="https://example.test", policy=_POLICY, http=HttpOptions(transport=transport)
     ) as c:
         with pytest.raises(UpstreamStatusError) as ei:
             await c.get("/x", expect=reader(dict[str, int]))
-        assert ei.value.source == "NamedClient"
+        assert ei.value.source == "example.test"
 
 
 async def test_rate_limited_raises_rate_limit_error() -> None:

@@ -1,7 +1,7 @@
 # Configuration
 
 ```text
-AsyncBaseClient(
+Client(
     *,
     base_url: str,
     rate: Rate | RateBudget | None = None,
@@ -13,10 +13,29 @@ AsyncBaseClient(
 )
 ```
 
-A client class fixes these in `super().__init__()` and exposes only what its callers should choose (a key, a region,
-observers, a transport for tests). Every option object is a frozen, keyword-only dataclass that validates when it is
-built, so a bad value fails where it is written, and freezes the collections it is given. Change one with
-`dataclasses.replace`.
+An SDK fixes these where it builds its `Client` and exposes only what its callers should choose (a key, a region,
+observers). It holds the client rather than inheriting from it (`Client` is final, and subclassing it raises
+`TypeError`), and forwards `async with` and `aclose()` to it:
+
+```python
+class GitHub:
+    def __init__(self, token: str) -> None:
+        self._http = Client(base_url="https://api.github.com", rate=Rate.per_second(10), auth=BearerAuth(token))
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+```
+
+A `ClientError` the client raises names its `base_url`'s host as its `source`, `[api.github.com] ...`.
+
+Every option object is a frozen, keyword-only dataclass that validates when it is built, so a bad value fails where it
+is written, and freezes the collections it is given. Change one with `dataclasses.replace`.
 
 - **`base_url`**: the API root. A relative path in a call is joined onto it (a trailing `/` is added if missing), and
   its origin is the one credentials are sent to.

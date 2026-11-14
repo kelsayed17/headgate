@@ -3,12 +3,12 @@
 
 """Construct a client with its transport policy switched off.
 
-``AsyncBaseClient`` wraps every request in retry with backoff, a per-origin circuit breaker, and a rate budget. All
+``Client`` wraps every request in retry with backoff, a per-origin circuit breaker, and a rate budget. All
 three are right in production and wrong where the network is a fake (a mocked transport under a test) or where the job
 is to report the first failure (a connectivity probe).
 
-The knobs exist on ``AsyncBaseClient.__init__`` (``TransportPolicy(retry=..., breaker=...)``, ``rate``), but a
-client class usually fixes its own policy in ``super().__init__()`` and exposes none of it. So the switch is read at
+The knobs exist on ``Client.__init__`` (``TransportPolicy(retry=..., breaker=...)``, ``rate``), but an SDK usually
+fixes its own policy where it builds its ``Client`` and exposes none of it. So the switch is read at
 construction from a context variable instead::
 
     with policy_disabled():

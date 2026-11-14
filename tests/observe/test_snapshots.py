@@ -40,8 +40,8 @@ if TYPE_CHECKING:
 
     from syrupy.assertion import SnapshotAssertion
 
+    from headgate import Client
     from headgate.events import Observer
-    from tests.support.clients import StubClient
 
 type _Scenario = Callable[[tuple[Observer, ...], AsyncSqliteStorage], Awaitable[None]]
 
@@ -57,7 +57,7 @@ _ONCE = TransportPolicy(retry=None)
 _DEPRECATED = {"Deprecation": "@1688169599", "Sunset": "Sun, 30 Jun 2024 23:59:59 GMT"}
 
 
-async def _call(built: StubClient, times: int = 1) -> None:
+async def _call(built: Client, times: int = 1) -> None:
     """Make *times* ``GET x`` calls on *built*, swallowing the ``ClientError`` a scenario may end in."""
     for _ in range(times):
         with contextlib.suppress(ClientError):

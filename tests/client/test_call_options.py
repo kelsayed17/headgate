@@ -18,9 +18,8 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import httpx2
 import pytest
 
-from headgate import HttpOptions, Rate, RetryPolicy, TransportPolicy, UpstreamStatusError, nothing
+from headgate import Client, HttpOptions, Rate, RetryPolicy, TransportPolicy, UpstreamStatusError, nothing
 from headgate.pagination import NextUrl
-from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
@@ -46,9 +45,9 @@ def _no_next(_page: None) -> None:
 _ONE_PAGE: Final = NextUrl[None, object](items=_no_items, next=_no_next)
 
 
-def _client(script: Script) -> StubClient:
+def _client(script: Script) -> Client:
     """Return a client over *script* under the default retry policy and no breaker."""
-    return StubClient(
+    return Client(
         base_url=_BASE,
         rate=Rate.per_second(1000),
         policy=TransportPolicy(breaker=None),
@@ -61,7 +60,7 @@ def _moved() -> Script:
     return Script(httpx2.Response(302, headers={"Location": f"{_BASE}/elsewhere"}))
 
 
-async def _by_default(client: StubClient, method: Method) -> None:
+async def _by_default(client: Client, method: Method) -> None:
     """Send *method* to :data:`_PATH` with the call's defaults."""
     match method:
         case "GET":
@@ -78,7 +77,7 @@ async def _by_default(client: StubClient, method: Method) -> None:
             await client.head(_PATH, expect=nothing)
 
 
-async def _without_retry(client: StubClient, method: Method) -> None:
+async def _without_retry(client: Client, method: Method) -> None:
     """Send *method* to :data:`_PATH` with ``retry=None``."""
     match method:
         case "GET":
@@ -95,7 +94,7 @@ async def _without_retry(client: StubClient, method: Method) -> None:
             await client.head(_PATH, expect=nothing, retry=None)
 
 
-async def _not_following(client: StubClient, method: Method) -> None:
+async def _not_following(client: Client, method: Method) -> None:
     """Send *method* to :data:`_PATH` with ``follow_redirects=False``."""
     match method:
         case "GET":
@@ -223,12 +222,14 @@ def _accept_all(_response: httpx2.Response) -> None:
 
 def test_a_view_cannot_follow_redirects_under_a_response_check() -> None:
     """Refuse a following view on a client with a ``response_check``, as every call of it would be refused."""
-    client = StubClient(
+    client = Client(
         base_url=_BASE,
         rate=Rate.per_second(1000),
         http=HttpOptions(transport=Script().transport(), response_check=_accept_all, follow_redirects=False),
     )
-    with pytest.raises(ValueError, match=r"^StubClient has a response_check=, so no view may follow redirects$"):
+    with pytest.raises(
+        ValueError, match=r"^the client of api.example.test has a response_check=, so no view may follow redirects$"
+    ):
         client.with_options(follow_redirects=True)
     client.with_options(follow_redirects=False)
 

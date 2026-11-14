@@ -22,6 +22,7 @@ import pytest
 from headgate import (
     BreakerPolicy,
     CircuitOpenError,
+    Client,
     ClientError,
     HttpOptions,
     Json,
@@ -42,7 +43,6 @@ from headgate._core import CallContext
 from headgate.breaker import BreakerRegistry
 from headgate.errors import RefusedError
 from tests.support.breakers import failures
-from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
@@ -59,10 +59,10 @@ _LATIN_1 = "text/plain; charset=latin-1"
 _REQUEST_ID_LIMIT = 200
 
 
-def _client(script: Script | httpx2.MockTransport) -> StubClient:
+def _client(script: Script | httpx2.MockTransport) -> Client:
     """Build a client over *script* that sends each call once."""
     transport = script if isinstance(script, httpx2.MockTransport) else script.transport()
-    return StubClient(
+    return Client(
         base_url=_BASE,
         rate=Rate.per_second(1000),
         policy=TransportPolicy(retry=None),
@@ -70,7 +70,7 @@ def _client(script: Script | httpx2.MockTransport) -> StubClient:
     )
 
 
-async def _raised(client: StubClient) -> ClientError:
+async def _raised(client: Client) -> ClientError:
     """Return what one GET through *client* raises."""
     with pytest.raises(ClientError) as raised:
         await client.get("orders", expect=nothing)
@@ -109,7 +109,7 @@ async def test_the_request_id_is_read_from_the_configured_headers_and_bounded() 
     """Read the first configured header the response carries, cut to a bounded length."""
     long_id = "x" * (_REQUEST_ID_LIMIT * 2)
     script = Script(httpx2.Response(404, headers={"X-Trace": long_id, "X-Request-Id": _REQUEST_ID}))
-    client = StubClient(
+    client = Client(
         base_url=_BASE,
         rate=Rate.per_second(1000),
         http=HttpOptions(transport=script.transport(), request_id_headers=("x-trace", "x-request-id")),
@@ -165,14 +165,14 @@ async def test_a_surviving_status_the_policy_does_not_retry_is_not_called_transi
     """Word a 5xx outside ``RetryPolicy.statuses`` as the upstream's status, keeping "transient" for what is retried."""
     error = await _raised(_client(Script(status)))
 
-    assert str(error).startswith(f"[StubClient] upstream {status} for GET orders")
+    assert str(error).startswith(f"[api.example.test] upstream {status} for GET orders")
 
 
 async def test_a_status_the_server_says_to_retry_is_called_transient() -> None:
     """Word a 501 the server marks ``x-should-retry: true`` as transient: the policy counts it as a failure to retry."""
     error = await _raised(_client(Script(httpx2.Response(501, headers={"x-should-retry": "true"}))))
 
-    assert str(error).startswith("[StubClient] transient 501 for GET orders")
+    assert str(error).startswith("[api.example.test] transient 501 for GET orders")
     assert error.retryable is True
 
 
@@ -184,7 +184,7 @@ async def test_a_redirect_loop_is_not_retried_nor_charged_to_the_breaker() -> No
     """Refuse a redirect loop once, not retryable and not charged: the origin answered every hop, as it would again."""
     script = Script(httpx2.Response(302, headers={"location": f"{_BASE}/orders"}))
     breaker = BreakerPolicy(failure_threshold=1, registry=BreakerRegistry())
-    client = StubClient(
+    client = Client(
         base_url=_BASE,
         rate=Rate.per_second(1000),
         policy=TransportPolicy(breaker=breaker),
@@ -229,17 +229,17 @@ def _dropped_mid_body(_request: httpx2.Request) -> httpx2.Response:
     return httpx2.Response(200, stream=_BrokenBody())
 
 
-async def _get(client: StubClient) -> None:
+async def _get(client: Client) -> None:
     """Make a GET."""
     await client.get("orders", expect=nothing)
 
 
-async def _put(client: StubClient) -> None:
+async def _put(client: Client) -> None:
     """Make a PUT with a JSON body."""
     await client.put("orders/1", expect=nothing, body=Json({"sku": "a"}))
 
 
-async def _post(client: StubClient) -> None:
+async def _post(client: Client) -> None:
     """Make a POST with a JSON body and no idempotency key."""
     await client.post("orders", expect=nothing, body=Json({"sku": "a"}))
 
@@ -249,7 +249,7 @@ async def _post(client: StubClient) -> None:
     [pytest.param(_get, True, id="GET"), pytest.param(_put, True, id="PUT"), pytest.param(_post, False, id="POST")],
 )
 async def test_a_body_read_failure_is_retryable_only_for_a_method_safe_to_resend(
-    call: Callable[[StubClient], Awaitable[None]], *, retryable: bool
+    call: Callable[[Client], Awaitable[None]], *, retryable: bool
 ) -> None:
     """Judge a failure reading the body as the retry policy judges a network failure: by the method's safety."""
     with pytest.raises(TransportError) as raised:
@@ -263,7 +263,7 @@ async def test_an_open_breaker_raises_circuit_open_error_with_its_cooldown() -> 
     registry = BreakerRegistry()
     breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=3600.0, registry=registry)
     script = Script(503)
-    client = StubClient(
+    client = Client(
         base_url=_BASE,
         rate=Rate.per_second(1000),
         policy=TransportPolicy(retry=None, breaker=breaker),
@@ -306,7 +306,7 @@ async def test_notes_a_layer_added_reach_the_error() -> None:
             context.add_note(f"attempt {context.attempt}: sent")
             return await call_next(request)
 
-    client = StubClient(
+    client = Client(
         base_url=_BASE,
         rate=Rate.per_second(1000),
         policy=TransportPolicy(retry=None),
@@ -322,7 +322,7 @@ async def test_a_body_over_the_cap_records_its_call() -> None:
     """Record the call on ``ResponseTooLargeError`` like on every other ``ClientError``."""
     cap = 4
     script = Script(httpx2.Response(200, content=b"x" * (cap * 2), headers={"X-Request-Id": _REQUEST_ID}))
-    client = StubClient(
+    client = Client(
         base_url=_BASE,
         rate=Rate.per_second(1000),
         http=HttpOptions(transport=script.transport(), max_response_bytes=cap),
@@ -511,7 +511,7 @@ async def test_a_problem_document_of_exactly_the_scan_limit_is_read() -> None:
 
 async def test_a_surviving_status_outside_the_policy_still_carries_its_retry_after() -> None:
     """Report a 503's ``Retry-After`` though the call's policy does not retry 503s."""
-    client = StubClient(
+    client = Client(
         base_url=_BASE,
         rate=Rate.per_second(1000),
         policy=TransportPolicy(retry=RetryPolicy(statuses=frozenset({500}))),
@@ -521,7 +521,7 @@ async def test_a_surviving_status_outside_the_policy_still_carries_its_retry_aft
     error = await _raised(client)
 
     assert (error.retryable, error.retry_after) == (False, _RETRY_AFTER)
-    assert str(error).startswith("[StubClient] upstream 503")
+    assert str(error).startswith("[api.example.test] upstream 503")
 
 
 async def test_a_surviving_500_is_transient_and_charged_to_the_breaker() -> None:
@@ -529,7 +529,7 @@ async def test_a_surviving_500_is_transient_and_charged_to_the_breaker() -> None
     client = _client(Script(500))
     error = await _raised(client)
 
-    assert str(error).startswith("[StubClient] transient 500 for GET orders")
+    assert str(error).startswith("[api.example.test] transient 500 for GET orders")
     assert failures(client, "api.example.test") == 1
 
 
@@ -564,7 +564,7 @@ async def test_a_parse_error_without_a_message_names_the_error_type() -> None:
         with pytest.raises(ResponseParseError) as raised:
             await client.get("orders", expect=_empty_value_error)
 
-    assert str(raised.value) == "[StubClient] unreadable 200 body for GET orders: ValueError"
+    assert str(raised.value) == "[api.example.test] unreadable 200 body for GET orders: ValueError"
 
 
 # --- Pickling ---

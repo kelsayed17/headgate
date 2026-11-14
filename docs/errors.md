@@ -28,7 +28,7 @@ names.
 
 | Attribute | Meaning |
 | --- | --- |
-| `source` | the client class's name; it also prefixes the message, `[CatalogClient] ...` |
+| `source` | the host of the client's `base_url`; it also prefixes the message, `[api.catalog.example] ...` |
 | `method`, `url` | the request line of the call, the URL as the call gave it, with credentials redacted and cut to 300 characters |
 | `request_id` | the upstream's request id, from the first of `HttpOptions.request_id_headers` the response carried |
 | `attempts` | how many sends the call made, retries and followed redirects included |

@@ -17,12 +17,11 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions
+from headgate import Client, HttpOptions
 from headgate.ratelimit import Rate, RateBudget
 from headgate.ratelimit._budgets import PathBudgets
 from headgate.ratelimit._inflight import InFlightLimit
 from headgate.ratelimit._transport import RateLimitTransport
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -266,7 +265,7 @@ async def test_a_response_already_read_and_closed_frees_its_slot_at_once() -> No
     """Free the slot of a response the transport returns read and closed, which no later close reaches."""
     budget = RateBudget(_INSTANT, max_in_flight=1)
     wire = httpx2.MockTransport(lambda _request: httpx2.Response(200, json={"ok": True}))
-    client = StubClient(base_url="https://x", rate=budget, http=HttpOptions(transport=wire))
+    client = Client(base_url="https://x", rate=budget, http=HttpOptions(transport=wire))
     for _ in range(_CALLS):
         response = await asyncio.wait_for(client.get("y", expect=RESPONSE), _THREAD_TIMEOUT)
         assert response.json() == {"ok": True}
@@ -276,7 +275,7 @@ async def test_a_response_already_read_and_closed_frees_its_slot_at_once() -> No
 async def test_a_capped_client_frees_every_slot_it_reads() -> None:
     """Serve more concurrent calls than the cap through a client: each buffered read frees its slot."""
     budget = RateBudget(_INSTANT, max_in_flight=2)
-    client = StubClient(base_url="https://x", rate=budget, http=HttpOptions(transport=_Wire()))
+    client = Client(base_url="https://x", rate=budget, http=HttpOptions(transport=_Wire()))
     responses = await asyncio.gather(*(client.get("y", expect=RESPONSE) for _ in range(_CALLS)))
     assert [response.content for response in responses] == [b"ab"] * _CALLS
     assert budget.in_flight == 0

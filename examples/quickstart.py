@@ -8,16 +8,14 @@ The README's Python blocks are excerpts of the modules in ``examples/`` and ``te
 """
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 
 import msgspec
 
-from headgate import AsyncBaseClient, BearerAuth, Cursor, Expect, HttpOptions, Rate, nothing
+from headgate import BearerAuth, Client, Cursor, Expect, Rate, nothing
 from headgate.msgspec import reader
 
 if TYPE_CHECKING:
-    import httpx2
-
     from headgate import Paginated
 
 
@@ -59,29 +57,40 @@ SERIES_OR_NONE = Expect(SERIES).on(HTTPStatus.NOT_FOUND, nothing)  # the API doc
 RELEASE_PAGES = Cursor(items=releases_on, next=cursor_after, param="cursor")
 
 
-class CatalogClient(AsyncBaseClient):
+class CatalogClient:
     """The catalog API: one method per endpoint, each one line."""
 
-    def __init__(self, api_key: str, *, transport: httpx2.AsyncBaseTransport | None = None) -> None:
-        """Authenticate with *api_key*; *transport* replaces the network, as a test does."""
-        super().__init__(
+    def __init__(self, api_key: str) -> None:
+        """Authenticate with *api_key*."""
+        self._http = Client(
             base_url="https://api.catalog.example/v1",
             rate=Rate.per_second(10),
             auth=BearerAuth(api_key),
-            http=HttpOptions(transport=transport),
         )
+
+    async def __aenter__(self) -> Self:
+        """Return the client; leaving the block closes it."""
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        """Close the client."""
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        """Close the connection pool."""
+        await self._http.aclose()
 
     async def get_series(self, series_id: str) -> Series:
         """Return the series *series_id*; a 404, undeclared here, raises ``UpstreamStatusError``."""
-        return await self.get(t"series/{series_id}", expect=SERIES)
+        return await self._http.get(t"series/{series_id}", expect=SERIES)
 
     async def find_series(self, series_id: str) -> Series | None:
         """Return the series *series_id*, or ``None`` when the API answers 404."""
-        return await self.get(t"series/{series_id}", expect=SERIES_OR_NONE)
+        return await self._http.get(t"series/{series_id}", expect=SERIES_OR_NONE)
 
     def releases(self) -> Paginated[ReleasePage, Release]:
         """Return every release, fetched a page at a time as the iteration reaches it."""
-        return self.paginate("releases", expect=reader(ReleasePage), pages=RELEASE_PAGES)
+        return self._http.paginate("releases", expect=reader(ReleasePage), pages=RELEASE_PAGES)
 
 
 async def main(api_key: str) -> tuple[float, Series | None, list[str]]:

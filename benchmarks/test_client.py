@@ -23,7 +23,7 @@ import msgspec
 from hishel import AsyncBaseStorage, Entry, Headers, Request, Response
 
 from headgate import (
-    AsyncBaseClient,
+    Client,
     HttpCache,
     HttpOptions,
     LinkHeader,
@@ -134,10 +134,10 @@ def _client(
     auth: httpx2.Auth | None = None,
     cache: HttpCache | None = None,
     breaker: bool = True,
-) -> AsyncBaseClient:
+) -> Client:
     """Build a client over an in-memory transport with a rate and a retry budget that never throttle."""
     retry = RetryPolicy(budget=None)
-    return AsyncBaseClient(
+    return Client(
         base_url=_BASE_URL,
         rate=_FAST,
         auth=auth,

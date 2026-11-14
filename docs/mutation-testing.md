@@ -101,12 +101,12 @@ few families:
 | `headgate.pydantic` | `_reason #23` | `typing.cast` ignores its type argument at runtime |
 | `headgate.pydantic` | `to_builtins #6` | pydantic-core's `to_jsonable_python` serializes a model by alias already |
 | `headgate.msgspec` | `encoder #3` | `MsgspecCodec.encoder` drops the type expression: msgspec encodes a value by its own type |
-| `headgate._client` | `AsyncBaseClient.with_options #17` | `_owns_pool` is only tested for truth |
-| `headgate._client` | `AsyncBaseClient.stream #12` | header-name case |
-| `headgate._client` | `AsyncBaseClient.stream #13` | header-name case |
-| `headgate._client` | `AsyncBaseClient._one_key_for_every_page #7` | the name is lower-cased on the next step |
-| `headgate._client` | `AsyncBaseClient._one_key_for_every_page #8` | the name is lower-cased on the next step |
-| `headgate._client` | `AsyncBaseClient._dispatch #30` | header-name case |
+| `headgate._client` | `Client.with_options #17` | `_owns_pool` is only tested for truth |
+| `headgate._client` | `Client.stream #12` | header-name case |
+| `headgate._client` | `Client.stream #13` | header-name case |
+| `headgate._client` | `Client._one_key_for_every_page #7` | the name is lower-cased on the next step |
+| `headgate._client` | `Client._one_key_for_every_page #8` | the name is lower-cased on the next step |
+| `headgate._client` | `Client._dispatch #30` | header-name case |
 | `headgate._client` | `_query_value #2` | httpx2 sends any other value as its `str()`, exactly what the function returns; it exists for the static type |
 | `headgate._failures` | `CallSite._request_id #3` | a missing header read as `None` is as falsy as `""` |
 | `headgate._failures` | `CallSite._request_id #5` | a missing header read as `None` is as falsy as `""` |

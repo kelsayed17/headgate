@@ -21,7 +21,7 @@ _PRELUDE = dedent(
     from headgate import Expect, Reader, as_bytes, nothing, reader_for
     from headgate.errors import RefusedError
     from headgate.msgspec import CODEC, reader
-    from tests.support.clients import StubClient
+    from headgate import Client
 
 
     class Order(msgspec.Struct):
@@ -31,7 +31,7 @@ _PRELUDE = dedent(
     ORDER = reader(Order)
 
 
-    async def probe(c: StubClient) -> None:
+    async def probe(c: Client) -> None:
     """
 )
 

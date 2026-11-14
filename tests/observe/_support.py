@@ -7,8 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from headgate import HttpOptions, Rate, TransportPolicy
-from tests.support.clients import StubClient
+from headgate import Client, HttpOptions, Rate, TransportPolicy
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -31,10 +30,10 @@ def client(
     auth: httpx2.Auth | None = None,
     rate: Rate | RateBudget = RATE,
     middleware: Sequence[Middleware] = (),
-) -> StubClient:
+) -> Client:
     """Build a client for :data:`BASE` over *fake*, spending *rate*, reporting to *observers*, with *http*'s options."""
     options = http or HttpOptions()
-    return StubClient(
+    return Client(
         base_url=BASE,
         rate=rate,
         auth=auth,

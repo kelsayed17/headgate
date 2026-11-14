@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``AsyncBaseClient.paginate``: each strategy, laziness, the full stack per page, and termination."""
+"""``Client.paginate``: each strategy, laziness, the full stack per page, and termination."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from headgate import (
+    Client,
     ClientError,
     Cursor,
     Expect,
@@ -36,7 +37,6 @@ from headgate._client import _paired
 from headgate.msgspec import reader
 from headgate.pagination import PageRequest
 from headgate.ratelimit import Rate
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -93,9 +93,9 @@ class _Api:
         self.sent.append(request.url)
         return self.answer(request)
 
-    def client(self) -> StubClient:
+    def client(self) -> Client:
         """Return a client over this API."""
-        return StubClient(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=httpx2.MockTransport(self.handle)))
+        return Client(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=httpx2.MockTransport(self.handle)))
 
 
 def _page(request: httpx2.Request, ids: Sequence[int], **links: str | None) -> httpx2.Response:
@@ -129,27 +129,6 @@ async def test_cursor_pages_are_followed_and_items_are_typed() -> None:
         f"{_BASE}/v1/items?kind=a&after=b",
         f"{_BASE}/v1/items?kind=a&after=c",
     ]
-
-
-async def test_a_walk_does_not_go_through_methods_a_subclass_may_rename() -> None:
-    """Fetch pages through the base client's own verbs, so an SDK whose ``get`` or ``post`` is an endpoint still pages.
-
-    The shadowing is done on the instance, as a subclass's ``async def get(self, order_id)`` would on the class.
-    """
-
-    async def endpoint(*args: object, **kwargs: object) -> None:
-        """Stand for an endpoint method that takes none of a verb's keywords."""
-        raise AssertionError((args, kwargs))
-
-    api = _Api(_by_cursor)
-    client = api.client()
-    vars(client).update(get=endpoint, post=endpoint)
-    pages = Cursor(items=items_of, next=cursor_of, param="after")
-    gets = [item.id async for item in client.paginate("items", expect=reader(Page), pages=pages)]
-    query: dict[str, object] = {}
-    posting = Cursor[Page, Item, dict[str, object]](items=items_of, next=cursor_of, param="after")
-    posts = [item.id async for item in client.paginate("items", query=query, expect=reader(Page), pages=posting)]
-    assert gets == posts == [1, 2, 3, 4]
 
 
 async def test_iteration_is_lazy_and_restarts_from_the_first_page() -> None:
@@ -503,10 +482,10 @@ async def test_a_page_that_leads_back_raises_instead_of_looping() -> None:
     with pytest.raises(ClientError, match="pagination loop") as raised:
         _ = [item async for item in paginated]
     assert raised.value.url == f"{_BASE}/items"
-    assert raised.value.source == "StubClient"
+    assert raised.value.source == "api.test"
     assert raised.value.method == "GET"
     assert str(raised.value) == (
-        f"[StubClient] pagination loop: the page after page 1 repeats an earlier page's request ({_BASE}/items)"
+        f"[api.test] pagination loop: the page after page 1 repeats an earlier page's request ({_BASE}/items)"
     )
 
 
@@ -521,7 +500,7 @@ async def test_a_repeating_cursor_on_a_template_url_raises() -> None:
     with pytest.raises(ClientError, match="pagination loop") as raised:
         _ = [page async for page in paginated.pages()]
     assert raised.value.url is None
-    assert str(raised.value) == "[StubClient] pagination loop: the page after page 2 repeats an earlier page's request"
+    assert str(raised.value) == "[api.test] pagination loop: the page after page 2 repeats an earlier page's request"
 
 
 #: One request body of each kind no pager can rewrite.
@@ -595,7 +574,7 @@ def test_pagination_terminates_for_any_page_graph(links: list[int | None]) -> No
     names it; the cursor repeating after that ends the walk.
     """
     graph = _Graph(links)
-    client = StubClient(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=graph))
+    client = Client(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=graph))
     paginated = client.paginate("items", expect=reader(Page), pages=Cursor(items=items_of, next=cursor_of, param="at"))
 
     path = [0]
@@ -704,7 +683,7 @@ async def test_a_walk_past_its_page_limit_raises_with_what_it_fetched() -> None:
     assert isinstance(raised.value, ClientError)
     assert (raised.value.method, raised.value.url) == ("GET", "items")
     assert str(raised.value) == (
-        f"[StubClient] pagination reached its limit of {_BUDGET} pages with more to come (items); the result is"
+        f"[api.test] pagination reached its limit of {_BUDGET} pages with more to come (items); the result is"
         " incomplete. Raise PageLimit.max_pages, or set on_limit='stop' to end the walk there"
     )
 
@@ -717,7 +696,7 @@ async def test_a_limit_on_a_template_url_raises_without_naming_it() -> None:
         _ = [page async for page in paginated.pages()]
     assert (raised.value.method, raised.value.url) == ("GET", None)
     assert str(raised.value) == (
-        "[StubClient] pagination reached its limit of 1 pages with more to come; the result is incomplete."
+        "[api.test] pagination reached its limit of 1 pages with more to come; the result is incomplete."
         " Raise PageLimit.max_pages, or set on_limit='stop' to end the walk there"
     )
 
@@ -849,7 +828,7 @@ async def test_an_offset_walk_the_server_does_not_page_raises_at_the_repeated_pa
 
     assert len(api.sent) == len(("first", "repeated"))
     assert str(raised.value) == (
-        f"[StubClient] pagination loop: page 2 repeats an earlier page's body, so the server is not paging the walk "
+        f"[api.test] pagination loop: page 2 repeats an earlier page's body, so the server is not paging the walk "
         f"({_BASE}/items?offset=2)"
     )
 
@@ -948,7 +927,7 @@ async def test_a_next_page_url_that_does_not_parse_is_a_client_error() -> None:
         _ = [item async for item in paginated]
 
     assert type(raised.value) is ClientError
-    assert raised.value.source == "StubClient"
+    assert raised.value.source == "api.test"
 
 
 async def test_a_link_anchored_to_another_resource_ends_the_walk() -> None:

@@ -11,9 +11,8 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import CachedTokenAuth, HttpOptions, Minted, Rate, as_bytes
+from headgate import CachedTokenAuth, Client, HttpOptions, Minted, Rate, as_bytes
 from headgate.testing import CassetteFilter, FakeTransport
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -126,7 +125,7 @@ async def test_a_token_mint_is_skipped_and_the_call_itself_is_recorded() -> None
         return httpx2.Response(200, content=b"ok")
 
     fake = FakeTransport().reply("POST", "/token", token).reply("GET", "/data", answer)
-    client = StubClient(
+    client = Client(
         base_url=_BASE,
         rate=Rate.per_second(1000),
         auth=_FlowAuth(),

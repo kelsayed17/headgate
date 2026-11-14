@@ -6,11 +6,11 @@ client side is cheaper than collecting 429s, and a budget that listens to the se
 hammering an API that has said "slow down".
 
 ```python
-from headgate import AsyncBaseClient, Rate, RateBudget, Route, TransportPolicy
+from headgate import Client, Rate, RateBudget, Route, TransportPolicy
 
 shared = RateBudget(Rate.per_minute(600), max_in_flight=8)  # one provider quota, two clients
-search = AsyncBaseClient(base_url="https://api.example.com/search", rate=shared)
-reports = AsyncBaseClient(
+search = Client(base_url="https://api.example.com/search", rate=shared)
+reports = Client(
     base_url="https://api.example.com/reports",
     rate=shared,
     policy=TransportPolicy(routes=(Route("/export", rate=Rate.per_minute(6)),)),

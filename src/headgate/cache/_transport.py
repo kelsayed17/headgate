@@ -5,7 +5,7 @@
 
 `hishel <https://hishel.com>`_'s :class:`hishel.httpx2.AsyncCacheTransport` sits below retry and above the rate
 budget (see :mod:`headgate._stack`), so a cache hit short-circuits before the retry layer and spends no rate token.
-``AsyncBaseClient`` marks a hit so the circuit breaker records neither a success nor a failure for it; admission is
+``Client`` marks a hit so the circuit breaker records neither a success nor a failure for it; admission is
 still decided before the fetch, so a hit is refused while the breaker is open.
 
 **Credentials.** hishel sees the request through the client's :class:`~headgate.cache._credentials.CredentialScope`:
@@ -14,14 +14,14 @@ URL fragment. The layer below hishel puts the real URL and headers back for the 
 what the caller built.
 
 **Stored on accept.** hishel writes a miss to storage as it passes through. Here the storage defers that write: the
-response handed up carries it (:func:`store_accepted`), and ``AsyncBaseClient`` makes it only once the call's reader
+response handed up carries it (:func:`store_accepted`), and ``Client`` makes it only once the call's reader
 accepted the response. A refusal inside a 200, an undecodable body or an undeclared status is never stored, so it is not
 served again for the entry's lifetime. :class:`~headgate.cache.HttpCache` still decides what may be stored at all: a
 request it does not name is sent past hishel, and a status it does not name is never written. A body past the size cap
 is not held here, so it is not stored, and neither is a stream's miss, whose body is never held.
 
 **Lifetimes.** An entry's TTL rides hishel's ``caching`` request extension (:func:`stamp_ttl`):
-:class:`ResilientCacheTransport` stamps :class:`~headgate.cache.HttpCache`'s ``ttl``, and ``AsyncBaseClient`` stamps a
+:class:`ResilientCacheTransport` stamps :class:`~headgate.cache.HttpCache`'s ``ttl``, and ``Client`` stamps a
 per-call ``cache_ttl=``, which wins. hishel reports a hit in the response extension of the same name
 (:func:`served_from_cache`).
 
@@ -38,7 +38,7 @@ every error raised past this layer name only the backend exception's type.
 **Outcomes that say nothing about the host.** Two things this layer hands up did not come from this request's own
 attempt on the network: a response or network failure another identical GET fetched (see
 :class:`ResilientCacheTransport`), and a storage fault while a body too large to hold streams. Both carry
-:data:`HOST_UNTESTED` (:func:`host_untested` reads it), so ``AsyncBaseClient`` records neither against the host's
+:data:`HOST_UNTESTED` (:func:`host_untested` reads it), so ``Client`` records neither against the host's
 circuit breaker: one upstream failure shared by five waiting requests is one failure, not five.
 """
 

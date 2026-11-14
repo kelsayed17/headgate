@@ -7,23 +7,22 @@ from __future__ import annotations
 
 import httpx2
 
-from headgate import BearerAuth, HttpOptions, TransportPolicy, nothing
+from headgate import BearerAuth, Client, HttpOptions, TransportPolicy, nothing
 from headgate.events import CallFinished
 from headgate.ratelimit import Rate
-from tests.support.clients import StubClient
 from tests.support.events import Recorder
 
 _BASE = "https://api.test/"
 
 
-def _client(sent: list[httpx2.Request], recorder: Recorder, *, auth: httpx2.Auth | None = None) -> StubClient:
+def _client(sent: list[httpx2.Request], recorder: Recorder, *, auth: httpx2.Auth | None = None) -> Client:
     """Return a client on ``_BASE`` that records each request in *sent*."""
 
     def handle(request: httpx2.Request) -> httpx2.Response:
         sent.append(request)
         return httpx2.Response(httpx2.codes.OK, request=request)
 
-    return StubClient(
+    return Client(
         base_url=_BASE,
         rate=Rate.per_second(1000),
         auth=auth,

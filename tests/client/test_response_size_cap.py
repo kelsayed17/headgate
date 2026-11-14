@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``AsyncBaseClient``'s response-body size cap (``HttpOptions.max_response_bytes``).
+"""``Client``'s response-body size cap (``HttpOptions.max_response_bytes``).
 
 The client buffers the whole response into memory before decoding, so an unbounded body is an OOM vector. The cap
 has one non-obvious requirement: it must count **decompressed** bytes.
@@ -22,7 +22,7 @@ import pytest
 
 from headgate import Expect, HttpOptions
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
-from headgate._client import AsyncBaseClient
+from headgate._client import Client
 from headgate.errors import ClientError, ResponseTooLargeError
 from headgate.ratelimit import Rate
 from tests.support.responses import RESPONSE
@@ -44,16 +44,13 @@ _OVER_CAP = 20_000
 _TINY_WIRE = 100_000
 
 
-class _Client(AsyncBaseClient):
-    """A client whose only setting under test is its body cap."""
-
-    def __init__(self, *, max_response_bytes: int, transport: httpx2.AsyncBaseTransport | None = None) -> None:
-        """Build with *max_response_bytes*, over *transport* or the mocked network."""
-        super().__init__(
-            base_url="https://example.test",
-            rate=Rate.per_second(1000),
-            http=HttpOptions(max_response_bytes=max_response_bytes, transport=transport),
-        )
+def _client(*, max_response_bytes: int, transport: httpx2.AsyncBaseTransport | None = None) -> Client:
+    """Build with *max_response_bytes*, over *transport* or the mocked network."""
+    return Client(
+        base_url="https://example.test",
+        rate=Rate.per_second(1000),
+        http=HttpOptions(max_response_bytes=max_response_bytes, transport=transport),
+    )
 
 
 class TestResponseSizeCap:
@@ -63,7 +60,7 @@ class TestResponseSizeCap:
         """Check that a body under the cap is returned whole."""
         body = b"x" * _KIB
         httpx2_mock.add_response(content=body)
-        c = _Client(max_response_bytes=_CAP)
+        c = _client(max_response_bytes=_CAP)
         try:
             resp = await c.get("thing", expect=RESPONSE)
             assert resp.content == body
@@ -74,7 +71,7 @@ class TestResponseSizeCap:
     async def test_body_over_cap_raises(self, httpx2_mock: HTTPXMock) -> None:
         """Check that a body past the cap raises ``ResponseTooLargeError``, a ``ClientError``."""
         httpx2_mock.add_response(content=b"x" * _OVER_CAP)
-        c = _Client(max_response_bytes=_CAP)
+        c = _client(max_response_bytes=_CAP)
         try:
             with pytest.raises(ResponseTooLargeError) as ei:
                 await c.get("thing", expect=RESPONSE)
@@ -104,7 +101,7 @@ class TestResponseSizeCap:
                 stream=httpx2.ByteStream(wire),
             )
 
-        c = _Client(max_response_bytes=_MIB, transport=httpx2.MockTransport(handler))
+        c = _client(max_response_bytes=_MIB, transport=httpx2.MockTransport(handler))
         try:
             with pytest.raises(ResponseTooLargeError):
                 await c.get("bomb", expect=RESPONSE)
@@ -159,7 +156,7 @@ class TestResponseSizeCap:
                 stream=httpx2.ByteStream(wire),
             )
 
-        c = _Client(max_response_bytes=16 * _MIB, transport=httpx2.MockTransport(handler))
+        c = _client(max_response_bytes=16 * _MIB, transport=httpx2.MockTransport(handler))
         try:
             resp = await c.get("ok", expect=RESPONSE)
             assert resp.content == payload
@@ -171,7 +168,7 @@ class TestResponseSizeCap:
     async def test_declared_content_length_rejects_before_transfer(self, httpx2_mock: HTTPXMock) -> None:
         """Check that an honestly oversized body is refused on its header, not downloaded."""
         httpx2_mock.add_response(content=b"x" * 100, headers={"Content-Length": str(_CAP * 1000)})
-        c = _Client(max_response_bytes=_CAP)
+        c = _client(max_response_bytes=_CAP)
         try:
             with pytest.raises(ResponseTooLargeError):
                 await c.get("huge", expect=RESPONSE)
@@ -181,7 +178,7 @@ class TestResponseSizeCap:
     async def test_missing_content_length_still_capped(self, httpx2_mock: HTTPXMock) -> None:
         """Check that a chunked response, which has no Content-Length, is capped on the decoded-byte count."""
         httpx2_mock.add_response(content=b"x" * _OVER_CAP, headers={"Transfer-Encoding": "chunked"})
-        c = _Client(max_response_bytes=_CAP)
+        c = _client(max_response_bytes=_CAP)
         try:
             with pytest.raises(ResponseTooLargeError):
                 await c.get("chunked", expect=RESPONSE)
@@ -196,7 +193,7 @@ class TestResponseSizeCap:
         """Check that a client's own cap lets through a body past the usual test cap."""
         body = b"x" * _OVER_CAP
         httpx2_mock.add_response(content=body)
-        c = _Client(max_response_bytes=_OVER_CAP)
+        c = _client(max_response_bytes=_OVER_CAP)
         try:
             assert (await c.get("thing", expect=RESPONSE)).content == body
         finally:
@@ -207,7 +204,7 @@ async def test_a_body_of_exactly_the_cap_passes(httpx2_mock: HTTPXMock) -> None:
     """Check that the cap is inclusive: a body of exactly ``max_response_bytes`` is returned whole."""
     body = b"x" * _CAP
     httpx2_mock.add_response(content=body)
-    c = _Client(max_response_bytes=_CAP)
+    c = _client(max_response_bytes=_CAP)
     try:
         assert (await c.get("thing", expect=RESPONSE)).content == body
     finally:
@@ -223,7 +220,7 @@ async def test_a_content_length_int_cannot_parse_is_ignored_not_a_crash() -> Non
     def handler(_request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(httpx2.codes.OK, headers=[(b"Content-Length", b"\xb2")], content=b"fine")
 
-    c = _Client(max_response_bytes=_CAP, transport=httpx2.MockTransport(handler))
+    c = _client(max_response_bytes=_CAP, transport=httpx2.MockTransport(handler))
     try:
         assert (await c.get("thing", expect=RESPONSE)).content == b"fine"
     finally:
@@ -240,7 +237,7 @@ async def test_a_followed_redirect_body_is_dropped_not_buffered() -> None:
             return httpx2.Response(httpx2.codes.FOUND, stream=httpx2.ByteStream(wire), headers=headers)
         return httpx2.Response(httpx2.codes.OK, content=b"fine")
 
-    c = _Client(max_response_bytes=_CAP, transport=httpx2.MockTransport(handle))
+    c = _client(max_response_bytes=_CAP, transport=httpx2.MockTransport(handle))
     try:
         resp = await c.get("start", expect=RESPONSE)
     finally:
@@ -257,7 +254,7 @@ async def test_an_unfollowed_redirect_body_is_still_capped() -> None:
         headers = {"Content-Encoding": "gzip", "Location": "/landing"}
         return httpx2.Response(httpx2.codes.FOUND, stream=httpx2.ByteStream(wire), headers=headers)
 
-    c = _Client(max_response_bytes=_CAP, transport=httpx2.MockTransport(handle))
+    c = _client(max_response_bytes=_CAP, transport=httpx2.MockTransport(handle))
     try:
         with pytest.raises(ResponseTooLargeError):
             await c.get("start", expect=RESPONSE, follow_redirects=False)
@@ -303,7 +300,7 @@ class _Serving(httpx2.AsyncBaseTransport):
 async def test_a_chunked_body_past_the_cap_is_refused_as_soon_as_it_passes() -> None:
     """Stop reading a chunked body one chunk past the cap, naming the call, without reading the rest."""
     body = _Chunks(count=100, size=_KIB)
-    client = _Client(max_response_bytes=_CAP, transport=_Serving(body))
+    client = _client(max_response_bytes=_CAP, transport=_Serving(body))
 
     with pytest.raises(ResponseTooLargeError) as raised:
         await client.get("thing", expect=RESPONSE)
@@ -311,13 +308,13 @@ async def test_a_chunked_body_past_the_cap_is_refused_as_soon_as_it_passes() -> 
 
     assert body.pulled == _CAP // _KIB + 1
     error = raised.value
-    assert str(error) == f"[_Client] response body exceeded cap {_CAP} bytes for thing"
+    assert str(error) == f"[example.test] response body exceeded cap {_CAP} bytes for thing"
     assert (error.method, error.url, error.request_id) == ("GET", "thing", "req-9")
 
 
 async def test_a_close_that_fails_after_the_cap_does_not_hide_the_refusal() -> None:
     """Raise the size refusal, not the failure closing the abandoned body."""
-    client = _Client(max_response_bytes=_CAP, transport=_Serving(_Chunks(count=100, size=_KIB, close_fails=True)))
+    client = _client(max_response_bytes=_CAP, transport=_Serving(_Chunks(count=100, size=_KIB, close_fails=True)))
 
     with pytest.raises(ResponseTooLargeError):
         await client.get("thing", expect=RESPONSE)
@@ -342,7 +339,7 @@ def _bodiless(status: int) -> httpx2.MockTransport:
 
 async def test_a_head_reads_the_size_and_encoding_of_a_file_past_the_cap() -> None:
     """Hand a HEAD's reader the ``Content-Length`` and ``Content-Encoding`` it was sent, never checking them."""
-    client = _Client(max_response_bytes=_CAP, transport=_bodiless(200))
+    client = _client(max_response_bytes=_CAP, transport=_bodiless(200))
     resp = await client.head("f", expect=RESPONSE)
     await client.aclose()
 
@@ -353,7 +350,7 @@ async def test_a_head_reads_the_size_and_encoding_of_a_file_past_the_cap() -> No
 @pytest.mark.parametrize("status", [204, 304])
 async def test_a_status_without_a_body_is_not_held_to_its_declared_size(status: int) -> None:
     """Accept a 204 or 304 whose ``Content-Length`` is past the cap, since neither carries a body."""
-    client = _Client(max_response_bytes=_CAP, transport=_bodiless(status))
+    client = _client(max_response_bytes=_CAP, transport=_bodiless(status))
     resp = await client.get("f", expect=Expect(RESPONSE).on(status, RESPONSE))
     await client.aclose()
 

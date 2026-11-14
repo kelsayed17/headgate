@@ -4,8 +4,8 @@
 """How a paginated endpoint links its pages: the :class:`Pager` protocol and its strategies.
 
 A pager is a frozen value that knows two things about a page ``P`` it never fetches itself: the items ``I`` on it, and
-the request for the page after it. The client does the fetching (:meth:`AsyncBaseClient.paginate
-<headgate.AsyncBaseClient.paginate>`), so every page goes through the whole stack.
+the request for the page after it. The client does the fetching (:meth:`Client.paginate
+<headgate.Client.paginate>`), so every page goes through the whole stack.
 
 * :class:`Cursor`: the page names an opaque cursor, sent back as a query parameter on the same URL.
 * :class:`Offset`: the next page starts where this one ended, as an offset query parameter.
@@ -95,7 +95,7 @@ class Pager[P, I, B = None](Protocol):
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
         """Return the request for the first page, given the one the caller wrote.
 
-        It runs once, when :meth:`~headgate.AsyncBaseClient.paginate` builds the walk, and every iteration starts from
+        It runs once, when :meth:`~headgate.Client.paginate` builds the walk, and every iteration starts from
         what it returned, so it is a function of *request* alone: nothing that should change between iterations, such
         as the time, belongs here. Its refusals raise from ``paginate``.
         """

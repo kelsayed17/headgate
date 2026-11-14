@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import MAX_MINT_RESPONSE_BYTES, CachedTokenAuth, HttpOptions, Minted, Timeouts, TransportPolicy
+from headgate import MAX_MINT_RESPONSE_BYTES, CachedTokenAuth, Client, HttpOptions, Minted, Timeouts, TransportPolicy
 from headgate._responses import as_bytes, nothing
 from headgate.errors import (
     AuthError,
@@ -33,7 +33,6 @@ from headgate.errors import (
 from headgate.retry import RetryPolicy
 from headgate.testing import FakeTransport
 from tests.support.breakers import failures
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Callable
@@ -82,9 +81,9 @@ class _FlowReadsJson(CachedTokenAuth):
         yield Minted(response.json()["access_token"], 3600.0)
 
 
-def _api(auth: httpx2.Auth, handler: Callable[[httpx2.Request], httpx2.Response] | None = None) -> StubClient:
+def _api(auth: httpx2.Auth, handler: Callable[[httpx2.Request], httpx2.Response] | None = None) -> Client:
     """Return a client of the API host signing with *auth*, every API call answering 200 unless *handler* says."""
-    return StubClient(
+    return Client(
         base_url=f"https://{_API_HOST}",
         auth=auth,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
@@ -283,14 +282,14 @@ class _ThreeHops(CachedTokenAuth):
         yield Minted("t", math.inf)
 
 
-def _hopping_client(max_redirects: int) -> tuple[StubClient, FakeTransport]:
+def _hopping_client(max_redirects: int) -> tuple[Client, FakeTransport]:
     """Return a client minting through :class:`_ThreeHops` with *max_redirects*, and its network."""
     fake = FakeTransport().reply("GET", "/v1/x", 200)
     for hop in range(_ThreeHops.hops):
         fake.reply("GET", f"/step/{hop}", 200)
     auth = _ThreeHops()
     http = HttpOptions(transport=fake, max_redirects=max_redirects)
-    return StubClient(base_url="https://api.example.test/v1", auth=auth, http=http), fake
+    return Client(base_url="https://api.example.test/v1", auth=auth, http=http), fake
 
 
 async def test_a_mints_hops_count_toward_max_redirects() -> None:
@@ -437,7 +436,7 @@ async def _hop_timeouts(auth: CachedTokenAuth, *, deadline: float | None) -> dic
         seen[request.url.path] = request.extensions["timeout"]
         return httpx2.Response(httpx2.codes.OK, text="t")
 
-    client = StubClient(
+    client = Client(
         base_url=f"https://{_API_HOST}",
         auth=auth,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), deadline=None, timeout=_CALL_TIMEOUTS),

@@ -14,7 +14,7 @@ Three design choices, each fixing a failure mode of the usual ``with breaker:`` 
   an auth flow failing to mint or a body over the size cap. See :meth:`CircuitBreaker.track`.
 * **Half-open admits one probe.** An origin that has just failed gets one call as its recovery test, not the full
   concurrent load.
-* **The breaker spans the body read.** ``AsyncBaseClient`` drives it around the send and the body read, so a connection
+* **The breaker spans the body read.** ``Client`` drives it around the send and the body read, so a connection
   dying mid-body is a failure of the fetch. A transport layer would see only the response headers, which is why there
   is no breaker transport.
 
@@ -48,7 +48,7 @@ __all__ = ["BreakerOpenError", "CircuitBreaker", "Transition", "Verdict"]
 class BreakerOpenError(Exception):
     """Raised by :meth:`CircuitBreaker.track` when it refuses a call: open, or its one probe already out.
 
-    ``AsyncBaseClient`` raises it to its caller as :class:`headgate.errors.CircuitOpenError`. ``retry_after`` is how
+    ``Client`` raises it to its caller as :class:`headgate.errors.CircuitOpenError`. ``retry_after`` is how
     many seconds remain until the breaker admits a probe, or ``None`` while a probe is out (its outcome decides).
     """
 
@@ -75,7 +75,7 @@ class _Outcome(enum.Enum):
 
 
 class Verdict:
-    """What one fetch established about its origin, marked by ``AsyncBaseClient`` inside :meth:`CircuitBreaker.track`.
+    """What one fetch established about its origin, marked by ``Client`` inside :meth:`CircuitBreaker.track`.
 
     Unmarked means "nothing": only an explicit mark makes a raise an origin failure, and only a clean exit that was not
     marked untested is an origin success. See :meth:`CircuitBreaker.track` for why the default is not the reverse.
@@ -244,7 +244,7 @@ class CircuitBreaker:
         Raises :class:`BreakerOpenError` instead of yielding when the origin is being refused. Otherwise yields a
         :class:`Verdict` the fetch marks as it goes, and what the call records on the way out is:
 
-        * **a failure**: only when the fetch marked :meth:`Verdict.mark_failed`, which ``AsyncBaseClient`` does for a
+        * **a failure**: only when the fetch marked :meth:`Verdict.mark_failed`, which ``Client`` does for a
           transport error or timeout (the call's own deadline cutting off a send on the wire included) and for a 5xx
           that survived retries. Those are what the wire said about this origin, so the mark counts however the block
           then exits, raising, cancelled or not;

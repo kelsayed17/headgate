@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``AsyncBaseClient.stream``: a response read as it arrives, through the same stack and failure ladder as a verb."""
+"""``Client.stream``: a response read as it arrives, through the same stack and failure ladder as a verb."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, assert_type, override
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, HttpOptions, TransportPolicy
+from headgate import BreakerPolicy, Client, HttpOptions, TransportPolicy
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
 from headgate.errors import (
     ClientError,
@@ -25,7 +25,6 @@ from headgate.errors import (
 from headgate.ratelimit import Rate
 from headgate.streaming import DEFAULT_MAX_EVENT_SIZE, Stream
 from tests.support.breakers import failures
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Coroutine
@@ -57,7 +56,7 @@ def _client(
     *,
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
     response_check: ResponseCheck | None = None,
-) -> StubClient:
+) -> Client:
     """Build a client over an async in-memory *handler*; a *response_check* turns redirect-following off."""
     http = HttpOptions(
         transport=httpx2.MockTransport(handler),
@@ -65,17 +64,17 @@ def _client(
         response_check=response_check,
         follow_redirects=response_check is None,
     )
-    return StubClient(base_url=_BASE, rate=_RATE, http=http)
+    return Client(base_url=_BASE, rate=_RATE, http=http)
 
 
-async def _drain(client: StubClient, on_chunk: Callable[[bytes], object] = len) -> None:
+async def _drain(client: Client, on_chunk: Callable[[bytes], object] = len) -> None:
     """Stream ``f`` from *client* to its end, handing each chunk to *on_chunk* as it arrives."""
     async with client.stream("f") as stream:
         async for chunk in stream.aiter_bytes():
             on_chunk(chunk)
 
 
-async def _drain_events(client: StubClient, max_event_size: int | None) -> None:
+async def _drain_events(client: Client, max_event_size: int | None) -> None:
     """Read every event of ``events`` from *client*, with events up to *max_event_size* bytes."""
     async with client.stream("events") as stream:
         async for _ in stream.aiter_events(max_event_size=max_event_size):
@@ -258,7 +257,7 @@ async def test_an_error_of_the_callers_own_passes_through_and_charges_nothing() 
     assert failures(client, _HOST) == 0
 
 
-async def _fail_while_handling(client: StubClient) -> None:
+async def _fail_while_handling(client: Client) -> None:
     """Raise ``KeyError`` from the stream's block while handling a ``ValueError``, its context suppressed."""
     async with client.stream("f"):
         try:
@@ -287,7 +286,7 @@ async def test_an_error_of_the_callers_own_keeps_its_context() -> None:
 )
 async def test_a_network_like_error_of_the_callers_own_is_not_the_streams(error: Exception) -> None:
     """Let an ``OSError`` or httpx2 error the block raises itself propagate unchanged, charging the host nothing."""
-    client = StubClient(
+    client = Client(
         base_url=_BASE,
         rate=_RATE,
         policy=TransportPolicy(breaker=BreakerPolicy(failure_threshold=1)),
@@ -451,7 +450,7 @@ async def test_the_block_receives_a_stream() -> None:
 
 async def test_a_stream_honors_the_policy_breaker() -> None:
     """Refuse to open a stream to a host whose breaker is open."""
-    client = StubClient(
+    client = Client(
         base_url=_BASE,
         rate=_RATE,
         policy=TransportPolicy(),
@@ -519,7 +518,7 @@ async def test_an_event_past_the_size_limit_names_the_limit_and_the_call() -> No
         await _drain_events(_client(handler), max_event_size=16)
 
     error = raised.value
-    assert str(error) == "[StubClient] server-sent event over 16 bytes from GET events"
+    assert str(error) == "[x.test] server-sent event over 16 bytes from GET events"
     assert (error.method, error.url, error.request_id) == ("GET", "events", "req-7")
 
 
@@ -536,7 +535,7 @@ async def _lines(*chunks: bytes, max_line_size: int | None = 1000, charset: str 
         return [line async for line in stream.aiter_lines(max_line_size=max_line_size)]
 
 
-async def _drain_lines(client: StubClient) -> None:
+async def _drain_lines(client: Client) -> None:
     """Read every line of ``f`` from *client*, with the default line limit."""
     async with client.stream("f") as stream:
         async for _ in stream.aiter_lines():
@@ -557,7 +556,7 @@ async def test_lines_split_as_httpx2_splits_them_however_the_body_is_cut() -> No
 )
 async def test_a_line_past_the_size_limit_is_refused(chunks: tuple[bytes, ...]) -> None:
     """Refuse a line past ``max_line_size``, before it ends or once it has, naming the limit and the call."""
-    with pytest.raises(ResponseTooLargeError, match=r"^\[StubClient\] line over 16 characters from GET f"):
+    with pytest.raises(ResponseTooLargeError, match=r"^\[x.test\] line over 16 characters from GET f"):
         await _lines(*chunks, max_line_size=16)
 
 
@@ -586,5 +585,5 @@ async def test_lines_under_a_charset_that_decodes_no_text_are_utf_8(charset: str
 
 async def test_a_body_its_charset_cannot_decode_is_unreadable() -> None:
     """Raise ``ResponseParseError`` for a UTF-16 body without a byte order mark, which UTF-16 refuses."""
-    with pytest.raises(ResponseParseError, match=r"^\[StubClient\] unreadable 200 body for GET f: 'utf-16' codec"):
+    with pytest.raises(ResponseParseError, match=r"^\[x.test\] unreadable 200 body for GET f: 'utf-16' codec"):
         await _lines(b"h\x00i\x00\n\x00", charset="utf-16")

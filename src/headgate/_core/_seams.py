@@ -109,7 +109,7 @@ class BudgetBacklogError(Exception):
 class BudgetPausedError(Exception):
     """Raised by ``Pacer.wait`` when the server's pause outlasts the call's deadline, so the attempt is never sent.
 
-    ``AsyncBaseClient`` raises it to its caller as :class:`headgate.errors.RateLimitError` with no status code, since
+    ``Client`` raises it to its caller as :class:`headgate.errors.RateLimitError` with no status code, since
     the call it refuses got no response. ``retry_after`` is the seconds left in the pause.
     """
 

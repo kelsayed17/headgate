@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The option objects an :class:`~headgate.AsyncBaseClient` is configured with, beyond its URL, rate and auth.
+"""The option objects a :class:`~headgate.Client` is configured with, beyond its URL, rate and auth.
 
 * :class:`TransportPolicy`: what the transport stack does for every request (retries, the timeouts and the deadline
   they are checked against, the breaker, per-path rates, the cache, idempotency keys, per-route overrides).
@@ -512,7 +512,7 @@ class HttpOptions:
     * ``request_id_headers``: the response headers a ``ClientError``'s ``request_id`` is read from, first match wins.
 
     The timeouts are the policy's (``TransportPolicy(timeout=)``), and the observers and middleware the client's own
-    (``AsyncBaseClient(observers=, middleware=)``): parts of the stack, not settings of how a request is sent.
+    (``Client(observers=, middleware=)``): parts of the stack, not settings of how a request is sent.
 
     Nothing is read from the environment: no proxy variable, no ``.netrc``, no ``SSL_CERT_FILE``.
     """

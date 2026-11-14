@@ -19,12 +19,11 @@ from typing import TYPE_CHECKING, ClassVar, cast, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, Json, Rate, TransportPolicy, call_info, nothing
+from headgate import Client, HttpOptions, Json, Rate, TransportPolicy, call_info, nothing
 from headgate._core import CallContext
 from headgate.retry import Backoff, Hedge, RetryPolicy
 from headgate.testing import FakeTransport, TestClock
 from tests.security._web import BASE, Web
-from tests.support.clients import StubClient
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
@@ -69,9 +68,9 @@ def signature(secret: bytes, request: httpx2.Request) -> str:
     return hmac.new(secret, message, hashlib.sha256).hexdigest()
 
 
-def _client(script: Script, *middleware: HmacSigner | Recorder | ShortCircuit) -> StubClient:
+def _client(script: Script, *middleware: HmacSigner | Recorder | ShortCircuit) -> Client:
     """Build a client over *script* with *middleware*, retrying up to three sends."""
-    return StubClient(
+    return Client(
         base_url="https://api.example.test",
         rate=Rate.per_second(1000),
         policy=TransportPolicy(retry=RetryPolicy(attempts=_ATTEMPTS)),
@@ -175,7 +174,7 @@ async def test_the_client_closes_the_network_under_the_middleware(count: int) ->
 
     script = Script()
     middleware = (Recorder("r", []),) * count
-    client = StubClient(
+    client = Client(
         base_url="https://api.example.test",
         rate=Rate.per_second(1000),
         http=HttpOptions(transport=_Network(script)),
@@ -257,7 +256,7 @@ async def _bare_function(request: httpx2.Request, call_next: Next) -> httpx2.Res
 def test_a_middleware_that_declares_nothing_is_refused(item: object, name: str) -> None:
     """Refuse a middleware that does not declare both names as frozensets, and name it."""
     with pytest.raises(TypeError, match="must declare credential_headers and credential_params") as raised:
-        StubClient(base_url="https://x", middleware=(cast("Middleware", item),))
+        Client(base_url="https://x", middleware=(cast("Middleware", item),))
 
     assert f"middleware {name} must" in str(raised.value)
 
@@ -306,7 +305,7 @@ async def test_a_middleware_reads_its_call_through_call_info() -> None:
 
     clock = TestClock(random=lambda: 1.0)
     with clock.install():
-        client = StubClient(
+        client = Client(
             base_url="https://h.test",
             rate=Rate.per_second(1000),
             policy=TransportPolicy(retry=RetryPolicy(backoff=Backoff(factor=1.0)), breaker=None),
@@ -345,7 +344,7 @@ async def test_a_hedged_send_reads_its_own_attempt() -> None:
             seen.append((before, _attempt(request)))
             return await call_next(request)
 
-    client = StubClient(
+    client = Client(
         base_url="https://h.test",
         rate=Rate.per_second(1000),
         policy=TransportPolicy(retry=RetryPolicy(budget=None, hedge=Hedge(after=0.01)), breaker=None),

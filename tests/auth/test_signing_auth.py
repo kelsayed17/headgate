@@ -14,14 +14,13 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import HttpCache, HttpOptions, Json, Next, RetryPolicy, SigningAuth, TransportPolicy
+from headgate import Client, HttpCache, HttpOptions, Json, Next, RetryPolicy, SigningAuth, TransportPolicy
 from headgate._core import CredentialStamper, Timing
 from headgate._url import is_secret_param
 from headgate.errors import AuthError
 from headgate.ratelimit import Rate, RateBudget
 from headgate.retry import Hedge
 from headgate.testing import TestClock, instant_retries
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -72,7 +71,7 @@ class _QuerySigner(SigningAuth):
 
 def _client(
     auth: httpx2.Auth, answer: Callable[[httpx2.Request], httpx2.Response]
-) -> tuple[StubClient, list[httpx2.Request]]:
+) -> tuple[Client, list[httpx2.Request]]:
     """Return a client signing with *auth* over *answer*, and the list of the requests it sent, as sent."""
     sent: list[httpx2.Request] = []
 
@@ -81,7 +80,7 @@ def _client(
         sent.append(httpx2.Request(request.method, request.url, headers=request.headers.copy()))
         return answer(request)
 
-    client = StubClient(base_url=_BASE, auth=auth, http=HttpOptions(transport=httpx2.MockTransport(handle)))
+    client = Client(base_url=_BASE, auth=auth, http=HttpOptions(transport=httpx2.MockTransport(handle)))
     return client, sent
 
 
@@ -159,7 +158,7 @@ async def test_a_hedged_attempt_is_signed_afresh() -> None:
         return httpx2.Response(200)
 
     with TestClock().install():
-        client = StubClient(base_url=_BASE, auth=auth, http=HttpOptions(transport=httpx2.MockTransport(handle)))
+        client = Client(base_url=_BASE, auth=auth, http=HttpOptions(transport=httpx2.MockTransport(handle)))
     async with client:
         await client.get("orders", expect=RESPONSE, retry=RetryPolicy(budget=None, hedge=Hedge(after=0.5)))
 
@@ -233,7 +232,7 @@ async def test_each_attempt_is_signed_once_after_the_last_middleware() -> None:
     sent: list[str] = []
     http = HttpOptions(transport=httpx2.MockTransport(handle))
     with instant_retries():
-        client = StubClient(base_url=_BASE, auth=auth, http=http, middleware=(_Stamp(),))
+        client = Client(base_url=_BASE, auth=auth, http=http, middleware=(_Stamp(),))
     async with client:
         await client.get("orders", expect=RESPONSE, retry=RetryPolicy(attempts=2))
 
@@ -264,7 +263,7 @@ async def test_a_signer_that_is_not_the_clients_auth_never_signs() -> None:
         return httpx2.Response(200)
 
     http = HttpOptions(transport=httpx2.MockTransport(handle))
-    client = StubClient(base_url=_BASE, auth=_Wrapping(auth), http=http, middleware=(_Stamp(),))
+    client = Client(base_url=_BASE, auth=_Wrapping(auth), http=http, middleware=(_Stamp(),))
     async with client:
         await client.get("orders", expect=RESPONSE)
 
@@ -301,7 +300,7 @@ async def test_a_wrapped_signer_is_not_re_sent_on_a_401() -> None:
         return httpx2.Response(httpx2.codes.UNAUTHORIZED)
 
     http = HttpOptions(transport=httpx2.MockTransport(handle))
-    client = StubClient(base_url=_BASE, auth=_Driving(auth), http=http, middleware=(_Stamp(),))
+    client = Client(base_url=_BASE, auth=_Driving(auth), http=http, middleware=(_Stamp(),))
     async with client:
         with pytest.raises(AuthError):
             await client.get("orders", expect=RESPONSE)
@@ -427,7 +426,7 @@ async def test_a_request_waiting_in_the_rate_queue_is_signed_when_it_leaves_it()
 
     budget = RateBudget(Rate.per_second(1), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
     with clock.install():
-        client = StubClient(
+        client = Client(
             base_url=_BASE,
             rate=budget,
             auth=_ClockSigner(clock),
@@ -448,7 +447,7 @@ async def test_a_cached_clients_401_is_signed_again_once(auth: type[SigningAuth]
         sent.append(request)
         return httpx2.Response(httpx2.codes.UNAUTHORIZED)
 
-    client = StubClient(
+    client = Client(
         base_url=_BASE,
         auth=auth(),
         policy=TransportPolicy(cache=HttpCache(storage=storage)),

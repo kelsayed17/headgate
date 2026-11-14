@@ -67,7 +67,7 @@ class _Bodies(TypedDict, total=False):
 
 
 class CallOptions(_Buffered, total=False, closed=True):
-    """The per-call options of every verb and of :meth:`~headgate.AsyncBaseClient.paginate`, beyond the body.
+    """The per-call options of every verb and of :meth:`~headgate.Client.paginate`, beyond the body.
 
     An option left out takes the view's, the route's or the policy's; ``None`` is off.
 
@@ -105,7 +105,7 @@ class RequestOptions(_Buffered, _Bodies, total=False, closed=True):
 
 
 class StreamOptions(_EveryCall, _Bodies, total=False, closed=True):
-    """The per-call options of :meth:`~headgate.AsyncBaseClient.stream`: :class:`~headgate.RequestOptions` but two.
+    """The per-call options of :meth:`~headgate.Client.stream`: :class:`~headgate.RequestOptions` but two.
 
     A stream is never buffered, so it takes no ``cache_ttl`` and no ``max_response_bytes``; the rest are a verb's.
     """

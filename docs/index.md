@@ -12,8 +12,8 @@ hide:
 
 # headgate
 
-**An async API-client base for Python, built on [httpx2](https://pypi.org/project/httpx2/).** Subclass
-`AsyncBaseClient`, declare what each endpoint answers, and every client you build gets the same production behavior.
+**An async API client for Python SDKs, built on [httpx2](https://pypi.org/project/httpx2/).** Hold a `Client`,
+declare what each endpoint answers, and every SDK you build gets the same production behavior.
 Each endpoint method stays one line.
 
 [Get started](#install){ .md-button .md-button--primary }
@@ -78,7 +78,7 @@ Each endpoint method stays one line.
 
 </div>
 
-## One base class instead of a stack
+## One client instead of a stack
 
 A production API client usually grows a stack: an HTTP library, a retry library, a rate limiter, a cache, a circuit
 breaker, a mocking library, and the glue code that makes them agree on deadlines and credentials. headgate is that
@@ -147,10 +147,11 @@ A client for a few GitHub REST endpoints. The full version, with its tests, is
 
 ```python
 from http import HTTPStatus
+from typing import Self
 
 import msgspec
 
-from headgate import AsyncBaseClient, BearerAuth, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
+from headgate import BearerAuth, Client, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
 from headgate.msgspec import reader
 
 
@@ -168,20 +169,26 @@ REPOSITORY_OR_NONE = Expect(reader(Repository)).on(HTTPStatus.NOT_FOUND, nothing
 ISSUE_PAGES = LinkHeader(items=lambda page: page)  # each page is a JSON list of issues
 
 
-class GitHub(AsyncBaseClient):
+class GitHub:
     def __init__(self, token: str) -> None:
-        super().__init__(
+        self._http = Client(
             base_url="https://api.github.com",
             rate=RateBudget(Rate.per_second(10), max_in_flight=50),
             auth=BearerAuth(token),
             http=HttpOptions(headers={"Accept": "application/vnd.github+json"}),
         )
 
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self._http.aclose()
+
     async def repository(self, owner: str, name: str) -> Repository | None:
-        return await self.get(t"repos/{owner}/{name}", expect=REPOSITORY_OR_NONE)
+        return await self._http.get(t"repos/{owner}/{name}", expect=REPOSITORY_OR_NONE)
 
     def open_issues(self, owner: str, name: str):
-        return self.paginate(t"repos/{owner}/{name}/issues", expect=reader(list[Issue]), pages=ISSUE_PAGES)
+        return self._http.paginate(t"repos/{owner}/{name}/issues", expect=reader(list[Issue]), pages=ISSUE_PAGES)
 ```
 
 ```python
@@ -192,7 +199,7 @@ async with GitHub(token) as github:
 ```
 
 Retries, pacing under GitHub's limits, pausing when its hourly limit is spent, following `Link` headers, and keeping
-the token on `api.github.com` all come from the base class.
+the token on `api.github.com` all come from the `Client` it holds.
 
 ## Where to next
 

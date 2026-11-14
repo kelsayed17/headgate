@@ -20,13 +20,12 @@ import pytest
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, RootModel, ValidationError
 from pydantic_core import PydanticCustomError
 
-from headgate import HttpOptions
+from headgate import Client, HttpOptions
 from headgate import msgspec as msgspec_flavor
 from headgate._failures import MESSAGE_TEXT_LIMIT
 from headgate.errors import DecodeError, RefusedError, ResponseParseError
 from headgate.pydantic import PydanticCodec, _schema_names, decode, reader, to_builtins, writer
 from headgate.testing import FakeTransport
-from tests.support.clients import StubClient
 from tests.support.responses import response
 
 if TYPE_CHECKING:
@@ -431,10 +430,10 @@ async def test_a_body_nested_too_deeply_is_a_parse_error() -> None:
     """Raise ``ResponseParseError`` for a body nested past pydantic's recursion limit, as every codec words it."""
     deep = b"[" * 100_000 + b"]" * 100_000
     fake = FakeTransport().reply("GET", "/x", httpx2.Response(200, content=deep))
-    client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
+    client = Client(base_url="https://api.test", http=HttpOptions(transport=fake))
     with pytest.raises(ResponseParseError) as raised:
         await client.get("x", expect=reader(list[object]))
-    assert str(raised.value) == "[StubClient] unreadable 200 body for GET x: nested too deeply"
+    assert str(raised.value) == "[api.test] unreadable 200 body for GET x: nested too deeply"
     with pytest.raises(DecodeError) as decoded:
         decode(deep, list[object])
     assert str(decoded.value) == "nested too deeply"

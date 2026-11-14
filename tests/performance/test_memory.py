@@ -23,9 +23,8 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage
 
-from headgate import ClientError, HttpCache, HttpOptions, RetryPolicy, TransportPolicy, as_bytes
+from headgate import Client, ClientError, HttpCache, HttpOptions, RetryPolicy, TransportPolicy, as_bytes
 from headgate.ratelimit import Rate
-from tests.support.clients import StubClient
 from tests.support.events import Recorder
 
 if TYPE_CHECKING:
@@ -75,12 +74,12 @@ def _client(
     cache: HttpCache | None = None,
     *,
     observed: bool = False,
-) -> StubClient:
+) -> Client:
     """Build a client over an in-memory transport that never throttles, with no retry budget to run out of.
 
     An *observed* client has an observer, which makes every call build its events and its breaker listener.
     """
-    return StubClient(
+    return Client(
         base_url="https://api.example.test",
         rate=_FAST,
         policy=TransportPolicy(retry=RetryPolicy(budget=None), cache=cache),

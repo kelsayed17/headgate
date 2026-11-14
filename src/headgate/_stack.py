@@ -3,7 +3,7 @@
 
 """The transport stack every client is built on, assembled in one place.
 
-:func:`build_http_client` returns the ``httpx2.AsyncClient`` an ``AsyncBaseClient`` holds, over the stack
+:func:`build_http_client` returns the ``httpx2.AsyncClient`` a ``Client`` holds, over the stack
 :func:`build_transport_stack` builds::
 
     RetryTransport(                    # re-sends per the RetryPolicy; begins each attempt on the call's context
@@ -30,7 +30,7 @@ signs each send, so a request that waited for its turn is signed when it goes ou
 * response hooks: the https-downgrade refusal, the refusal to re-send a one-shot body on a redirect, and the drop of a
   followed redirect's body (:mod:`headgate._redirects`).
 
-The circuit breaker and the deadline are not in this stack. ``AsyncBaseClient`` drives both around the send and the
+The circuit breaker and the deadline are not in this stack. ``Client`` drives both around the send and the
 body read, which no transport can span.
 
 Nothing here reads the environment: the client and the default transport are built with ``trust_env=False``, and the
@@ -39,9 +39,10 @@ cookie jar refuses every cookie unless ``HttpOptions(cookies=True)``.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass
 from http.cookiejar import CookieJar, DefaultCookiePolicy
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import httpx2
 
@@ -70,7 +71,11 @@ if TYPE_CHECKING:
     from headgate._options import HttpOptions, Timeouts, TransportPolicy
     from headgate.ratelimit._budgets import PathBudgets
 
-__all__ = ["Credentials", "build_http_client", "build_transport_stack"]
+__all__ = ["NETWORK_OVERRIDE", "Credentials", "build_http_client", "build_transport_stack"]
+
+#: The network transport every client built while it is set sends on, in place of its own:
+#: :func:`headgate.testing.fake_network` sets it.
+NETWORK_OVERRIDE: Final = ContextVar[httpx2.AsyncBaseTransport | None]("headgate_network_override", default=None)
 
 #: The response hooks, in the order they run on every hop.
 _RESPONSE_HOOKS = (refuse_https_downgrade, refuse_unreplayable_redirect, drop_followed_redirect_body)
@@ -174,7 +179,9 @@ def build_transport_stack(
 
 
 def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
-    """Return the network transport: the caller's own, used as it is, or an HTTP/2 pool that reads no environment."""
+    """Return the network transport: a test's override, the caller's own, or an HTTP/2 pool reading no environment."""
+    if (override := NETWORK_OVERRIDE.get()) is not None:
+        return override
     if http.transport is not None:
         return http.transport
     guard = _address_guard(http)

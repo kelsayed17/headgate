@@ -20,12 +20,11 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, Timeouts, TransportPolicy
+from headgate import Client, HttpOptions, Timeouts, TransportPolicy
 from headgate.cache import HttpCache
 from headgate.errors import ClientTimeoutError
 from headgate.retry import RetryPolicy
 from tests.cache._helpers import series_rules, stamped_ttl, stub_client
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -102,7 +101,7 @@ async def test_a_black_holing_host_times_out_through_the_cache(storage: AsyncSql
     listener.listen(4)  # accepts, never answers
     port = listener.getsockname()[1]
 
-    client = StubClient(
+    client = Client(
         base_url=f"http://127.0.0.1:{port}",
         policy=TransportPolicy(
             retry=RetryPolicy(attempts=1),

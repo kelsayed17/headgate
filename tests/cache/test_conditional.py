@@ -10,10 +10,9 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate import Expect, HttpOptions, TransportPolicy, as_bytes
+from headgate import Client, Expect, HttpOptions, TransportPolicy, as_bytes
 from headgate.cache import Fresh, HttpCache, NotModified, Validator, conditional
 from tests.cache._helpers import every_get_rules
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from hishel import AsyncSqliteStorage
@@ -43,9 +42,9 @@ class _Origin:
         return httpx2.Response(httpx2.codes.OK, content=b"v2 body", headers=current)
 
 
-def _client(origin: _Origin, cache: HttpCache | None = None) -> StubClient:
+def _client(origin: _Origin, cache: HttpCache | None = None) -> Client:
     """Build a client over *origin*, caching through *cache* when given."""
-    return StubClient(
+    return Client(
         base_url="https://x",
         policy=TransportPolicy(cache=cache),
         http=HttpOptions(transport=httpx2.MockTransport(origin)),
