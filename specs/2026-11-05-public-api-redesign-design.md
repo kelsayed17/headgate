@@ -241,7 +241,10 @@ per-path rule.
 - Every injectable clock takes `timing: Timing`. Today it is `clock=`, `timing=` or `wall_clock=` depending on the
   class.
 - A new `headgate.call_info(request) -> CallInfo | None` gives middleware a read-only view of the call: route
-  template, attempt number, time left before the deadline. Today it takes `headgate._core.CallContext`.
+  template, attempt number, time left before the deadline. Today it takes `headgate._core.CallContext`. (Amended
+  with the phase 5 plan: it returns a `CallView` snapshot holding the call's `CallInfo`, its attempt and the time left,
+  since `CallInfo` is the record events carry, made once. `Timing` holds four seams: clock, sleep, wall clock and
+  random source.)
 
 **5.2 Naming.**
 
@@ -253,7 +256,9 @@ per-path rule.
   it is a frozen value with hidden per-client state. `RetryPolicy.budget` defaults to `None`, and a client with no
   budget given makes its own, shared by every route and view of that client: today's per-client behavior, unchanged.
   Only a `RetryBudget` object the caller constructs and passes to several clients is shared between them. A
-  `RetryPolicy` stays frozen and hashable, holding the budget by identity. My call.
+  `RetryPolicy` stays frozen and hashable, holding the budget by identity. My call. (Amended with the phase 5 plan:
+  the frozen value is `RetryShare`, from which each client builds its own budget, as from a `Rate`; a `RetryBudget` is
+  the live object, shared; and `budget=None` stays "no cap", so `None` keeps meaning off.)
 - `BreakerRegistry` is already an object you construct.
 
 **5.3 Breakers are shared only when a registry is passed.** Each client keeps its own breakers by default, one per
@@ -268,7 +273,8 @@ origin. Clients that should pool their failure counts are given the same `Breake
 - Today two clients on one origin share a breaker only when their thresholds happen to be equal, because the global
   registry keys by origin and thresholds, and `breaker_states` reports the most degraded one. A passed registry holds
   one breaker per origin; a client whose thresholds differ from the ones that registry's breaker for that origin was
-  made with raises `ValueError` at construction.
+  made with raises `ValueError` at construction. (Amended with the phase 5 plan: a registry fixes its thresholds when
+  first used, so the check runs before any origin is known.)
 - This is a behavior change, the one exception to the non-goal: two clients on one origin no longer pool failures
   unless given one registry. The maintainer asked for the cleanest design; this is my recommendation.
 
@@ -293,7 +299,8 @@ class GitHub:
   becomes a plain `Client`.
 - Testing an SDK no longer needs its author to forward `transport=`: `headgate.testing` gains a way to build every
   `Client` in a block over a fake transport (the builder picks its shape, alongside the existing construction-time
-  switches it replaces).
+  switches it replaces). (Amended with the phase 5 plan: `fake_network(transport)`. An error's `[source]` prefix names
+  the `base_url`'s host, since a final `Client` has no subclass name to give.)
 - My call.
 
 ### 6. Errors
