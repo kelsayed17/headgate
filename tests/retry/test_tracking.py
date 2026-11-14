@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import IdempotencyKeys, TransportPolicy, nothing
+from headgate import IdempotencyKeys, Json, TransportPolicy, nothing
 from headgate._core import CallContext, CallInfo
 from headgate.errors import TransportError
 from headgate.ratelimit import Rate
@@ -232,7 +232,7 @@ async def test_a_post_whose_head_reached_the_server_is_not_resent_end_to_end() -
     async with _server(count_and_drop) as url:
         client = StubClient(base_url=url, rate=Rate.per_second(1000))
         with pytest.raises(TransportError) as raised:
-            await client.post("orders", expect=nothing, json={"qty": 1})
+            await client.post("orders", expect=nothing, body=Json({"qty": 1}))
         await client.aclose()
 
     assert connections == 1
@@ -253,7 +253,7 @@ async def test_a_keyed_post_whose_head_reached_the_server_is_resent_end_to_end()
             base_url=url, rate=Rate.per_second(1000), policy=TransportPolicy(idempotency=IdempotencyKeys())
         )
         with pytest.raises(TransportError):
-            await client.post("orders", expect=nothing, json={"qty": 1})
+            await client.post("orders", expect=nothing, body=Json({"qty": 1}))
         await client.aclose()
 
     assert connections == len(("first", "second", "third"))

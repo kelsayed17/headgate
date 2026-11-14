@@ -1,10 +1,10 @@
 # Pagination
 
-`client.paginate(url, *, expect, pages, retry=None, limit=None, body=None, json=None, **options)` follows a paginated
-endpoint and returns a `Paginated[P, I]`: `async for` yields the items `I`, and `.pages()` yields the pages `P`. Each
-page is a GET through the whole stack (rate budget, retries, breaker, cache, credential rules), fetched only when the
-iteration reaches it. An endpoint whose query is a request body is walked with POSTs instead, given `body=` or `json=`
-as a `post` is: see [Walks of POSTs](#walks-of-posts).
+`client.paginate(url, *, expect, pages, query=None, limit=None, **options)` follows a paginated endpoint and returns a
+`Paginated[P, I]`: `async for` yields the items `I`, and `.pages()` yields the pages `P`. Each page is a GET through the
+whole stack (rate budget, retries, breaker, cache, credential rules), fetched only when the iteration reaches it. An
+endpoint whose query is a request body is walked with POSTs instead, given that body as `query=`: see
+[Walks of POSTs](#walks-of-posts).
 
 ```python
 from headgate import Cursor
@@ -70,11 +70,11 @@ except PageLimitError as exc:
 
 Set the budget where the client calls `paginate`, so every caller of that endpoint gets it.
 
-A walk of POSTs takes its body as `body=` or `json=` (see [Walks of POSTs](#walks-of-posts)); the other body options
-(`data`, `content`, `files`) are refused. Its `params=` are the first page's query, and a pager's parameter is added to
-them. `expect=` may be an `Expect`: a page can be a declared answer like any other. Every other option applies to each
-page as it does to one `get` (or one `post`, in a walk of POSTs): `follow_redirects=False` makes a page's redirect raise
-as its 3xx, and `cache_ttl=` is each page's cache lifetime.
+A walk of POSTs takes its body as `query=` (see [Walks of POSTs](#walks-of-posts)), and no `body=`: a walk's body is the
+value its pager rewrites, not one encoded body. Its `params=` are the first page's query, and a pager's parameter is
+added to them. `expect=` may be an `Expect`: a page can be a declared answer like any other. Every other option applies
+to each page as it does to one `get` (or one `post`, in a walk of POSTs): `follow_redirects=False` makes a page's
+redirect raise as its 3xx, and `cache_ttl=` is each page's cache lifetime.
 
 ## Strategies
 
@@ -127,10 +127,10 @@ Each strategy is a frozen value: build it once, next to the client, as with read
 ## Walks of POSTs
 
 Some endpoints take their query as a request body, so the page token or offset travels in the body too: a search API
-that is a POST, or a JSON-RPC call whose arguments carry a cursor. `paginate` walks one when it is given a body, as
-`post` is: `json=` for builtins sent as JSON, or `body=` for your own value. A `body=` is encoded for each page by the
-pager's `write=` (a flavor's `writer`): the writer belongs to the endpoint, like the reader and the pager, so it is
-built once beside them, and a pager that rewrites the body needs your value, not its bytes.
+that is a POST, or a JSON-RPC call whose arguments carry a cursor. `paginate` walks one when it is given a body as
+`query=`: your own value, which the pager rewrites page by page, so it needs the value, not its bytes. Each page's body
+is encoded by the pager's `write=` (a flavor's `writer`): the writer belongs to the endpoint, like the reader and the
+pager, so it is built once beside them.
 
 ```python
 import msgspec
@@ -148,17 +148,15 @@ def with_cursor(query: Query, cursor: str) -> Query:
 SEARCH_PAGES = BodyCursor[Page, Item, Query](items=items_of, next=cursor_of, put=with_cursor, write=QUERY)
 
 query = Query(kind="open", limit=100)
-async for item in client.paginate("search", body=query, expect=reader(Page), pages=SEARCH_PAGES):
+async for item in client.paginate("search", query=query, expect=reader(Page), pages=SEARCH_PAGES):
     ...
 ```
 
-A body of builtins needs no writer: leave out `write=`, pass `json=`, and have `put` return a new dict. Either keyword
-given as `None` is no body, so a method with an optional body makes one call: under a `Cursor` or `Offset` the walk is
-then GETs, and the writer goes unused. Each keyword means one thing, so a mismatch is refused rather than sent another
-way. A body of another type than the pager's, a body on a GET-only pager (`LinkHeader`, `NextUrl`), a `body=` under a
-pager that is not a `WritingPager`, and `body=` beside `json=` are type errors. Every refusal but the body's type also
-raises `ValueError` from the `paginate` call itself, before anything is fetched, as do a body pager given no body, a
-`body=` whose pager's `write` is `None`, and a `json=` whose pager has one.
+A body of builtins needs no writer: leave out `write=` and have `put` return a new dict, and each page's body is sent as
+JSON. `query=None` is no body, so a method with an optional body makes one call: under a `Cursor` or `Offset` the walk
+is then GETs, and the writer goes unused. A body of another type than the pager's, and a body on a GET-only pager
+(`LinkHeader`, `NextUrl`), are type errors. A body pager given no body raises `ValueError` from the `paginate` call
+itself, before anything is fetched, and so does `body=` or `json=`, which a walk does not take, with a `TypeError`.
 
 `BodyCursor` posts the first body as you wrote it, then `put(body, cursor)` with each cursor `next` reads from a page.
 `BodyOffset` reads the offset the body carries with `offset(body)`, starts there, and posts `put(body, offset)` past
@@ -181,8 +179,8 @@ ROW_PAGES = BodyOffset[list[Row], Row, Query](
 
 `put` returns a new body and leaves the one it was given alone, so the caller's body is never changed under it.
 `Cursor` and `Offset` page a POST as well, by query parameter, sending the same body with each page: give them the
-body's type and writer, as in `Cursor[Page, Item, Query](..., write=QUERY)`, and pass `body=`, or pass `json=` without
-a writer. `LinkHeader` and `NextUrl` refuse a body, since the URL a response names is fetched with a GET;
+body's type and writer, as in `Cursor[Page, Item, Query](..., write=QUERY)`, and pass `query=`, or leave the writer out
+for builtins sent as JSON. `LinkHeader` and `NextUrl` refuse a body, since the URL a response names is fetched with a GET;
 `BodyCursor` and `BodyOffset` refuse a walk with no body, since there is nothing for them to rewrite.
 
 Each page is then a `post` in every respect: the same stack, `expect=` (with its declared answers), breaker and page
@@ -196,7 +194,8 @@ would answer each page with the first.
 ## A pager of your own
 
 A scheme the strategies do not cover implements the `Pager[P, I]` protocol (`Pager[P, I, B]` for a walk of POSTs whose
-bodies are of type `B`). One walked with `body=` subclasses `WritingPager[P, I, B]` and gives it a `write` property:
+bodies are of type `B`). One that encodes its walk's bodies subclasses `WritingPager[P, I, B]` and gives it a `write`
+property:
 a pager writes bodies because it says so, not because it has an attribute of that name.
 
 ```python
@@ -219,9 +218,9 @@ class HeaderTokens:
         return request.with_param("token", token) if token else None
 ```
 
-A pager walked with `body=` subclasses `WritingPager` instead, which makes every member abstract, so leaving one out
-is an error when the pager is built rather than a `None` mid-walk. A frozen dataclass field named `write` gives the
-writer, as the strategies do. Here it has no default, since a walk with `body=` needs one
+A pager that encodes its walk's bodies subclasses `WritingPager` instead, which makes every member abstract, so leaving
+one out is an error when the pager is built rather than a `None` mid-walk. A frozen dataclass field named `write` gives
+the writer, as the strategies do. Here it has no default, since this endpoint's bodies are not builtins
 (`SearchPages(write=writer(Query))`):
 
 ```python

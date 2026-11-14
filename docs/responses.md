@@ -170,8 +170,8 @@ The core imports no serialization library. `headgate.msgspec` and `headgate.pyda
 - `reader(Type, *, strict=True, allow_empty_body=False, refuse=None)`: a reader built on `decode`;
 - `writer(Type, *, drop_none=False)`: the mirror of `reader`, a writer whose `body=WRITER(value)` sends the value
   as JSON (see [request bodies](streaming.md#request-bodies));
-- `to_builtins(value, *, drop_none=False)`: a struct or model (or a list or mapping of them) as builtins for `json=` or
-  `data=`, with field renames applied and `drop_none=True` removing `None` fields recursively.
+- `to_builtins(value, *, drop_none=False)`: a struct or model (or a list or mapping of them) as builtins for
+  `body=Json(...)` or `Form(...)`, with field renames applied and `drop_none=True` removing `None` fields recursively.
 
 `Type` is any type expression, so one function serves an envelope (`reader(Page)`), a bare array
 (`reader(list[Row])`), a map, or a genuine union (`reader(list[A] | A)`), and the reader is typed exactly that.

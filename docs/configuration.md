@@ -57,7 +57,7 @@ How requests are sent and responses read.
 | `timeout` | `Timeouts()` | per-phase timeouts; a phase left unset takes its default |
 | `follow_redirects` | `True` | the client's default; a call can override it |
 | `max_redirects` | `5` | the hop limit, auth-flow hops included |
-| `max_response_bytes` | 32 MiB | the cap on a buffered body, counted after decompression; `stream()` is uncapped |
+| `max_response_bytes` | 32 MiB | the cap on a buffered body, counted after decompression; a call's own `max_response_bytes=` replaces it for that call; `stream()` is uncapped |
 | `response_check` | `None` | a check of every final response; requires `follow_redirects=False` |
 | `security` | `SecurityOptions()` | where requests and credentials may go: see below |
 | `ssl_context` | `None` | TLS for the default transport: a private CA, mutual TLS, pinning |
@@ -169,38 +169,55 @@ re-send on a 401 is lost.
 ## Per-call options
 
 Every verb, `get`, `post`, `put`, `patch`, `delete` and `head`, has the same signature, except that `head` reads
-`expect=nothing` unless it is given another reader, since a HEAD has no body:
+`expect=nothing` unless it is given another reader, since a HEAD has no body. An option left out takes the view's, the
+route's or the client's; `None` turns it off:
 
 ```python
 await client.get(
     url,  # a literal, a t-string (escaped, and the call's route) or an httpx2.URL (sent as it is)
     expect=reader_or_expect,
-    retry=None,  # None: the view's; False: send once; a RetryPolicy: replace the client's; True: undo the view's
-    follow_redirects=None,  # None: the client's default
-    cache_ttl=None,  # this response's cache lifetime, over HttpCache.ttl
+    retry=RetryPolicy(attempts=5),  # replaces the view's, the route's or the client's; None: send once
+    follow_redirects=False,  # a 3xx raises as itself; True follows it
+    cache_ttl=60.0,  # this response's cache lifetime, over HttpCache.ttl; None: no lifetime limit
     params={"q": "gdp"},  # a list or tuple value repeats the key
     headers={"Accept-Language": "en"},
     timeout=Timeouts(read=5.0),  # the phases it sets replace the view's or the client's
     deadline=10.0,  # seconds for this call, or None for none
+    max_response_bytes=256 * 1024 * 1024,  # this call's body cap, over HttpOptions.max_response_bytes
 )
 ```
 
-plus `body=` (what a flavor's `writer` wrote), `json=`, `data=`, `content=` or `files=` for a body and
-`idempotency_key=` for a write. `stream()` takes the same options without `expect=` and `cache_ttl=`, and `paginate()`
-takes `expect=`, `pages=`, `limit=` and the same options, applied to each page; a walk of POSTs takes `body=` or
-`json=` and no other body option ([Walks of POSTs](pagination.md#walks-of-posts)).
+plus `body=` for a body (a `Body`: what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`, see
+[request bodies](streaming.md#request-bodies)) and `idempotency_key=` for a write. `stream()` takes the same options
+without `expect=`, `cache_ttl=` and `max_response_bytes=`, and `paginate()` takes `expect=`, `pages=`, `limit=` and the
+same options but the body, applied to each page; a walk of POSTs takes `query=`
+([Walks of POSTs](pagination.md#walks-of-posts)).
 
-The options are typed, so a wrapper can forward them with every key checked: `RequestOptions` is the TypedDict of a
-verb's options (`**options: Unpack[RequestOptions]`), `PageOptions` the ones `paginate()` applies to each page (the
-same, less the body, plus `follow_redirects` and `cache_ttl`), and `ViewOptions` what `with_options()` takes. `Method`
-is the literal type of the six verbs, which `stream(method=...)` takes.
+`cache_ttl=None` removes headgate's lifetime only: the cache is TTL-only and never reads a response's own cache headers,
+so an entry stored with `cache_ttl=None` is served until its storage evicts it, past any `Cache-Control: max-age` and
+even past `no-store`, as an entry of `HttpCache(ttl=None)` is.
+
+The options are typed, so a wrapper can forward them with every key checked. `CallOptions` is the TypedDict of every
+per-call option but the body, which every verb and `paginate()` take; `RequestOptions` is a verb's (`CallOptions` plus
+the body); `headgate.streaming.StreamOptions` is `stream()`'s (`RequestOptions` less `cache_ttl` and
+`max_response_bytes`); and `ViewOptions` is what `with_options()` takes. A wrapper typed on them forwards every option
+at once:
+
+```python
+async def fetch(self, url: LiteralString, **options: Unpack[CallOptions]) -> Series:
+    return await self._http.get(url, expect=SERIES, **options)
+```
+
+Each is closed, so a misspelled keyword is a type error, and the client refuses one at runtime too, with a `TypeError`
+naming it, before anything is sent. `Method` is the literal type of the six verbs, which `stream(method=...)` takes.
 
 ### Views
 
-`client.with_options(headers=..., timeout=..., deadline=..., retry=...)` returns a view: the same client with other
-defaults for its calls. It shares everything that makes calls cooperate: the connection pool and transport stack (so
-the rate budget and the retry budget), the breakers, the auth and its cached token, and the observers. Options left
-out keep the client's; a view of a view layers on the outer view.
+`client.with_options(headers=..., timeout=..., deadline=..., retry=..., follow_redirects=...)` returns a view: the same
+client with other defaults for its calls. A view's `retry=None` sends each of its calls once; a call that should not
+take the view's defaults is made on the client. It shares everything that makes calls cooperate: the connection pool
+and transport stack (so the rate budget and the retry budget), the breakers, the auth and its cached token, and the
+observers. Options left out keep the client's; a view of a view layers on the outer view.
 
 ```python
 patient = client.with_options(timeout=Timeouts(read=120.0), deadline=600.0)

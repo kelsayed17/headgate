@@ -11,9 +11,11 @@ async with client.stream("exports/2026.csv") as stream:
         sink.write(chunk)
 ```
 
-`client.stream(url, *, method="GET", retry=..., follow_redirects=..., last_event_id=None, **options)` sends the request
-when the block is entered and hands it a `Stream` once a 2xx head has arrived. It runs through the same stack and failure
-ladder as a verb, except that:
+`client.stream(url, *, method="GET", last_event_id=None, **options)` sends the request when the block is entered and
+hands it a `Stream` once a 2xx head has arrived. Its options are `headgate.streaming.StreamOptions`: a verb's
+[per-call options](configuration.md#per-call-options), `retry=` and `follow_redirects=` included, but `cache_ttl=` and
+`max_response_bytes=`, since its body is never buffered. It runs through the same stack and failure ladder as a verb,
+except that:
 
 - **a 2xx is the only success.** There is no `expect=`; any other status raises before the block is entered, with a
   bounded head of its body in the error. A 3xx raises unless redirects are followed.
@@ -79,18 +81,28 @@ await self.post("orders", body=NEW_ORDER(order), expect=ORDER)
 
 It is sent with the writer's `Content-Type` (`application/json` for these codecs) unless the call's `headers=`, or
 its view's, sets another; a `Content-Type` among the client's default headers does not count. It is bytes, so the call
-stays retryable. A verb also takes `json=` (builtins, which a codec's `to_builtins` builds), `data=` (form fields), or
-one of:
+stays retryable. `body=` takes one `Body`, whose class says what it is:
 
-- **`content=`**, a raw body:
-  - `bytes`, sent as they are, and retryable;
-  - an async iterable of `bytes`, streamed once. The call is then **never re-sent**, and a redirect that asks for the
-    body again (a 307 or 308, or a 301 answering anything but a POST) is not followed but raised as its 3xx, both with
-    a note saying why;
-  - a callable returning such an iterable: a **factory**, called once for each send, so the call stays retryable and
-    redirects are followed. Prefer this for a file.
-- **`files=`**, a multipart body as httpx2 takes it (`{"name": file}`, or `(filename, file, content_type)` tuples), with
-  `data=` as its form fields.
+| `body=` | Sent as | Sent again on a retry or a 307/308 |
+| --- | --- | --- |
+| `EncodedBody`, from a `writer` | its bytes, with its `Content-Type` | yes |
+| `Json(value)` | JSON of builtins (a codec's `to_builtins` builds them), `application/json` | yes |
+| `Form(fields)` | `application/x-www-form-urlencoded` | yes |
+| `Multipart(files, fields)` | `multipart/form-data`: files as httpx2 takes them, beside form fields | unless a file cannot be rewound |
+| `Raw(content)` | bytes, an async iterable of bytes, or a callable returning one | unless it is an async iterable |
+
+`Raw` takes:
+
+- `bytes`, sent as they are, and retryable;
+- an async iterable of `bytes`, streamed once. The call is then **never re-sent**, and a redirect that asks for the
+  body again (a 307 or 308, or a 301 answering anything but a POST) is not followed but raised as its 3xx, both with
+  a note saying why;
+- a callable returning such an iterable: a **factory**, called once for each send, so the call stays retryable and
+  redirects are followed. Prefer this for a file.
+
+A `Multipart` file is `{"name": file}`, or a `(filename, file, content_type)` tuple, where the file is bytes, text or a
+binary file object; a file object that is neither a regular file nor in memory, such as a pipe, cannot be rewound, so
+the call is sent once. `Raw(...).replayable` and `Multipart(...).replayable` say which a body is.
 
 ```python
 async def chunks(path: Path) -> AsyncIterator[bytes]:
@@ -99,11 +111,12 @@ async def chunks(path: Path) -> AsyncIterator[bytes]:
             yield chunk
 
 
-await client.put(t"blobs/{blob_id}", expect=nothing, content=lambda: chunks(path))
-await client.post("reports", expect=nothing, files={"report": ("q3.csv", csv_bytes, "text/csv")}, data={"kind": "q"})
+await client.put(t"blobs/{blob_id}", expect=nothing, body=Raw(lambda: chunks(path)))
+await client.post(
+    "reports", expect=nothing, body=Multipart({"report": ("q3.csv", csv_bytes, "text/csv")}, {"kind": "q"})
+)
 ```
 
-`content=` combines with no other body option, and `files=` cannot carry `json=`: both raise `ValueError` rather than
-let httpx2 drop one silently. A `content=` that is none of the three (a `str`, which you encode first, a `bytearray`, a
-list) raises `TypeError` naming it. A `CachedTokenAuth` buffers a streamed body before the first send, because a 401
-makes it send the request again.
+A call has one body, so no two can conflict. `Raw` content that is none of the three (a `str`, which you encode first, a
+`bytearray`, a list) raises `TypeError` naming it, and so does a `body=` that is no `Body` (bare `bytes` or a `dict`).
+A `CachedTokenAuth` buffers a streamed body before the first send, because a 401 makes it send the request again.
