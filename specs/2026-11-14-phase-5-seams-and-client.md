@@ -17,7 +17,7 @@
 ## Global Constraints
 
 - Python 3.14 or newer; httpx2 2.16 or newer; hishel 2.
-- Base branch: `origin/main` after Phase 6 (errors) has merged. **Do not start Task 2 before it has.** The plan itself is written over `9379587` (#94).
+- Base branch: Tasks 2–5 start from `origin/main` at `9379587` (#94), in parallel with Phase 6, and rebase over Phase 6 when it merges. Task 6 starts only after Phase 6 has merged. Phase 5 ships as two PRs: Tasks 2–5, then Task 6.
 - Clean break: no deprecation aliases, and no old spelling kept next to the new one.
 - Gates for every task:
   - `uv run ruff check`
@@ -192,6 +192,8 @@ These six cases are not covered by the design's own examples and are the most li
    - a `BreakerRegistry`'s cooldown runs on it;
    - a `RetryBudget`'s window slides on it.
 
+   - a `RateBudget` shared by two clients, built in the block, paces both on the test clock.
+
    An object built outside the block keeps the system clock. Covered in Task 2.
 2. **Retry budgets:**
    - Two clients given one `RetryBudget` spend one window: the second client's retries are refused once the first has spent the budget.
@@ -329,7 +331,7 @@ These six cases are not covered by the design's own examples and are the most li
   - `_effective_policy` loses its registry substitution.
 - Modify: `src/headgate/health.py`: `breaker_states(registry)`.
 - Delete: `src/headgate/testing/_breakers.py`, and remove `isolated_breakers` from `headgate.testing`. Every test that entered it drops the `with`, and a test that inspected the yielded registry builds one and passes it.
-- Modify: `docs/breaker.md`, `docs/testing.md`, `README.md` and `examples/`.
+- Modify: `docs/breaker.md`, `docs/testing.md`, `README.md` and `examples/`. `docs/breaker.md` quotes the `ValueError` a client raises for thresholds that differ from its shared registry's.
 - Test: `tests/breaker/test_breaker_keying.py`, `tests/breaker/test_registry.py`, `tests/transport/test_health.py` and `tests/testing/test_breakers.py` (Review Focus 3); the last loses its `isolated_breakers` cases.
 
 - [ ] **Step 1: Write the failing tests:** Review Focus 3, and that `isolated_breakers` and `DEFAULT_REGISTRY` are gone (`hasattr`).
@@ -356,7 +358,7 @@ Do this task last, so its mechanical pass over `tests/` runs once, over everythi
 - Modify: `src/headgate/__init__.py` and every module that names `AsyncBaseClient`. Find them with `grep -rn AsyncBaseClient src docs examples README.md`.
 - Create: `fake_network` in `src/headgate/testing/_transport.py`. The client reads the override when it builds its network transport (`_stack._network`).
 - Modify: `tests/support/clients.py`: `StubClient` becomes a function returning a `Client`. Every `class X(AsyncBaseClient)` in `tests/` becomes a helper that builds a `Client` (16 today, found by `grep -rn "(AsyncBaseClient)" tests`). This is a mechanical pass, done after Phase 6's tests have landed.
-- Modify: `README.md`, every guide and `examples/` hold a `Client`. `docs/` shows how an SDK forwards `async with` and `aclose()` in a few lines.
+- Modify: `README.md`, every guide and `examples/` hold a `Client`: no example subclasses it. `docs/` shows how an SDK forwards `async with` and `aclose()` in a few lines. `errors.py`'s docs for Phase 6's `source` say it is the `base_url`'s host.
 - Modify: the error-message snapshot, whose `[StubClient]` prefixes become the test origins' hosts.
 - Test: `tests/client/test_client.py` (Review Focus 6), and `tests/testing/test_fake_network.py` (new, Review Focus 5).
 
