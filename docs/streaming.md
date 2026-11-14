@@ -11,9 +11,10 @@ async with client.stream("exports/2026.csv") as stream:
         sink.write(chunk)
 ```
 
-`client.stream(url, *, method="GET", retry=..., follow_redirects=..., last_event_id=None, **options)` sends the request
-when the block is entered and hands it a `Stream` once a 2xx head has arrived. It runs through the same stack and failure
-ladder as a verb, except that:
+`client.stream(url, *, method="GET", last_event_id=None, **options)` sends the request when the block is entered and
+hands it a `Stream` once a 2xx head has arrived. Its options are `headgate.streaming.StreamOptions`: a verb's
+[per-call options](configuration.md#per-call-options), `retry=` and `follow_redirects=` included, but `cache_ttl=`. It
+runs through the same stack and failure ladder as a verb, except that:
 
 - **a 2xx is the only success.** There is no `expect=`; any other status raises before the block is entered, with a
   bounded head of its body in the error. A 3xx raises unless redirects are followed.

@@ -9,7 +9,7 @@ picks a codec: ``headgate.msgspec``, ``headgate.pydantic``, or any library as a 
 here is what a client is written with:
 
 * the client and its options: :class:`AsyncBaseClient`, :data:`Method`, :class:`RequestOptions`,
-  :class:`PageOptions`, :class:`ViewOptions`, :class:`TransportPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`,
+  :class:`CallOptions`, :class:`ViewOptions`, :class:`TransportPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`,
   :class:`Timeouts` and :data:`DEFAULT_TIMEOUTS`, :class:`IdempotencyKeys`, :class:`Route`, :class:`Middleware` and
   :data:`Next` (what a middleware calls to continue);
 * declared responses: :class:`Expect`, :class:`Reader` and the readers (:data:`as_json` among them),
@@ -41,7 +41,8 @@ from headgate._auth import (
     SigningAuth,
     StaticHeaderAuth,
 )
-from headgate._client import AsyncBaseClient, Method, PageOptions, RequestOptions
+from headgate._call_options import CallOptions, RequestOptions
+from headgate._client import AsyncBaseClient, Method
 from headgate._codec import Codec, decode_with, reader_for, writer_for
 from headgate._middleware import Middleware, Next
 from headgate._options import (
@@ -107,6 +108,7 @@ __all__ = [
     "BodyOffset",
     "BreakerPolicy",
     "CachedTokenAuth",
+    "CallOptions",
     "CircuitOpenError",
     "ClientConfigurationError",
     "ClientError",
@@ -130,7 +132,6 @@ __all__ = [
     "PageLimit",
     "PageLimitError",
     "PageNumber",
-    "PageOptions",
     "Paginated",
     "Problem",
     "QueryParamAuth",

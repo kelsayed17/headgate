@@ -533,7 +533,8 @@ _BODIES: list[RequestOptions] = [{"data": {}}, {"content": b"x"}, {"files": {"f"
 def test_a_body_no_pager_can_rewrite_is_refused(body: RequestOptions) -> None:
     """Refuse a form, raw or multipart body: a walk's body is ``json=``, or ``body=`` with ``write=``."""
     client = _Api(_by_cursor).client()
-    with pytest.raises(ValueError, match="takes no data=, content= or files="):
+    name = next(iter(body))
+    with pytest.raises(TypeError, match=rf"argument '{name}': a walk of POSTs sends body= or json=$"):
         client.paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of), **cast("dict[str, Any]", body))
 
 

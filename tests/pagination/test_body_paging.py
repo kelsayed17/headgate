@@ -20,6 +20,7 @@ import pytest
 from headgate import (
     BodyCursor,
     BodyOffset,
+    CallOptions,
     ClientError,
     Cursor,
     EncodedBody,
@@ -31,7 +32,6 @@ from headgate import (
     Offset,
     PageLimit,
     PageLimitError,
-    PageOptions,
     Reader,
     RetryPolicy,
     TransportPolicy,
@@ -552,11 +552,11 @@ def test_a_body_offset_takes_a_page_size_of_one() -> None:
 
 
 #: A fixed idempotency key, as a call option and as a header.
-_FIXED_KEYS: Final[list[PageOptions]] = [{"idempotency_key": "k"}, {"headers": {"idempotency-key": "k"}}]
+_FIXED_KEYS: Final[list[CallOptions]] = [{"idempotency_key": "k"}, {"headers": {"idempotency-key": "k"}}]
 
 
 @pytest.mark.parametrize("options", _FIXED_KEYS, ids=["idempotency-key", "header"])
-def test_a_walk_of_posts_refuses_one_idempotency_key_for_every_page(options: PageOptions) -> None:
+def test_a_walk_of_posts_refuses_one_idempotency_key_for_every_page(options: CallOptions) -> None:
     """Refuse a fixed idempotency key on a walk of POSTs: the server would replay the first page for every other."""
     first = Query(kind="a", limit=2)
     message = r"^an idempotency key would be sent with every page's body; a walk of POSTs takes none$"
@@ -637,13 +637,12 @@ async def test_a_json_walk_sends_every_page_with_the_walks_retry_and_options() -
 #: The body arguments ``paginate`` refuses, each with the reason it gives.
 _BAD_BODY_ARGUMENTS: Final[list[tuple[dict[str, Any], str]]] = [
     ({"json": {}, "body": Query(kind="a", limit=2)}, r"^paginate takes body= or json=, not both$"),
-    ({"data": {}}, r"^paginate takes no data=, content= or files=: a walk of POSTs sends body= or json=$"),
 ]
 
 
-@pytest.mark.parametrize(("arguments", "message"), _BAD_BODY_ARGUMENTS, ids=["both", "data"])
+@pytest.mark.parametrize(("arguments", "message"), _BAD_BODY_ARGUMENTS, ids=["both"])
 def test_a_bad_body_argument_is_refused(arguments: dict[str, Any], message: str) -> None:
-    """Refuse two bodies, and a body no pager can rewrite."""
+    """Refuse two bodies; a body no pager can rewrite is refused in ``tests/pagination/test_paginate.py``."""
     with pytest.raises(ValueError, match=message):
         _Api(_by_body_cursor).client().paginate("search", expect=reader(Page), pages=QUERY_CURSOR, **arguments)
 
@@ -815,7 +814,7 @@ class _WrittenPostsLater(_PostsLater, WritingPager[Page, Item, Query]):
     ids=["no-writer", "fixed-key"],
 )
 async def test_a_body_that_appears_mid_walk_is_held_to_the_same_rules(
-    pages: _PostsLater, options: PageOptions, message: str
+    pages: _PostsLater, options: CallOptions, message: str
 ) -> None:
     """Refuse a later page's body that cannot be sent as the walk says, from the iteration, before sending it."""
     api = _Api(_by_param_cursor)

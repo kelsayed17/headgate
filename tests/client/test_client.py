@@ -876,6 +876,6 @@ async def test_a_client_without_a_rate_paces_nothing_but_obeys_a_server_pause() 
             await client.get("x", expect=nothing)
         assert clock.sleeps == []
         with pytest.raises(RateLimitError):
-            await client.get("x", expect=nothing, retry=False)
+            await client.get("x", expect=nothing, retry=None)
         await client.get("x", expect=nothing)
     assert clock.sleeps == [2.0]

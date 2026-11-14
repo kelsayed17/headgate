@@ -8,6 +8,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `CallOptions`, the TypedDict of every per-call option but the body, which every verb and `paginate()` take, and
+  `headgate.streaming.StreamOptions`, the options of `stream()`. `with_options(follow_redirects=...)` sets a view's
+  redirect choice, and is refused on a client with a `response_check`, as each of its calls would be.
 - `Stream.retry` and `EventParser.retry`: the reconnection time the server last set with an SSE `retry:` field, kept
   across events as the WHATWG spec says, including a `retry:` sent in a block of its own. `Event.retry` is unchanged:
   the field in that event's own block.
@@ -20,6 +23,24 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- **A call's explicit `retry=None` now sends once; it used to mean "take the view's or the client's policy".**
+  `retry` is a call option now, where leaving it out inherits and `None` is off. A forwarding wrapper whose own
+  default is `None` (`retry=retry`) is the usual case: type it on `**options: Unpack[CallOptions]` and forward
+  `**options`, or leave `retry` out when it is `None`. Find affected calls with
+  `grep -rnE "(retry|cache_ttl)=(None|[a-z_]+)\b"`.
+- **A call's explicit `cache_ttl=None` now stores without a lifetime limit; it used to mean "the cache's `ttl`".** It
+  removes headgate's lifetime only: the cache is TTL-only and still never reads a response's own cache headers, so such
+  an entry is served until its storage evicts it, past any `Cache-Control: max-age` and even past `no-store`, as an
+  entry of `HttpCache(ttl=None)` is. Leave `cache_ttl` out for the cache's `ttl`.
+- `retry=`, `follow_redirects=` and `cache_ttl=` are no longer named parameters of the verbs, `stream()` and
+  `paginate()`, but keys of their options (`CallOptions`, `RequestOptions`, `headgate.streaming.StreamOptions`), so a
+  wrapper typed on the options forwards them. A call keeps the same spelling. `retry=False` is `retry=None`, on a call
+  and on a view (`with_options(retry=None)`); `True` and `False` raise `TypeError` saying so. `follow_redirects=None`
+  is leaving it out, and raises `TypeError`.
+- A keyword no option names, such as a misspelled `retires=`, raises `TypeError` before anything is sent, on every
+  verb, `stream()`, `paginate()` and `with_options()`, where it was ignored. `paginate(data=...)`, `content=` and
+  `files=` now raise this `TypeError` too, still saying a walk of POSTs sends `body=` or `json=`, where they raised
+  `ValueError`.
 - `HttpOptions(refusal_check=...)` is `HttpOptions(response_check=...)`, and its type `RefusalCheck` is
   `ResponseCheck`. The check is unchanged: it sees the final response and returns a `RefusedError` or `None`. The
   `ValueError` for a redirect-following client names `response_check=`.
@@ -77,6 +98,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Removed
 
+- `retry=True` on a call, which undid its view's `retry=`: make the call on the client instead of the view.
+- `PageOptions`: `paginate()` takes `CallOptions`, which has the same keys plus `retry`.
 - `HttpCache(policy=...)` and `HttpCache.filter_policy()`, and `headgate.cache.MethodFilter`, `PathFragmentFilter` and
   `StatusCodeFilter`: hishel 2 removed `FilterPolicy` and `BaseFilter`, which they were built on. Write the same rules
   as `HttpCache(methods=..., paths=..., statuses=...)`, which headgate now applies itself; read them back with the new

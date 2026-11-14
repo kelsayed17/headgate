@@ -48,7 +48,6 @@ import asyncio
 import contextlib
 import dataclasses
 import enum
-import math
 import uuid
 from collections import Counter
 from collections.abc import Iterator
@@ -60,7 +59,7 @@ import httpx2
 from hishel import AsyncBaseStorage, Entry, Request, Response
 from hishel.httpx2 import AsyncCacheTransport
 
-from headgate._core import CacheOutcome, CacheResult, CallContext, Slot, check_kind
+from headgate._core import CacheOutcome, CacheResult, CallContext, Slot
 from headgate.cache._credentials import CredentialScope
 from headgate.cache._policy import Partition
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
@@ -93,18 +92,13 @@ __all__ = [
 CACHING_EXT: Final = "caching"
 
 
-def stamp_ttl(request: httpx2.Request, ttl: float, *, keep: bool = False) -> None:
-    """Set *ttl* as the lifetime of the entry *request* stores; with *keep*, a TTL it already carries stays.
+def stamp_ttl(request: httpx2.Request, ttl: float | None, *, keep: bool = False) -> None:
+    """Set *ttl* as the lifetime of the entry *request* stores, ``None`` for none; with *keep*, a TTL it carries stays.
 
-    The settings are copied, never changed in place, since a retry re-sends the same request object.
-
-    :raises TypeError: for a *ttl* that is not a number.
-    :raises ValueError: for a *ttl* that is not positive and finite, which no entry could live by.
+    The settings are copied, never changed in place, since a retry re-sends the same request object. *ttl* is
+    checked where it is given: a call's by :func:`~headgate._call_options.check_overrides`, the cache's by
+    :class:`~headgate.cache.HttpCache`.
     """
-    check_kind("cache_ttl", ttl, (int, float), "a number of seconds")
-    if not (ttl > 0 and math.isfinite(ttl)):
-        msg = f"cache_ttl must be a positive finite number of seconds (got {ttl})"
-        raise ValueError(msg)
     settings = dict(request.extensions.get(CACHING_EXT, {}))
     if not (keep and "ttl" in settings):
         settings["ttl"] = ttl
