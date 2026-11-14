@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
@@ -44,6 +45,7 @@ from headgate.errors import (
 from headgate.retry._policy import UNRETRYABLE_ERRORS
 
 if TYPE_CHECKING:
+    from headgate._core import Clock
     from headgate.errors import RefusedError
     from headgate.retry._policy import RetryOutcome
 
@@ -131,7 +133,8 @@ class CallSite:
 
     ``url`` is already sanitized and bounded (:func:`loggable_url`). ``retry`` is the retry layer's verdict on the
     call's last attempt, if it made one. It decides whether the error is retryable (see :meth:`details`), and supplies
-    the delay the upstream asked for when the builder has none of its own.
+    the delay the upstream asked for when the builder has none of its own. ``wall_clock`` is the client's, which a
+    ``Retry-After`` HTTP-date is read against.
     """
 
     source: str
@@ -140,6 +143,7 @@ class CallSite:
     attempts: int | None = None
     request_id_headers: tuple[str, ...] = DEFAULT_REQUEST_ID_HEADERS
     retry: RetryOutcome | None = None
+    wall_clock: Clock = time.time
 
     def details(
         self,
@@ -400,7 +404,7 @@ def transient_status_error(resp: httpx2.Response, site: CallSite) -> UpstreamSta
         status_code=code,
         body=_summary(resp, problem),
         problem=problem,
-        **site.details(resp, retry_after=retry_after_of(resp)),
+        **site.details(resp, retry_after=retry_after_of(resp, now=site.wall_clock())),
     )
 
 

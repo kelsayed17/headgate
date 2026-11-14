@@ -246,7 +246,7 @@ class _Sequence:
         *paid* says the send spent the retry budget (a retry, or a hedge), which a send never made gives back.
         """
         context = self._context
-        context.begin_attempt()
+        begun = context.begin_attempt()
         progress = context.progress
         self._sent += 1
         number = self._sent
@@ -255,7 +255,7 @@ class _Sequence:
         prefix = f"attempt {number}/{self._policy.attempts}{' (hedge)' if hedge else ''}"
         result: httpx2.Response | Exception
         # Names this send's attempt to the layers below, which a hedge begun meanwhile would otherwise take as theirs.
-        sending = SENDING.set((context, progress))
+        sending = SENDING.set((context, progress, begun))
         try:
             result = await self._transport.handle_async_request(request)
         except NETWORK_ERRORS as exc:
@@ -379,7 +379,9 @@ class _Sequence:
         if (note := self._unsendable(attempt)) is not None:
             return _Decision(note=note)
         # The backoff grows with the retries made, not with the sends: a hedge is no retry.
-        delay = self._policy.wait_after(attempt.verdict.retry_after, self._retries + 1, self._random())
+        asked = attempt.verdict.retry_after
+        # Draw only for a backoff, so a seeded source replays the same waits whatever the server asks.
+        delay = self._policy.wait_after(asked, self._retries + 1, 1.0 if asked is not None else self._random())
         if (note := self._unaffordable(delay)) is not None:
             return _Decision(note=note)
         return _Decision(delay=delay)

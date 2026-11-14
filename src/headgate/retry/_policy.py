@@ -169,8 +169,8 @@ class RetryBudget:
     clock, or, without one, on the timing current when the budget is built. Its ``repr`` shows the share and what the
     window holds now.
 
-    :raises TypeError: for a *share* that is not a :class:`RetryShare`, such as the old keywords
-        (``RetryBudget(ratio=0.1)`` is ``RetryShare(ratio=0.1)``).
+    :raises TypeError: for a *share* that is not a :class:`RetryShare`, and, as Python's own, for the old keywords
+        (``RetryBudget(ratio=0.1)`` is now ``RetryBudget(RetryShare(ratio=0.1))``).
     """
 
     __slots__ = ("_ledger", "_lock", "_share")

@@ -114,19 +114,23 @@ class BreakerRegistry:
 
         :raises ValueError: for thresholds other than the ones the registry was first bound with, naming both.
         """
-        asked = (failure_threshold, recovery_timeout)
         with self._lock:
-            if self._thresholds is None:
-                self._thresholds = asked
-            elif asked != self._thresholds:
-                fixed_threshold, fixed_timeout = self._thresholds
-                msg = (
-                    f"this BreakerRegistry's breakers trip after {fixed_threshold} failures with a {fixed_timeout:g}s "
-                    f"cooldown, so a client with BreakerPolicy(failure_threshold={failure_threshold}, "
-                    f"recovery_timeout={recovery_timeout:g}) cannot share it: give that client the same thresholds, "
-                    "or a registry of its own"
-                )
-                raise ValueError(msg)
+            self._bind((failure_threshold, recovery_timeout))
+
+    def _bind(self, asked: tuple[int, float]) -> None:
+        """Do :meth:`bind`'s work for the thresholds *asked*; the caller holds the lock."""
+        if self._thresholds is None:
+            self._thresholds = asked
+        elif asked != self._thresholds:
+            fixed_threshold, fixed_timeout = self._thresholds
+            failure_threshold, recovery_timeout = asked
+            msg = (
+                f"this BreakerRegistry's breakers trip after {fixed_threshold} failures with a {fixed_timeout:g}s "
+                f"cooldown, so a client with BreakerPolicy(failure_threshold={failure_threshold}, "
+                f"recovery_timeout={recovery_timeout:g}) cannot share it: give that client the same thresholds, "
+                "or a registry of its own"
+            )
+            raise ValueError(msg)
 
     def breaker_for(
         self, origin: httpx2.Origin | httpx2.URL | str, *, failure_threshold: int, recovery_timeout: float
@@ -136,10 +140,9 @@ class BreakerRegistry:
         :raises ValueError: for a relative URL, which has no origin, and for thresholds the registry is not bound to
             (see :meth:`bind`).
         """
-        name = origin_text(origin if isinstance(origin, httpx2.Origin) else origin_of(origin))
-        self.bind(failure_threshold=failure_threshold, recovery_timeout=recovery_timeout)
-        key = name
+        key = name = origin_text(origin if isinstance(origin, httpx2.Origin) else origin_of(origin))
         with self._lock:
+            self._bind((failure_threshold, recovery_timeout))
             breaker = self._breakers.get(key)
             if breaker is not None:
                 self._breakers.move_to_end(key)

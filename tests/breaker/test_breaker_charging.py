@@ -53,7 +53,7 @@ def _client(
     policy: TransportPolicy | None = None,
     recorder: Recorder | None = None,
 ) -> StubClient:
-    """Return a client against *handler*, sending each call once, on the default registry's default breaker."""
+    """Return a client against *handler*, sending each call once, on a default breaker of its own."""
     return StubClient(
         base_url=_ORIGIN,
         rate=_RATE,

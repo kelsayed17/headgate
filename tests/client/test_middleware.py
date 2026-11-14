@@ -10,6 +10,7 @@ attempt's nonce, which a server that rejects replays refuses; a middleware signs
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import itertools
@@ -20,7 +21,7 @@ import pytest
 
 from headgate import HttpOptions, Json, Rate, TransportPolicy, call_info, nothing
 from headgate._core import CallContext
-from headgate.retry import Backoff, RetryPolicy
+from headgate.retry import Backoff, Hedge, RetryPolicy
 from headgate.testing import FakeTransport, TestClock
 from tests.security._web import BASE, Web
 from tests.support.clients import StubClient
@@ -303,7 +304,7 @@ async def test_a_middleware_reads_its_call_through_call_info() -> None:
             seen.append(call_info(request))
             return await call_next(request)
 
-    clock = TestClock()
+    clock = TestClock(random=lambda: 1.0)
     with clock.install():
         client = StubClient(
             base_url="https://h.test",
@@ -321,5 +322,43 @@ async def test_a_middleware_reads_its_call_through_call_info() -> None:
     assert (first.call.route, first.attempt, second.attempt) == ("series/{series_id}", 1, 2)
     assert first.call is second.call, "one call, the same record events carry"
     assert first.remaining == pytest.approx(30.0)
+    assert clock.now > 0
     assert second.remaining == pytest.approx(30.0 - clock.now), "the time left fell by the backoff waited"
     assert call_info(httpx2.Request("GET", "https://h.test/x")) is None
+
+
+async def test_a_hedged_send_reads_its_own_attempt() -> None:
+    """Give each send its own attempt number, though a hedge begun meanwhile raised the call's."""
+    seen: list[tuple[int, int]] = []
+    hedge_began = asyncio.Event()
+
+    class _Reader:
+        credential_headers: ClassVar = frozenset[str]()
+        credential_params: ClassVar = frozenset[str]()
+
+        async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+            before = _attempt(request)
+            if before == 1:
+                await hedge_began.wait()
+            else:
+                hedge_began.set()
+            seen.append((before, _attempt(request)))
+            return await call_next(request)
+
+    client = StubClient(
+        base_url="https://h.test",
+        rate=Rate.per_second(1000),
+        policy=TransportPolicy(retry=RetryPolicy(budget=None, hedge=Hedge(after=0.01)), breaker=None),
+        http=HttpOptions(transport=FakeTransport().reply("GET", "/x", 200)),
+        middleware=(_Reader(),),
+    )
+    await client.get("x", expect=nothing)
+
+    assert sorted(seen) == [(1, 1), (2, 2)]
+
+
+def _attempt(request: httpx2.Request) -> int:
+    """Return the attempt *request*'s send is, as a middleware reads it."""
+    view = call_info(request)
+    assert view is not None
+    return view.attempt

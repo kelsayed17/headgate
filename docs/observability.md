@@ -105,7 +105,8 @@ A `User-Agent` in `HttpOptions(headers=...)` replaces it entirely.
 
 `headgate.health` reads the state that says something is degraded, as fresh copies a metrics callback can poll:
 
-- `breaker_states(registry)`: a `BreakerSnapshot(state, refusing)` per origin, of the registry you pass (the one your
-  clients share through `BreakerPolicy(registry=...)`);
+- `breaker_states(registry)`: a `BreakerSnapshot(state, refusing)` per origin, of the registry you pass. A client's
+  breakers are its own unless its policy names a registry, so to watch them, build one and give it to the clients:
+  `BreakerPolicy(registry=watched)`;
 - `cache_degradations()`: per host, how many requests found the cache broken and went to the network;
 - `observer_failures()`: per observer class, how many events its `notify` raised on.

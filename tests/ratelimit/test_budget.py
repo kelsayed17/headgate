@@ -973,3 +973,13 @@ async def test_recovery_never_lifts_the_rate_past_the_configured_one() -> None:
     budget.observe(_response(429), sent_at=clock())
 
     assert budget.effective_rate == Rate(requests=_BURST * 0.5, period=1.0)
+
+
+def test_a_budget_shows_its_state() -> None:
+    """Name the rate, the rate pacing runs at now, what is in flight and the pause left."""
+    budget = RateBudget(Rate.per_second(10), timing=Timing(clock=TestClock()))
+
+    assert repr(budget) == (
+        "RateBudget(Rate(requests=10, period=1.0), effective=Rate(requests=10.0, period=1.0), in_flight=0, "
+        "pause_remaining=0)"
+    )

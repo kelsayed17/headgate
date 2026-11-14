@@ -86,5 +86,5 @@ share), with `refusing` alongside `state`: an open breaker whose cooldown has el
 takes the probe, so `refusing` is what says whether a call made now would be turned away. See
 [observability](observability.md).
 
-In tests, no breaker state crosses between tests, since each client keeps its own; `headgate.testing.breakers_of(client)`
-returns the registry a client's breakers live in. See [testing](testing.md).
+In tests, no breaker state crosses between tests, since each client keeps its own;
+`headgate.testing.breakers_of(client)` returns the registry a client's breakers live in. See [testing](testing.md).

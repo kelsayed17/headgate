@@ -35,7 +35,7 @@ from __future__ import annotations
 import math
 import threading
 import weakref
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, override
 
 import httpx2
 
@@ -433,6 +433,13 @@ class RateBudget:
     def pause_remaining(self) -> float:
         """The seconds left in a pause the server asked for, or 0."""
         return self._pacer.pause_remaining()
+
+    @override
+    def __repr__(self) -> str:
+        return (
+            f"RateBudget({self.rate!r}, effective={self.effective_rate!r}, in_flight={self.in_flight}, "
+            f"pause_remaining={self.pause_remaining:g})"
+        )
 
 
 #: Each live budget's pacer. Weak, so a budget nobody holds any more goes with its pacer.

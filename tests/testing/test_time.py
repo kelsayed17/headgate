@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import email.utils
 import math
 import time
 from typing import TYPE_CHECKING, Any, cast
@@ -19,7 +20,8 @@ from headgate import HttpOptions, Rate, RateBudget, RetryPolicy, TransportPolicy
 from headgate._core import Timing as CoreTiming
 from headgate._core import current_timing
 from headgate.breaker import BreakerRegistry, CircuitBreaker
-from headgate.retry import Backoff
+from headgate.errors import UpstreamStatusError
+from headgate.retry import Backoff, RetryBudget, RetryShare
 from headgate.testing import FakeTransport, TestClock, instant_retries
 from headgate.testing._time import _SETTLE_TURNS
 from headgate.timing import Timing
@@ -276,3 +278,56 @@ def test_the_timing_module_is_the_one_seam() -> None:
     """Export the same ``Timing`` the layers take, with all four seams."""
     assert headgate.timing.Timing is CoreTiming
     assert {field.name for field in dataclasses.fields(Timing)} == {"clock", "sleep", "wall_clock", "random"}
+
+
+def test_a_retry_budget_built_in_the_block_slides_on_the_test_clock() -> None:
+    """Measure a shared retry budget's window on the clock installed when it was built, read once then."""
+    clock = TestClock()
+    with clock.install():
+        budget = RetryBudget(RetryShare(ratio=0.0, min_per_second=0.1, window=10.0))
+    assert budget.try_spend()
+    assert not budget.try_spend()
+
+    clock.advance(20.0)
+    assert budget.try_spend()
+
+
+async def test_an_errors_retry_after_date_is_read_against_the_clients_wall_clock() -> None:
+    """Give an error the wait a ``Retry-After`` HTTP-date asks for, measured from the test clock's epoch."""
+    clock = TestClock()
+    asked = email.utils.formatdate(clock.wall_clock() + 120, usegmt=True)
+    fake = FakeTransport().reply("GET", "/x", httpx2.Response(503, headers={"Retry-After": asked}))
+    with clock.install():
+        client = StubClient(
+            base_url="https://h.test",
+            rate=Rate.per_second(1000),
+            policy=TransportPolicy(retry=RetryPolicy(max_retry_after=30.0), breaker=None),
+            http=HttpOptions(transport=fake),
+        )
+
+    with pytest.raises(UpstreamStatusError) as raised:
+        await client.get("x", expect=nothing)
+    assert raised.value.retry_after == pytest.approx(120.0)
+
+
+async def test_a_wait_the_server_asks_for_draws_no_random_number() -> None:
+    """Draw from the timing's random source for a backoff only, so a seeded source replays whatever servers ask."""
+    draws: list[None] = []
+
+    def draw() -> float:
+        draws.append(None)
+        return 1.0
+
+    clock = TestClock(random=draw)
+    fake = FakeTransport().reply("GET", "/x", httpx2.Response(503, headers={"Retry-After": "1"}), 503, 200)
+    with clock.install():
+        client = StubClient(
+            base_url="https://h.test",
+            rate=Rate.per_second(1000),
+            policy=TransportPolicy(retry=RetryPolicy(attempts=3, backoff=_EXACT_BACKOFF), breaker=None),
+            http=HttpOptions(transport=fake),
+        )
+
+    await client.get("x", expect=nothing)
+    assert len(draws) == 1, "the second retry backs off; the first waits the second the server asked"
+    assert clock.sleeps == [1.0, 4.0]

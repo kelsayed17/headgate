@@ -12,6 +12,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   without a breaker.
 - `BreakerRegistry.bind(failure_threshold=, recovery_timeout=)`, which fixes the thresholds of every breaker the
   registry holds, and a `repr` naming each origin's state.
+- `TestClock(epoch=..., random=...)` and `TestClock.wall_clock()`: a test clock's wall clock reads `epoch` plus its
+  monotonic reading, and `random` is the backoff's jitter draw (`random=lambda: 1.0` for a full backoff a test can
+  predict). `RetryBudget.record_first()`, `try_spend()`, `refund()` and `.share`, what a shared budget is spent
+  through.
+- A `repr` showing their state on `RateBudget` (its rate, the rate pacing runs at now, what is in flight and the pause
+  left) and `RetryBudget` (its share, and the retries and first attempts in the window).
 - `RetryShare`, the frozen share of traffic retries may add, from which each client builds a budget of its own.
 - `headgate.call_info(request)`, a middleware's read-only view of its call: a `headgate.events.CallView` holding the
   call's `CallInfo` (its route template among it), its `attempt` and the seconds `remaining` before its deadline,
@@ -56,6 +62,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Changed
 
+- `TestClock.install()` puts the clients built in its block on a fixed wall clock, `epoch` (2027-01-15 by default)
+  plus the test clock's reading, as well as its monotonic clock. A test that builds a `Retry-After` date or a
+  `RateLimit` reset from `time.time()` builds it from `clock.wall_clock()` instead.
+- A retry whose wait the server asked for (`Retry-After`) draws no random number: only a backoff does, so a seeded
+  `Timing(random=)` replays the same waits whatever the server asks.
 - **Each client keeps its breakers to itself.** A client given no registry builds one of its own, so one client's
   failures no longer open a breaker another client is refused by. This changes behavior without an error: clients that
   relied on pooling their failures against an upstream must now be given one registry:

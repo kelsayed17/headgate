@@ -287,7 +287,7 @@ class AsyncBaseClient:
     limit, raises the root ``ClientError``, since such a URL often comes from the wire rather than the code. Every
     message names a URL redacted and cut to a few hundred characters.
 
-    **Time.** The client takes its clock and sleep from :func:`headgate._core.current_timing` when it is built.
+    **Time.** The client takes its timing from :func:`headgate.timing.current_timing` when it is built.
     """
 
     def __init__(
@@ -1124,7 +1124,13 @@ class AsyncBaseClient:
         context = prepared.context
         info = context.info
         return CallSite(
-            self._source, info.method, info.url, context.attempt, self._request_id_headers, context.get(RETRY_OUTCOME)
+            self._source,
+            info.method,
+            info.url,
+            context.attempt,
+            self._request_id_headers,
+            context.get(RETRY_OUTCOME),
+            self._timing.wall_clock,
         )
 
     def _unsent_site(self, prepared: _Prepared) -> CallSite:

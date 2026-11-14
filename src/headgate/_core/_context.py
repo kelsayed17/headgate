@@ -295,9 +295,10 @@ class CallContext:
         self._slots[slot] = value
 
 
-#: The call and attempt progress the current task is sending for, set by the retry layer around each send. Every
-#: hedge sends in a task of its own, so each sees its own attempt here, while the call's ``progress`` is the latest.
-SENDING: Final = ContextVar[tuple[CallContext, SendProgress] | None]("headgate_sending", default=None)
+#: The call, attempt progress and attempt number the current task is sending for, set by the retry layer around each
+#: send. Every hedge sends in a task of its own, so each sees its own attempt here, while the call's ``progress`` and
+#: ``attempt`` are the latest.
+SENDING: Final = ContextVar[tuple[CallContext, SendProgress, int] | None]("headgate_sending", default=None)
 
 
 def progress_of(context: CallContext) -> SendProgress:
@@ -332,4 +333,6 @@ def call_info(request: httpx2.Request) -> CallView | None:
     context = CallContext.find(request)
     if context is None:
         return None
-    return CallView(call=context.info, attempt=context.attempt, remaining=context.remaining())
+    sending = SENDING.get()
+    attempt = sending[2] if sending is not None and sending[0] is context else context.attempt
+    return CallView(call=context.info, attempt=attempt, remaining=context.remaining())
