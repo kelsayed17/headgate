@@ -126,7 +126,8 @@ class AttemptId:
 
 A signature that must be fresh on every attempt (a timestamp, a nonce) belongs in a
 [`SigningAuth`](auth.md#signingauth) passed as the client's `auth=`, not in a middleware: it signs each attempt inside
-the retry layer too, after the last middleware, and the class refuses a signer that declares nothing it stamps.
+the retry layer too, after the last middleware and the rate-limit wait, and the class refuses a signer that declares
+nothing it stamps.
 
 ```python
 import hashlib

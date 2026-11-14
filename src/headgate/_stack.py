@@ -6,24 +6,24 @@
 :func:`build_http_client` returns the ``httpx2.AsyncClient`` an ``AsyncBaseClient`` holds, over the stack
 :func:`build_transport_stack` builds::
 
-    RetryTransport(                  # re-sends per the RetryPolicy; begins each attempt on the call's context
-      AttemptTransport(              # AttemptFinished per send (only with observers)
-        MiddlewareTransport(         # HttpOptions.middleware and a SigningAuth's signature, once per attempt, then
-                                     # the credential guard again
-          ResilientCacheTransport(   # opt-in response cache; a hit stops here
-            RateLimitTransport(      # the rate budget: every network send takes its turn and feeds back
-              SendTrackingTransport( # records whether each send connected and how many request bytes it wrote
-                network_transport))))))  # httpx2.AsyncHTTPTransport(trust_env=False, ...) or HttpOptions.transport
+    RetryTransport(                    # re-sends per the RetryPolicy; begins each attempt on the call's context
+      AttemptTransport(                # AttemptFinished per send (only with observers)
+        MiddlewareTransport(           # HttpOptions.middleware, once per attempt, then the credential guard again
+          ResilientCacheTransport(     # opt-in response cache; a hit stops here
+            RateLimitTransport(        # the rate budget: every network send takes its turn and feeds back
+              MiddlewareTransport(     # a SigningAuth's signature, once per send, then the credential guard again
+                SendTrackingTransport( # records whether each send connected and how many request bytes it wrote
+                  network_transport)))))))  # httpx2.AsyncHTTPTransport(trust_env=False, ...) or HttpOptions.transport
 
 :func:`build_transport_stack` builds the layers bottom-up, one statement per layer: a new layer is one more statement in
 its place there, wrapping the layer below it.
 
 Above the stack, ``httpx2.AsyncClient`` runs the auth flow and the hooks, once per logical call and once per hop of a
-redirect or an auth flow. A :class:`~headgate.SigningAuth` flow only marks the request: the middleware layer signs each
-attempt.
+redirect or an auth flow. A :class:`~headgate.SigningAuth` flow only marks the request: the layer below the rate budget
+signs each send, so a request that waited for its turn is signed when it goes out, not when it joined the queue.
 
 * request hooks: the credential guard (:class:`~headgate.security.CredentialGuard`, which also runs below the last
-  middleware and the signature, where what they stamp is visible), then, over a custom network
+  middleware and below the signature, where what they stamp is visible), then, over a custom network
   transport with ``SecurityOptions(allow_private_hosts=False)``, the SSRF guard's vetting
   (:func:`~headgate.security.address_hook`); the default transport pins vetted addresses itself
   (:class:`~headgate.security.PinnedHTTPTransport`);
@@ -134,11 +134,13 @@ def build_transport_stack(
 ) -> httpx2.AsyncBaseTransport:
     """Build the layers under ``httpx2.AsyncClient``, bottom-up: each statement wraps the layer before it.
 
-    The rate-limit layer spends from *budgets*. The cache partitions its entries by *credentials*' auth. The middleware
-    layer is built for middleware or a ``SigningAuth``, which signs each attempt there; its guard runs again below the
-    last middleware and the signature, so what they stamp stays on trusted origins too.
+    The rate-limit layer spends from *budgets*. The cache partitions its entries by *credentials*' auth. A
+    ``SigningAuth`` signs each send below the rate layer, after its wait, and the middleware layer is built for
+    middleware; the guard runs again below each, so what they stamp stays on trusted origins too.
     """
     layer = SendTrackingTransport(transport=_network(http))
+    if isinstance(signer := credentials.auth, SigningAuth):
+        layer = MiddlewareTransport(transport=layer, middleware=(), guard=credentials.guard, signer=signer)
     layer = RateLimitTransport(budgets=budgets, transport=layer)
     if (cache := policy.cache) is not None:
         scope = credential_scope(
@@ -149,9 +151,8 @@ def build_transport_stack(
             guarded=not http.security.allow_private_hosts,
         )
         layer = ResilientCacheTransport(layer, cache, max_body_bytes=http.max_response_bytes, scope=scope)
-    signer = credentials.auth if isinstance(credentials.auth, SigningAuth) else None
-    if http.middleware or signer is not None:
-        layer = MiddlewareTransport(transport=layer, middleware=http.middleware, guard=credentials.guard, signer=signer)
+    if http.middleware:
+        layer = MiddlewareTransport(transport=layer, middleware=http.middleware, guard=credentials.guard, signer=None)
     if http.observers:
         layer = AttemptTransport(transport=layer)
     return RetryTransport(transport=layer, policy=policy.retry, sleep=timing.sleep, clock=timing.clock)
