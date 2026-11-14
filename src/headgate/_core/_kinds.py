@@ -9,7 +9,7 @@ import re
 from collections.abc import Collection
 from typing import Any, Final, NewType, TypeAliasType, get_origin
 
-__all__ = ["check_callable", "check_int", "check_kind", "check_names", "type_text"]
+__all__ = ["check_callable", "check_collection", "check_int", "check_kind", "check_names", "type_text"]
 
 #: In a type expression's ``repr``, a quoted string (group 1, kept) or a run of dotted prefixes (dropped): the module
 #: and enclosing names before a class, ``<locals>`` included.
@@ -72,6 +72,18 @@ def check_callable(option: str, value: object, wanted: str) -> None:
     :raises TypeError: naming the option, what it takes (*wanted*) and what it got.
     """
     if not callable(value):
+        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        raise TypeError(msg)
+
+
+def check_collection(option: str, value: object, wanted: str) -> None:
+    """Refuse a *value* for *option* that is not a collection: a bare ``str`` above all, and a one-shot iterator.
+
+    A ``str`` would be read one character at a time, and reading an iterator to check it would empty it.
+
+    :raises TypeError: naming the option, what it takes (*wanted*) and what it got.
+    """
+    if isinstance(value, str | bytes) or not isinstance(value, Collection):
         msg = f"{option}= takes {wanted} (got {_named(value)})"
         raise TypeError(msg)
 

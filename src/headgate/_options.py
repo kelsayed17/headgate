@@ -33,6 +33,7 @@ from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
 from headgate._call_options import check_options
 from headgate._core import (
     check_callable,
+    check_collection,
     check_fragment,
     check_int,
     check_kind,
@@ -287,6 +288,7 @@ class Route:
 
     def __init__(self, fragment: str, /, **options: Unpack[RouteOptions]) -> None:
         """Hold *fragment* and the *options* its paths take."""
+        check_kind("fragment", fragment, str, "path segments, such as '/exports'")
         check_fragment(fragment)
         check_options("Route", options, _ROUTE_KEYS)
         if "retry" in options:
@@ -370,9 +372,13 @@ class TransportPolicy:
         check_kind("idempotency", self.idempotency, (IdempotencyKeys, type(None)), "IdempotencyKeys(), or None")
         check_deadline(self.deadline)
         check_timeout_fits(self.timeout, self.deadline)
-        routes = tuple(self.routes) if not isinstance(self.routes, str) else self.routes
+        wanted = "a tuple of Route, such as (Route('/exports', deadline=300.0),)"
+        if isinstance(self.routes, Route):
+            check_kind("routes", self.routes, (), wanted)
+        check_collection("routes", self.routes, wanted)
+        routes = tuple(self.routes)
         for route in routes:
-            check_kind("routes", route, Route, "a tuple of Route, such as (Route('/exports', deadline=300.0),)")
+            check_kind("routes", route, Route, wanted)
         object.__setattr__(self, "routes", routes)
 
 
@@ -453,7 +459,10 @@ class SecurityOptions:
 
     def __post_init__(self) -> None:
         """Refuse a value of the wrong kind and a resolver without the SSRF guard, and normalize the trusted origins."""
-        check_names("trusted_origins", self.trusted_origins, "a frozenset of origins, such as {'https://cdn.example'}")
+        # Each origin may be text or an httpx2.URL; _normalized_origin refuses anything else.
+        check_collection(
+            "trusted_origins", self.trusted_origins, "a frozenset of origins, such as {'https://cdn.example'}"
+        )
         check_kind("block_private_hosts", self.block_private_hosts, bool, "a bool")
         if self.resolver is not None:
             check_callable("resolver", self.resolver, "a resolver function, or None")

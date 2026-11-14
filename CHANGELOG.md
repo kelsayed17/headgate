@@ -204,7 +204,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   no `HttpCache` failed at the first request with an `AttributeError`; `request_id_headers="x-request-id"` and
   `trusted_origins="https://cdn.example"` were read as one name per character; and `deadline=True`,
   `max_redirects=True` and a `str` where a `bool` goes were taken as numbers or truths. A one-shot iterator where names
-  go is refused, since checking it would empty it.
+  go is refused, since checking it would empty it. Some values main converted are now refused, each with what to
+  write: `HttpOptions(headers=)` takes a mapping, not a list of pairs; `max_response_bytes=` an `int`, not a float;
+  `transport=` an `httpx2.AsyncBaseTransport` subclass, not a look-alike; and `follow_redirects=` a `bool`, not `1`.
 - A problem+json error body with an extension nested hundreds of levels deep, about 1 KB, raised a raw
   `RecursionError` from every call. It is now read as no problem detail, and the status error names the body.
 - An error body declaring `charset=idna` or `charset=undefined` raised a bare `UnicodeError`. It is read as UTF-8,

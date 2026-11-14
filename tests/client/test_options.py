@@ -623,6 +623,8 @@ _WRONG_KINDS: Final[list[tuple[Callable[[], object], str]]] = [
     (lambda: IdempotencyKeys(header=cast("Any", 1)), r"^header= takes a header name"),
     (lambda: IdempotencyKeys(factory=cast("Any", "uuid")), r"^factory= takes a function returning a fresh key"),
     (lambda: StubClient(base_url=cast("Any", None)), r"^base_url= takes the API root"),
+    (lambda: Route(cast("Any", None)), r"^fragment= takes path segments, such as '/exports' \(got NoneType\)$"),
+    (lambda: TransportPolicy(routes=cast("Any", Route("/x"))), r"^routes= takes a tuple of Route.*\(got Route\)$"),
     (lambda: StubClient(base_url=_BASE, policy=cast("Any", {})), r"^policy= takes TransportPolicy\(\.\.\.\)"),
     (lambda: StubClient(base_url=_BASE, http=cast("Any", {})), r"^http= takes HttpOptions\(\.\.\.\)"),
 ]
@@ -651,6 +653,8 @@ _WRONG_KIND_IDS: Final = [
     "header",
     "factory",
     "base-url",
+    "route-fragment",
+    "lone-route",
     "policy",
     "http",
 ]
@@ -675,3 +679,9 @@ def test_the_ssrf_guard_is_switched_on_by_block_private_hosts() -> None:
     with pytest.raises(TypeError, match="allow_private_hosts"):
         SecurityOptions(**old)
     assert SecurityOptions().block_private_hosts is False
+
+
+def test_a_trusted_origin_may_be_a_url() -> None:
+    """Take an ``httpx2.URL`` among the trusted origins at runtime, as main did, and normalize it as text is."""
+    options = SecurityOptions(trusted_origins=cast("Any", frozenset({httpx2.URL("HTTPS://CDN.example:443/")})))
+    assert options.trusted_origins == {"https://cdn.example"}
