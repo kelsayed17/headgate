@@ -13,7 +13,7 @@
 
 **Tech Stack:** Python 3.14, httpx2 2.16, ty, ruff, pytest, syrupy (the API snapshot).
 
-**Spec:** `specs/2026-11-05-public-api-redesign-design.md`, section 7, and issue #53. Phases 1–4 and 6 have merged (#56, #60, #85, #94, #97). Phase 5 (#96) is being coded.
+**Spec:** `specs/2026-11-05-public-api-redesign-design.md`, section 7, and issue #53. Phases 1–4 and 6 have merged (#56, #60, #85, #94, #97). Phase 5 (#96) is being coded. The plan was approved in #98, with every decision kept as written.
 
 ## Global Constraints
 
@@ -248,8 +248,8 @@ These cases are not covered by the design's own examples and are the most likely
 **Files:**
 - Modify: `src/headgate/_core/_context.py`: `CallContext.streamed`, and `fit_timeouts` leaves the read phase of a streamed call as requested.
 - Modify: `src/headgate/_client.py`: `_prepare` marks a stream call's context, and skips `read` in its per-call `check_timeout_fits`.
-- Modify: `docs/streaming.md` and `docs/deadlines.md`.
-- Test: `tests/streaming/` (a loopback server sending spaced chunks) and `tests/core/test_context.py`.
+- Modify: `docs/streaming.md` and `docs/deadlines.md`. Both say plainly that once the response head arrives, only the per-read timeout bounds a stream, and that wrapping the block in `asyncio.timeout` bounds the whole stream. (Asked for in review.)
+- Test: `tests/streaming/` (a loopback server sending spaced chunks) and `tests/core/test_context.py`. One test shows a stream outliving its `deadline=` for as long as chunks keep coming. (Asked for in review.)
 
 - [ ] **Step 1: Write the failing tests** for Review Focus 1.
 - [ ] **Step 2:** Run them. Expected: FAIL at the first gap.
@@ -312,7 +312,7 @@ These cases are not covered by the design's own examples and are the most likely
 - [ ] **Step 2:** Run them. Expected: FAIL, because a mapping is sent as its `repr`.
 - [ ] **Step 3:** Implement.
 - [ ] **Step 4:** Run every gate.
-- [ ] **Step 5:** CHANGELOG under **Changed**: a nested `params` value raises `TypeError`, with how to encode one. Commit: `Refuse a nested query value instead of sending its repr`.
+- [ ] **Step 5:** CHANGELOG under **Changed**: a nested `params` value raises `TypeError`, with how to encode one. The entry lists every refused shape: a mapping, a set, `bytes`, `bytearray` or `memoryview`, and a list or tuple inside a list or tuple. (Asked for in review.) Commit: `Refuse a nested query value instead of sending its repr`.
 
 ### Task 9: Verify each PR and open it
 
