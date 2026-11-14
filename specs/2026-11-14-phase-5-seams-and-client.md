@@ -74,7 +74,7 @@ class Timing:
     clock: Clock = time.monotonic
     sleep: Sleep = asyncio_sleep
     wall_clock: Clock = time.time                           # new: Unix seconds, for Retry-After dates and RateLimit epochs
-    random: RandomSource = system_random                    # new: backoff jitter, moved from RetryPolicy(jitter=)
+    random: RandomSource = system_random                    # new: backoff jitter, moved from Backoff(jitter=)
 
 # headgate.security: exports CredentialCarrier and CredentialStamper (moved from headgate._core)
 
@@ -137,7 +137,7 @@ Removed:
 - `AsyncBaseClient` (now `Client`);
 - `headgate.breaker.DEFAULT_REGISTRY`;
 - `headgate.testing.isolated_breakers`;
-- `RetryPolicy(jitter=)` and `RetryBudget(clock=)`;
+- `Backoff(jitter=)` and `RetryBudget(clock=)`;
 - `RateBudget(wall_clock=)` and `BreakerRegistry(clock=)`;
 - `headgate._core`'s seam names, which move to `headgate.timing` and `headgate.security`.
 
@@ -151,7 +151,7 @@ Removed:
 | two clients on one origin, pooling failures by default | `BreakerPolicy(registry=shared)` in each, with one `shared = BreakerRegistry()` | **each client now has its own breakers, silently** (see below) |
 | `breaker_states()` | `breaker_states(registry)` | `TypeError` (missing argument) |
 | `isolated_breakers()` | nothing: a client's breakers are its own | `ImportError` |
-| `BreakerRegistry(clock=c)`, `RateBudget(wall_clock=w)`, `RetryPolicy(jitter=j)` | `timing=Timing(clock=c, wall_clock=w, random=j)` | `TypeError` |
+| `BreakerRegistry(clock=c)`, `RateBudget(wall_clock=w)`, `Backoff(jitter=j)` | `timing=Timing(clock=c, wall_clock=w, random=j)` | `TypeError` |
 | `from headgate._core import CredentialStamper` | `from headgate.security import CredentialStamper` | the private import keeps working, but is undocumented |
 | `from headgate._core import CallContext` in a middleware | `headgate.call_info(request)` | as above |
 | an SDK forwarding `transport=` only for its tests | `with headgate.testing.fake_network(FakeTransport(...)):` around building the SDK | — (new) |
@@ -171,7 +171,7 @@ The design leaves these to the builder, or does not settle them. Each is the pla
 - **`BreakerPolicy(registry=None)` means the client's own breakers.** Here `None` is off for sharing, and the breaker itself is off with `TransportPolicy(breaker=None)`, as today.
   - **Thresholds.** A registry remembers the thresholds of the first policy that uses it. A client whose `BreakerPolicy` names that registry with different thresholds raises `ValueError` when the client is built, naming both pairs. That realizes the design's "a passed registry holds one breaker per origin" with a check that can run before any origin is known.
   - **Keying.** Breakers are keyed by origin alone, no longer by origin and thresholds.
-- **One `Timing`, with four seams.** `wall_clock` joins it, because a budget reads `Retry-After` dates and `RateLimit` epochs in Unix time, and `random` joins it, because backoff jitter is randomness that a test pins. `RetryPolicy(jitter=)` goes, since a policy is configuration and a random source is a seam. `Timing(...)` can be passed in each class's `timing=`. `None` there reads `headgate.timing.current_timing()` once, when the object is built, as a client does today. That is what makes `TestClock.install()` reach a token auth, a shared budget or a registry built in its block, which closes L16 and L35. `timing_override` moves to `headgate.timing` beside `current_timing`, so a test kit of the user's own can install a clock as `TestClock` does.
+- **One `Timing`, with four seams.** `wall_clock` joins it, because a budget reads `Retry-After` dates and `RateLimit` epochs in Unix time, and `random` joins it, because backoff jitter is randomness that a test pins. `Backoff(jitter=)` goes, since a policy is configuration and a random source is a seam. `Timing(...)` can be passed in each class's `timing=`. `None` there reads `headgate.timing.current_timing()` once, when the object is built, as a client does today. That is what makes `TestClock.install()` reach a token auth, a shared budget or a registry built in its block, which closes L16 and L35. `timing_override` moves to `headgate.timing` beside `current_timing`, so a test kit of the user's own can install a clock as `TestClock` does.
 - **`call_info(request)` returns a snapshot, `CallView`.** The design names its return type `CallInfo`, but `CallInfo` is the record events carry, made once when a call starts. The attempt number and the time left change while the call runs. So `call_info` returns a fresh, frozen `CallView(call: CallInfo, attempt, remaining)` each time it is called, `None` for a request no client call built, and `CallView` lives in `headgate.events` beside `CallInfo`. `CallContext` stays private. The design's 5.1 is amended in Task 1.
 - **`Client`'s errors name its origin, not a class.** A `ClientError`'s `source`, its `[source]` prefix, named the subclass (`[GitHub]`). A final `Client` would make every message read `[Client]`, which tells nobody anything. So the source is the `base_url`'s host (`[api.github.com]`), which still tells two SDKs apart and needs no new argument. The constructor stays at seven. It is set where the client sets `_source`, so `_failures.py` and Phase 6's read-only `source` property are untouched (see **Coordination with Phase 6**). The error-message snapshot is updated with it.
 - **`fake_network(transport)` replaces the transport of every `Client` built in its block,** even one that sets `HttpOptions(transport=...)` itself. That is the point: an SDK that fixes `AsyncCurlTransport` in its constructor can still be tested over a `FakeTransport`. The override replaces only the network transport, so the stack above it (rate, cache, retry, breaker) is the SDK's own. It nests with `TestClock.install()`, `instant_retries()` and `policy_disabled()`, like them a construction-time switch, and yields the transport. It is in `headgate.testing`, which is where the design says the builder picks its shape.
@@ -259,7 +259,7 @@ These six cases are not covered by the design's own examples and are the most li
 
 - [ ] **Step 1: Write the failing tests:**
   - Each part of Review Focus 1.
-  - `RetryPolicy(jitter=...)`, `RateBudget(wall_clock=...)` and `BreakerRegistry(clock=...)` raise `TypeError`.
+  - `Backoff(jitter=...)`, `RateBudget(wall_clock=...)` and `BreakerRegistry(clock=...)` raise `TypeError`.
   - `headgate.timing.Timing` is `headgate._core.Timing`.
 - [ ] **Step 2:** Run them. Expected: FAIL.
 - [ ] **Step 3:** Implement as in **Files**. Grep `time\.monotonic\(\)|time\.time\(\)|system_random` across `src/`. Expected: only the defaults in `_core/_time.py`.
