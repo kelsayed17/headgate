@@ -151,12 +151,32 @@ def _check_param(param: str) -> None:
         raise ValueError(msg)
 
 
-def _reached[P](total: Callable[[P], int | None] | None, page: P, offset: int) -> bool:
-    """Return whether *offset*, the one after *page*, reaches the exact total *total* reads from *page*, if any."""
-    if total is None:
-        return False
-    count = total(page)
-    return count is not None and offset >= count
+def _last[P](page: P, count: int, page_size: int, total: Callable[[P], int | None] | None, walked: int) -> bool:
+    """Return whether *page*, holding *count* items, is the last, *walked* items into the walk.
+
+    With an exact total read from *page*, the walk ends when it has walked that many items or a page is empty, so a
+    server that caps its pages below *page_size* is walked to the end; without one, a short page is the last.
+    """
+    known = None if total is None else total(page)
+    if known is None:
+        return count < page_size
+    return count == 0 or walked >= known
+
+
+def _position[B](request: PageRequest[B], param: str, default: int, what: str) -> int:
+    """Return the position *request* carries under *param* (an int >= 0 or a string of digits), else *default*.
+
+    :raises ValueError: for a value that is neither, naming it *what* (``"a page number"``, ``"an offset"``).
+    """
+    value = (request.params or {}).get(param)
+    if value is None:
+        return default
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        return int(value)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    msg = f"{param} must be {what}, an int >= 0 or a string of digits (got {value!r})"
+    raise ValueError(msg)
 
 
 def _absolute(response: httpx2.Response, target: str) -> PageRequest:
@@ -232,10 +252,13 @@ class Cursor[P, I, B = None](WritingPager[P, I, B]):
 class Offset[P, I, B = None](WritingPager[P, I, B]):
     """Pages of at most ``page_size`` items, addressed by the offset of their first item, sent as the query ``param``.
 
-    The offset starts at ``start`` and advances by the number of items each page held. A page holding fewer than
-    ``page_size`` items (or none) is the last. So is a page that reaches ``total``, when given: the number of items
-    the whole walk holds, read from a page, so a walk whose items fill its last page ends there instead of fetching an
-    empty page past it. ``total`` returns ``None`` for a page that states no exact total (one reported as "at least"),
+    ``start`` is the offset of the collection's first item (0, or 1 for a 1-based API). The walk starts at the offset
+    the caller's own ``params=`` give under ``param`` (an int, or a string of digits), or at ``start`` when they give
+    none, and advances by the number of items each page held. A page holding fewer than ``page_size`` items (or none)
+    is the last. With ``total``, the number of items the whole collection holds, read from a page, the walk instead
+    ends once it has passed that many items from ``start``, or at an empty page: a walk whose items fill its last page
+    ends there instead of fetching an empty page past it, and one whose server caps pages below ``page_size`` is
+    walked to the end. ``total`` returns ``None`` for a page that states no exact total (one reported as "at least"),
     which leaves the walk to end at a short page. The page size itself is the caller's to send, in ``params=`` under
     whatever name the endpoint uses, since that name varies (``limit``, ``per_page``, ``page_size``). ``B`` is the
     type of the request body for a walk of POSTs, and ``write`` its writer, as on :class:`Cursor`.
@@ -260,8 +283,8 @@ class Offset[P, I, B = None](WritingPager[P, I, B]):
 
     @override
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
-        """Return *request* at offset ``start``."""
-        return request.with_param(self.param, self.start)
+        """Return *request* at its own offset, or at ``start``, refusing an offset that is not one."""
+        return request.with_param(self.param, _position(request, self.param, self.start, "an offset"))
 
     @override
     def page_items(self, page: P) -> Sequence[I]:
@@ -270,14 +293,13 @@ class Offset[P, I, B = None](WritingPager[P, I, B]):
 
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
-        """Return *request* at the offset after *page*'s items, or ``None`` after a short page or at ``total``."""
+        """Return *request* at the offset after *page*'s items, or ``None`` after the last page (see the class)."""
         del response
         count = len(self.items(page))
-        if count < self.page_size:
+        following = _position(request, self.param, self.start, "an offset") + count
+        if _last(page, count, self.page_size, self.total, following - self.start):
             return None
-        offset = (request.params or {}).get(self.param)
-        following = (offset if isinstance(offset, int) else self.start) + count
-        return None if _reached(self.total, page, following) else request.with_param(self.param, following)
+        return request.with_param(self.param, following)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -310,7 +332,7 @@ class PageNumber[P, I, B = None](WritingPager[P, I, B]):
     @override
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
         """Return *request* at its own page number, or at ``start``, refusing a number that is not one."""
-        return request.with_param(self.param, self._number(request))
+        return request.with_param(self.param, _position(request, self.param, self.start, "a page number"))
 
     @override
     def page_items(self, page: P) -> Sequence[I]:
@@ -323,19 +345,9 @@ class PageNumber[P, I, B = None](WritingPager[P, I, B]):
         del response
         if self.stop_on_empty and not self.items(page):
             return None
-        return request.with_param(self.param, self._number(request) + 1) if self.more(page) else None
-
-    def _number(self, request: PageRequest[B]) -> int:
-        """Return the page number *request* carries, or ``start`` when it carries none."""
-        value = (request.params or {}).get(self.param)
-        if value is None:
-            return self.start
-        if isinstance(value, str) and value.isascii() and value.isdecimal():
-            return int(value)
-        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-            return value
-        msg = f"{self.param} must be a page number, an int >= 0 or a string of digits (got {value!r})"
-        raise ValueError(msg)
+        if not self.more(page):
+            return None
+        return request.with_param(self.param, _position(request, self.param, self.start, "a page number") + 1)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -363,7 +375,7 @@ class LinkHeader[P, I]:
         del request
         if self.stop_on_empty and not self.items(page):
             return None
-        target = next_link(response.headers)
+        target = next_link(response.headers, response.url)
         return None if target is None else _absolute(response, target)
 
 
@@ -444,7 +456,8 @@ class BodyOffset[P, I, B](WritingPager[P, I, B]):
 
     ``offset`` reads the offset from a body and ``put`` returns a new body at another one. The walk starts at the
     offset the first request's body carries, and advances by the number of items each page held. A page holding fewer
-    than ``page_size`` items (or none) is the last, and so is one that reaches ``total``, as on :class:`Offset`. The
+    than ``page_size`` items (or none) is the last; with ``total``, the walk ends as on :class:`Offset`, counting from
+    offset 0. The
     page size itself is the caller's to put in the body, as it is the caller's to put in :class:`Offset`'s query.
     ``write`` encodes each page's body, as for :class:`BodyCursor`.
     """
@@ -481,8 +494,8 @@ class BodyOffset[P, I, B](WritingPager[P, I, B]):
         """Return *request*'s body at the offset past *page*'s items, or ``None`` after a short page or at ``total``."""
         del response
         count = len(self.items(page))
-        if count < self.page_size:
-            return None
         body = _posted(request, "BodyOffset")
         following = self.offset(body) + count
-        return None if _reached(self.total, page, following) else request.with_body(self.put(body, following))
+        if _last(page, count, self.page_size, self.total, following):
+            return None
+        return request.with_body(self.put(body, following))
