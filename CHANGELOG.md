@@ -166,6 +166,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- Every configuration value is checked for its kind where it is written, with a `TypeError` naming the option and what
+  it takes, where some passed construction and failed at the first request or were misread:
+  `TransportPolicy(idempotency=True)`, `routes=("/x",)`, a synchronous `HttpOptions(transport=)` and a `cache=` that is
+  no `HttpCache` failed at the first request with an `AttributeError`; `request_id_headers="x-request-id"` and
+  `trusted_origins="https://cdn.example"` were read as one name per character; and `deadline=True`,
+  `max_redirects=True` and a `str` where a `bool` goes were taken as numbers or truths. A one-shot iterator where names
+  go is refused, since checking it would empty it.
 - A problem+json error body with an extension nested hundreds of levels deep, about 1 KB, raised a raw
   `RecursionError` from every call. It is now read as no problem detail, and the status error names the body.
 - An error body declaring `charset=idna` or `charset=undefined` raised a bare `UnicodeError`. It is read as UTF-8,
