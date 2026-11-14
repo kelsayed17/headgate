@@ -18,7 +18,8 @@ below hishel for the network:
   process, of the auth's class and :meth:`~headgate._core.CredentialStamper.credential_identity`, of the value of every
   dropped credential the auth did not declare (a middleware's, a caller's own ``Authorization`` header, a cookie, an
   ``api_key`` in the URL), and of the value of every header the client sets on all its requests
-  (``HttpOptions.headers``, where a static key is often configured). Two requests with different credentials therefore
+  (``HttpOptions.headers``, where a static key is often configured) or a view sets on all of its
+  (``with_options(headers=...)``, often one tenant's key). Two requests with different credentials therefore
   never share an entry, and the label can be neither reversed nor compared with another process's. A request with no
   credential at all gets no label, so anonymous entries are the same namespace
   :attr:`Partition.SHARED <headgate.cache.Partition.SHARED>` uses.
@@ -32,9 +33,9 @@ re-minted bearer token keeps its entries; a middleware that is a ``CredentialSta
 identity the same way, so a signer whose signature changes on every request still finds its entries. A call that sets
 the auth's own header or parameter itself (``headers=``, ``params=``), which the auth then leaves alone, is labeled by
 the value it sent as well: the client's auth is wrapped by :func:`mark_caller_credentials`, which records on the
-request, before the auth runs, which of its declared names the call set. A header nothing declares and the client does
-not set on all its requests (one call's ``X-Api-Key``) labels nothing: only a response's ``Vary`` tells such requests
-apart.
+request, before the auth runs, which of its declared names the call set. A header nothing declares and neither the
+client nor the call's view sets on all its requests (one call's ``X-Api-Key``) labels nothing: only a response's
+``Vary`` tells such requests apart.
 
 The key is per process, so credential-partitioned entries in a persistent storage are not found again after a restart,
 nor is an entry whose response varies on a request header (``Vary``); they expire by their TTL like any other.
@@ -50,7 +51,7 @@ from typing import TYPE_CHECKING, Final, override
 
 import httpx2
 
-from headgate._core import CredentialCarrier, CredentialStamper
+from headgate._core import EXPLICIT_HEADERS, CredentialCarrier, CredentialStamper, ExplicitHeaders
 from headgate._url import is_secret_param
 from headgate.cache._policy import Partition
 from headgate.errors import ClientConfigurationError
@@ -144,6 +145,7 @@ class CredentialScope:
         "_client_headers",
         "_dropped_headers",
         "_dropped_params",
+        "_guarded",
         "_identities",
         "_partitioned",
         "_represented_headers",
@@ -157,6 +159,7 @@ class CredentialScope:
         partition: Partition = Partition.CREDENTIAL,
         carriers: Iterable[CredentialCarrier] = (),
         client_headers: Iterable[str] = (),
+        guarded: bool = False,
     ) -> None:
         """Strip what *stamper* and *carriers* declare, and partition by their credentials under the default partition.
 
@@ -164,6 +167,9 @@ class CredentialScope:
         what it declares dropped too, represented by its identity when it is a
         :class:`~headgate._core.CredentialStamper` and by the values otherwise. *client_headers* names the headers the
         client sets on every request, which label the partition by their values. The names are read once, here.
+
+        A *guarded* client (one that refuses private hosts) gets entries of its own under either partition, so it is
+        never served a body an unguarded client on the same storage fetched from a host it would refuse.
         """
         sources = list(carriers)
         if stamper is not None:
@@ -188,17 +194,21 @@ class CredentialScope:
         self._represented_params = frozenset(represented_params)
         self._client_headers = frozenset(name.lower() for name in client_headers) - self._dropped_headers
         self._partitioned = partition is Partition.CREDENTIAL
+        # One label for every guarded client, since they all vet addresses alike; a configurable check needs its own.
+        self._guarded = (b"guarded",) if guarded else ()
 
     def view(self, request: httpx2.Request) -> tuple[httpx2.URL, httpx2.Headers]:
         """Return the URL and headers hishel gets for *request*: no credential, and its partition label if any."""
         credentials: list[bytes] = []
         kept_headers: list[tuple[bytes, bytes]] = []
         caller = request.extensions.get(CALLER_CREDENTIALS, _NOTHING_SET)
+        explicit = request.extensions.get(EXPLICIT_HEADERS)
+        view_headers = explicit.view if isinstance(explicit, ExplicitHeaders) else frozenset[str]()
         for raw_name, raw_value in request.headers.raw:
             name = raw_name.decode("latin-1").lower()
             if name not in self._dropped_headers:
                 kept_headers.append((raw_name, _digest(b"value", name.encode("latin-1"), raw_value).encode()))
-                if name in self._client_headers:
+                if name in self._client_headers or name in view_headers:
                     credentials.extend((b"client", name.encode("latin-1"), raw_value))
             elif name not in self._represented_headers or name in caller.headers:
                 credentials.extend((b"header", name.encode("latin-1"), raw_value))
@@ -222,9 +232,10 @@ class CredentialScope:
         """Return the fragment naming the request's partition, or ``None`` for a request with nothing to keep apart.
 
         Under :attr:`Partition.SHARED <headgate.cache.Partition.SHARED>` only *secret_params* count, since they may be
-        ordinary parameters that happen to have a secret name.
+        ordinary parameters that happen to have a secret name. A guarded client's label says so under either.
         """
-        parts = [*self._identities, *credentials, *secret_params] if self._partitioned else secret_params
+        kept = [*self._identities, *credentials, *secret_params] if self._partitioned else secret_params
+        parts = [*self._guarded, *kept]
         if not parts:
             return None
         return _LABEL_PREFIX + _digest(*parts)
@@ -246,8 +257,11 @@ def credential_scope(
     *,
     middleware: Iterable[CredentialCarrier] = (),
     headers: Iterable[str] = (),
+    guarded: bool = False,
 ) -> CredentialScope:
     """Return the :class:`CredentialScope` for a client with *cache*, *auth*, *middleware* and client-wide *headers*.
+
+    A *guarded* client, one that refuses private hosts, gets entries of its own.
 
     :raises ClientConfigurationError: for an auth that does not declare its credentials under
         :attr:`Partition.CREDENTIAL <headgate.cache.Partition.CREDENTIAL>`, since nothing could keep its entries apart
@@ -263,4 +277,6 @@ def credential_scope(
             f"HttpCache(partition=Partition.SHARED)"
         )
         raise ClientConfigurationError(msg)
-    return CredentialScope(stamper, partition=cache.partition, carriers=middleware, client_headers=headers)
+    return CredentialScope(
+        stamper, partition=cache.partition, carriers=middleware, client_headers=headers, guarded=guarded
+    )

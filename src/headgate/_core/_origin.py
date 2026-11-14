@@ -13,7 +13,7 @@ from typing import Final
 
 import httpx2
 
-__all__ = ["origin_of", "origin_text", "same_origin"]
+__all__ = ["origin_of", "origin_text"]
 
 #: The port each scheme implies, left out of :func:`origin_text`.
 _DEFAULT_PORTS: Final = {"http": 80, "https": 443, "ws": 80, "wss": 443}
@@ -32,8 +32,3 @@ def origin_text(origin: httpx2.Origin) -> str:
     host = f"[{origin.host}]" if ":" in origin.host else origin.host
     port = "" if origin.port in {None, _DEFAULT_PORTS.get(origin.scheme)} else f":{origin.port}"
     return f"{origin.scheme}://{host}{port}"
-
-
-def same_origin(a: httpx2.URL | str, b: httpx2.URL | str) -> bool:
-    """Return whether two absolute URLs address the same origin."""
-    return origin_of(a) == origin_of(b)

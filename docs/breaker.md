@@ -14,7 +14,11 @@ Each origin (`scheme://host:port`) has a breaker with three states:
   the cooldown left. After `recovery_timeout` seconds (default 60) the next call becomes the probe.
 - **half-open**: exactly one call, the probe, is let through; its outcome closes or re-opens the breaker. Other calls
   meanwhile are refused with `retry_after=None`, since the probe's outcome decides. The probe keeps its own retries, so
-  its whole retry sequence is the one recovery test.
+  its whole retry sequence is the one recovery test. A `stream()` probe is settled at its response head, so a
+  long-lived stream does not hold the origin half-open while its body is read.
+
+A call admitted before the breaker opened records nothing when it finishes, even after the probe has closed the breaker
+again, and its retries are refused: its outcome belongs to the outage the breaker already counted.
 
 The breaker spans the send **and the body read**, so a connection that dies mid-body is a failure of the fetch. A
 retry sequence counts once, however many attempts it made, and the retry layer stops re-sending as soon as the breaker
@@ -33,6 +37,7 @@ Only what the origin itself showed:
 | | a failure on a hop an auth flow made to mint a credential (that is the token host's failure) |
 | | a cache hit, a stored 5xx, or an outcome shared from another identical request's fetch |
 | | a call its caller cancelled, a deadline passing before the request reached the network, a body over the size cap, a refused SSRF destination |
+| | a response a middleware answered itself, without sending the request |
 | | an exception a `stream()` block's own code raises, even an `OSError` or an httpx2 error: it is the caller's, not the origin's |
 
 Every other response is a success: a 4xx says the origin is answering.
@@ -41,7 +46,7 @@ A call that ends on its deadline while an attempt is on the network, waiting for
 **does** count, as a timeout: an origin that hangs is failing, and it is the deadline's timer, not httpx2's own
 timeout, that ends such a call (each attempt's timeouts are cut to the time left, but httpx2 starts each phase's clock
 later). A deadline that passes before the attempt reached the network (in a rate-budget wait, a middleware or a token
-mint) records nothing, as does a caller cancelling the call itself, with `asyncio.timeout` or `wait_for` around it.
+mint), or while the auth waits for or makes a token mint (a re-mint after a 401 included), records nothing, as does a caller cancelling the call itself, with `asyncio.timeout` or `wait_for` around it.
 
 ## Sharing and keying
 

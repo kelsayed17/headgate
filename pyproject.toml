@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -37,7 +37,8 @@ dependencies = [
 [project.optional-dependencies]
 msgspec = ["msgspec>=0.22.0"]
 pydantic = ["pydantic>=2.14.1"]
-curl = ["curl_cffi>=0.16.3"]
+# The transport reads its CA bundle path from certifi; the floor is what curl_cffi 0.16.3 requires.
+curl = ["certifi>=2024.2.2", "curl_cffi>=0.16.3"]
 otel = ["opentelemetry-api>=1.45.1"]
 # hishel's own extra for its async storages: AsyncSqliteStorage imports anysqlite.
 cache = ["hishel[async]>=2.0.0"]
@@ -56,8 +57,8 @@ dev = [
     "pytest-asyncio>=1.4",
     "syrupy>=6.1.1",
     "httpx2-pytest>=2.0.0",
-    "time-machine",
-    "ruff",
+    "time-machine>=2.14.0",
+    "ruff>=0.15.11",
     "ty>=0.0.93",
     "headgate[msgspec,pydantic,curl,otel,cache]",
     "opentelemetry-sdk>=1.45.1",
@@ -85,7 +86,7 @@ include = [
     "LICENSE",
     "pyproject.toml",
 ]
-exclude = ["docs/assets", ".hypothesis", "**/__pycache__", "**/*.pyc", "mutants", ".coverage*", ".codspeed"]
+exclude = ["docs/assets/social-preview.png", ".hypothesis", "**/__pycache__", "**/*.pyc", "mutants", ".coverage*", ".codspeed"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, ClassVar, cast, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, Rate, TransportPolicy, nothing
+from headgate import HttpOptions, Json, Rate, TransportPolicy, nothing
 from headgate._core import CallContext
 from headgate.retry import RetryPolicy
 from tests.security._web import BASE, Web
@@ -100,7 +100,7 @@ async def test_every_attempt_is_signed_afresh() -> None:
     """
     server = _VerifyingServer(503, 503, 200)
     client = _client(server, HmacSigner(_SECRET))
-    await client.post("orders", expect=nothing, json={"qty": 1}, idempotency_key="order-1")
+    await client.post("orders", expect=nothing, body=Json({"qty": 1}), idempotency_key="order-1")
 
     assert server.received == [("1", True), ("2", True), ("3", True)]
 

@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import inspect
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, Unpack, override
 
 import anysqlite
 import httpx2
 import pytest
 import time_machine
 
+from headgate import RequestOptions
 from headgate._client import AsyncBaseClient
 from headgate.cache import HttpCache
 from headgate.cache._transport import served_from_cache
@@ -29,6 +30,8 @@ from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
     from hishel import AsyncSqliteStorage
+
+    from headgate import CallOptions
 
 _CLIENT_TTL = 3600.0
 _CALL_TTL = 99.0
@@ -41,15 +44,16 @@ _SHARING_CLIENTS = 3
 class _CountingTransport(httpx2.AsyncBaseTransport):
     """The network leg: counts the requests that reach it and records each one's extensions."""
 
-    def __init__(self) -> None:
+    def __init__(self, headers: dict[str, str] | None = None) -> None:
         self.count = 0
         self.extensions: list[dict[str, object]] = []
+        self._headers = headers
 
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         self.count += 1
         self.extensions.append(dict(request.extensions))
-        return httpx2.Response(httpx2.codes.OK, json={"call": self.count})
+        return httpx2.Response(httpx2.codes.OK, json={"call": self.count}, headers=self._headers)
 
 
 # When the cache is engaged.
@@ -128,7 +132,7 @@ async def test_the_client_ttl_is_threaded_and_a_per_call_cache_ttl_wins(storage:
 
 
 async def _network_hits_for_two_gets(
-    storage: AsyncSqliteStorage, *, client_ttl: float | None, call_ttl: float | None, gap: float
+    storage: AsyncSqliteStorage, *, client_ttl: float | None, gap: float, **call: Unpack[CallOptions]
 ) -> int:
     """Count how many of two GETs of one cacheable URL, *gap* seconds apart, reached the network.
 
@@ -142,22 +146,22 @@ async def _network_hits_for_two_gets(
         cache=HttpCache(**series_rules(), storage=storage, ttl=client_ttl),
     )
     with time_machine.travel(datetime.now(UTC), tick=False) as clock:
-        await client.get("/series?id=A", expect=RESPONSE, cache_ttl=call_ttl)
+        await client.get("/series?id=A", expect=RESPONSE, **call)
         clock.shift(gap)
-        await client.get("/series?id=A", expect=RESPONSE, cache_ttl=call_ttl)
+        await client.get("/series?id=A", expect=RESPONSE, **call)
     return base.count
 
 
 async def test_a_short_client_ttl_expires_the_entry(storage: AsyncSqliteStorage) -> None:
     """Hishel applies the client's TTL: past it, the entry is gone and the second GET goes back to the network."""
-    hits = await _network_hits_for_two_gets(storage, client_ttl=_SHORT_TTL, call_ttl=None, gap=_GAP)
+    hits = await _network_hits_for_two_gets(storage, client_ttl=_SHORT_TTL, gap=_GAP)
 
     assert hits == len(("first", "second"))
 
 
 async def test_a_long_client_ttl_keeps_the_entry(storage: AsyncSqliteStorage) -> None:
     """Control for the test above: the same gap inside a long TTL is a hit, so the expiry above is the TTL's."""
-    hits = await _network_hits_for_two_gets(storage, client_ttl=_CLIENT_TTL, call_ttl=None, gap=_GAP)
+    hits = await _network_hits_for_two_gets(storage, client_ttl=_CLIENT_TTL, gap=_GAP)
 
     assert hits == 1
 
@@ -167,9 +171,28 @@ async def test_a_per_call_cache_ttl_beats_the_client_ttl_inside_hishel(storage: 
 
     It is on both calls because hishel judges an entry by the TTL it was stored with: the first call's.
     """
-    hits = await _network_hits_for_two_gets(storage, client_ttl=_CLIENT_TTL, call_ttl=_SHORT_TTL, gap=_GAP)
+    hits = await _network_hits_for_two_gets(storage, client_ttl=_CLIENT_TTL, gap=_GAP, cache_ttl=_SHORT_TTL)
 
     assert hits == len(("first", "second"))
+
+
+async def test_a_calls_cache_ttl_none_stores_without_a_limit(storage: AsyncSqliteStorage) -> None:
+    """A call's ``cache_ttl=None`` is off, not "inherit": past the client's short TTL, the entry is still served."""
+    hits = await _network_hits_for_two_gets(storage, client_ttl=_SHORT_TTL, gap=_GAP, cache_ttl=None)
+
+    assert hits == 1
+
+
+async def test_a_calls_cache_ttl_none_ignores_the_servers_max_age(storage: AsyncSqliteStorage) -> None:
+    """The cache is TTL-only: an entry stored with no lifetime is served past the ``max-age`` its response gave."""
+    base = _CountingTransport(headers={"Cache-Control": "max-age=1"})
+    client = stub_client(transport=base, cache=HttpCache(**series_rules(), storage=storage, ttl=_SHORT_TTL))
+    with time_machine.travel(datetime.now(UTC), tick=False) as clock:
+        await client.get("/series?id=A", expect=RESPONSE, cache_ttl=None)
+        clock.shift(_GAP)
+        await client.get("/series?id=A", expect=RESPONSE, cache_ttl=None)
+
+    assert base.count == 1
 
 
 # A per-call cache_ttl= is forwarded by every verb that accepts one.
@@ -180,8 +203,11 @@ _VERBS = ("delete", "get", "head", "patch", "post", "put")
 
 @pytest.mark.parametrize("verb", _VERBS)
 def test_every_http_verb_takes_a_cache_ttl(verb: str) -> None:
-    """Accept ``cache_ttl`` on every verb, so the forwarding test below covers them all."""
-    assert "cache_ttl" in inspect.signature(getattr(AsyncBaseClient, verb)).parameters
+    """Accept ``cache_ttl`` on every verb, through its options, so the forwarding test below covers them all."""
+    assert inspect.signature(getattr(AsyncBaseClient, verb)).parameters["options"].annotation == (
+        "Unpack[RequestOptions]"
+    )
+    assert "cache_ttl" in RequestOptions.__optional_keys__
 
 
 @pytest.mark.parametrize("verb", _VERBS)

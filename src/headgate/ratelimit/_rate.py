@@ -29,12 +29,16 @@ class Rate:
     period: float
 
     def __post_init__(self) -> None:
-        """Reject a rate that cannot pace: non-positive, NaN, or an infinite period."""
-        if math.isnan(self.requests) or self.requests <= 0:
-            msg = f"requests must be > 0 (got {self.requests})"
+        """Reject a rate that cannot pace: non-positive, NaN or infinite, or one whose interval is infinite."""
+        if not math.isfinite(self.requests) or self.requests <= 0:
+            msg = f"requests must be > 0 and finite (got {self.requests})"
             raise ValueError(msg)
         if not math.isfinite(self.period) or self.period <= 0:
             msg = f"period must be > 0 and finite (got {self.period})"
+            raise ValueError(msg)
+        if not math.isfinite(self.period / self.requests):
+            # A request count so small that the spacing overflows would turn every send time into NaN.
+            msg = f"requests must be > 0 and leave a finite interval (got {self.requests} per {self.period}s)"
             raise ValueError(msg)
 
     @classmethod

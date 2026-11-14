@@ -142,14 +142,16 @@ is the better pick.
 Python 3.14 or newer.
 
 ```bash
-pip install 'headgate[msgspec]'    # or: uv add 'headgate[msgspec]'. headgate, and the msgspec codec
-pip install 'headgate[pydantic]'   # headgate, and the pydantic codec
-pip install 'headgate[curl]'       # + AsyncCurlTransport: a browser's TLS fingerprint, via curl_cffi
-pip install 'headgate[otel]'       # + OpenTelemetryObserver (opentelemetry-api only)
-pip install 'headgate[cache]'      # + what hishel's AsyncSqliteStorage needs (hishel[async]: anysqlite)
+uv add 'headgate[msgspec]'    # headgate, and the msgspec codec
+uv add 'headgate[pydantic]'   # headgate, and the pydantic codec
+uv add 'headgate[curl]'       # + AsyncCurlTransport: a browser's TLS fingerprint, via curl_cffi
+uv add 'headgate[otel]'       # + OpenTelemetryObserver (opentelemetry-api only)
+uv add 'headgate[cache]'      # + what hishel's AsyncSqliteStorage needs (hishel[async]: anysqlite)
 ```
 
-`pip install headgate` alone brings no serialization library: httpx2, hishel and typing-extensions only. Pick a codec as
+With pip, install the same extras with `pip install 'headgate[msgspec]'` and so on.
+
+`uv add headgate` alone brings no serialization library: httpx2, hishel and typing-extensions only. Pick a codec as
 an extra, or bring your own (see [codecs](https://kelsayed17.github.io/headgate/codecs/)).
 
 <details>
@@ -287,7 +289,7 @@ token, an idempotent POST, a declared business refusal, `Link`-header pages and 
 | [Response cap](https://kelsayed17.github.io/headgate/configuration/#httpoptions) | 32 MiB per buffered body, counted after decompression |
 | [Caching](https://kelsayed17.github.io/headgate/caching/) | Opt-in hishel cache, partitioned by credential, never storing one; coalesced identical GETs; conditional reads |
 | [Streaming and uploads](https://kelsayed17.github.io/headgate/streaming/) | `stream()` for bodies and server-sent events with resume; raw, streamed and multipart request bodies |
-| [Pagination](https://kelsayed17.github.io/headgate/pagination/) | `paginate()` with `Cursor`, `Offset`, `PageNumber`, `LinkHeader` or `NextUrl`, and walks of POSTs given `body=` or `json=` (`BodyCursor`, `BodyOffset`); lazy, loop-safe, bounded by pages or items |
+| [Pagination](https://kelsayed17.github.io/headgate/pagination/) | `paginate()` with `Cursor`, `Offset`, `PageNumber`, `LinkHeader` or `NextUrl`, and walks of POSTs given `query=` (`BodyCursor`, `BodyOffset`); lazy, loop-safe, bounded by pages or items |
 | [Errors](https://kelsayed17.github.io/headgate/errors/) | One `ClientError` tree; method, URL, request id, attempts, `retryable`, `retry_after`, RFC 9457 problems |
 | [Auth](https://kelsayed17.github.io/headgate/auth/) | Static headers, query keys, per-attempt signatures, re-sent once on a 401, and a cached minted token with one re-mint on a 401 |
 | [Observability](https://kelsayed17.github.io/headgate/observability/) | Typed events, OpenTelemetry spans and metrics, request ids, `Deprecation` / `Sunset` notices, health snapshots |
@@ -380,10 +382,12 @@ Every option, its validation and the precedence of call, view, route and policy:
 ## Per-call options
 
 Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`) takes the URL, `expect=` (on `head`, `nothing` unless
-given), and optionally `retry=False` or a `RetryPolicy`, `follow_redirects=`, `cache_ttl=`, `timeout=`, `deadline=`,
-`idempotency_key=`, and the request options `params=`, `headers=`, `body=` (what a flavor's `writer` wrote), `json=`,
-`data=`, `content=` and `files=`. `client.with_options(headers=..., timeout=..., deadline=..., retry=...)` returns a
-view with other defaults that shares the pool, the budgets and the breakers; the client it came from owns the pool.
+given), and optionally `retry=` (a `RetryPolicy`, or `None` to send once), `follow_redirects=`, `cache_ttl=`,
+`timeout=`, `deadline=`, `idempotency_key=`, `max_response_bytes=`, and the request options `params=`, `headers=` and
+`body=` (what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`); an option left out takes the view's or
+the client's.
+`client.with_options(headers=..., timeout=..., deadline=..., retry=..., follow_redirects=...)` returns a view with other
+defaults that shares the pool, the budgets and the breakers; the client it came from owns the pool.
 
 ## Errors
 

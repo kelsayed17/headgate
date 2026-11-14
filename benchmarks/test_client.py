@@ -26,6 +26,7 @@ from headgate import (
     AsyncBaseClient,
     HttpCache,
     HttpOptions,
+    LinkHeader,
     QueryParamAuth,
     Rate,
     RetryPolicy,
@@ -46,6 +47,9 @@ _BASE_URL = "https://api.example.test/v1/"
 _FAST = Rate.per_second(1_000_000)
 _CONCURRENCY = 100
 _LARGE_BODY_BYTES = 8 * 1024 * 1024
+_PAGES = 50
+_EVENTS = 1000
+_EVENT_CHUNK_BYTES = 512
 _OK = httpx2.codes.OK
 _UNAVAILABLE = httpx2.codes.SERVICE_UNAVAILABLE
 
@@ -242,4 +246,67 @@ def test_stream(benchmark: BenchmarkFixture, runner: asyncio.Runner) -> None:
         async with client.stream("file") as stream:
             return sum([len(chunk) async for chunk in stream.aiter_bytes()])
 
+    benchmark(lambda: runner.run(drain()))
+
+
+class Page(msgspec.Struct, frozen=True):
+    """One page of a paginated listing."""
+
+    items: list[int]
+
+
+_PAGE = msgspec_flavor.reader(Page)
+_PAGE_BODY = msgspec.json.encode(Page(list(range(20))))
+
+
+def _items_of(page: Page) -> list[int]:
+    """Return the items on *page*."""
+    return page.items
+
+
+def _linked_page(request: httpx2.Request) -> httpx2.Response:
+    """Answer page ``?page=n`` with a ``Link`` to page ``n + 1``, up to :data:`_PAGES`."""
+    number = int(request.url.params.get("page", "1"))
+    headers = {"content-type": "application/json"}
+    if number < _PAGES:
+        headers["link"] = (
+            f'<{_BASE_URL}items?page={number + 1}>; rel="next", <{_BASE_URL}items?page={_PAGES}>; rel="last"'
+        )
+    return httpx2.Response(_OK, content=_PAGE_BODY, headers=headers, request=request)
+
+
+def test_paginate_link_header(benchmark: BenchmarkFixture, runner: asyncio.Runner) -> None:
+    """Measure walking ``_PAGES`` pages linked by the ``Link`` header, each a GET through the full stack."""
+    client = _client(_linked_page)
+    pages = LinkHeader(items=_items_of)
+
+    async def walk() -> int:
+        return sum([item async for item in client.paginate("items", expect=_PAGE, pages=pages)])
+
+    runner.run(walk())
+    benchmark(lambda: runner.run(walk()))
+
+
+_EVENT_BODY = b"".join(b'id: %d\nevent: tick\ndata: {"seq": %d, "price": 101.25}\n\n' % (i, i) for i in range(_EVENTS))
+
+
+async def _event_chunks() -> AsyncIterator[bytes]:
+    """Yield :data:`_EVENT_BODY` in network-sized chunks that split events mid-line."""
+    for start in range(0, len(_EVENT_BODY), _EVENT_CHUNK_BYTES):
+        yield _EVENT_BODY[start : start + _EVENT_CHUNK_BYTES]
+
+
+def test_stream_events(benchmark: BenchmarkFixture, runner: asyncio.Runner) -> None:
+    """Measure reading ``_EVENTS`` server-sent events from a stream that arrives in 512-byte chunks."""
+    client = _client(
+        lambda request: httpx2.Response(
+            _OK, content=_event_chunks(), headers={"content-type": "text/event-stream"}, request=request
+        )
+    )
+
+    async def drain() -> int:
+        async with client.stream("events") as stream:
+            return len([event async for event in stream.aiter_events()])
+
+    runner.run(drain())
     benchmark(lambda: runner.run(drain()))

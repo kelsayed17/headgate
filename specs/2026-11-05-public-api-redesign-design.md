@@ -1,6 +1,6 @@
 # headgate public API redesign
 
-Status: for approval · 2026-11-05
+Status: approved · 2026-11-05. Phases 1 (#56) and 2 (#60) are done; phases 3 to 8 are not started.
 
 ## Why
 
@@ -144,7 +144,8 @@ response.
 ### 3. One set of per-call options
 
 **3.1 `CallOptions`.** One `TypedDict` holds every per-call option except the URL, `expect=` and the body:
-`params`, `headers`, `timeout`, `deadline`, `retry`, `follow_redirects`, `cache_ttl`, `idempotency_key`.
+`params`, `headers`, `timeout`, `deadline`, `retry`, `follow_redirects`, `cache_ttl`, `idempotency_key`,
+`max_response_bytes` (one call's size cap, raising or lowering the client's; amended with the phase 3 plan).
 
 - Every verb, `stream`, `paginate` and `with_options` takes `**options: Unpack[...]` of it or a documented subset.
 - `retry`, `follow_redirects` and `cache_ttl` stop being separate parameters, so a wrapper typed on the options can
@@ -152,7 +153,8 @@ response.
   leaving it out inherits; `True` and `False` are gone.
 - `RequestOptions` = `CallOptions` plus `body=` (3.3).
 - `ViewOptions` = the subset a view can default: `headers`, `timeout`, `deadline`, `retry`, `follow_redirects`.
-- `stream` takes `CallOptions` minus `cache_ttl`, plus `method` and `last_event_id`.
+- `stream` takes `StreamOptions` (in `headgate.streaming`): `CallOptions` minus `cache_ttl` and `max_response_bytes`,
+  since a stream is never buffered, plus `body=`, `method` and `last_event_id`. (Amended with the phase 3 plan.)
 - `expect=` and `pages=` stay named parameters, since they drive the return type.
 
 **3.2 A walk's body is `query=`.** `paginate(query=value)` names the raw value the pager rewrites per page, and
@@ -170,11 +172,13 @@ become one parameter, `body: Body | None`, whose value says what it is:
 | `EncodedBody` (from a `writer_for` writer) | its bytes, with its `Content-Type` | `body=` |
 | `Json(value)` | JSON of builtins | `json=` |
 | `Form(fields)` | `application/x-www-form-urlencoded` | `data=` |
-| `Multipart(fields, files)` | `multipart/form-data` | `files=` with `data=` |
+| `Multipart(files, fields)` | `multipart/form-data` | `files=` with `data=` |
 | `Raw(content)` | bytes, an async iterable of bytes (streamed once, so not re-sent), or a callable returning one (re-sent) | `content=` |
 
 `Json`, `Form`, `Multipart` and `Raw` are small frozen classes in `headgate`. A conflicting body can no longer be
-written, so `check_one_body` and its five refusals are deleted. My call.
+written, so `check_one_body` and its five refusals are deleted. My call. `Raw` and `Multipart` state whether they can
+be re-sent, as a read-only `replayable` derived from the value, and the client reads only that. (Amended with the
+phase 3 plan.)
 
 ### 4. Configuration grouped by what it is for
 

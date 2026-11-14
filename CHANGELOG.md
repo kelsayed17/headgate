@@ -8,16 +8,67 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
-- `Stream.retry` and `EventParser.retry`: the reconnection time the server last set with an SSE `retry:` field, kept
-  across events as the WHATWG spec says, including a `retry:` sent in a block of its own. `Event.retry` is unchanged:
-  the field in that event's own block.
+- `CassetteFilter(replaying=True)`, for replaying a cassette (`record_mode="none"`): a token mint fails the test with
+  an `AssertionError` saying to seed the auth. A mint is never recorded, so vcrpy let an unseeded one reach the
+  network, with the auth's secret.
+- `Body`, the union of `EncodedBody`, `Json`, `Form`, `Multipart` and `Raw`, the body classes a call's `body=` takes.
+  `Raw(...).replayable` and `Multipart(...).replayable` say whether a retry or a 307/308 redirect can send the body
+  again: not for a `Raw` async iterable, nor a `Multipart` holding a file that cannot be rewound.
+- `max_response_bytes=` on a call (#57) raises or lowers the client's body cap for that call alone, as `timeout=` and
+  `deadline=` already can: higher for one large file on a host whose other files are small, lower for an endpoint that
+  should stay small. It is checked as a positive `int`. A cached client holds the body up to the call's cap, so the
+  entry is stored, and every read of an entry is checked against the cap of the call reading it. An undeclared error
+  status keeps the client's cap, so it still raises as its status. `stream()` takes no cap, since its body is never
+  buffered.
+- `CallOptions`, the TypedDict of every per-call option but the body, which every verb and `paginate()` take, and
+  `headgate.streaming.StreamOptions`, the options of `stream()`. `with_options(follow_redirects=...)` sets a view's
+  redirect choice, and is refused on a client with a `response_check`, as each of its calls would be.
+- `Stream.retry`: the reconnection time the server last set with an SSE `retry:` field, kept across events as the
+  WHATWG spec says, including a `retry:` sent in a block of its own. The `retry` of each event `aiter_events` yields
+  (an `httpx2.ServerSentEvent`) is unchanged: the field in that event's own block.
+- `Stream.aiter_lines(max_line_size=...)`: a line past it, 1 MiB by default (`None` for no limit), raises
+  `ResponseTooLargeError`, before it ends if it never does. A body with no line ending used to be held whole.
 - `as_json`, a ready reader of JSON into builtins with the standard library's `json.loads`, so a core-only install
   can read JSON without a codec. It is typed `object`, and reads strict RFC 8259 JSON as `headgate.msgspec`'s reader
   does: a body that is not UTF-8, `NaN`, `Infinity`, a number out of range and a lone surrogate are each a
   `DecodeError` naming the position, never the input.
+- `CachedTokenAuth.token_params`, for a provider that takes the token in the query (`?access_token=`): a subclass
+  whose `attach` sets a query parameter declares it here, as `token_headers` declares headers.
 
 ### Changed
 
+- A walk of POSTs takes its body as `paginate(query=value)`, where it took `body=value` (encoded by the pager's
+  `write=`) or `json=value` (builtins): the pager's `write=` encodes the value when it has one, and without one the
+  value is sent as JSON. So `body=` means one thing everywhere, the request body. `paginate(body=...)` and
+  `paginate(json=...)` raise `TypeError` naming `query=`, before the pager runs. The two `ValueError`s that tied a
+  keyword to a pager having or lacking `write=` are gone, since the pager now decides; a fixed idempotency key on a
+  walk of POSTs is still refused.
+- A request body is one keyword, `body=`, whose value says what it is: `json=value` is `body=Json(value)`,
+  `data=fields` is `body=Form(fields)`, `files=files, data=fields` is `body=Multipart(files, fields)`, and
+  `content=raw` is `body=Raw(raw)`; `body=` an `EncodedBody` from a writer is unchanged. The old keywords raise
+  `TypeError` naming the replacement, before anything is sent, on every verb and `stream()`. A call has one body, so
+  the `ValueError`s for two that conflict are gone. `Json` is encoded as `json=` was, except that `Json(None)` sends
+  `null` where `json=None` sent no body. A `Raw` content that is no body (a `str`, a `bytearray`, a list) raises
+  `TypeError` when the `Raw` is built, and a `body=` that is no `Body` (bare `bytes`, a `dict`) raises `TypeError`
+  naming it.
+- **A call's or a view's explicit `retry=None` now sends once; it used to mean "take the view's or the client's
+  policy".** `with_options(retry=None)` ignored the `None` and kept the client's policy; it now sends each of the
+  view's calls once. `retry` is a call option now, where leaving it out inherits and `None` is off. A forwarding
+  wrapper whose own default is `None` (`retry=retry`) is the usual case: type it on `**options: Unpack[CallOptions]`
+  and forward `**options`, or leave `retry` out when it is `None`. Find affected calls and views with
+  `grep -rnE "(retry|cache_ttl)=(None|[a-z_]+)\b"`.
+- **A call's explicit `cache_ttl=None` now stores without a lifetime limit; it used to mean "the cache's `ttl`".** It
+  removes headgate's lifetime only: the cache is TTL-only and still never reads a response's own cache headers, so such
+  an entry is served until its storage evicts it, past any `Cache-Control: max-age` and even past `no-store`, as an
+  entry of `HttpCache(ttl=None)` is. Leave `cache_ttl` out for the cache's `ttl`.
+- `retry=`, `follow_redirects=` and `cache_ttl=` are no longer named parameters of the verbs, `stream()` and
+  `paginate()`, but keys of their options (`CallOptions`, `RequestOptions`, `headgate.streaming.StreamOptions`), so a
+  wrapper typed on the options forwards them. A call keeps the same spelling. `retry=False` is `retry=None`, on a call
+  and on a view (`with_options(retry=None)`); `True` and `False` raise `TypeError` saying so. `follow_redirects=None`
+  is leaving it out, and raises `TypeError`.
+- A keyword no option names, such as a misspelled `retires=`, raises `TypeError` before anything is sent, on every
+  verb, `stream()`, `paginate()` and `with_options()`, where it was ignored. `paginate(data=...)`, `content=` and
+  `files=` now raise this `TypeError` too, naming the walk's `query=`, where they raised `ValueError`.
 - `HttpOptions(refusal_check=...)` is `HttpOptions(response_check=...)`, and its type `RefusalCheck` is
   `ResponseCheck`. The check is unchanged: it sees the final response and returns a `RefusedError` or `None`. The
   `ValueError` for a redirect-following client names `response_check=`.
@@ -70,9 +121,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
   same for `headgate.pydantic`. A reader's refusal check is spelled `refuse=` where it was `refusal_check=`, on
   `reader_for`, the flavors' `reader` and `body_reader`. `Codec.decoder` and `Codec.encoder` keep their
   names.
+- A call costs about 6% less CPU in headgate's own code. A client's timeouts are resolved once, not on every call,
+  and fitting a call's timeouts to its deadline no longer sorts them. Behavior is unchanged.
 
 ### Removed
 
+- `retry=True` on a call, which undid its view's `retry=`: make the call on the client instead of the view.
+- `PageOptions`: `paginate()` takes `CallOptions`, which has the same keys plus `retry`.
 - `HttpCache(policy=...)` and `HttpCache.filter_policy()`, and `headgate.cache.MethodFilter`, `PathFragmentFilter` and
   `StatusCodeFilter`: hishel 2 removed `FilterPolicy` and `BaseFilter`, which they were built on. Write the same rules
   as `HttpCache(methods=..., paths=..., statuses=...)`, which headgate now applies itself; read them back with the new
@@ -85,6 +140,113 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A hedge that loses while it is still above the rate budget, in a middleware that awaits before it sends, gives its
+  retry budget back. The send it raced reached the rate budget meanwhile and marked the hedge as sent, so every such
+  call kept one retry, and enough of them drained the budget: later calls could neither hedge nor retry.
+- A rate budget hands a turn a caller abandoned in the middle of the queue (a cancelled call, or a deadline passing
+  while it waited) to the next caller to arrive, while that turn's time is still ahead. The turn used to stay in the
+  schedule unused, so a budget with callers giving up sent fewer requests than its rate.
+- A `RateLimit` field whose `t` is a Unix time, which some servers send, pauses the budget until that time. It used to
+  be read as that many seconds and cut to the hour-long maximum. `t` is now told apart by size, as
+  `X-RateLimit-Reset` already was.
+- `Rate` refuses an infinite request count, and one so small that the spacing between requests overflows, with
+  `ValueError`. Either turned every send time into NaN, which paced nothing.
+- Rate rules, `Route`s and the cache's `paths` fragments no longer match a `/` inside a t-string value: the path is
+  split into segments before they are decoded, so `t"/files/{name}"` with `name="exports/q3"` sends
+  `/files/exports%2Fq3`, which is not an `/exports` request. A regular expression in the cache's `paths` still
+  searches the decoded path.
+- Only responses from the client's own origin (`base_url`'s) pause and throttle its rate budget. A 429 or a spent
+  quota from a redirect target, another origin's next page, a token host or an absolute URL on another origin paused
+  the shared budget for every client using it, for up to an hour. Those requests are still paced, and each call still
+  waits out its own `Retry-After`. A client always has an absolute `base_url`, so a client that calls absolute URLs
+  on several origins is paused and throttled by its `base_url` origin's responses alone.
+- A send that waited for its rate-budget turn while a hedge began marks its own attempt as sent, not the hedge's.
+- A cached call is answered only by an entry stored for the same `Accept`, so a CSV and a JSON of one URL no longer
+  answer each other. A request with a `Range` goes to the network, since no whole stored body answers it.
+- Under `Partition.SHARED`, a call that sends `Authorization` (or a cookie, or a declared credential) is never answered
+  by a stored entry that varies on it. An anonymous call's answer was served to an authenticated one.
+- A send that waits for its rate-budget turn while a hedge starts beside it records its connection and the bytes it
+  writes into its own attempt. They went into the hedge's attempt, whichever send wrote them.
+- A problem+json error body with an extension nested hundreds of levels deep, about 1 KB, raised a raw
+  `RecursionError` from every call. It is now read as no problem detail, and the status error names the body.
+- An error body declaring `charset=idna` or `charset=undefined` raised a bare `UnicodeError`. It is read as UTF-8,
+  as other charsets that are no text encoding already were.
+- The default transport moves on to the next vetted address after a connect timeout, as it already did after a
+  refusal. Each address gets an even share of the time left on the connect timeout, so one that hangs no longer
+  spends all of it.
+- A raw `#` in a URL's userinfo (`https://user:pa#ss@host/`) is redacted from error messages. The password after the
+  `#` was shown.
+- A `Retry-After` HTTP-date is measured from the response's `Date` header, so a local clock ahead of the server's no
+  longer shortens the wait to nothing, and one behind no longer stretches it.
+- An `Offset`, `PageNumber` or `BodyOffset` walk whose server ignores the paging parameter raises `ClientError` at
+  the second page, which repeats the first page's body. Before, it fetched the same page forever.
+- `Offset` starts at the offset the caller's `params=` give, as `PageNumber` starts at the caller's page, instead of
+  overwriting it with `start`.
+- `Offset(start=1, total=...)` no longer loses a 1-based walk's last item. With `total`, `Offset` and `BodyOffset`
+  walk to the total even when the server caps its pages below `page_size`, ending early only at an empty page.
+- A next-page URL that httpx2 cannot parse raises `ClientError`, not a bare `httpx2.InvalidURL`.
+- `LinkHeader` skips a `rel="next"` link whose `anchor` names another resource. By RFC 8288 it is the next page of
+  that resource, not of this one.
+- A next-page URL that leads back to the walk's first page is caught one page sooner. The first page is now
+  remembered by the URL it was sent to as well as by the relative URL it was written as.
+- A walk remembers a 16-byte digest of each page's request, and keeps only the last 4096, instead of every request
+  whole. A walk of large POST bodies held all of them.
+- `Stream.aiter_lines` reads a body whose `charset` is no text encoding (`base64`, `rot13`, `idna`, `undefined`) as
+  UTF-8, and raises `ResponseParseError` for a body its `charset` cannot decode (UTF-16 without a byte order mark).
+  Each raised a raw `AssertionError`, `TypeError` or `UnicodeError`.
+- An SSE `retry:` of any length of digits is read; one past 2**63 - 1 milliseconds is held at that. More than 4,300
+  digits raised a raw `ValueError`, and a few hundred made `stream.retry / 1000` overflow.
+- Whether an SSE event passes `max_event_size` no longer depends on how the body is cut into chunks: a comment line,
+  or the byte order mark, still arriving counted toward it. A comment is now dropped as it arrives, so one that never
+  ends holds no memory.
+- A one-shot `content=` stream is never sent twice below the retry layer either. When an HTTP/2 GOAWAY moved the
+  request to a new connection, an async-iterable file went out empty and the server processed an empty POST, and an
+  async generator raised a raw `httpx2.StreamConsumed`. The second read is now refused, and the call raises
+  `TransportError`.
+- A `files=` upload of a file that cannot be rewound, such as a pipe or a socket, is sent once, like a one-shot
+  `content=` stream. A retry or a followed 307 or 308 sent it again with an empty file. A file object counts as
+  rewindable only if it is a regular file on disk or an in-memory file that can seek.
+- A hedge sends its own copy of an in-memory body, and a streamed or multipart body is never hedged. A middleware that
+  read `request.content` failed every hedged call with `RequestNotRead`, and two sends read one file at once.
+- An empty or blank idempotency key is refused: `idempotency_key=""`, or an `IdempotencyKeys` factory returning one,
+  raises `ValueError`. An empty `Idempotency-Key` header no longer makes a POST retryable.
+- A `stream()` that became the half-open breaker's probe settles it at its response head. It used to hold the probe
+  until its block exited, so every other call to that origin, from every client sharing the registry, was refused
+  with `CircuitOpenError` for as long as the stream was read. A network failure mid-body now counts as one ordinary
+  failure.
+- A call admitted before its origin's breaker opened no longer changes the breaker when it finishes, even after the
+  probe has closed it again, and its retries are refused once the cooldown elapses. Such a call failing late used to
+  open the recovered breaker for another full cooldown, and its retries reached the origin beside the probe.
+- A breaker transition listener (an observer of `BreakerChanged`) that raises when the probe is taken no longer leaves
+  the breaker refusing every call forever.
+- The call's deadline passing while `CachedTokenAuth` re-mints a token after a 401, or waits for another call's mint,
+  is no longer charged to the API origin's breaker. Five such calls opened it for the whole process.
+- A response a middleware answers itself, without sending the request, is no longer charged to the origin's breaker.
+- `stream()` charges the breaker as a verb does: a stream that opens with a 4xx or a `response_check` refusal counts as
+  the origin answering, and a network `TimeoutError` while reading the error's body is a transport failure rather than
+  "deadline exceeded". A `ClientError` another call raises inside a stream's block is no longer reported as the
+  stream's error, nor given the stream's notes.
+- A cached client no longer buffers a `stream()`, a POST, or a request its `HttpCache` rules do not name: each goes to
+  the network and up as it arrives, unshared. A server-sent event stream's block was entered only once the body ended
+  or 32 MiB arrived. A stream is still served from a hit, but a stream's miss is no longer stored.
+- On a cached client, a hedge sends its own request instead of waiting on its call's first send of the same GET.
+- A cache write still running at a verb's deadline is dropped and counted in `cache_degradations()`; the call returns
+  by its deadline. It ran on past it.
+- A response header holding raw UTF-8 (`Content-Disposition: attachment; filename="café.csv"`) is handed up as sent.
+  Every buffered call raised `UnicodeEncodeError`, and on a cached client a `Set-Cookie` beside it did too.
+- Identical GETs share one download with `OpenTelemetryObserver` installed: its per-call trace headers no longer keep
+  them apart.
+- A client that refuses private hosts has cache entries of its own, so it is never served a body that another client
+  on the same storage fetched from an internal address.
+- A per-call `cache_ttl=` that is not a positive finite number raises `ValueError`, and one that is not a number
+  `TypeError`, before the call is sent. `nan` was stored forever, and `"60"` was counted as a storage fault.
+- A view's headers (`with_options(headers=...)`) partition the cache, as `HttpOptions(headers=...)` does. Two views
+  with different `X-Api-Key` values on one client were served each other's cached entries.
+- A view's headers are withheld from untrusted origins, as client-wide ones are, and a call's own `headers=` from a
+  redirect or a later page that leads to another origin than the one the call named. Both reached any origin a
+  redirect or a `Link` header named.
+- A next page an `https` page names on plain `http` raises `ForbiddenDestinationError` before it is sent, as a
+  downgrading redirect is refused. It was sent in cleartext.
 - A body nested too deeply for its parser (around 100,000 levels for `json.loads` and msgspec) raises
   `ResponseParseError` on a 2xx, or the status's error on a declared non-2xx, where it raised a raw `RecursionError`,
   whichever reader read it: a codec's, `as_json`, `body_reader(json.loads)` or a hand-written reader over
@@ -135,15 +297,85 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - A deadline message wrote a long elapsed time in scientific notation (`1.23e+03s`).
 - Every call left its context in a reference cycle (through the retry verdict's judge), so what it allocated was
   freed only at the next garbage collection, raising the memory a stream of calls held at its peak.
+- A `SigningAuth` signs each attempt after the rate-limit wait, just before it is sent. It signed before the wait, so
+  a request queued behind a tight budget went out with an old signature: at 1 request a second against a server that
+  refuses signatures older than 30 seconds, a third of 45 concurrent calls took a 401 and spent their budget twice.
+- A client-wide `Content-Type` no longer replaces the one `json=`, `data=` or `files=` encodes the body with. A
+  multipart upload lost its boundary and could not be parsed. A call's own `headers=` still wins.
+- `Content-Type` is sent to an untrusted origin. A client-wide or view `Content-Type` was withheld there, so the body
+  went out with no type.
+- A credential declaration that is not a frozenset of names is refused with a `TypeError`: `token_headers`,
+  `token_params`, `signed_headers` and `signed_params` when the class is defined, and an auth's `credential_headers`
+  and `credential_params` when the client is built. A bare `str` (`"x-api-key"`) iterates as its letters, so the
+  guard and the cache withheld single letters instead of the header.
+
+- `AsyncCurlTransport` sends a request the retry layer would not repeat (a POST or PATCH without an idempotency key,
+  or any method outside the call's `RetryPolicy(methods=...)`) on a fresh connection. On a reused keep-alive
+  connection that died unanswered, libcurl sent it a second time on its own, so the server could process it twice
+  while headgate counted one attempt.
+- A call through `AsyncCurlTransport` cancelled before the response head, by a deadline or a timeout, ends its
+  transfer and gives its connection back. curl kept downloading the body into memory nobody read, outside
+  `max_response_bytes`, and enough such calls held every connection, so calls to healthy paths timed out.
+- An `AsyncCurlTransport` response is returned at its head, as httpx2's own transport does, not at its first body
+  byte, so a stream whose first event is slow no longer times out on open.
+- Closing an `AsyncCurlTransport` response whose body has stalled returns at once. It waited for curl's own stall
+  timeout, past the call's deadline.
+- An explicit `CurlOpt.PROXY` in `AsyncCurlTransport(curl_options=...)` is used for every host. The transport's
+  `NOPROXY="*"`, which keeps the environment's proxy out, bypassed it too; a `CurlOpt.NOPROXY` of your own is kept.
+- A 401 that `SigningAuth` or `CachedTokenAuth` answers by re-sending the request is dropped unread. httpx2 read it in
+  full, below `max_response_bytes`: a 66 MiB 401 body was read under a 1 MiB cap.
+- A token response that `MAX_MINT_RESPONSE_BYTES` refuses by its `Content-Length` closes its connection. It was left
+  open, so each such mint kept a pooled connection until the pool ran out.
+- When a token mint fails, every call that was waiting for it fails with the same error. Each waiting call used to
+  try the mint again, one after another, so a token host that was down cost one timeout per queued call.
+- A token refresh that fails inside `refresh_margin` sends the held token, which has not expired yet, instead of
+  failing the call.
+- A `mint_flow` hop that fails on the network (a refused connection, a timeout) is reported as the token mint's
+  `TransportError`, named for the auth class and the token endpoint. It was reported as the API call's, naming the
+  call's URL.
+- Under a headgate client, `CachedTokenAuth` no longer reads a streamed upload into memory before sending it. A body
+  that can be sent again (bytes, a factory, a rewindable `files=` upload) is still re-sent after a 401 re-mint; a
+  one-shot stream's 401 reaches the caller as `AuthError`, and the next call mints a new token.
+
+- `AsyncCurlTransport` reads a request's body from its stream on every send, as httpx2's own transport does. It read
+  the body once and sent that copy again, so a one-shot body sent a second time was not refused.
+- `FakeTransport.calls` logs a snapshot of each send, so a request changed between attempts shows each attempt's own
+  headers; it logged the one live request object, so every attempt showed the last one's. A reply function is given
+  the snapshot.
+- `FakeTransport` reads a request's body from its stream on every send, as a network transport does. It read the body
+  once and served that copy again, so a one-shot body sent twice went unnoticed in tests.
+- `check_codec` refuses a codec that reads a numeric string (`"1"`) as an `int`. It caught only strings that are no
+  number.
+- `CassetteFilter` keeps credentials out of recorded responses too: it drops the headers it filters from requests,
+  besides `Set-Cookie`, and redacts the secret query values in a `Location` or `Content-Location`, such as a signed
+  download URL.
 
 ### Security
 
+- `AsyncCurlTransport(curl_options={CurlOpt.FOLLOWLOCATION: True})` raises `ValueError`. curl followed each redirect
+  itself, below every headgate hook, so the credential guard never saw the hop and a credential went to whatever
+  origin the redirect named. headgate follows redirects itself (`HttpOptions(follow_redirects=...)`).
+- `AsyncCurlTransport` verifies TLS against the Mozilla CA bundle `curl_cffi` installs. It took its trust store from
+  `SSL_CERT_FILE`, `CURL_CA_BUNDLE` or `REQUESTS_CA_BUNDLE`, which a native transport ignores; pass `CurlOpt.CAINFO`
+  in `curl_options` for a bundle of your own. libcurl still writes TLS session keys to the file `SSLKEYLOGFILE` names,
+  when it is set.
 - A transport or token-mint error whose message quoted one long word (a redirect to a URL with a 64 KiB port, a token
   field the mint's parser quoted whole) took time quadratic in the word's length to redact, over twenty seconds on a
   desktop for the longest URL httpx2 accepts, blocking the event loop on a value the server chose. The `name=value`
   pattern now makes one full attempt per word, in linear time, and redacts exactly the pairs it did before.
 - A password with a bare `@` in it (`https://user:p@ss@host/`) is redacted whole from an error message. The redaction
   of a URL's userinfo in free text stopped at the first `@` and left the rest of the password in the message.
+- A `CachedTokenAuth` whose `attach` put the token in the query had no way to declare it, so the token reached any
+  origin a redirect or a next-page link named, and a 401 never re-minted. Such a subclass declares `token_params`; a
+  custom `attach` whose class declares no header and no parameter fails when it is defined.
+- httpx2's own `HTTP Request:` log line (INFO, `httpx2` logger) printed the URL as sent, a `QueryParamAuth` key or a
+  `SigningAuth` query signature included. Importing headgate adds a filter to that logger that redacts the URL, as
+  every error message is redacted. headgate still writes no log records of its own.
+- A failed token mint is raised without a cause. It chained httpx2's own error, whose message names the token URL
+  unredacted, so a traceback or `logger.exception` logged a `client_secret` in the URL. A note names the original
+  error's type and its redacted message instead.
+- When the cache storage failed and the live fetch that replaced it failed too, the live error carried the storage
+  error as its context, and a traceback printed the backend's message, which can hold a DSN and its password.
 
 ## [0.11.0] - 2026-11-02
 

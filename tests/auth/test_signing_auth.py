@@ -14,11 +14,11 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, Next, RetryPolicy, SigningAuth
-from headgate._core import CredentialStamper
+from headgate import HttpCache, HttpOptions, Json, Next, RetryPolicy, SigningAuth, TransportPolicy
+from headgate._core import CredentialStamper, Timing
 from headgate._url import is_secret_param
 from headgate.errors import AuthError
-from headgate.ratelimit import UNLIMITED
+from headgate.ratelimit import UNLIMITED, Rate, RateBudget
 from headgate.retry import Hedge
 from headgate.testing import TestClock, instant_retries
 from tests.support.clients import StubClient
@@ -27,7 +27,11 @@ from tests.support.responses import RESPONSE
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
+    from hishel import AsyncSqliteStorage
+
 _BASE = "https://api.example"
+#: The sends a 401 costs: the signed request and its one re-signed re-send.
+_SIGNED_AND_RE_SIGNED = 2
 
 
 class _Signer(SigningAuth):
@@ -96,7 +100,7 @@ async def test_every_request_is_signed_over_its_body() -> None:
     auth = _Signer()
     client, sent = _client(auth, _ok)
     async with client:
-        await client.post("orders", json={"qty": 1}, expect=RESPONSE)
+        await client.post("orders", body=Json({"qty": 1}), expect=RESPONSE)
         await client.get("orders/7", expect=RESPONSE)
 
     assert [request.headers["X-Signature"] for request in sent] == [
@@ -399,3 +403,64 @@ def test_a_signer_declaring_nothing_fails_when_it_is_defined() -> None:
             return "k"
 
     assert _Declared().credential_headers == {"x-key"}
+
+
+class _ClockSigner(SigningAuth):
+    """Signs each attempt with the time on *clock*, as a timestamp a server checks for freshness."""
+
+    signed_headers: ClassVar = frozenset({"X-Signed-At"})
+
+    def __init__(self, clock: TestClock) -> None:
+        """Read the time from *clock*."""
+        self._clock = clock
+
+    @override
+    def sign(self, request: httpx2.Request) -> None:
+        request.headers["X-Signed-At"] = str(self._clock.now)
+
+
+@pytest.mark.transport_policy
+async def test_a_request_waiting_in_the_rate_queue_is_signed_when_it_leaves_it() -> None:
+    """Sign after the rate wait, so a call queued behind a tight budget does not go out with a stale signature."""
+    clock = TestClock()
+    ages: list[float] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        ages.append(clock.now - float(request.headers["X-Signed-At"]))
+        return httpx2.Response(200)
+
+    budget = RateBudget(Rate.per_second(1), timing=Timing(clock=clock, sleep=clock.sleep), wall_clock=clock)
+    with clock.install():
+        client = StubClient(
+            base_url=_BASE,
+            rate=budget,
+            auth=_ClockSigner(clock),
+            http=HttpOptions(transport=httpx2.MockTransport(handle)),
+        )
+    async with client:
+        await asyncio.gather(*(client.get("orders", expect=RESPONSE) for _ in range(3)))
+
+    assert ages == [0.0, 0.0, 0.0]
+
+
+@pytest.mark.parametrize("auth", [_Signer, _QuerySigner], ids=["header", "query"])
+async def test_a_cached_clients_401_is_signed_again_once(auth: type[SigningAuth], storage: AsyncSqliteStorage) -> None:
+    """Re-sign a 401 behind the cache too, which hands the request down below the signature and back."""
+    sent: list[httpx2.Request] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        return httpx2.Response(httpx2.codes.UNAUTHORIZED)
+
+    client = StubClient(
+        base_url=_BASE,
+        rate=UNLIMITED,
+        auth=auth(),
+        policy=TransportPolicy(cache=HttpCache(storage=storage)),
+        http=HttpOptions(transport=httpx2.MockTransport(handle)),
+    )
+    async with client:
+        with pytest.raises(AuthError):
+            await client.get("orders", expect=RESPONSE)
+
+    assert len(sent) == _SIGNED_AND_RE_SIGNED

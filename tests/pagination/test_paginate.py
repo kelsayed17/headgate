@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, assert_type, cast
+from typing import TYPE_CHECKING, Any, assert_type
 
 import httpx2
 import msgspec
@@ -20,6 +20,7 @@ from headgate import (
     ClientError,
     Cursor,
     Expect,
+    ForbiddenDestinationError,
     HttpOptions,
     LinkHeader,
     NextUrl,
@@ -28,7 +29,6 @@ from headgate import (
     PageLimitError,
     PageNumber,
     Reader,
-    RequestOptions,
     ResponseParseError,
     UpstreamStatusError,
 )
@@ -148,7 +148,7 @@ async def test_a_walk_does_not_go_through_methods_a_subclass_may_rename() -> Non
     gets = [item.id async for item in client.paginate("items", expect=reader(Page), pages=pages)]
     query: dict[str, object] = {}
     posting = Cursor[Page, Item, dict[str, object]](items=items_of, next=cursor_of, param="after")
-    posts = [item.id async for item in client.paginate("items", json=query, expect=reader(Page), pages=posting)]
+    posts = [item.id async for item in client.paginate("items", query=query, expect=reader(Page), pages=posting)]
     assert gets == posts == [1, 2, 3, 4]
 
 
@@ -337,6 +337,23 @@ async def test_link_header_pages_are_followed_as_absolute_urls() -> None:
     ]
 
 
+@pytest.mark.parametrize("kind", ["body", "link"])
+async def test_a_next_page_from_https_down_to_http_is_refused_before_it_is_sent(kind: str) -> None:
+    """Refuse a next page an ``https`` page names on plain ``http``, as a downgrading redirect is, sending nothing."""
+    following = "http://api.test/items?cursor=c"
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        response = _page(request, [1], next=following)
+        response.headers["Link"] = f'<{following}>; rel="next"'
+        return response
+
+    pages = NextUrl(items=items_of, next=next_of) if kind == "body" else LinkHeader(items=items_of)
+    api = _Api(answer)
+    with pytest.raises(ForbiddenDestinationError, match=r"from https to http://api\.test/items"):
+        _ = [item async for item in api.client().paginate("start", expect=reader(Page), pages=pages)]
+    assert [str(url) for url in api.sent] == [f"{_BASE}/start"]
+
+
 async def test_next_url_pages_are_followed_from_the_body() -> None:
     """Follow a next URL the page names, relative or absolute."""
 
@@ -489,7 +506,7 @@ async def test_a_page_that_leads_back_raises_instead_of_looping() -> None:
     assert raised.value.source == "StubClient"
     assert raised.value.method == "GET"
     assert str(raised.value) == (
-        f"[StubClient] pagination loop: the page after page 2 repeats an earlier page's request ({_BASE}/items)"
+        f"[StubClient] pagination loop: the page after page 1 repeats an earlier page's request ({_BASE}/items)"
     )
 
 
@@ -508,15 +525,18 @@ async def test_a_repeating_cursor_on_a_template_url_raises() -> None:
 
 
 #: One request body of each kind no pager can rewrite.
-_BODIES: list[RequestOptions] = [{"data": {}}, {"content": b"x"}, {"files": {"f": b"x"}}]
+_BODIES: list[dict[str, Any]] = [{"data": {}}, {"content": b"x"}, {"files": {"f": b"x"}}]
 
 
 @pytest.mark.parametrize("body", _BODIES, ids=["data", "content", "files"])
-def test_a_body_no_pager_can_rewrite_is_refused(body: RequestOptions) -> None:
+def test_a_body_no_pager_can_rewrite_is_refused(body: dict[str, Any]) -> None:
     """Refuse a form, raw or multipart body: a walk's body is ``json=``, or ``body=`` with ``write=``."""
     client = _Api(_by_cursor).client()
-    with pytest.raises(ValueError, match="takes no data=, content= or files="):
-        client.paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of), **cast("dict[str, Any]", body))
+    name = next(iter(body))
+    with pytest.raises(
+        TypeError, match=rf"argument '{name}': a walk's body is query=, the value its pager rewrites for each page$"
+    ):
+        client.paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of), **body)
 
 
 @pytest.mark.parametrize(
@@ -810,3 +830,136 @@ async def test_collect_refuses_a_bad_count(max_items: int) -> None:
     with pytest.raises(ValueError, match=f"^max_items must be None or >= 0 \\(got {max_items!r}\\)$"):
         await paginated.collect(max_items=max_items)
     assert api.sent == []
+
+
+#: A page budget that only ends a walk the loop check failed to end.
+_BACKSTOP = PageLimit(max_pages=10)
+
+
+async def test_an_offset_walk_the_server_does_not_page_raises_at_the_repeated_page() -> None:
+    """Raise once a page repeats an earlier one's body, rather than walking the same page forever."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return _page(request, [0, 1])  # the offset is ignored
+
+    api = _Api(answer)
+    pages = Offset(items=items_of, page_size=2)
+    with pytest.raises(ClientError, match="pagination loop") as raised:
+        _ = [item async for item in api.client().paginate("items", expect=reader(Page), pages=pages, limit=_BACKSTOP)]
+
+    assert len(api.sent) == len(("first", "repeated"))
+    assert str(raised.value) == (
+        f"[StubClient] pagination loop: page 2 repeats an earlier page's body, so the server is not paging the walk "
+        f"({_BASE}/items?offset=2)"
+    )
+
+
+async def test_a_numbered_walk_the_server_does_not_page_raises_at_the_repeated_page() -> None:
+    """Raise at the second page when the server answers every page number with the first page."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return _page(request, [1], next="more")
+
+    api = _Api(answer)
+    pages = PageNumber(items=items_of, more=has_next)
+    with pytest.raises(ClientError, match="page 2 repeats an earlier page's body"):
+        _ = [item async for item in api.client().paginate("items", expect=reader(Page), pages=pages, limit=_BACKSTOP)]
+
+    assert len(api.sent) == len(("first", "repeated"))
+
+
+async def test_empty_pages_that_repeat_are_walked_past() -> None:
+    """Walk past empty pages with the same body when told to, since an empty page proves nothing about paging."""
+    last = 4
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        number = int(request.url.params["page"])
+        return _page(request, [number] if number in {1, last} else [], next=None if number == last else "more")
+
+    api = _Api(answer)
+    pages = PageNumber(items=items_of, more=has_next, stop_on_empty=False)
+    items = [item.id async for item in api.client().paginate("items", expect=reader(Page), pages=pages)]
+
+    assert items == [1, 4]
+
+
+async def test_link_header_pages_with_the_same_body_are_walked() -> None:
+    """Follow ``Link`` pages whose bodies are alike: their next page comes from the response, not the request."""
+    last = 3
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        page = int(request.url.params.get("page", "1"))
+        link = f'</items?page={page + 1}>; rel="next"' if page < last else ""
+        return httpx2.Response(200, json={"data": [{"id": 1}]}, headers={"link": link}, request=request)
+
+    api = _Api(answer)
+    paginated = api.client().paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of))
+
+    assert [item.id async for item in paginated] == [1, 1, 1]
+
+
+async def test_an_offset_walk_starts_at_the_callers_own_offset() -> None:
+    """Start at the offset the caller's ``params=`` give, as a numbered walk starts at the caller's page."""
+    end = 22
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        offset = int(request.url.params["offset"])
+        return _page(request, [offset] if offset < end else [])
+
+    api = _Api(answer)
+    pages = Offset(items=items_of, page_size=1)
+    paginated = api.client().paginate("items", expect=reader(Page), pages=pages, params={"offset": "20"})
+
+    assert [item.id async for item in paginated] == [20, 21]
+    assert [url.params["offset"] for url in api.sent] == ["20", "21", "22"]
+
+
+def test_an_offset_that_is_not_one_is_refused() -> None:
+    """Refuse a caller's offset that is no offset when the walk is built."""
+    with pytest.raises(ValueError, match="offset must be an offset"):
+        Offset(items=items_of, page_size=1).first(PageRequest("items", {"offset": "x"}))
+
+
+@pytest.mark.parametrize("served", [2, 1], ids=["full-pages", "capped-pages"])
+async def test_a_one_based_offset_walk_reaches_its_total(served: int) -> None:
+    """Fetch every item of a 1-based walk up to its total, even when the server caps pages below ``page_size``."""
+    total = 3
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        offset = int(request.url.params["offset"])
+        return _page(request, [i for i in range(offset, offset + served) if i <= total], cursor=str(total))
+
+    api = _Api(answer)
+    pages = Offset(items=items_of, page_size=2, start=1, total=lambda page: int(page.cursor or 0))
+
+    assert [item.id async for item in api.client().paginate("items", expect=reader(Page), pages=pages)] == [1, 2, 3]
+
+
+async def test_a_next_page_url_that_does_not_parse_is_a_client_error() -> None:
+    """Raise ``ClientError`` for a next URL httpx2 cannot parse, rather than its bare ``InvalidURL``."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return _page(request, [1], next="http://[::1")
+
+    paginated = (
+        _Api(answer).client().paginate("items", expect=reader(Page), pages=NextUrl(items=items_of, next=next_of))
+    )
+    with pytest.raises(ClientError, match="invalid next-page URL after page 1") as raised:
+        _ = [item async for item in paginated]
+
+    assert type(raised.value) is ClientError
+    assert raised.value.source == "StubClient"
+
+
+async def test_a_link_anchored_to_another_resource_ends_the_walk() -> None:
+    """Stop at a page whose only ``rel="next"`` is anchored to another resource: it names no page after this one."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        link = '</items?page=2>; rel="next"; anchor="/elsewhere"'
+        return httpx2.Response(200, json={"data": [{"id": 1}]}, headers={"link": link}, request=request)
+
+    api = _Api(answer)
+    paginated = api.client().paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of))
+
+    assert [item.id async for item in paginated] == [1]
+    assert len(api.sent) == 1

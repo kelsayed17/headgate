@@ -34,11 +34,12 @@ class _FetchError(Exception):
 
 @dataclass
 class _Call:
-    """One fetch inside ``track()``: its open scope, its verdict, and whether it took the probe slot."""
+    """One fetch inside ``track()``: its open scope, its verdict, whether it took the probe slot, and prior trips."""
 
     scope: AbstractContextManager[Verdict]
     verdict: Verdict
     probe: bool
+    trips: int
 
 
 class _Clock:
@@ -62,6 +63,7 @@ class BreakerMachine(RuleBasedStateMachine):
         self.breaker = CircuitBreaker(failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN, clock=self.clock)
         self.open_calls: list[_Call] = []
         self.opened_at: float | None = None
+        self.trips = 0
 
     @initialize()
     def build(self) -> None:
@@ -78,7 +80,7 @@ class BreakerMachine(RuleBasedStateMachine):
         except BreakerOpenError:
             assert not was_closed, "a closed breaker must admit every call"
             return
-        self.open_calls.append(_Call(scope, verdict, probe=not was_closed))
+        self.open_calls.append(_Call(scope, verdict, probe=not was_closed, trips=self.trips))
 
     @precondition(lambda self: self.open_calls)
     @rule(data=st.data(), outcome=st.sampled_from(_OUTCOMES))
@@ -103,15 +105,18 @@ class BreakerMachine(RuleBasedStateMachine):
             call.scope.__exit__(None, None, None)
             if call.probe:
                 assert self.breaker.state is BreakerState.OPEN, "a probe whose failure was caught still re-opens"
-            elif closed_before:
+            elif closed_before and call.trips == self.trips:
                 counted = self.breaker.failure_count == counted_before + 1
                 assert counted or self.breaker.state is BreakerState.OPEN, "a caught failure still counts"
+            elif closed_before:
+                assert self.breaker.failure_count == counted_before, "a call from before the last trip counts nothing"
         elif outcome == "unmarked_error":
             call.scope.__exit__(_FetchError, _FetchError("not a host failure"), None)
         else:
             call.scope.__exit__(asyncio.CancelledError, asyncio.CancelledError(), None)
         if self.breaker.state is BreakerState.OPEN and not was_open:
             self.opened_at = self.clock.now
+            self.trips += 1
 
     @rule(seconds=st.floats(min_value=0, max_value=3 * _COOLDOWN))
     def advance_clock(self, seconds: float) -> None:

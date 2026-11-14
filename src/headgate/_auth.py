@@ -24,6 +24,7 @@ Only the async flow is implemented; the clients are async-only.
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 import math
 import secrets
@@ -35,11 +36,12 @@ from typing import TYPE_CHECKING, ClassVar, Final, override
 import httpx2
 
 from headgate._body import read_capped
-from headgate._core import CallContext, origin_text
-from headgate._failures import CallSite, loggable_url, mint_error
-from headgate._url import register_secret_params
-from headgate.errors import ClientConfigurationError
-from headgate.security._credentials import CHAIN_ORIGIN
+from headgate._core import CallContext, Slot, origin_text
+from headgate._failures import CallSite, loggable_url, mint_error, shorten, transport_error
+from headgate._url import redact_secrets, register_secret_params
+from headgate.errors import ClientConfigurationError, ClientError
+from headgate.retry._policy import REPLAYABLE_BODY
+from headgate.security._credentials import CHAIN_ORIGIN, check_names
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable, Mapping
@@ -48,6 +50,7 @@ __all__ = [
     "AUTH_HOP",
     "FRESH_TOKEN_S",
     "MAX_MINT_RESPONSE_BYTES",
+    "MINTING",
     "SIGNER_EXT",
     "BearerAuth",
     "CachedTokenAuth",
@@ -56,6 +59,7 @@ __all__ = [
     "SigningAuth",
     "StaticHeaderAuth",
     "failed_on_auth_hop",
+    "mint_hop_failure",
 ]
 
 #: The request extension marking a request an auth flow yields to acquire a credential, as opposed to the call's own
@@ -63,9 +67,17 @@ __all__ = [
 #: recorder can read it to skip the hop, which is not the endpoint's answer.
 AUTH_HOP = "headgate.auth_hop"
 
+#: The request extension naming the auth class whose mint flow yielded the request, for :func:`mint_hop_failure`.
+_MINTED_BY: Final = "headgate.minted_by"
+
+#: True on a call's context while its :class:`CachedTokenAuth` waits for the mint lock or mints under it, so the call's
+#: deadline passing then is not charged to the API origin's breaker: the time went to the credential host. A raise or
+#: cancellation leaves it set, for the exchange to read on the way out.
+MINTING = Slot[bool]("minting")
+
 #: The request extension holding the :class:`SigningAuth` that signs the request. Its flow sets it on a request it
-#: signs, and the transport stack calls its :meth:`~SigningAuth.sign` on every attempt, before the credential guard,
-#: when it is the client's own ``auth``.
+#: signs, and the transport stack calls its :meth:`~SigningAuth.sign` on every attempt, after the rate-limit wait and
+#: before the credential guard, when it is the client's own ``auth``.
 #: httpx2 hands a request's extensions to the redirects that follow it, so each hop is signed for its own origin, and
 #: the guard withholds the signature from one it does not trust.
 SIGNER_EXT: Final = "headgate.signer"
@@ -81,7 +93,7 @@ FRESH_TOKEN_S = 60.0
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class _Held[T]:
-    """A cached token, with when it was minted and when it is due for a refresh: ``time.monotonic()`` instants.
+    """A cached token, with when it was minted, is due for a refresh and expires: ``time.monotonic()`` instants.
 
     A monotonic clock is immune to wall-clock steps. ``minted_at`` is ``-inf`` for a token whose age is unknown.
     """
@@ -89,6 +101,54 @@ class _Held[T]:
     token: T
     minted_at: float
     due_at: float
+    expires_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class _Failed:
+    """A mint that failed: the number it was started as, and what it raised, copied as it was raised."""
+
+    attempt: int
+    error: ClientError
+
+    def raised(self) -> ClientError:
+        """Return a copy of the error for one more call to raise: its own traceback, and notes of its own."""
+        return _copied(self.error)
+
+
+def _copied(error: ClientError) -> ClientError:
+    """Return a copy of *error* that shares no traceback and no notes list with it."""
+    copied = copy.copy(error).with_traceback(None)
+    copied.__notes__ = list(getattr(error, "__notes__", ()))
+    return copied
+
+
+async def _buffer_unless_headgate(request: httpx2.Request, context: CallContext | None) -> None:
+    """Buffer *request*'s body for a 401's re-send when it is sent by a bare httpx2 client (no *context*).
+
+    A headgate client marks a body that cannot be sent twice (``REPLAYABLE_BODY``), and the flow re-sends only one that
+    can, so its uploads stream; a bare client says nothing, so its body is read into memory first. httpx2 honors
+    ``requires_request_body`` only in its default flows, which :class:`CachedTokenAuth` replaces.
+    """
+    if context is None:
+        await request.aread()
+
+
+def _mark_minting(context: CallContext | None, *, minting: bool) -> None:
+    """Record on *context*, when the request has one, whether its auth is waiting for or running a mint."""
+    if context is not None:
+        context.put(MINTING, value=minting)
+
+
+async def _drop_body(response: httpx2.Response) -> None:
+    """Close the body of a response an auth flow answers with a re-send, and leave it empty.
+
+    httpx2 reads in full each response a flow answers with another request, below ``max_response_bytes``, to keep it in
+    the call's history; nothing reads a re-sent 401's body, so it is closed unread, as a followed redirect's is.
+    """
+    # Closed through a response of its own, so *response* is not marked closed: httpx2 still reads it for the history.
+    await httpx2.Response(response.status_code, stream=response.stream).aclose()
+    response.stream = httpx2.ByteStream(b"")
 
 
 def _identity(pairs: Iterable[tuple[str, str]]) -> bytes:
@@ -98,6 +158,19 @@ def _identity(pairs: Iterable[tuple[str, str]]) -> bytes:
         raw = part.encode()
         encoded += b"%d:%b," % (len(raw), raw)
     return bytes(encoded)
+
+
+def mint_hop_failure(exc: httpx2.HTTPError | OSError) -> ClientError | None:
+    """Return the ``ClientError`` a network failure on a mint flow's hop means, or ``None`` for any other failure.
+
+    httpx2 raises a hop's network failure outside the auth flow, so the client maps it here: as the token endpoint's
+    failure, named for the auth class and the hop's request, never the API call's.
+    """
+    if not (isinstance(exc, httpx2.RequestError) and failed_on_auth_hop(exc)):
+        return None
+    request = exc.request
+    source = str(request.extensions.get(_MINTED_BY, "token mint"))
+    return transport_error(exc, CallSite(source, request.method, f"{loggable_url(str(request.url))} (token mint)"))
 
 
 def failed_on_auth_hop(exc: BaseException) -> bool:
@@ -147,25 +220,28 @@ async def _read_hop(response: httpx2.Response, source: str) -> httpx2.Response:
     """
     request = response.request
     site = CallSite(source, request.method, f"{loggable_url(str(request.url))} (token mint)")
-    raw = _Recorded(httpx2.Response(response.status_code, stream=response.stream).aiter_raw())
+    network = httpx2.Response(response.status_code, stream=response.stream)
+    raw = _Recorded(network.aiter_raw())
     decoded = httpx2.Response(response.status_code, headers=response.headers, stream=raw, request=request)
     try:
         await read_capped(decoded, MAX_MINT_RESPONSE_BYTES, site)
     finally:
+        # Closed whether it was read or refused unread (by its Content-Length), so its pooled connection goes back.
+        await network.aclose()
         response.stream = httpx2.ByteStream(b"".join(raw.chunks))
     await response.aread()
     return response
 
 
-def _prepare_hop(hop: httpx2.Request, call: httpx2.Request) -> None:
-    """Mark *hop*, a request a mint flow yielded for *call*, as an auth hop, and give it the call's timeouts.
+def _prepare_hop(hop: httpx2.Request, call: httpx2.Request, source: str) -> None:
+    """Mark *hop*, a request a mint flow yielded for *call*, as *source*'s auth hop, and give it the call's timeouts.
 
     The marks are :data:`AUTH_HOP` and the :data:`~headgate.security.CHAIN_ORIGIN` the credential guard trusts for the
     hop. A hop that sets no ``timeout`` extension of its own takes the call's: a request built by hand has none, and a
     token host that never answered would hold the call, and the mint's lock, until the deadline. Either way the hop's
     timeouts are cut to the time the call's deadline leaves.
     """
-    extensions = {**hop.extensions, AUTH_HOP: True, CHAIN_ORIGIN: origin_text(hop.url.origin)}
+    extensions = {**hop.extensions, AUTH_HOP: True, _MINTED_BY: source, CHAIN_ORIGIN: origin_text(hop.url.origin)}
     timeout = call.extensions.get("timeout")
     if "timeout" not in extensions and isinstance(timeout, dict):
         extensions["timeout"] = dict(timeout)
@@ -261,10 +337,11 @@ class SigningAuth(httpx2.Auth, ABC):
     :meth:`sign`; the base class runs the flow around it:
 
     * **Every attempt is signed afresh**, inside the retry layer. The flow marks the request with :data:`SIGNER_EXT`,
-      and the client's transport stack calls :meth:`sign` on each attempt as it leaves the middleware layer: after the
-      last middleware and before the credential guard, the cache and any rate-limit wait. A retry or a hedge carries a
-      signature of its own, so a short-lived one (a timestamp checked to 30 s, a JWT of two minutes) does not go stale
-      across the backoff, and a cross-origin redirect hop is signed only to have the guard withhold it. It signs only as
+      and the client's transport stack calls :meth:`sign` on each attempt as it leaves the rate budget: after the last
+      middleware, the cache and the rate-limit wait, and before the credential guard runs again. A retry, a hedge and
+      a request that queued behind the budget each carry a signature of their own, so a short-lived one (a timestamp
+      checked to 30 s, a JWT of two minutes) goes stale neither across the backoff nor in the queue, and a cross-origin
+      redirect hop is signed only to have the guard withhold it. It signs only as
       the client's own ``auth`` under a headgate client: under a bare ``httpx2.AsyncClient``, or wrapped in another
       ``httpx2.Auth``, its requests go out unsigned and a 401 is not re-sent.
     * **An exception from** :meth:`sign` **surfaces from inside the retry layer**, as it was raised: the attempt counts
@@ -301,6 +378,7 @@ class SigningAuth(httpx2.Auth, ABC):
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse a concrete subclass that declares nothing it signs with, and register its parameters as secret."""
         super().__init_subclass__(**kwargs)
+        check_names(cls.__name__, signed_headers=cls.signed_headers, signed_params=cls.signed_params)
         register_secret_params(cls.signed_params)
         if not inspect.isabstract(cls) and not (cls.signed_headers or cls.signed_params):
             msg = (
@@ -356,6 +434,7 @@ class SigningAuth(httpx2.Auth, ABC):
         # A 401 to a request its signature never reached (the credential guard withheld it) judged no signature, so it
         # is not re-sent.
         if response.status_code == httpx2.codes.UNAUTHORIZED and self._carries(response.request):
+            await _drop_body(response)
             yield request
 
 
@@ -383,7 +462,9 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
       problem, not staleness, and re-minting cannot fix it: a gateway that rejects valid tokens (a revoked scope, a
       changed entitlement) costs at most one mint per window, and the 401 reaches the caller as the ``AuthError`` it
       is. A 401 to a request sent without the token (withheld from an origin the client does not trust) rejects
-      nothing, so it neither mints nor re-sends.
+      nothing, so it neither mints nor re-sends. The re-sent 401's body is dropped unread. Under a headgate client the
+      call's body is not buffered for the re-send: a body that cannot be sent twice (a one-shot stream) is not re-sent,
+      its 401 reaches the caller, and the rejected token is dropped so the next call mints.
 
     The exchange itself is the subclass's, because that is where providers differ (form-encoded or JSON, a separate
     sign-in host, their own field names). It supplies one of:
@@ -400,9 +481,12 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     bearer. :meth:`seed` caches a token obtained elsewhere.
 
     **What it stamps is declared.** :attr:`token_headers` names the headers :meth:`attach` sets (``Authorization`` by
-    default), and is what :attr:`credential_headers` reports, so the client withholds exactly those from an untrusted
-    origin. A subclass that overrides :meth:`attach` must declare its own :attr:`token_headers` (or override
-    :attr:`credential_headers`), or the class definition fails: an undeclared header would follow a request anywhere.
+    default) and :attr:`token_params` the query parameters (none by default, ``access_token`` for a provider that takes
+    the token in the query). They are what :attr:`credential_headers` and :attr:`credential_params` report, so the
+    client withholds exactly those from an untrusted origin, and the parameters are registered as secret, so error
+    messages redact them. A subclass that overrides :meth:`attach` must declare its own :attr:`token_headers` or
+    :attr:`token_params`, not both empty (or override :attr:`credential_headers` or :attr:`credential_params`), or the
+    class definition fails: an undeclared credential would follow a request anywhere.
 
     **Its identity is the long-lived credential, not the token.** :meth:`credential_identity` names what the minted
     tokens stand for, so a cache keeps one credential's responses apart from another's across token refreshes. The base
@@ -424,19 +508,28 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
 
     The lock is held while a mint flow's requests are in flight, so requests that need a token wait for the mint to
     finish or fail, bounded by the hop's timeouts (the call's, unless the hop sets its own) and the call's deadline.
-    Closing the flow (an error, or the caller's cancellation) releases it.
+    Closing the flow (an error, or the caller's cancellation) releases it. **A mint that fails fails every request that
+    waited for it**, each with a copy of its ``ClientError``, instead of each minting again in turn; a request that
+    starts after the failure mints afresh. **A refresh that fails inside the margin** sends the held token instead,
+    since it has not expired, and so do the requests that waited for that refresh. A hop's network failure is raised
+    by httpx2 outside the flow, so it is neither shared nor answered with the held token.
 
     **A failed mint is reported as the token endpoint's failure**, never the API call's (see
     :func:`~headgate._failures.mint_error`): an exception the mint code raises (a ``ConnectError`` on its own client,
     a ``raise_for_status()``, an unreadable token response) becomes the ``ClientError`` it means, named for this auth
     class and the token endpoint, chained to the original. It is raised from the auth flow, so the API host's circuit
-    breaker records nothing for it. A hop :meth:`mint_flow` yields travels the owning client's stack and fails as any
-    request there does; reading its response (bounded by :data:`MAX_MINT_RESPONSE_BYTES`) fails through the same
-    mapping, so a body that is too large is ``ResponseTooLargeError`` and a dropped connection ``TransportError``.
+    breaker records nothing for it. A hop :meth:`mint_flow` yields travels the owning client's stack; a network
+    failure there is reported the same way, as ``TransportError`` naming this auth class and the hop's endpoint
+    (:func:`mint_hop_failure`), and reading its response (bounded by :data:`MAX_MINT_RESPONSE_BYTES`) fails through
+    the same mapping, so a body that is too large is ``ResponseTooLargeError`` and a dropped connection
+    ``TransportError``.
     """
 
     #: The headers :meth:`attach` sets. A subclass whose :meth:`attach` sets others declares them here.
     token_headers: ClassVar[frozenset[str]] = frozenset({"Authorization"})
+    #: The query parameters :meth:`attach` sets. A subclass whose :meth:`attach` puts the token in the query declares
+    #: them here.
+    token_params: ClassVar[frozenset[str]] = frozenset[str]()
 
     def __init__(self, *, refresh_margin: float = 120.0) -> None:
         """Start with an empty cache that refreshes *refresh_margin* seconds before a token expires."""
@@ -444,17 +537,24 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         self._refresh_margin_s = refresh_margin
         self._held: _Held[TokenT] | None = None
         self._lock = asyncio.Lock()
+        # Mints started so far, and the last that failed: a call that queued behind a failed mint raises its error.
+        self._attempts = 0
+        self._minting = False
+        self._failed: _Failed | None = None
 
     # -- Subclass contract ---------------------------------------------------
 
     def __init_subclass__(cls, **kwargs: object) -> None:
-        """Refuse a subclass with no mint, or whose :meth:`attach` sets headers it has not declared.
+        """Refuse a subclass with no mint, or whose :meth:`attach` sets a credential it has not declared.
 
         A subclass must inherit a :meth:`mint_token` or a :meth:`mint_flow` override; and when it overrides
-        :meth:`attach`, that class or one below it must declare :attr:`token_headers` or override
-        :attr:`credential_headers`.
+        :meth:`attach`, that class or one below it must declare a non-empty :attr:`token_headers` or
+        :attr:`token_params`, or override :attr:`credential_headers` or :attr:`credential_params`. Its parameters are
+        registered as secret.
         """
         super().__init_subclass__(**kwargs)
+        check_names(cls.__name__, token_headers=cls.token_headers, token_params=cls.token_params)
+        register_secret_params(cls.token_params)
         # Not @abstractmethod: either of two methods satisfies the contract.
         supplied = any(getattr(cls, name) is not getattr(CachedTokenAuth, name) for name in ("mint_token", "mint_flow"))
         if not supplied:
@@ -462,14 +562,13 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
             raise TypeError(msg)
         mro = cls.__mro__
         attaching = next(klass for klass in mro if "attach" in vars(klass))
-        declared = any(
-            "token_headers" in vars(klass) or "credential_headers" in vars(klass)
-            for klass in mro[: mro.index(attaching) + 1]
-        )
-        if not declared:
+        below = [vars(klass) for klass in mro[: mro.index(attaching) + 1]]
+        by_property = any("credential_headers" in names or "credential_params" in names for names in below)
+        by_token = any("token_headers" in names or "token_params" in names for names in below)
+        if not (by_property or (by_token and (cls.token_headers or cls.token_params))):
             msg = (
-                f"{cls.__name__} overrides attach, so it must declare the headers attach sets in token_headers "
-                f"(or override credential_headers)"
+                f"{cls.__name__} overrides attach, so it must declare what attach sets in token_headers or "
+                f"token_params (or override credential_headers)"
             )
             raise TypeError(msg)
 
@@ -482,8 +581,8 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
 
     @property
     def credential_params(self) -> frozenset[str]:
-        """No query parameters: a minted token rides a header."""
-        return frozenset[str]()
+        """The query parameters :meth:`attach` sets (:attr:`token_params`): none by default."""
+        return self.token_params
 
     def credential_identity(self) -> bytes:
         """Return bytes naming the long-lived credential this auth mints with: by default, this instance's own.
@@ -526,8 +625,11 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         request.headers["Authorization"] = f"Bearer {token}"
 
     def skips(self, request: httpx2.Request) -> bool:
-        """Return whether *request* needs no credential from this auth: by default, one carrying a token header."""
-        return any(name in request.headers for name in self.token_headers)
+        """Return whether *request* needs no credential from this auth: by default, one carrying its token's name."""
+        params = request.url.params
+        return any(name in request.headers for name in self.token_headers) or any(
+            name in params for name in self.token_params
+        )
 
     def reject_credential_rotation(self, returned: str | None, configured: str, *, setting: str) -> None:
         """Raise ``ClientConfigurationError`` when a token endpoint returns a replacement for the configured credential.
@@ -564,7 +666,8 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         # A lifetime at or under the margin would read as due the moment it was cached, so every request would mint
         # again: refresh at half-life instead.
         margin = min(self._refresh_margin_s, lifetime / 2)
-        self._held = _Held(token=token, minted_at=minted_at, due_at=time.monotonic() + lifetime - margin)
+        now = time.monotonic()
+        self._held = _Held(token=token, minted_at=minted_at, due_at=now + lifetime - margin, expires_at=now + lifetime)
 
     def _usable(self, rejected: TokenT | None) -> TokenT | None:
         """Return the cached token unless it is absent, the one a 401 just rejected, or within the refresh margin."""
@@ -572,6 +675,21 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         if held is not None and held.token != rejected and time.monotonic() < held.due_at:
             return held.token
         return None
+
+    def _unexpired(self, rejected: TokenT | None) -> TokenT | None:
+        """Return the cached token while it has not expired, unless it is the one a 401 just rejected.
+
+        A refresh inside the margin that fails falls back to it: it still carries the authority it was minted with.
+        """
+        held = self._held
+        if held is not None and held.token != rejected and time.monotonic() < held.expires_at:
+            return held.token
+        return None
+
+    def _forget(self, token: TokenT) -> None:
+        """Drop *token* from the cache if it is still the cached one, so the next call mints."""
+        if self._held is not None and self._held.token == token:
+            self._held = None
 
     def _is_fresh(self, token: TokenT) -> bool:
         """Return whether *token* is still the cached one and was minted within :data:`FRESH_TOKEN_S`.
@@ -583,18 +701,28 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         return held is not None and token == held.token and time.monotonic() - held.minted_at < FRESH_TOKEN_S
 
     def _carried(self, request: httpx2.Request) -> bool:
-        """Return whether *request*, as it was sent, carried any of the headers the token rides on."""
-        return any(name in request.headers for name in self.credential_headers)
+        """Return whether *request*, as it was sent, carried any of the headers or parameters the token rides on."""
+        params = request.url.params
+        return any(name in request.headers for name in self.credential_headers) or any(
+            name in params for name in self.credential_params
+        )
 
     async def _mint_step[T](self, step: Awaitable[T]) -> T:
-        """Await a *step* of the mint, raising a failure in it as the ``ClientError`` it means."""
+        """Await a *step* of the mint, raising a failure in it as the ``ClientError`` it means.
+
+        The mapped error is raised outside the ``except`` block, with no cause: the original's message (httpx2's names
+        the URL as sent) may carry the token URL's secrets, and a traceback prints the whole chain. A note names the
+        original by its type and redacted message instead.
+        """
         try:
             return await step
         except Exception as exc:
             mapped = mint_error(exc, source=type(self).__name__)
             if mapped is exc:
                 raise
-            raise mapped from exc
+            detail = " ".join(redact_secrets(str(exc)).split())
+            mapped.add_note(f"from {type(exc).__name__}: {shorten(detail)}" if detail else f"from {type(exc).__name__}")
+        raise mapped
 
     @override
     async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
@@ -602,43 +730,99 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
             yield request
             return
 
-        # The 401 path re-sends this request, so a streamed body is buffered before the first send. httpx2 honors
-        # ``requires_request_body`` only in its default flows, which this method replaces.
-        await request.aread()
+        context = CallContext.find(request)
+        await _buffer_unless_headgate(request, context)
         # The token a 401 came back for, rather than a "force" flag: each waiter on the lock re-checks the cache
         # against the token it was rejected for, so concurrent 401s share the first replacement instead of each minting.
         rejected: TokenT | None = None
         while True:
+            _mark_minting(context, minting=True)
+            # The mint this call waits behind: the one in flight, or else the next to start.
+            behind = self._attempts if self._minting else self._attempts + 1
             async with self._lock:
                 token = self._usable(rejected)
                 if token is None:
-                    # Only this generator can yield to the client, so it drives the mint flow: httpx2 sends each
-                    # request the mint yields and hands its response back in.
-                    mint = self.mint_flow(request)
+                    token = self._after_failed_wait(rejected, behind)
+                if token is None:
+                    self._attempts += 1
+                    self._minting = True
                     try:
-                        step = await self._mint_step(anext(mint))
-                        while isinstance(step, httpx2.Request):
-                            _prepare_hop(step, request)
-                            hop_response = yield step
-                            hop_response = await self._mint_step(_read_hop(hop_response, type(self).__name__))
-                            step = await self._mint_step(mint.asend(hop_response))
-                    except StopAsyncIteration:
-                        msg = f"{type(self).__name__}.mint_flow ended without yielding Minted"
-                        raise RuntimeError(msg) from None
+                        # Only this generator can yield to the client, so it drives the mint flow: httpx2 sends each
+                        # request the mint yields and hands its response back in.
+                        mint = self.mint_flow(request)
+                        try:
+                            step = await self._mint_step(anext(mint))
+                            while isinstance(step, httpx2.Request):
+                                _prepare_hop(step, request, type(self).__name__)
+                                hop_response = yield step
+                                hop_response = await self._mint_step(_read_hop(hop_response, type(self).__name__))
+                                step = await self._mint_step(mint.asend(hop_response))
+                        except StopAsyncIteration:
+                            msg = f"{type(self).__name__}.mint_flow ended without yielding Minted"
+                            raise RuntimeError(msg) from None
+                        finally:
+                            await mint.aclose()
+                    except ClientError as exc:
+                        token = self._after_failed_mint(exc, rejected)
+                    else:
+                        self._failed = None
+                        token = step.token
+                        self._cache(token, step.lifetime, minted_at=time.monotonic())
                     finally:
-                        await mint.aclose()
-                    token = step.token
-                    self._cache(token, step.lifetime, minted_at=time.monotonic())
+                        self._minting = False
+            _mark_minting(context, minting=False)
             self.attach(request, token)
             response = yield request
             # ``rejected`` is set only after the first 401, so this re-sends at most once. A 401 to a request the token
             # never reached (the credential guard withheld it from an untrusted origin, or httpx2 from a cross-origin
             # redirect) judged no token, so it rejects none.
-            if (
-                response.status_code != httpx2.codes.UNAUTHORIZED
-                or rejected is not None
-                or not self._carried(response.request)
-                or self._is_fresh(token)
-            ):
+            if not await self._re_sends(response, token, rejected, context):
                 return
             rejected = token
+
+    def _after_failed_wait(self, rejected: TokenT | None, behind: int) -> TokenT | None:
+        """Return the token a call that waited behind mint number *behind* uses, or ``None`` when it mints itself.
+
+        When that mint failed, its error is this call's answer too (raised as a copy), unless the held token has not
+        expired yet: then that token is used, as it is by the call whose mint failed.
+        """
+        failed = self._failed
+        if failed is None or failed.attempt < behind:
+            return None
+        token = self._unexpired(rejected)
+        if token is None:
+            raise failed.raised()
+        return token
+
+    def _after_failed_mint(self, error: ClientError, rejected: TokenT | None) -> TokenT:
+        """Record *error* for the calls waiting behind this mint, and return the held token if it has not expired.
+
+        :raises ClientError: *error*, when there is no such token.
+        """
+        self._failed = _Failed(self._attempts, _copied(error))
+        token = self._unexpired(rejected)
+        if token is None:
+            raise error
+        return token
+
+    async def _re_sends(
+        self, response: httpx2.Response, token: TokenT, rejected: TokenT | None, context: CallContext | None
+    ) -> bool:
+        """Return whether the flow re-sends its request after *response*, the answer to it carrying *token*.
+
+        Only a first 401 that rejected a long-held token is re-sent (see the class docstring), and only with a body
+        that can be sent again: a one-shot stream's 401 reaches the caller, and the token is dropped so the next call
+        mints afresh. A re-sent 401's body is dropped unread.
+        """
+        if (
+            response.status_code != httpx2.codes.UNAUTHORIZED
+            or rejected is not None
+            or not self._carried(response.request)
+            or self._is_fresh(token)
+        ):
+            return False
+        if context is not None and context.get(REPLAYABLE_BODY) is False:
+            self._forget(token)
+            return False
+        await _drop_body(response)
+        return True

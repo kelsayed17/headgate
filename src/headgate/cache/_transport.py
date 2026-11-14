@@ -18,7 +18,7 @@ response handed up carries it (:func:`store_accepted`), and ``AsyncBaseClient`` 
 accepted the response. A refusal inside a 200, an undecodable body or an undeclared status is never stored, so it is not
 served again for the entry's lifetime. :class:`~headgate.cache.HttpCache` still decides what may be stored at all: a
 request it does not name is sent past hishel, and a status it does not name is never written. A body past the size cap
-is not held here, so it is not stored.
+is not held here, so it is not stored, and neither is a stream's miss, whose body is never held.
 
 **Lifetimes.** An entry's TTL rides hishel's ``caching`` request extension (:func:`stamp_ttl`):
 :class:`ResilientCacheTransport` stamps :class:`~headgate.cache.HttpCache`'s ``ttl``, and ``AsyncBaseClient`` stamps a
@@ -59,7 +59,7 @@ import httpx2
 from hishel import AsyncBaseStorage, Entry, Request, Response
 from hishel.httpx2 import AsyncCacheTransport
 
-from headgate._core import CacheOutcome, CacheResult, CallContext
+from headgate._core import CacheOutcome, CacheResult, CallContext, Slot, url_path
 from headgate.cache._credentials import CredentialScope
 from headgate.cache._policy import Partition
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
@@ -75,6 +75,9 @@ __all__ = [
     "CACHE_DEGRADATIONS",
     "CACHE_DEGRADED_EXT",
     "HOST_UNTESTED",
+    "MAX_RESPONSE_BYTES",
+    "STREAMED",
+    "TRACE_HEADERS",
     "CacheStorageError",
     "ResilientCacheTransport",
     "host_untested",
@@ -90,10 +93,12 @@ __all__ = [
 CACHING_EXT: Final = "caching"
 
 
-def stamp_ttl(request: httpx2.Request, ttl: float, *, keep: bool = False) -> None:
-    """Set *ttl* as the lifetime of the entry *request* stores; with *keep*, a TTL it already carries stays.
+def stamp_ttl(request: httpx2.Request, ttl: float | None, *, keep: bool = False) -> None:
+    """Set *ttl* as the lifetime of the entry *request* stores, ``None`` for none; with *keep*, a TTL it carries stays.
 
-    The settings are copied, never changed in place, since a retry re-sends the same request object.
+    The settings are copied, never changed in place, since a retry re-sends the same request object. *ttl* is
+    checked where it is given: a call's by :func:`~headgate._call_options.check_overrides`, the cache's by
+    :class:`~headgate.cache.HttpCache`.
     """
     settings = dict(request.extensions.get(CACHING_EXT, {}))
     if not (keep and "ttl" in settings):
@@ -164,17 +169,28 @@ def _vary_names(headers: Headers) -> frozenset[str]:
 
 
 def _same_variant(entry: Entry, headers: httpx2.Headers) -> bool:
-    """Return whether *entry* answers a request sending *headers*, by the headers its response's ``Vary`` names.
+    """Return whether *entry* answers a request sending *headers*, by ``Accept`` and the headers its ``Vary`` names.
 
-    Each named header must have the values the stored request had (RFC 9111 section 4.1). Both sides are the cache's
-    view of a request (see :class:`~headgate.cache._credentials.CredentialScope`), where each value is a keyed digest,
-    so equal digests are equal values. No entry varying on ``*``, or on a header the view drops, is ever stored (see
-    :meth:`_GuardedStorage.create_entry`), so a named header the view lacks is one neither request sent.
+    Each named header must have the values the stored request had (RFC 9111 section 4.1), and so must ``Accept``
+    whatever the response's ``Vary`` says, since an API that answers JSON and CSV at one URL rarely names it. Both sides
+    are the cache's view of a request (see :class:`~headgate.cache._credentials.CredentialScope`), where each value is a
+    keyed digest, so equal digests are equal values. A named header the view drops is told apart by
+    :func:`_varies_on_dropped`, never here.
     """
     return all(
         (entry.request.headers.get_list(name) or []) == headers.get_list(name)
-        for name in _vary_names(entry.response.headers)
+        for name in _vary_names(entry.response.headers) | {"accept"}
     )
+
+
+def _varies_on_dropped(names: frozenset[str]) -> bool:
+    """Return whether *names*, a response's ``Vary``, names a header this trip's request sent but its view drops.
+
+    That is a credential (``Authorization``, a cookie, a declared one): under a shared partition no view tells two of
+    its values apart, so such a response neither is stored nor answers this request.
+    """
+    call = _CALL.get()
+    return any(name in call.headers and name not in call.view_headers for name in names)
 
 
 class _GuardedStorage(AsyncBaseStorage):
@@ -188,8 +204,8 @@ class _GuardedStorage(AsyncBaseStorage):
     by :class:`_Store` once the call's reader accepts the response. One is never held when no later request could be
     told to be its variant or another's: a status *stores* refuses, a ``Vary: *``, and, under a *shared* partition, a
     ``Vary`` naming a header the request sent but the view drops (``Authorization``, a cookie, a declared credential).
-    Under a credential partition the view's partition label already carries that header's value, so each value has
-    entries of its own.
+    By the same rule, a stored entry varying on such a header never answers a request that sends it. Under a credential
+    partition the view's partition label already carries that header's value, so each value has entries of its own.
     """
 
     def __init__(self, backend: AsyncBaseStorage, *, stores: Callable[[int], bool], shared: bool) -> None:
@@ -205,8 +221,7 @@ class _GuardedStorage(AsyncBaseStorage):
         names = _vary_names(response.headers)
         if "*" in names:
             return False
-        call = _CALL.get()
-        return not (self._shared and any(name in call.headers and name not in call.view_headers for name in names))
+        return not (self._shared and _varies_on_dropped(names))
 
     @override
     async def create_entry(
@@ -224,7 +239,12 @@ class _GuardedStorage(AsyncBaseStorage):
             entries = await self._backend.get_entries(key)
         # hishel keys an entry by its URL alone, so the variants a response's Vary names are told apart here.
         headers = _CALL.get().view_headers
-        return [_guarded_body(entry) for entry in entries if _same_variant(entry, headers)]
+        return [
+            _guarded_body(entry)
+            for entry in entries
+            if _same_variant(entry, headers)
+            and not (self._shared and _varies_on_dropped(_vary_names(entry.response.headers)))
+        ]
 
     @override
     async def update_headers(self, id: uuid.UUID, headers: Headers) -> None:
@@ -249,10 +269,10 @@ class _CacheCall:
     """One request's trip through hishel: what the layer below puts back, and what it hands up."""
 
     url: httpx2.URL
-    """The request's own URL, credentials included."""
+    """The request's own URL, credentials included: as it was sent, once the layer below has sent it."""
 
     headers: httpx2.Headers
-    """The request's own headers, credentials included."""
+    """The request's own headers, credentials included: as they were sent, once the layer below has sent them."""
 
     view_headers: httpx2.Headers
     """The headers hishel sees and stores, which a stored response's ``Vary`` is matched against."""
@@ -260,7 +280,7 @@ class _CacheCall:
     handed_up: list[httpx2.Response] = field(default_factory=list)
     """Every network response the layer below returned, for the cache layer to close if hishel abandons one."""
 
-    set_cookies: list[str] = field(default_factory=list)
+    set_cookies: list[bytes] = field(default_factory=list)
     """The ``Set-Cookie`` values of the latest network response, kept from hishel and handed back to the caller."""
 
     deferred: _Deferred | None = None
@@ -281,7 +301,8 @@ class _Store:
     """Write a deferred entry with its body, once, the first time a call accepts the response (:func:`store_accepted`).
 
     Shared by every copy of the response, a download's waiting requests included, so it is written at most once. A
-    storage fault while writing is counted as a degradation and dropped: the call already has its answer.
+    storage fault while writing, or a write still running when the accepting call's deadline passes, is counted as a
+    degradation and dropped: the call already has its answer.
     """
 
     def __init__(self, backend: AsyncBaseStorage, deferred: _Deferred, body: bytes, host: str) -> None:
@@ -292,22 +313,23 @@ class _Store:
         self._host = host
         self._written = False
 
-    async def __call__(self) -> None:
-        """Write the entry, unless it was written already."""
+    async def __call__(self, time_left: float | None) -> None:
+        """Write the entry within *time_left* seconds (no bound for ``None``), unless it was written already."""
         if self._written:
             return
         self._written = True
         entry, body = self._deferred.entry, self._body
         response = dataclasses.replace(entry.response, stream=_one_chunk(body))
         try:
-            with _storage_faults():
-                stored = await self._backend.create_entry(
-                    entry.request, response, self._deferred.key, ttl=self._deferred.ttl, tti=self._deferred.tti
-                )
-            # A storage writes the body as it streams.
-            async for _ in _guarded_chunks(stored.response.stream):
-                pass
-        except CacheStorageError:
+            async with asyncio.timeout(time_left):
+                with _storage_faults():
+                    stored = await self._backend.create_entry(
+                        entry.request, response, self._deferred.key, ttl=self._deferred.ttl, tti=self._deferred.tti
+                    )
+                # A storage writes the body as it streams.
+                async for _ in _guarded_chunks(stored.response.stream):
+                    pass
+        except CacheStorageError, TimeoutError:
             CACHE_DEGRADATIONS[self._host] += 1
 
 
@@ -321,11 +343,29 @@ CACHE_STORE = "headgate.cache_store"
 
 
 async def store_accepted(response: httpx2.Response) -> None:
-    """Store the cache miss *response* answers, now that the call accepted it; do nothing for any other response."""
+    """Store the cache miss *response* answers, now that the call accepted it; do nothing for any other response.
+
+    The write is bounded by the time left before the accepting call's deadline, read from the request *response*
+    answers when it has one.
+    """
     store = response.extensions.get(CACHE_STORE)
     if isinstance(store, _Store):
-        await store()
+        try:
+            context = CallContext.find(response.request)
+        except RuntimeError:  # A response no client sent carries no request.
+            context = None
+        await store(None if context is None else context.remaining())
 
+
+#: Marks a call opened as a stream, which this layer hands up as it arrives: never read ahead, shared or stored.
+STREAMED = Slot[bool]("streamed")
+
+#: A call's own ``max_response_bytes``, which this layer holds a body up to in place of the client's cap.
+MAX_RESPONSE_BYTES = Slot[int]("max_response_bytes")
+
+#: The request extension naming the headers a tracer stamps on each attempt (OpenTelemetry's ``traceparent``, say),
+#: which differ on every call and so are left out of what identical GETs must agree on to share a download.
+TRACE_HEADERS = "headgate.trace_headers"
 
 #: The call in progress in this task. A ContextVar rather than instance state because one transport serves every
 #: concurrent request on a client. Set only around hishel, so the layer below never runs without it.
@@ -401,10 +441,13 @@ class _RestoreRequest(httpx2.AsyncBaseTransport):
         try:
             response = await self._inner.handle_async_request(request)
         finally:
+            # A SigningAuth below signs the query by replacing the URL: the caller gets the request as it was sent.
+            call.url, call.headers = request.url, request.headers
             # hishel records the entry's request from this same object once the send returns: give it the view back.
             request.url, request.headers = view
         call.handed_up.append(response)
-        call.set_cookies = response.headers.get_list("set-cookie")
+        # Raw bytes, so a value that is not ASCII goes back exactly as it came.
+        call.set_cookies = [value for name, value in response.headers.raw if name.lower() == b"set-cookie"]
         if call.set_cookies:
             del response.headers["set-cookie"]
         return response
@@ -462,17 +505,23 @@ async def _buffer_up_to(
         head.append(chunk)
         total += len(chunk)
         if total > cap:
-            replay = _ReplayStream(head, raw, sources)
-            over_cap = httpx2.Response(
-                response.status_code, headers=response.headers, stream=replay, extensions=response.extensions
-            )
-            return over_cap, None
+            return _replayed(response, head, raw, sources), None
     await _close_quietly(*sources)
     body = b"".join(head)
     whole = httpx2.Response(
         response.status_code, headers=response.headers, stream=httpx2.ByteStream(body), extensions=response.extensions
     )
     return whole, body
+
+
+def _replayed(
+    response: httpx2.Response, head: list[bytes], rest: AsyncIterator[bytes], sources: tuple[httpx2.Response, ...]
+) -> httpx2.Response:
+    """Return *response* reading *head*, then *rest*, and closing every one of *sources* when closed."""
+    stream = _ReplayStream(head, rest, sources)
+    return httpx2.Response(
+        response.status_code, headers=response.headers, stream=stream, extensions=response.extensions
+    )
 
 
 # Sharing one download between simultaneous identical GETs.
@@ -543,6 +592,9 @@ type _SharingKey = tuple[str, tuple[tuple[str, str], ...], tuple[tuple[str, obje
 class _InFlight:
     """A GET being fetched, and what the identical requests waiting on it get once it finishes."""
 
+    context: CallContext | None
+    """The call fetching it, whose own later sends (a hedge) never wait on it."""
+
     finished: asyncio.Event = field(default_factory=asyncio.Event)
     outcome: _Outcome = _Unshared.TRY_AGAIN
 
@@ -561,13 +613,16 @@ def _sharing_key(request: httpx2.Request) -> _SharingKey:
     responses. The timeouts and the call's own retry policy too, since a request willing to wait longer, or to try more
     often, must not inherit the ``ReadTimeout`` of one that was not. The timeouts are the ones the request asked for,
     not the ones fitted to its deadline, which differ on every request; each waiter's own deadline bounds its wait. And
-    the TTL, since the one download is stored once, for as long as the request that fetched it said.
+    the TTL, since the one download is stored once, for as long as the request that fetched it said. A tracer's headers
+    (:data:`TRACE_HEADERS`) are left out, since they differ on every call.
     """
     timeouts = CallContext.requested_timeouts(request)
     retry = CallContext.of(request).get(RETRY_POLICY)
     settings = request.extensions.get(CACHING_EXT)
     ttl = settings.get("ttl") if isinstance(settings, dict) else None
-    return str(request.url), tuple(sorted(request.headers.multi_items())), timeouts, retry, ttl
+    traced = {name.lower() for name in request.extensions.get(TRACE_HEADERS, ())}
+    headers = tuple(sorted(item for item in request.headers.multi_items() if item[0] not in traced))
+    return str(request.url), headers, timeouts, retry, ttl
 
 
 def _cut_short(request: httpx2.Request, failure: Exception) -> bool:
@@ -600,10 +655,11 @@ class ResilientCacheTransport(AsyncCacheTransport):
     so the retry and breaker layers above see it as they would without a cache. Redoing is safe because the cached
     surface is read-only: only a GET or HEAD goes through hishel, never a mutation.
 
-    **The body is read inside this layer**, up to the client's size cap. A storage streams a stored body from its
-    backend, and stores a miss's body as it streams, so reading here keeps a fault while it streams inside the
-    fallback. Every response abandoned on the way is closed before the request is redone. A degraded response is read
-    the same way.
+    **The body is read inside this layer**, up to the client's size cap, for a request the rules name. A storage streams
+    a stored body from its backend, so reading here keeps a fault while it streams inside the fallback. Every response
+    abandoned on the way is closed before the request is redone. A degraded response is read the same way. A request
+    the rules do not name (a POST among them) goes to the network and up as it arrives, and so does a stream's miss
+    (:data:`STREAMED`): a stream is held only when it is a hit.
 
     **The storage is never closed here.** One storage may serve many clients, so whoever created it closes it;
     ``aclose()`` closes only the transport below.
@@ -624,7 +680,8 @@ class ResilientCacheTransport(AsyncCacheTransport):
     those retries share again. What a waiting request receives is marked :data:`HOST_UNTESTED`, so only the request that
     fetched counts toward the circuit breaker. If the first request is cancelled or fails outside the network, the next
     waiting request fetches for the rest. A body past the cap is not held, so each waiting request fetches its own.
-    POSTs are never shared, since a POST's body is part of what it asks for.
+    POSTs are never shared, since a POST's body is part of what it asks for, nor streams, nor a later send of the call
+    fetching (a hedge), which would only wait on the send it is meant to overtake.
     """
 
     def __init__(
@@ -655,11 +712,21 @@ class ResilientCacheTransport(AsyncCacheTransport):
         # Stamped here because only a cached client has a default TTL to give; setdefault, so a per-call one wins.
         if self._ttl is not None:
             stamp_ttl(request, self._ttl, keep=True)
-        if request.method != "GET":
-            response, _ = await self._fetch(request)
+        # A Range asks for part of a body, which no stored whole one answers and whose 206 is never stored.
+        if not self._cache.caches_request(request.method, url_path(request.url)) or "range" in request.headers:
+            # Neither looked up nor stored, so nothing here needs its body: it goes up as it arrives.
+            return await self._live.handle_async_request(request)
+        context = CallContext.find(request)
+        streamed = context is not None and bool(context.get(STREAMED))
+        if request.method != "GET" or streamed:
+            response, _ = await self._fetch(request, streamed=streamed)
             return response
         key = _sharing_key(request)
         while (in_flight := self._in_flight.get(key)) is not None:
+            if context is not None and in_flight.context is context:
+                # Another send of the fetching call (a hedge) would only wait on the send it is meant to overtake.
+                response, _ = await self._fetch(request)
+                return response
             await in_flight.finished.wait()
             outcome = in_flight.outcome
             if isinstance(outcome, NETWORK_ERRORS):
@@ -680,7 +747,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
 
     async def _fetch_for_waiters(self, key: _SharingKey, request: httpx2.Request) -> httpx2.Response:
         """Fetch *request*, then hand the identical GETs that arrived meanwhile what they get."""
-        in_flight = _InFlight()
+        in_flight = _InFlight(CallContext.find(request))
         self._in_flight[key] = in_flight
         try:
             response, body = await self._fetch(request)
@@ -694,26 +761,42 @@ class ResilientCacheTransport(AsyncCacheTransport):
             in_flight.finished.set()
         return response
 
-    async def _fetch(self, request: httpx2.Request) -> tuple[httpx2.Response, bytes | None]:
-        """Fetch *request* through the cache, or live when the storage fails: the response, and its body when held."""
-        try:
-            fetched = await self._fetch_cached(request)
-        except CacheStorageError as fault:
-            # Counted before the live fetch, so a fallback that then fails on the network too cannot hide the outage.
-            CACHE_DEGRADATIONS[request.url.host] += 1
-            _report(request, CacheOutcome.DEGRADED)
-            live = await self._live.handle_async_request(request)
-            # The query is dropped, since a key-in-the-URL provider carries its credential there.
-            live.extensions[CACHE_DEGRADED_EXT] = f"{request.url.copy_with(query=None, userinfo=b'')}: {fault}"[:240]
-            try:
-                return await _buffer_up_to(live, self._max_body_bytes, sources=(live,))
-            except BaseException:
-                await _close_quietly(live)
-                raise
-        _report(request, CacheOutcome.HIT if served_from_cache(fetched[0]) else CacheOutcome.MISS)
-        return fetched
+    async def _fetch(self, request: httpx2.Request, *, streamed: bool = False) -> tuple[httpx2.Response, bytes | None]:
+        """Fetch *request* through the cache, or live when the storage fails: the response, and its body when held.
 
-    async def _fetch_cached(self, request: httpx2.Request) -> tuple[httpx2.Response, bytes | None]:
+        A *streamed* request's body is held only when it is a hit, so a storage fault while it streams stays inside
+        the fallback; a miss or a degraded fetch goes up as it arrives.
+        """
+        try:
+            fetched = await self._fetch_cached(request, streamed=streamed)
+        except CacheStorageError as exc:
+            fault = exc
+        else:
+            _report(request, CacheOutcome.HIT if served_from_cache(fetched[0]) else CacheOutcome.MISS)
+            return fetched
+        # Outside the except block, so a live fetch that fails too does not carry the storage error (whose cause may
+        # name a DSN and its password) as its __context__.
+        # Counted before the live fetch, so a fallback that then fails on the network too cannot hide the outage.
+        CACHE_DEGRADATIONS[request.url.host] += 1
+        _report(request, CacheOutcome.DEGRADED)
+        live = await self._live.handle_async_request(request)
+        # The query is dropped, since a key-in-the-URL provider carries its credential there.
+        live.extensions[CACHE_DEGRADED_EXT] = f"{request.url.copy_with(query=None, userinfo=b'')}: {fault}"[:240]
+        if streamed:
+            return live, None
+        try:
+            return await _buffer_up_to(live, self._cap_for(request), sources=(live,))
+        except BaseException:
+            await _close_quietly(live)
+            raise
+
+    def _cap_for(self, request: httpx2.Request) -> int:
+        """Return how much of *request*'s body this layer holds: its call's ``max_response_bytes``, else its own."""
+        context = CallContext.find(request)
+        cap = None if context is None else context.get(MAX_RESPONSE_BYTES)
+        return self._max_body_bytes if cap is None else cap
+
+    async def _fetch_cached(self, request: httpx2.Request, *, streamed: bool) -> tuple[httpx2.Response, bytes | None]:
         """Fetch *request* through hishel, closing every response it abandons when anything goes wrong."""
         view_url, view_headers = self._scope.view(request)
         call = _CacheCall(url=request.url, headers=request.headers, view_headers=view_headers)
@@ -722,18 +805,17 @@ class ResilientCacheTransport(AsyncCacheTransport):
         request.url, request.headers = view_url, view_headers
         response: httpx2.Response | None = None
         try:
-            if self._cache.caches_request(request.method, call.url.path):
-                response = await super().handle_async_request(request)
-            else:
-                # Not one HttpCache names: neither looked up nor stored, but restored and recorded like any other.
-                response = await self.next_transport.handle_async_request(request)
-            if isinstance(status := response.extensions.get(CACHING_EXT), dict):
-                # hishel says stored as soon as it asks; nothing is written until the call accepts the response.
-                response.extensions[CACHING_EXT] = {**status, "stored": False}
+            response = await super().handle_async_request(request)
+            # hishel says stored as soon as it asks; nothing is written until the call accepts the response.
+            response.extensions[CACHING_EXT] = {**response.extensions[CACHING_EXT], "stored": False}
             if call.set_cookies:
-                cookies = [("set-cookie", value) for value in call.set_cookies]
-                response.headers = httpx2.Headers([*response.headers.multi_items(), *cookies])
-            held, body = await _buffer_up_to(response, self._max_body_bytes, sources=(response, *call.handed_up))
+                cookies = [(b"set-cookie", value) for value in call.set_cookies]
+                response.headers = httpx2.Headers([*response.headers.raw, *cookies])
+            sources = (response, *call.handed_up)
+            if streamed and not served_from_cache(response):
+                held, body = _replayed(response, [], response.aiter_raw(), sources), None
+            else:
+                held, body = await _buffer_up_to(response, self._cap_for(request), sources=sources)
         except BaseException:
             await _close_quietly(response, *call.handed_up)
             raise

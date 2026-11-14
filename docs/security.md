@@ -44,7 +44,10 @@ first request, each redirect, and each request an auth flow sends. On any hop ad
 - every header set in `HttpOptions(headers=...)`, where a static key is often configured, except `User-Agent` and the
   content negotiation headers `Accept`, `Accept-Encoding` and `Accept-Language`: those name the client and the format it
   wants, never a caller, so they go everywhere. Any other name is withheld, whatever it holds; a client-wide header
-  another origin needs (a tracing or tenant header, say) needs that origin in `trusted_origins`.
+  another origin needs (a tracing or tenant header, say) needs that origin in `trusted_origins`;
+- the same, for every header a view sets (`with_options(headers=...)`), and for every header a call sets itself
+  (`headers=`) on a hop to another origin than the one the call named: a redirect, or a later page of a walk, whose URL
+  the server chose. A call that names another origin's URL itself still sends it its own headers.
 
 The request still goes out, unsigned, so a signed download URL on a CDN works. A credential meant for another origin
 needs that origin in `trusted_origins`, written as a bare origin:
@@ -71,8 +74,8 @@ that does not. A middleware runs inside the transport stack, after the request h
 the guard runs a second time below the last middleware, on every attempt of every hop, and removes what it declares
 from any hop not addressed to `base_url`'s origin or a trusted one. An auth flow's token host is not trusted for a
 middleware's credentials: the middleware did not choose it. A [`SigningAuth`](auth.md#signingauth) signs each attempt
-there too, after the last middleware and before that second pass, so its signature is withheld from an untrusted hop
-the same way.
+below the rate budget, and the guard runs once more after it, so its signature is withheld from an untrusted hop the
+same way.
 
 A third-party `httpx2.Auth` that is not a `CredentialStamper` and puts its credential in another header or in the query
 is not covered; declare the names to have them withheld. A cache refuses
@@ -81,7 +84,8 @@ such an auth unless told the data is public (see [caching](caching.md#partitions
 ## Redirects
 
 - **No downgrade.** A redirect from `https` to `http` is never followed: the 3xx becomes the call's final response and
-  raises as the `UpstreamStatusError` it is, with a note naming the refused target.
+  raises as the `UpstreamStatusError` it is, with a note naming the refused target. A next page an `https` page names
+  on `http` is refused the same way, before it is sent, as `ForbiddenDestinationError`.
 - **A hop limit.** `HttpOptions(max_redirects=5)` is the default. An auth flow's hops count toward it too, because
   httpx2 keeps one history per call; a client whose mint takes several hops raises it. Past it the call raises
   `TransportError` ("Exceeded maximum allowed redirects").
@@ -142,7 +146,10 @@ Nothing headgate raises or reports carries a credential in clear:
   the upstream's own text.
 
 `QueryParamAuth` puts the key in the URL, and URLs are not secret to every tool: a tracing integration that records full
-request URLs records it. Exclude such hosts from URL capture, or prefer a header.
+request URLs records it. Exclude such hosts from URL capture, or prefer a header. httpx2's own `HTTP Request:` log line
+(INFO, on the `httpx2` logger) is redacted: importing headgate adds a filter to that logger that replaces the URL's
+secret values with `***`, so a key or a query signature does not reach an application's INFO log. The filter is
+process-wide: it applies to every httpx2 client in the process, not only headgate's.
 
 ## Hermetic by default
 

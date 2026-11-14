@@ -68,7 +68,7 @@ async def test_the_client_itself_is_unchanged() -> None:
     """Leave the client's own calls without the view's headers."""
     fake = FakeTransport().reply("GET", "/v1/x")
     root = client(fake)
-    root.with_options(headers={"X-View": "v"}, retry=False, deadline=None, timeout=Timeouts(read=1.0))
+    root.with_options(headers={"X-View": "v"}, retry=None, deadline=None, timeout=Timeouts(read=1.0))
     await root.get("x", expect=nothing)
     assert "x-view" not in fake.calls[0].headers
 
@@ -143,11 +143,11 @@ def test_a_bad_timeout_is_refused() -> None:
         client(FakeTransport()).with_options(timeout=Timeouts(read=0.0))
 
 
-async def test_retry_false_sends_once() -> None:
-    """Send a view's calls once when it says ``retry=False``."""
+async def test_retry_none_sends_once() -> None:
+    """Send a view's calls once when it says ``retry=None``."""
     fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
     with pytest.raises(UpstreamStatusError):
-        await client(fake).with_options(retry=False).get("x", expect=nothing)
+        await client(fake).with_options(retry=None).get("x", expect=nothing)
     assert len(fake.calls) == 1
 
 
@@ -161,30 +161,21 @@ async def test_a_view_policy_wins_over_the_routes_and_loses_to_the_calls() -> No
 
     fake.reply("GET", "/v1/x", 503, 200)
     with pytest.raises(UpstreamStatusError):
-        await view.get("x", expect=nothing, retry=False)
+        await view.get("x", expect=nothing, retry=None)
 
 
-async def test_retry_true_restores_the_clients_policy() -> None:
-    """Undo an outer view's ``retry=False`` with ``retry=True``."""
+async def test_an_inner_views_policy_replaces_an_outer_views_none() -> None:
+    """Retry under an inner view's policy although the outer view sends once."""
     fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
-    await client(fake).with_options(retry=False).with_options(retry=True).get("x", expect=nothing)
+    await client(fake).with_options(retry=None).with_options(retry=RetryPolicy(attempts=2)).get("x", expect=nothing)
     assert len(fake.calls) == len(("503", "200"))
 
 
-async def test_a_calls_retry_true_undoes_its_views_retry_false() -> None:
-    """Re-send a call that says ``retry=True`` on a view that says ``retry=False``: the call's own option wins."""
+async def test_a_calls_policy_wins_over_its_views_none() -> None:
+    """Retry a call that gives its own policy on a view that sends once: the call's own option wins."""
     fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
-    await client(fake).with_options(retry=False).get("x", expect=nothing, retry=True)
+    await client(fake).with_options(retry=None).get("x", expect=nothing, retry=RetryPolicy(attempts=2))
     assert len(fake.calls) == len(("503", "200"))
-
-
-async def test_a_calls_retry_true_keeps_its_routes_policy() -> None:
-    """Keep a route's policy under ``retry=True``, which restores the client's configuration, routes included."""
-    fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
-    policy = TransportPolicy(routes=(Route("/x", retry=NO_RETRY),))
-    with pytest.raises(UpstreamStatusError):
-        await client(fake, policy=policy).with_options(retry=False).get("x", expect=nothing, retry=True)
-    assert len(fake.calls) == 1
 
 
 async def test_a_view_cannot_retry_a_client_built_with_its_policy_off() -> None:
@@ -212,7 +203,7 @@ async def test_closing_a_view_closes_nothing_and_the_client_closes_the_pool() ->
     """Leave the pool open when a view is closed or its block exits; close it with the client."""
     fake = FakeTransport().reply("GET", "/v1/x", httpx2.Response(200, content=b"ok"))
     root = client(fake)
-    async with root.with_options(retry=False) as view:
+    async with root.with_options(retry=None) as view:
         assert await view.get("x", expect=as_bytes) == b"ok"
     await view.aclose()
     assert not fake.closed

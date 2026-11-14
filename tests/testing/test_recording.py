@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, override
 
 import httpx2
+import pytest
 
 from headgate import CachedTokenAuth, HttpOptions, Minted, Rate, as_bytes
 from headgate.testing import CassetteFilter, FakeTransport
@@ -67,6 +68,32 @@ def test_a_recorded_response_loses_its_cookies() -> None:
     """Drop ``Set-Cookie`` from the recorded response and keep every other header."""
     response: dict[str, object] = {"headers": {"Set-Cookie": ["session=1"], "Content-Type": ["text/plain"]}}
     assert CassetteFilter().before_record_response(response) == {"headers": {"Content-Type": ["text/plain"]}}
+
+
+def test_a_recorded_response_loses_the_credential_headers_the_filter_names() -> None:
+    """Drop the filter's credential headers from a recorded response too: a server may echo or issue one."""
+    response: dict[str, object] = {"headers": {"X-Session": ["s3cret"], "Content-Type": ["text/plain"]}}
+    recorded = CassetteFilter(headers=("X-Session",)).before_record_response(response)
+    assert recorded == {"headers": {"Content-Type": ["text/plain"]}}
+
+
+_SIGNED = "https://cdn.test/file?X-Amz-Signature=abc123&part=1"
+_REDACTED = "https://cdn.test/file?X-Amz-Signature=%2A%2A%2A&part=1"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param([_SIGNED], [_REDACTED], id="vcrpys-list-of-values"),
+        pytest.param(_SIGNED, _REDACTED, id="a-single-value"),
+        pytest.param(None, None, id="no-text"),
+    ],
+)
+def test_a_recorded_redirect_has_its_signed_location_redacted(value: object, expected: object) -> None:
+    """Redact the secret query values in ``Location`` and ``Content-Location``, as in a recorded request's URI."""
+    response: dict[str, object] = {"headers": {"Location": value, "content-location": value}}
+    recorded = CassetteFilter().before_record_response(response)
+    assert recorded == {"headers": {"Location": expected, "content-location": expected}}
 
 
 def test_a_response_without_headers_is_left_alone() -> None:

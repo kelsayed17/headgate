@@ -38,23 +38,28 @@ policy = TransportPolicy(cache=cache)
   body; any other status raises `ValueError`, rather than being accepted and never stored.
 - **`caches_request(method, path)` and `stores_status(status)`** say what the three decide. A request they do not
   name is sent straight past hishel: never looked up, never stored.
-- **`Vary` is honored.** An entry answers only a request whose headers named in the response's `Vary` match the ones
-  it was stored with, compared as keyed digests (see below). A response that could never be matched is not stored:
-  one with `Vary: *`, and, under `Partition.SHARED`, one varying on a header the cache never stores (`Authorization`,
-  a cookie, a declared credential) that the request sent. Under the default credential partition such a header's
-  value already keeps entries apart, so those responses are stored.
+- **`Vary` is honored, and `Accept` always counts.** An entry answers only a request whose `Accept`, and whose
+  headers named in the response's `Vary`, match the ones it was stored with, compared as keyed digests (see below), so
+  a JSON and a CSV of one URL are two entries. A response that could never be matched is not stored: one with
+  `Vary: *`, and, under `Partition.SHARED`, one varying on a header the cache never stores (`Authorization`, a cookie,
+  a declared credential) that the request sent. Nor does such an entry answer a request that sends that header. Under
+  the default credential partition such a header's value already keeps entries apart, so those responses are stored.
 - **Stored on accept.** A response the rules allow is written to storage only once the call's `expect=` reader has
   accepted it. A call whose reader raises stores nothing, so the cache never serves an answer the client refused:
   a refusal inside a 200 that a reader's `refuse` catches, an undecodable body, an undeclared status. A
-  declared non-2xx (`Expect(...).on(404, ...)`) is never stored, since `statuses` names 2xx only. A `stream()` has no
-  reader, so passing its head checks accepts it. A write that fails then never fails the call, which keeps its answer;
-  it is counted as a degradation when the storage raises it (see [storage faults](#storage-faults)). Until then,
+  declared non-2xx (`Expect(...).on(404, ...)`) is never stored, since `statuses` names 2xx only. A write that fails
+  never fails the call, which keeps its answer; it is counted as a degradation when the storage raises it (see
+  [storage faults](#storage-faults)), or when it is still running at the call's deadline, which bounds it. Until then,
   hishel's `caching` report on the response says `stored: False`.
-- **`ttl`** is the client's default lifetime in seconds; a call's `cache_ttl=` overrides it.
+- **A `stream()` is never buffered.** It is served from a hit, but a miss goes up as it arrives and is not stored. A
+  POST, a request with a `Range`, or any request the rules do not name, goes to the network unread and unshared.
+- **`ttl`** is the client's default lifetime in seconds; a call's `cache_ttl=` overrides it. Either must be a positive
+  finite number: anything else raises before the call is sent.
 - **TTL, not revalidation.** An entry is served until its lifetime ends and is never revalidated with the origin. For
   revalidation, use [conditional reads](#conditional-reads).
-- The body is held up to `HttpOptions.max_response_bytes`, and a body past it raises `ResponseTooLargeError` as it would
-  uncached. A body past the cap is not stored, not even for a `stream()`.
+- The body is held up to the call's `max_response_bytes=`, else `HttpOptions.max_response_bytes`, and a body past it
+  raises `ResponseTooLargeError` as it would uncached. A body past the cap is not stored. An entry is checked against
+  the cap of the call that reads it, so one stored for a call that raised its cap is refused to a call that did not.
 
 ## Partitions
 
@@ -62,10 +67,10 @@ policy = TransportPolicy(cache=cache)
 with different keys can share one storage. The partition is an HMAC-SHA256, under a key drawn at random once per
 process, of the auth's class and `credential_identity()`, of any other credential the request carries (what a
 [middleware](configuration.md#middleware) declares in `credential_headers` and `credential_params`, a caller's own
-`Authorization`, a cookie, an `api_key` in the URL), and of every header set in `HttpOptions(headers=...)`, whatever
-it is, since a static key is often configured there. A call that sends the auth's own header or parameter itself
+`Authorization`, a cookie, an `api_key` in the URL), and of every header set in `HttpOptions(headers=...)` or by a
+view (`with_options(headers=...)`), whatever it is, since a static key, or one tenant's, is often configured there. A call that sends the auth's own header or parameter itself
 (`headers={"Authorization": ...}` beside a `BearerAuth`), which the auth then leaves alone, is partitioned by the value
-it sent too. A key a call sends in a header nothing declares and the client does not set (one call's `X-Api-Key`) is
+it sent too. A key a call sends in a header nothing declares and neither the client nor its view sets (one call's `X-Api-Key`) is
 not part of the partition: declare it in an auth, or have the response name it in `Vary`. A middleware whose
 credential changes on every request implements `credential_identity()` too, and is then partitioned by that, as an
 auth is. Labels can be neither reversed nor compared across processes, so credential-partitioned entries in a
@@ -83,6 +88,10 @@ opt-in for public data: every client on the storage sees every entry, whatever i
 entries apart there: a query parameter with a well-known secret name that the auth does not declare, by its value,
 since `/config?key=theme` and `?key=locale` are different resources.
 
+Under either partition, a client that refuses private hosts (`SecurityOptions(allow_private_hosts=False)`) has entries
+of its own, so it is never served what a client allowed private hosts fetched from an internal address on the same
+storage.
+
 ## Credentials are never stored
 
 hishel persists the request with each entry, so it is handed a view of the request without `Authorization`,
@@ -98,14 +107,14 @@ it.
 
 hishel has no request coalescing, so an identical GET arriving while the first is still being fetched would miss too.
 headgate makes it wait and gives it a copy of the first one's response (a hit, a miss or a degraded fetch). Identical
-means the same URL, every header, the same timeouts, the same retry policy and the same cache lifetime; the timeouts compared are the ones the
-call asked for, including value-changing middleware overrides, not the ones its deadline cut, so calls with different
+means the same URL, every header but a tracer's (OpenTelemetry's `traceparent`, say), the same timeouts, the same
+retry policy and the same cache lifetime; the timeouts compared are the ones the call asked for, including value-changing middleware overrides, not the ones its deadline cut, so calls with different
 time left can still share. A timeout in a known phase is not passed on only when the first request's deadline shortened
 that phase: each waiting request then fetches its own. If a timeout does not identify its phase, any deadline-shortened
 phase still triggers that handoff. Other network failures fail every waiting request from the one attempt, each with
 its own copy of the error, and each caller's retry layer then retries (and shares again). Only the request that fetched
 counts toward the [breaker](breaker.md). A body past the size cap is not held, so each waiting request fetches its own.
-POSTs are never shared.
+POSTs, streams and GETs the rules do not name are never shared, and a hedge never waits on its own call's first send.
 
 ## Storage faults
 

@@ -16,7 +16,8 @@ the request for the page after it. The client does the fetching (:meth:`AsyncBas
 * :class:`BodyOffset`: like :class:`Offset`, but the offset is put into the POSTed request body.
 
 A next-page URL from the wire is resolved against the URL that answered and sent as an absolute URL, which the client
-treats like any other: credentials go only to the origins the client trusts.
+treats like any other: credentials go only to the origins the client trusts. A next page that would take an ``https``
+walk down to plain ``http`` is refused, as a redirect would be.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, override
 
+from headgate._failures import loggable_url
+from headgate.errors import ForbiddenDestinationError
 from headgate.pagination._link import next_link
 
 if TYPE_CHECKING:
@@ -83,7 +86,7 @@ class Pager[P, I, B = None](Protocol):
     """How pages of type ``P`` holding items of type ``I``, fetched with request bodies of type ``B``, link up.
 
     ``B`` is the type of the walk's body, ``None`` for a pager that only walks GETs. A pager typed with a body may walk
-    GETs too, when ``paginate`` is given no body (``body=None``): the first request's ``body`` is then ``None``, and a
+    GETs too, when ``paginate`` is given no body (``query=None``): the first request's ``body`` is then ``None``, and a
     later one has a body only if the pager gives it one.
     """
 
@@ -108,10 +111,10 @@ class Pager[P, I, B = None](Protocol):
 
 
 class WritingPager[P, I, B](Pager[P, I, B], ABC):
-    """A :class:`Pager` that writes the walk's request bodies: ``write`` encodes a ``body=`` for every page.
+    """A :class:`Pager` that writes the walk's request bodies: ``write`` encodes the walk's ``query=`` for every page.
 
-    A walk given ``body=`` needs one, since the body is the caller's own value, and a walk given ``json=`` needs one
-    whose ``write`` is ``None``, since builtins are sent as JSON. :class:`Cursor`, :class:`Offset`,
+    The body is the caller's own value, which ``write`` encodes; with ``write`` ``None``, the value is builtins, sent as
+    JSON. :class:`Cursor`, :class:`Offset`,
     :class:`BodyCursor` and :class:`BodyOffset` are writing pagers; a pager of GETs is not one.
 
     A pager is one by subclassing this class, not by its shape: an attribute that only shares the name ``write`` is
@@ -148,17 +151,45 @@ def _check_param(param: str) -> None:
         raise ValueError(msg)
 
 
-def _reached[P](total: Callable[[P], int | None] | None, page: P, offset: int) -> bool:
-    """Return whether *offset*, the one after *page*, reaches the exact total *total* reads from *page*, if any."""
-    if total is None:
-        return False
-    count = total(page)
-    return count is not None and offset >= count
+def _last[P](page: P, count: int, page_size: int, total: Callable[[P], int | None] | None, walked: int) -> bool:
+    """Return whether *page*, holding *count* items, is the last, *walked* items into the walk.
+
+    With an exact total read from *page*, the walk ends when it has walked that many items or a page is empty, so a
+    server that caps its pages below *page_size* is walked to the end; without one, a short page is the last.
+    """
+    known = None if total is None else total(page)
+    if known is None:
+        return count < page_size
+    return count == 0 or walked >= known
+
+
+def _position[B](request: PageRequest[B], param: str, default: int, what: str) -> int:
+    """Return the position *request* carries under *param* (an int >= 0 or a string of digits), else *default*.
+
+    :raises ValueError: for a value that is neither, naming it *what* (``"a page number"``, ``"an offset"``).
+    """
+    value = (request.params or {}).get(param)
+    if value is None:
+        return default
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        return int(value)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    msg = f"{param} must be {what}, an int >= 0 or a string of digits (got {value!r})"
+    raise ValueError(msg)
 
 
 def _absolute(response: httpx2.Response, target: str) -> PageRequest:
-    """Return the request for *target*, resolved against the URL that sent *response*, as an absolute URL."""
-    return PageRequest(response.url.join(target))
+    """Return the request for *target*, resolved against the URL that sent *response*, as an absolute URL.
+
+    :raises ForbiddenDestinationError: for a plain ``http`` *target* named by an ``https`` page, which would send the
+        next request (its credentials and cursor) in cleartext.
+    """
+    url = response.url.join(target)
+    if response.url.scheme == "https" and url.scheme == "http":
+        msg = f"refused to follow a next page from https to {loggable_url(str(url))}"
+        raise ForbiddenDestinationError(msg)
+    return PageRequest(url)
 
 
 def _check_get[B](request: PageRequest[B], pager: str) -> None:
@@ -171,7 +202,7 @@ def _check_get[B](request: PageRequest[B], pager: str) -> None:
 def _posted[B](request: PageRequest[B], pager: str) -> B:
     """Return *request*'s body, refusing a request with none: *pager* rewrites the body, so its walk is POSTs."""
     if request.body is None:
-        msg = f"{pager} rewrites the request body, so its walk needs one: pass body= or json="
+        msg = f"{pager} rewrites the request body, so its walk needs one: pass query="
         raise ValueError(msg)
     return request.body
 
@@ -183,8 +214,8 @@ class Cursor[P, I, B = None](WritingPager[P, I, B]):
     The last page is the one whose ``next`` returns ``None`` or ``""``, or one with no items: a cursor that advances
     while returning nothing makes no progress. Set ``stop_on_empty=False`` for an endpoint that sends empty pages
     mid-walk. ``B`` is the type of the request body for a walk of POSTs (``Cursor[Page, Item, Query]``), and
-    ``None`` for a walk of GETs. ``write`` encodes a ``body=`` on each page (a flavor's ``writer``); a walk of POSTs
-    without one sends ``json=``, and a walk of GETs leaves it unused.
+    ``None`` for a walk of GETs. ``write`` encodes the walk's ``query=`` on each page (a flavor's ``writer``); a walk
+    of POSTs without one sends it as JSON, and a walk of GETs leaves it unused.
     """
 
     items: Callable[[P], Sequence[I]]
@@ -221,10 +252,13 @@ class Cursor[P, I, B = None](WritingPager[P, I, B]):
 class Offset[P, I, B = None](WritingPager[P, I, B]):
     """Pages of at most ``page_size`` items, addressed by the offset of their first item, sent as the query ``param``.
 
-    The offset starts at ``start`` and advances by the number of items each page held. A page holding fewer than
-    ``page_size`` items (or none) is the last. So is a page that reaches ``total``, when given: the number of items
-    the whole walk holds, read from a page, so a walk whose items fill its last page ends there instead of fetching an
-    empty page past it. ``total`` returns ``None`` for a page that states no exact total (one reported as "at least"),
+    ``start`` is the offset of the collection's first item (0, or 1 for a 1-based API). The walk starts at the offset
+    the caller's own ``params=`` give under ``param`` (an int, or a string of digits), or at ``start`` when they give
+    none, and advances by the number of items each page held. A page holding fewer than ``page_size`` items (or none)
+    is the last. With ``total``, the number of items the whole collection holds, read from a page, the walk instead
+    ends once it has passed that many items from ``start``, or at an empty page: a walk whose items fill its last page
+    ends there instead of fetching an empty page past it, and one whose server caps pages below ``page_size`` is
+    walked to the end. ``total`` returns ``None`` for a page that states no exact total (one reported as "at least"),
     which leaves the walk to end at a short page. The page size itself is the caller's to send, in ``params=`` under
     whatever name the endpoint uses, since that name varies (``limit``, ``per_page``, ``page_size``). ``B`` is the
     type of the request body for a walk of POSTs, and ``write`` its writer, as on :class:`Cursor`.
@@ -249,8 +283,8 @@ class Offset[P, I, B = None](WritingPager[P, I, B]):
 
     @override
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
-        """Return *request* at offset ``start``."""
-        return request.with_param(self.param, self.start)
+        """Return *request* at its own offset, or at ``start``, refusing an offset that is not one."""
+        return request.with_param(self.param, _position(request, self.param, self.start, "an offset"))
 
     @override
     def page_items(self, page: P) -> Sequence[I]:
@@ -259,14 +293,13 @@ class Offset[P, I, B = None](WritingPager[P, I, B]):
 
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
-        """Return *request* at the offset after *page*'s items, or ``None`` after a short page or at ``total``."""
+        """Return *request* at the offset after *page*'s items, or ``None`` after the last page (see the class)."""
         del response
         count = len(self.items(page))
-        if count < self.page_size:
+        following = _position(request, self.param, self.start, "an offset") + count
+        if _last(page, count, self.page_size, self.total, following - self.start):
             return None
-        offset = (request.params or {}).get(self.param)
-        following = (offset if isinstance(offset, int) else self.start) + count
-        return None if _reached(self.total, page, following) else request.with_param(self.param, following)
+        return request.with_param(self.param, following)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -299,7 +332,7 @@ class PageNumber[P, I, B = None](WritingPager[P, I, B]):
     @override
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
         """Return *request* at its own page number, or at ``start``, refusing a number that is not one."""
-        return request.with_param(self.param, self._number(request))
+        return request.with_param(self.param, _position(request, self.param, self.start, "a page number"))
 
     @override
     def page_items(self, page: P) -> Sequence[I]:
@@ -312,19 +345,9 @@ class PageNumber[P, I, B = None](WritingPager[P, I, B]):
         del response
         if self.stop_on_empty and not self.items(page):
             return None
-        return request.with_param(self.param, self._number(request) + 1) if self.more(page) else None
-
-    def _number(self, request: PageRequest[B]) -> int:
-        """Return the page number *request* carries, or ``start`` when it carries none."""
-        value = (request.params or {}).get(self.param)
-        if value is None:
-            return self.start
-        if isinstance(value, str) and value.isascii() and value.isdecimal():
-            return int(value)
-        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-            return value
-        msg = f"{self.param} must be a page number, an int >= 0 or a string of digits (got {value!r})"
-        raise ValueError(msg)
+        if not self.more(page):
+            return None
+        return request.with_param(self.param, _position(request, self.param, self.start, "a page number") + 1)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -352,7 +375,7 @@ class LinkHeader[P, I]:
         del request
         if self.stop_on_empty and not self.items(page):
             return None
-        target = next_link(response.headers)
+        target = next_link(response.headers, response.url)
         return None if target is None else _absolute(response, target)
 
 
@@ -433,7 +456,8 @@ class BodyOffset[P, I, B](WritingPager[P, I, B]):
 
     ``offset`` reads the offset from a body and ``put`` returns a new body at another one. The walk starts at the
     offset the first request's body carries, and advances by the number of items each page held. A page holding fewer
-    than ``page_size`` items (or none) is the last, and so is one that reaches ``total``, as on :class:`Offset`. The
+    than ``page_size`` items (or none) is the last; with ``total``, the walk ends as on :class:`Offset`, counting from
+    offset 0. The
     page size itself is the caller's to put in the body, as it is the caller's to put in :class:`Offset`'s query.
     ``write`` encodes each page's body, as for :class:`BodyCursor`.
     """
@@ -470,8 +494,8 @@ class BodyOffset[P, I, B](WritingPager[P, I, B]):
         """Return *request*'s body at the offset past *page*'s items, or ``None`` after a short page or at ``total``."""
         del response
         count = len(self.items(page))
-        if count < self.page_size:
-            return None
         body = _posted(request, "BodyOffset")
         following = self.offset(body) + count
-        return None if _reached(self.total, page, following) else request.with_body(self.put(body, following))
+        if _last(page, count, self.page_size, self.total, following):
+            return None
+        return request.with_body(self.put(body, following))

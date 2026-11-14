@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
 from typing import TYPE_CHECKING, override
 
 import httpx2
@@ -32,9 +31,8 @@ if TYPE_CHECKING:
 #: Fast enough never to pace in a test.
 _INSTANT = Rate.per_second(1_000_000)
 
-#: How long the cross-thread test waits for the other thread, and how often it looks.
+#: How long the cross-thread test waits for the other thread.
 _THREAD_TIMEOUT = 5.0
-_POLL = 0.001
 
 #: How many concurrent calls a capped client serves in the end-to-end test.
 _CALLS = 6
@@ -202,18 +200,22 @@ def test_a_slot_is_handed_across_threads_and_loops() -> None:
     """Wake a waiter on another thread's loop when this thread frees the slot."""
     limit = InFlightLimit(1)
     asyncio.run(limit.acquire())
+    parked = threading.Event()
     acquired = threading.Event()
 
+    async def park_then_wait() -> None:
+        waiting = asyncio.create_task(limit.acquire())
+        await asyncio.sleep(0)  # the acquire runs to its first await: parked on the limit, the slot being held
+        parked.set()
+        await waiting
+
     def wait_in_another_loop() -> None:
-        asyncio.run(limit.acquire())
+        asyncio.run(park_then_wait())
         acquired.set()
 
     thread = threading.Thread(target=wait_in_another_loop)
     thread.start()
-    deadline = time.monotonic() + _THREAD_TIMEOUT
-    while not limit.waiting and time.monotonic() < deadline:
-        time.sleep(_POLL)
-    assert limit.waiting == 1, "the other thread is parked on the limit"
+    assert parked.wait(_THREAD_TIMEOUT), "the other thread is parked on the limit"
     limit.release()
     thread.join(timeout=_THREAD_TIMEOUT)
     assert acquired.is_set()

@@ -7,7 +7,9 @@
 the theoretical arrival time of the next request, and each request reserves its send time against it under a lock,
 then sleeps until then. Up to ``rate.burst`` requests go back to back; after that they are ``rate.interval`` apart.
 Reservations are made in arrival order, so waiters are served FIFO. A caller cancelled while it waits gives its
-reservation back when nobody has reserved after it, so a deadline expiring in the queue does not waste a send slot.
+reservation back, so a deadline expiring in the queue does not waste a send slot: at the end of the queue the turn
+comes off the schedule, and in the middle of it the next caller to arrive takes the turn, while its time is still
+ahead. A pause discards the turns abandoned before it, since the pause moves every waiting turn behind it.
 The schedule is kept on its own timeline, which a server pause shifts later (see below), so a pause postpones a
 reservation without taking it away.
 
@@ -116,6 +118,7 @@ class Pacer:
         "_clock",
         "_decreased_at",
         "_factor",
+        "_holes",
         "_in_flight",
         "_lock",
         "_pause_status",
@@ -159,6 +162,8 @@ class Pacer:
         self._pause_status = 0
         self._shift = 0.0
         self._turns: set[_Turn] = set()
+        # Turns callers abandoned mid-queue, for the next callers to take (see _reserve).
+        self._holes: list[_Turn] = []
 
     @property
     def rate(self) -> Rate:
@@ -281,7 +286,20 @@ class Pacer:
         return Rate(requests=self._rate.requests * self._factor, period=self._rate.period)
 
     def _reserve(self, now: float) -> _Turn:
-        """Reserve the next send at *now* and return it, counted among the turns waiting."""
+        """Reserve the next send at *now* and return it, counted among the turns waiting.
+
+        The earliest turn a caller abandoned mid-queue is taken first, while its send time is still ahead; one whose
+        time has passed is dropped, since sending in it now would crowd the turns after it.
+        """
+        reason = THROTTLED if self._factor < 1 else PACED
+        if self._holes:
+            self._holes = [hole for hole in self._holes if hole.send + self._shift >= now]
+        if self._holes:
+            hole = min(self._holes, key=_send_time)
+            self._holes.remove(hole)
+            turn = _Turn(before=hole.before, after=hole.after, send=hole.send, shift=self._shift, reason=reason)
+            self._turns.add(turn)
+            return turn
         rate = self._current_rate()
         interval = rate.interval
         # The timeline stands still through a pause: a call arriving during one queues from the pause's end.
@@ -291,7 +309,7 @@ class Pacer:
             after=arrival + interval,
             send=arrival - (rate.burst - 1) * interval,
             shift=self._shift,
-            reason=THROTTLED if self._factor < 1 else PACED,
+            reason=reason,
         )
         self._tat = turn.after
         self._turns.add(turn)
@@ -330,20 +348,32 @@ class Pacer:
         """Pause until *until*, shifting the timeline so the earliest waiting turn falls due no sooner than that."""
         self._paused_until = until
         self._pause_status = status_code
+        self._holes.clear()
         if self._turns:
             first = min(turn.send for turn in self._turns) + self._shift
             self._shift += max(0.0, until - first)
 
     def _refund(self, turn: _Turn) -> None:
-        """Drop *turn* from the waiting, and give it back when it is still the latest, so the next caller takes it."""
+        """Drop *turn* from the waiting and give it back: off the schedule at its end, else to the next caller."""
         self._turns.discard(turn)
-        if turn.after == self._tat:
-            self._tat = turn.before
+        if turn.after != self._tat:
+            self._holes.append(turn)
+            return
+        self._tat = turn.before
+        # Turns abandoned earlier that now end the schedule come off it too.
+        while (tail := next((hole for hole in self._holes if hole.after == self._tat), None)) is not None:
+            self._holes.remove(tail)
+            self._tat = tail.before
 
     def _paused_error(self, pause: float) -> BudgetPausedError:
         """Build the error for a pause of *pause* seconds that outlasts a call's deadline."""
         msg = f"rate budget paused for {pause:.3g}s at the server's request, past the call's deadline"
         return BudgetPausedError(msg, retry_after=pause, status_code=self._pause_status)
+
+
+def _send_time(turn: _Turn) -> float:
+    """Return *turn*'s send time on the budget's timeline: what abandoned turns are taken in the order of."""
+    return turn.send
 
 
 class RateBudget:

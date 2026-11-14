@@ -23,6 +23,7 @@ read and write it through its methods, never through extension keys of their own
 from __future__ import annotations
 
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, cast, override
 
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
     from headgate._core._events import Emitter, Event
     from headgate._core._time import Clock
 
-__all__ = ["CallContext", "SendProgress", "Slot"]
+__all__ = ["SENDING", "CallContext", "SendProgress", "Slot", "progress_of"]
 
 #: The one request extension headgate keeps its per-call state in.
 _EXTENSION: Final = "headgate.call"
@@ -48,13 +49,22 @@ _FITTED_TIMEOUT: Final = "headgate.fitted_timeout"
 type PhaseTimeouts = tuple[tuple[str, float | None], ...]
 
 
-def _named(timeout: object) -> PhaseTimeouts:
-    """Return *timeout*, a request's ``timeout`` extension, as :data:`PhaseTimeouts`; empty when it is not one."""
+def _phases(timeout: object) -> dict[str, float | None]:
+    """Return *timeout*, a request's ``timeout`` extension, as limits by phase; empty when it is not one."""
     if not isinstance(timeout, dict):
-        return ()
-    # Sorted by phase, which is unique, so the values (a float or None) are never compared.
-    pairs: list[tuple[str, float | None]] = sorted((str(phase), limit) for phase, limit in timeout.items())
-    return tuple(pairs)
+        return {}
+    return {str(phase): limit for phase, limit in timeout.items()}
+
+
+def _requested(request: httpx2.Request) -> dict[str, float | None]:
+    """Return the limits by phase *request* asked for, as :meth:`CallContext.requested_timeouts` describes."""
+    extensions = request.extensions
+    original = _phases(extensions.get(_REQUESTED_TIMEOUT))
+    fitted = _phases(extensions.get(_FITTED_TIMEOUT))
+    return {
+        phase: original.get(phase, limit) if phase in fitted and limit == fitted[phase] else limit
+        for phase, limit in _phases(extensions.get("timeout")).items()
+    }
 
 
 @dataclass(slots=True)
@@ -197,7 +207,7 @@ class CallContext:
         if remaining is None or not isinstance(timeout, dict):
             return
         # Recorded on the request itself: a call's hops (a token mint, say) may ask for timeouts of their own.
-        request.extensions[_REQUESTED_TIMEOUT] = dict(self.requested_timeouts(request))
+        request.extensions[_REQUESTED_TIMEOUT] = _requested(request)
         left = max(remaining, floor)
         request.extensions["timeout"] = {
             phase: left if limit is None else min(limit, left) for phase, limit in timeout.items()
@@ -212,18 +222,13 @@ class CallContext:
         the last fit is a new requested limit, including a middleware override on a later retry. An override equal to
         the last fitted value is treated as unchanged.
         """
-        current = _named(request.extensions.get("timeout"))
-        original = dict(_named(request.extensions.get(_REQUESTED_TIMEOUT)))
-        fitted = dict(_named(request.extensions.get(_FITTED_TIMEOUT)))
-        return tuple(
-            (phase, original.get(phase, limit) if phase in fitted and limit == fitted[phase] else limit)
-            for phase, limit in current
-        )
+        # Sorted by phase, which is unique, so the limits (a float or None) are never compared.
+        return tuple(sorted(_requested(request).items()))
 
     @staticmethod
     def timeouts_cut(request: httpx2.Request) -> bool:
         """Return whether :meth:`fit_timeouts` cut *request*'s timeouts below the ones it asked for."""
-        return _named(request.extensions.get("timeout")) != CallContext.requested_timeouts(request)
+        return _phases(request.extensions.get("timeout")) != _requested(request)
 
     # Attempts.
 
@@ -277,3 +282,14 @@ class CallContext:
     def put[T](self, slot: Slot[T], value: T) -> None:
         """Put *value* in *slot*."""
         self._slots[slot] = value
+
+
+#: The call and attempt progress the current task is sending for, set by the retry layer around each send. Every
+#: hedge sends in a task of its own, so each sees its own attempt here, while the call's ``progress`` is the latest.
+SENDING: Final = ContextVar[tuple[CallContext, SendProgress] | None]("headgate_sending", default=None)
+
+
+def progress_of(context: CallContext) -> SendProgress:
+    """Return the progress of the attempt this task sends for *context* (:data:`SENDING`), else its latest attempt's."""
+    sending = SENDING.get()
+    return sending[1] if sending is not None and sending[0] is context else context.progress

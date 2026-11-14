@@ -15,6 +15,7 @@ written, and freezes the collections it is given.
 
 from __future__ import annotations
 
+import functools
 import math
 import uuid
 from dataclasses import KW_ONLY, dataclass, field, replace
@@ -150,10 +151,23 @@ def httpx_timeout(client: Timeouts, call: Timeouts | None = None) -> httpx2.Time
 
     :raises TypeError: for a *call* timeout that is not a :class:`Timeouts`.
     """
-    resolved = client.over(DEFAULT_TIMEOUTS)
-    if call is not None:
-        check_kind("timeout", call, Timeouts, _TIMEOUTS_WANTED)
-        resolved = call.over(resolved)
+    if call is None:
+        return _client_timeout(client)
+    check_kind("timeout", call, Timeouts, _TIMEOUTS_WANTED)
+    return _as_httpx(call.over(client.over(DEFAULT_TIMEOUTS)))
+
+
+@functools.lru_cache(maxsize=64)
+def _client_timeout(client: Timeouts) -> httpx2.Timeout:
+    """Return *client*'s ``httpx2.Timeout``, cached: every call without a ``timeout=`` of its own sends it.
+
+    Sharing one is safe, since httpx2 copies the ``Timeout`` it is handed.
+    """
+    return _as_httpx(client.over(DEFAULT_TIMEOUTS))
+
+
+def _as_httpx(resolved: Timeouts) -> httpx2.Timeout:
+    """Return *resolved*, every phase set, as an ``httpx2.Timeout``."""
     return httpx2.Timeout(connect=resolved.connect, read=resolved.read, write=resolved.write, pool=resolved.pool)
 
 
@@ -235,7 +249,7 @@ def match_route(routes: tuple[Route, ...], path: str) -> Route | None:
 class TransportPolicy:
     """What the transport stack does for every request.
 
-    * ``retry``: how a call is re-sent (:class:`~headgate.RetryPolicy`). A call opts out with ``retry=False``.
+    * ``retry``: how a call is re-sent (:class:`~headgate.RetryPolicy`). A call opts out with ``retry=None``.
     * ``deadline``: seconds the whole logical call may take, every attempt, wait and the body read included; ``None``
       for none. Past it the call raises ``ClientTimeoutError``. A call overrides it with ``deadline=``.
     * ``breaker``: the circuit breaker (:class:`~headgate.BreakerPolicy`), or ``None`` for none.

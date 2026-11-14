@@ -26,6 +26,7 @@ from hishel import AsyncSqliteStorage
 from headgate import ClientError, HttpCache, HttpOptions, RetryPolicy, TransportPolicy, as_bytes
 from headgate.ratelimit import Rate
 from tests.support.clients import StubClient
+from tests.support.events import Recorder
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -43,6 +44,10 @@ _WINDOW_REQUESTS = 500
 #: The most one measured window may leave allocated after a full collection: under 128 bytes a request, less than any
 #: object a leak would retain per request.
 _GROWTH_LIMIT = 64 * 1024
+#: Frames kept per allocation, so a window past the limit can name the code that retained what grew.
+_TRACE_FRAMES = 16
+#: How many of the largest growths a window past the limit reports.
+_REPORTED_GROWTHS = 5
 _FAST = Rate.per_second(1_000_000)
 _BODY = b'{"series_id": "GDP", "values": [1.0, 2.0, 3.0]}'
 
@@ -65,18 +70,26 @@ def _ok(request: httpx2.Request) -> httpx2.Response:
     return httpx2.Response(httpx2.codes.OK, content=_BODY, request=request)
 
 
-def _client(handler: Callable[[httpx2.Request], httpx2.Response] = _ok, cache: HttpCache | None = None) -> StubClient:
-    """Build a client over an in-memory transport that never throttles, with no retry budget to run out of."""
+def _client(
+    handler: Callable[[httpx2.Request], httpx2.Response] = _ok,
+    cache: HttpCache | None = None,
+    *,
+    observed: bool = False,
+) -> StubClient:
+    """Build a client over an in-memory transport that never throttles, with no retry budget to run out of.
+
+    An *observed* client has an observer, which makes every call build its events and its breaker listener.
+    """
     return StubClient(
         base_url="https://api.example.test",
         rate=_FAST,
         policy=TransportPolicy(retry=RetryPolicy(budget=None), cache=cache),
-        http=HttpOptions(transport=httpx2.MockTransport(handler)),
+        http=HttpOptions(transport=httpx2.MockTransport(handler), observers=(Recorder(),) if observed else ()),
     )
 
 
-async def _growth_per_window(operation: Callable[[], Awaitable[object]]) -> int:
-    """Return how many bytes a window of *operation* runs leaves allocated, once warmed up.
+async def _assert_no_growth(operation: Callable[[], Awaitable[object]]) -> None:
+    """Assert that a window of *operation* runs, once warmed up, leaves less than :data:`_GROWTH_LIMIT` allocated.
 
     A leak retains something on every run, so it grows window after window; a bounded cache fills during the warmup
     and then stops. Measuring a window after the warmup tells the two apart.
@@ -84,10 +97,13 @@ async def _growth_per_window(operation: Callable[[], Awaitable[object]]) -> int:
     The event loop turns once before each snapshot, as it does between requests in any real program. An in-memory
     transport never suspends, so without that turn the loop never purges the deadline timers each call cancels, which
     it does whenever it runs.
+
+    The failure names where the largest growths were allocated, since a leak seen on one platform only is diagnosed
+    from that alone.
     """
     for _ in range(_WARMUP_REQUESTS):
         await operation()
-    tracemalloc.start()
+    tracemalloc.start(_TRACE_FRAMES)
     try:
         for _ in range(_WINDOW_REQUESTS):
             await operation()
@@ -101,7 +117,20 @@ async def _growth_per_window(operation: Callable[[], Awaitable[object]]) -> int:
         after = tracemalloc.take_snapshot()
     finally:
         tracemalloc.stop()
-    return sum(stat.size_diff for stat in after.compare_to(before, "filename"))
+    growth = sum(stat.size_diff for stat in after.compare_to(before, "filename"))
+    report = _report(growth, after.compare_to(before, "traceback")[:_REPORTED_GROWTHS])
+    assert growth < _GROWTH_LIMIT, report
+
+
+def _report(growth: int, stats: list[tracemalloc.StatisticDiff]) -> str:
+    """Return what a window that grew by *growth* bytes says: the largest growths, where allocated, and the timers."""
+    lines = [f"a window grew by {growth} B"]
+    timers = getattr(asyncio.get_running_loop(), "_scheduled", [])
+    lines.append(f"event loop: {len(timers)} timers scheduled, {sum(timer.cancelled() for timer in timers)} cancelled")
+    for stat in stats:
+        lines.append(f"+{stat.size_diff} B in {stat.count_diff} blocks, allocated at (innermost first):")
+        lines.extend(f"    {line}" for line in stat.traceback.format(most_recent_first=True))
+    return "\n".join(lines)
 
 
 async def _garbage_per_call(operation: Callable[[], Awaitable[object]]) -> int:
@@ -135,12 +164,18 @@ async def test_streaming_a_large_body_holds_a_few_chunks_at_most() -> None:
 async def test_repeated_gets_retain_nothing() -> None:
     """Retain nothing per request across thousands of successful GETs."""
     client = _client()
-    assert await _growth_per_window(lambda: client.get("series", expect=as_bytes)) < _GROWTH_LIMIT
+    await _assert_no_growth(lambda: client.get("series", expect=as_bytes))
 
 
 async def test_a_get_leaves_no_reference_cycle() -> None:
     """Free everything a successful GET allocated when it returns, by reference counting alone."""
     client = _client()
+    assert await _garbage_per_call(lambda: client.get("series", expect=as_bytes)) == 0
+
+
+async def test_an_observed_get_leaves_no_reference_cycle() -> None:
+    """Free everything an observed GET allocated, its breaker listener and the gate its context holds included."""
+    client = _client(observed=True)
     assert await _garbage_per_call(lambda: client.get("series", expect=as_bytes)) == 0
 
 
@@ -152,7 +187,7 @@ async def test_repeated_failures_retain_nothing() -> None:
         with pytest.raises(ClientError):
             await client.get("series", expect=as_bytes)
 
-    assert await _growth_per_window(failing_get) < _GROWTH_LIMIT
+    await _assert_no_growth(failing_get)
 
 
 async def test_repeated_retries_retain_nothing() -> None:
@@ -165,7 +200,7 @@ async def test_repeated_retries_retain_nothing() -> None:
         return _ok(request)
 
     client = _client(flaky)
-    assert await _growth_per_window(lambda: client.get("series", expect=as_bytes)) < _GROWTH_LIMIT
+    await _assert_no_growth(lambda: client.get("series", expect=as_bytes))
 
 
 async def test_repeated_cache_hits_retain_nothing() -> None:
@@ -173,7 +208,7 @@ async def test_repeated_cache_hits_retain_nothing() -> None:
     storage = AsyncSqliteStorage(connection=await anysqlite.connect(":memory:"))
     client = _client(cache=HttpCache(storage=storage, ttl=3600))
     try:
-        assert await _growth_per_window(lambda: client.get("series", expect=as_bytes)) < _GROWTH_LIMIT
+        await _assert_no_growth(lambda: client.get("series", expect=as_bytes))
     finally:
         await storage.close()
 
@@ -197,4 +232,4 @@ async def test_repeated_streams_retain_nothing() -> None:
             async for _ in stream.aiter_bytes():
                 pass
 
-    assert await _growth_per_window(drain) < _GROWTH_LIMIT
+    await _assert_no_growth(drain)

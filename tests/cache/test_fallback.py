@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import sqlite3
+import traceback
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, override
 
@@ -28,7 +29,7 @@ import httpx2
 import pytest
 from hishel import AsyncBaseStorage, AsyncSqliteStorage, Entry, Headers, Request, Response
 
-from headgate import HttpCache, HttpOptions, TransportError
+from headgate import HttpCache, HttpOptions, TransportError, as_bytes
 from headgate.cache._transport import (
     CACHE_DEGRADATIONS,
     CACHE_DEGRADED_EXT,
@@ -235,6 +236,19 @@ async def test_a_network_failure_in_the_degraded_fetch_is_raised_and_closes_it(s
 
     assert len(network.urls) == 1
     assert network.streams[0].closed
+
+
+async def test_a_failed_degraded_fetch_does_not_carry_the_storage_error(storage: AsyncSqliteStorage) -> None:
+    """Raise the live fetch's own failure with no link to the storage fault, whose message may carry a DSN."""
+    faulty = FaultyStorage(
+        storage, sqlite3.OperationalError("unable to open postgres://admin:hunter2@db"), failing="get_entries"
+    )
+
+    with pytest.raises(httpx2.ReadError) as raised:
+        await cache_transport(faulty, _FlakyNetwork()).handle_async_request(httpx2.Request("GET", _URL))
+
+    assert raised.value.__context__ is None
+    assert "hunter2" not in "".join(traceback.format_exception(raised.value))
 
 
 class _RequestRuleBug(HttpCache):
@@ -555,8 +569,7 @@ async def test_a_storage_fault_while_an_unheld_body_streams_is_a_value_free_tran
     """
     network = TrackingNetwork((b"x" * 10,) * 10)
     storer = stub_client(transport=network, cache=HttpCache(**every_get_rules(), storage=storage))
-    async with storer.stream("big") as stream:
-        await _Received().drain(stream.aiter_bytes())
+    await storer.get("big", expect=as_bytes)
     await storer.aclose()
     client = stub_client(
         transport=network,

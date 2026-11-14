@@ -16,11 +16,13 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import IdempotencyKeys, TransportPolicy, nothing
-from headgate._core import CallContext, CallInfo
+from headgate import IdempotencyKeys, Json, TransportPolicy, nothing
+from headgate._core import CallContext, CallInfo, SendProgress
 from headgate.errors import TransportError
 from headgate.ratelimit import Rate
+from headgate.retry import Hedge, RetryPolicy
 from headgate.retry._tracking import SendTrackingTransport, head_size
+from headgate.retry._transport import RetryTransport
 from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
@@ -232,7 +234,7 @@ async def test_a_post_whose_head_reached_the_server_is_not_resent_end_to_end() -
     async with _server(count_and_drop) as url:
         client = StubClient(base_url=url, rate=Rate.per_second(1000))
         with pytest.raises(TransportError) as raised:
-            await client.post("orders", expect=nothing, json={"qty": 1})
+            await client.post("orders", expect=nothing, body=Json({"qty": 1}))
         await client.aclose()
 
     assert connections == 1
@@ -253,7 +255,7 @@ async def test_a_keyed_post_whose_head_reached_the_server_is_resent_end_to_end()
             base_url=url, rate=Rate.per_second(1000), policy=TransportPolicy(idempotency=IdempotencyKeys())
         )
         with pytest.raises(TransportError):
-            await client.post("orders", expect=nothing, json={"qty": 1})
+            await client.post("orders", expect=nothing, body=Json({"qty": 1}))
         await client.aclose()
 
     assert connections == len(("first", "second", "third"))
@@ -295,3 +297,44 @@ async def test_closing_the_counted_body_closes_the_callers_stream() -> None:
     await SendTrackingTransport(transport=_ClosesBody()).handle_async_request(request)
 
     assert stream.closed is True
+
+
+class _HoldFirstSend(httpx2.AsyncBaseTransport):
+    """Above the tracking layer: note each send's own progress as it enters, and hold the first until a second begins.
+
+    The first send held here stands for one waiting its rate-budget turn while a hedge starts beside it.
+    """
+
+    def __init__(self, below: httpx2.AsyncBaseTransport) -> None:
+        """Pass each send on to *below*."""
+        self._below = below
+        self._second = asyncio.Event()
+        self.progress: list[SendProgress] = []
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        self.progress.append(CallContext.of(request).progress)
+        if len(self.progress) == 1:
+            await self._second.wait()
+        else:
+            self._second.set()
+        return await self._below.handle_async_request(request)
+
+
+async def test_a_send_held_while_a_hedge_begins_counts_into_its_own_attempt() -> None:
+    """Record each send's connection and head into its own attempt's progress, not the attempt that began last."""
+    reached: list[int] = []
+
+    async def network(request: httpx2.Request) -> httpx2.Response:
+        # What httpcore2 reports as it writes the head, through the tracking layer's trace.
+        await request.extensions["trace"]("http11.send_request_headers.started", {})
+        reached.append(len(reached))
+        if reached == [0]:
+            await asyncio.sleep(3600)  # the hedge, first to the wire, never answers
+        return httpx2.Response(200, request=request)
+
+    held = _HoldFirstSend(SendTrackingTransport(transport=httpx2.MockTransport(network)))
+    policy = RetryPolicy(hedge=Hedge(after=0.001), budget=None)
+    retry = RetryTransport(transport=held, policy=policy)
+    await retry.handle_async_request(httpx2.Request("PUT", "https://x.example/item", content=_BODY))
+    assert [(progress.connected, progress.bytes_sent > 0) for progress in held.progress] == [(True, True)] * 2

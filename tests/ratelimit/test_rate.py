@@ -23,7 +23,28 @@ def test_rate_units_are_in_the_constructor() -> None:
 
 @pytest.mark.parametrize(
     ("requests", "period"),
-    [(0, 1.0), (-1, 1.0), (float("nan"), 1.0), (1, 0.0), (1, -60.0), (1, float("nan")), (1, float("inf"))],
+    [
+        (0, 1.0),
+        (-1, 1.0),
+        (float("nan"), 1.0),
+        (float("inf"), 1.0),
+        (1e-320, 1.0),
+        (1, 0.0),
+        (1, -60.0),
+        (1, float("nan")),
+        (1, float("inf")),
+    ],
+    ids=[
+        "zero",
+        "negative",
+        "nan",
+        "infinite",
+        "infinite interval",
+        "zero period",
+        "negative period",
+        "nan period",
+        "infinite period",
+    ],
 )
 def test_a_rate_must_be_positive_and_finite(requests: float, period: float) -> None:
     """Refuse a rate that cannot pace, rather than failing on the first request that has to wait."""
