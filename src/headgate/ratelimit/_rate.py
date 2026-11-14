@@ -14,7 +14,7 @@ from headgate._core import check_fragment
 if TYPE_CHECKING:
     from headgate.ratelimit._budget import RateBudget
 
-__all__ = ["UNLIMITED", "Adaptive", "Rate", "RateRule"]
+__all__ = ["UNPACED", "Adaptive", "Rate", "RateRule"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +68,7 @@ class Rate:
 
 
 #: A rate that never throttles in practice (1M req/s): what a budget built with transport policy off paces at.
-UNLIMITED = Rate.per_second(1_000_000)
+UNPACED = Rate.per_second(1_000_000)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

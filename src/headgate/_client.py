@@ -122,11 +122,10 @@ from headgate.errors import (
 )
 from headgate.pagination import PageRequest, WritingPager
 from headgate.pagination._paginated import PageWalk
-from headgate.ratelimit import UNLIMITED, Rate, RateBudget
+from headgate.ratelimit import Rate, RateBudget
 from headgate.ratelimit._budget import BudgetPausedError
 from headgate.ratelimit._budgets import PathBudgets
-from headgate.retry import NO_RETRY, RetryPolicy
-from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY
+from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE
 from headgate.streaming._stream import OpenStream
 
 if TYPE_CHECKING:
@@ -142,6 +141,7 @@ if TYPE_CHECKING:
     from headgate.breaker._registry import Breaker
     from headgate.cache import HttpCache
     from headgate.pagination import PageLimit, Pager, Paginated
+    from headgate.retry import RetryPolicy
     from headgate.streaming import Stream
 
 __all__ = ["AsyncBaseClient", "Built", "Method", "built_with"]
@@ -292,7 +292,7 @@ class AsyncBaseClient:
         self,
         *,
         base_url: str,
-        rate: Rate | RateBudget = UNLIMITED,
+        rate: Rate | RateBudget | None = None,
         auth: httpx2.Auth | None = None,
         policy: TransportPolicy = _DEFAULT_POLICY,
         http: HttpOptions = _DEFAULT_HTTP,
@@ -302,8 +302,8 @@ class AsyncBaseClient:
         """Build the transport stack for *base_url*, spending from *rate*, signing requests with *auth*.
 
         *rate* is a :class:`~headgate.Rate`, from which the client builds a budget of its own, or a
-        :class:`~headgate.RateBudget` it shares with every other client given the same one. Without one the client
-        paces nothing itself (:data:`~headgate.ratelimit.UNLIMITED`), but still waits out the pauses the server asks
+        :class:`~headgate.RateBudget` it shares with every other client given the same one. Without one (``None``) the
+        client paces nothing itself, but still waits out the pauses the server asks
         for: a 429 or 503 with ``Retry-After``, and a spent ``RateLimit`` quota. Pass a rate when the provider states
         its quota.
 
@@ -321,7 +321,9 @@ class AsyncBaseClient:
             its credentials (see :class:`~headgate.cache.Partition`).
         """
         reject_upstream_httpx(auth, what="auth")
-        check_kind("rate", rate, (Rate, RateBudget), "a Rate, such as Rate.per_second(10), or a RateBudget")
+        check_kind(
+            "rate", rate, (Rate, RateBudget, type(None)), "a Rate, such as Rate.per_second(10), a RateBudget or None"
+        )
         observers, middleware = _stack_parts("observers", observers), _stack_parts("middleware", middleware)
         check_middleware(middleware)
         self._policy_off = policy_is_disabled()
@@ -817,13 +819,13 @@ class AsyncBaseClient:
     def _retry_of(self, call: _Call, route: Route | None) -> RetryPolicy | None:
         """Return *call*'s own retry policy when it overrides the client's: per call, view or route; else ``None``.
 
-        A call's or a view's ``retry=None`` is :data:`~headgate.retry.NO_RETRY`: send once.
+        A call's or a view's ``retry=None`` sends once; the policy's ``None`` is read where the stack is built.
         """
         if self._policy_off:
-            return NO_RETRY
+            return SEND_ONCE
         if "retry" in call.options:
             retry = call.options["retry"]
-            return NO_RETRY if retry is None else retry
+            return SEND_ONCE if retry is None else retry
         if self._view.retry is not KEEP:
             return self._view.retry
         return None if route is None else route.retry
@@ -1121,7 +1123,7 @@ def _effective_policy(policy: TransportPolicy, *, off: bool) -> TransportPolicy:
     if any. The rate budget checks for transport policy being off itself, when it is built.
     """
     if off:
-        return replace(policy, retry=NO_RETRY, breaker=None)
+        return replace(policy, retry=None, breaker=None)
     breaker = policy.breaker
     if breaker is None or (registry := scoped_registry(breaker.registry)) is breaker.registry:
         return policy

@@ -54,6 +54,7 @@ from headgate._user_agent import user_agent
 from headgate.cache._credentials import credential_scope, mark_caller_credentials
 from headgate.cache._transport import ResilientCacheTransport
 from headgate.ratelimit._transport import RateLimitTransport
+from headgate.retry._policy import SEND_ONCE
 from headgate.retry._tracking import SendTrackingTransport
 from headgate.retry._transport import RetryTransport
 from headgate.security import AddressGuard, PinnedHTTPTransport
@@ -168,7 +169,8 @@ def build_transport_stack(
         layer = MiddlewareTransport(transport=layer, middleware=middleware, guard=credentials.guard, signer=None)
     if observed:
         layer = AttemptTransport(transport=layer)
-    return RetryTransport(transport=layer, policy=policy.retry, sleep=timing.sleep, clock=timing.clock)
+    retry = SEND_ONCE if policy.retry is None else policy.retry
+    return RetryTransport(transport=layer, policy=retry, sleep=timing.sleep, clock=timing.clock)
 
 
 def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:

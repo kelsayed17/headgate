@@ -26,7 +26,6 @@ from headgate._core import BreakerState, CallFinished
 from headgate.breaker import BreakerRegistry, CircuitBreaker
 from headgate.errors import ClientError, ClientTimeoutError, TransportError, UpstreamStatusError
 from headgate.ratelimit import Rate
-from headgate.retry import NO_RETRY
 from headgate.testing import TestClock
 from tests.support.clients import StubClient
 from tests.support.events import Recorder
@@ -68,7 +67,7 @@ class _Breakers:
         return StubClient(
             base_url=_ORIGIN,
             rate=_RATE,
-            policy=TransportPolicy(retry=NO_RETRY, breaker=self.policy),
+            policy=TransportPolicy(retry=None, breaker=self.policy),
             http=HttpOptions(transport=transport),
             observers=observers,
             middleware=middleware,
@@ -156,7 +155,7 @@ async def test_a_timeout_reading_an_error_head_is_the_networks_not_the_deadline(
     client = StubClient(
         base_url=_ORIGIN,
         rate=_RATE,
-        policy=TransportPolicy(retry=NO_RETRY, breaker=breakers.policy, deadline=60.0),
+        policy=TransportPolicy(retry=None, breaker=breakers.policy, deadline=60.0),
         http=HttpOptions(transport=_answering(404, _DiesMidBody(TimeoutError("read timed out")))),
     )
     with pytest.raises(ClientError) as raised:
@@ -248,7 +247,7 @@ async def test_a_deadline_passing_during_a_401_re_mint_is_not_charged_to_the_ori
         base_url=_ORIGIN,
         rate=_RATE,
         auth=_HangingMint(hop=hop),
-        policy=TransportPolicy(retry=NO_RETRY, breaker=breakers.policy, deadline=_DEADLINE),
+        policy=TransportPolicy(retry=None, breaker=breakers.policy, deadline=_DEADLINE),
         http=HttpOptions(transport=_ApiThenHangingTokenHost()),
     )
     with pytest.raises(ClientTimeoutError):

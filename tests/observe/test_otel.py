@@ -27,7 +27,6 @@ from headgate.errors import ResponseParseError, TransportError, UpstreamStatusEr
 from headgate.events import AttemptFinished, CallFinished, CallInfo, CallStarted, RetryScheduled
 from headgate.msgspec import reader
 from headgate.otel import OpenTelemetryObserver
-from headgate.retry import NO_RETRY
 from headgate.testing import FakeTransport, TestClock
 from tests.observe._support import client
 
@@ -175,7 +174,7 @@ async def test_a_transport_failure_is_named_by_its_error_class(telemetry: Teleme
     fake = FakeTransport().reply("GET", "/v1/x", _refuse)
     with pytest.raises(TransportError):
         await client(
-            fake, telemetry.observer, policy=TransportPolicy(retry=NO_RETRY), middleware=(telemetry.observer,)
+            fake, telemetry.observer, policy=TransportPolicy(retry=None), middleware=(telemetry.observer,)
         ).get("x", expect=nothing)
 
     attributes = _attributes(telemetry.span())

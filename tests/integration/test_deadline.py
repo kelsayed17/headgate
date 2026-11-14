@@ -24,7 +24,7 @@ from headgate import (
     nothing,
 )
 from headgate.ratelimit import Rate
-from headgate.retry import NO_RETRY, Backoff
+from headgate.retry import Backoff
 from headgate.testing import FakeTransport, TestClock
 from tests.integration._support import client
 
@@ -59,7 +59,7 @@ async def test_a_pause_a_backoff_and_attempts_stay_inside_the_deadline() -> None
     with clock.install():
         built = client(fake, rate=budget, policy=TransportPolicy(retry=retry))
     with pytest.raises(RateLimitError):
-        await built.get("limited", expect=nothing, retry=NO_RETRY)
+        await built.get("limited", expect=nothing, retry=None)
     started = clock.now
 
     with pytest.raises(UpstreamStatusError) as raised:
@@ -130,7 +130,7 @@ async def test_a_deadline_passing_before_the_send_says_so() -> None:
 
     fake = FakeTransport().reply("GET", "/v1/slow", hangs).reply("GET", "/v1/x", 200)
     built = client(fake, rate=RateBudget(Rate.per_second(100), max_in_flight=1))
-    holder = asyncio.create_task(built.get("slow", expect=nothing, retry=NO_RETRY))
+    holder = asyncio.create_task(built.get("slow", expect=nothing, retry=None))
     try:
         await holding.wait()
         with pytest.raises(ClientTimeoutError, match="before attempt 1 was sent") as raised:

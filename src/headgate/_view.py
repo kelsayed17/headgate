@@ -22,7 +22,7 @@ from typing_extensions import TypedDict
 
 from headgate._call_options import check_overrides
 from headgate._options import check_deadline
-from headgate.retry import NO_RETRY
+from headgate.retry._policy import SEND_ONCE
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -70,7 +70,7 @@ class ViewDefaults:
     """What a view adds to each of its calls: ``headers`` under the call's own, a ``deadline``, ``retry`` and redirects.
 
     ``headers`` is a tuple of pairs so the value stays immutable; every other setting is ``KEEP`` when the view sets
-    none. A view's ``retry=None`` is held as :data:`~headgate.retry.NO_RETRY`.
+    none. A view's ``retry=None`` is held as the policy that sends once.
     """
 
     headers: tuple[tuple[str, str], ...] = ()
@@ -106,7 +106,7 @@ class ViewDefaults:
             changed = replace(changed, deadline=deadline)
         if "retry" in options:
             retry = options["retry"]
-            changed = replace(changed, retry=NO_RETRY if retry is None else retry)
+            changed = replace(changed, retry=SEND_ONCE if retry is None else retry)
         if "follow_redirects" in options:
             changed = replace(changed, follow_redirects=options["follow_redirects"])
         return changed

@@ -18,7 +18,6 @@ from headgate import HttpCache, HttpOptions, RateLimitError, TransportPolicy
 from headgate._core import AttemptFinished, CallFinished, RateLimited, Timing
 from headgate.cache._transport import CACHE_DEGRADATIONS
 from headgate.ratelimit import Rate, RateBudget
-from headgate.retry import NO_RETRY
 from headgate.testing import TestClock
 from tests.support.breakers import failures
 from tests.support.clients import StubClient
@@ -64,7 +63,7 @@ def _client(
     return StubClient(
         base_url=f"https://{_HOST}",
         rate=budget,
-        policy=TransportPolicy(retry=NO_RETRY, cache=cache),
+        policy=TransportPolicy(retry=None, cache=cache),
         http=HttpOptions(transport=httpx2.MockTransport(server)),
         observers=() if recorder is None else (recorder,),
     )

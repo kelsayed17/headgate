@@ -313,10 +313,11 @@ How the pieces fit together, for contributors and the curious: [design](https://
 
 ## Configuration
 
-`AsyncBaseClient(*, base_url, rate=UNLIMITED, auth=None, policy=TransportPolicy(), http=HttpOptions())`. `rate` is a
-`Rate` (a budget of the client's own) or a `RateBudget` shared with other clients; without one the client paces nothing
-itself but still waits out the pauses the server asks for. `TransportPolicy` says what the stack does to
-every request, `HttpOptions` how requests are sent and read. Both are frozen and validate on construction.
+`AsyncBaseClient(*, base_url, rate=None, auth=None, policy=TransportPolicy(), http=HttpOptions(), observers=(),
+middleware=())`. `rate` is a `Rate` (a budget of the client's own) or a `RateBudget` shared with other clients; without
+one the client paces nothing itself but still waits out the pauses the server asks for. `TransportPolicy` says what the
+stack does to every request, `HttpOptions` how requests are sent and read. Both are frozen and validate on
+construction.
 
 <details>
 <summary><b>A fuller client's configuration</b></summary>

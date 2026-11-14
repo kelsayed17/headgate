@@ -4,7 +4,7 @@
 AsyncBaseClient(
     *,
     base_url: str,
-    rate: Rate | RateBudget = UNLIMITED,
+    rate: Rate | RateBudget | None = None,
     auth: httpx2.Auth | None = None,
     policy: TransportPolicy = TransportPolicy(),
     http: HttpOptions = HttpOptions(),
@@ -34,7 +34,7 @@ What the stack does to every request.
 
 | Field | Default | |
 | --- | --- | --- |
-| `retry` | `RetryPolicy()` | how a call is re-sent; see [retries](retries.md) |
+| `retry` | `RetryPolicy()` | how a call is re-sent, or `None` to send every call once; see [retries](retries.md) |
 | `timeout` | `Timeouts()` | per-phase timeouts; a phase left unset takes its default, and a phase set longer than `deadline` is refused |
 | `deadline` | `60.0` | seconds the whole call may take, or `None`; see [deadlines](deadlines.md) |
 | `breaker` | `BreakerPolicy()` | the per-origin breaker, or `None`; see [breaker](breaker.md) |
@@ -46,10 +46,9 @@ What the stack does to every request.
 A `Route` changes an endpoint's retry policy or deadline in configuration, so the endpoint method stays one line:
 
 ```python
-from headgate import Route, TransportPolicy
-from headgate.retry import NO_RETRY
+from headgate import RetryPolicy, Route, TransportPolicy
 
-policy = TransportPolicy(routes=(Route("/charges", retry=NO_RETRY), Route("/reports", deadline=300.0)))
+policy = TransportPolicy(routes=(Route("/charges", retry=RetryPolicy(attempts=1)), Route("/reports", deadline=300.0)))
 ```
 
 ## HttpOptions

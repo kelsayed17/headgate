@@ -131,9 +131,7 @@ class CredentialGuard:
         self._headers = frozenset(headers)
         self._params = params
         self._cookie_jar = cookie_jar
-        self._middleware_headers = frozenset(
-            name.lower() for item in middleware for name in item.credential_headers
-        )
+        self._middleware_headers = frozenset(name.lower() for item in middleware for name in item.credential_headers)
         self._middleware_params = frozenset(name for item in middleware for name in item.credential_params)
         trusted = (httpx2.Origin(origin) for origin in http.security.trusted_origins)
         self._trusted = frozenset({base_url.origin, *trusted})

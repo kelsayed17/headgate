@@ -12,7 +12,6 @@ import pytest
 
 from headgate import Form, HttpOptions, Rate, TransportPolicy, as_bytes, nothing
 from headgate.errors import TransportError, UpstreamStatusError
-from headgate.retry import NO_RETRY
 from headgate.testing import FakeTransport, Respond, UnmatchedRequestError
 from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
@@ -39,7 +38,7 @@ async def test_a_route_serves_its_replies_in_order_and_repeats_the_last() -> Non
 async def test_a_route_serves_a_respond_step_as_faulty_transport_does() -> None:
     """Answer with a ``Respond``: its status, its ``Retry-After``, and its JSON body with a JSON content type."""
     fake = FakeTransport().reply("GET", "/v1/series", Respond(503, retry_after=2.0), Respond(json={"id": "GDP"}))
-    client = _client(fake, policy=TransportPolicy(retry=NO_RETRY))
+    client = _client(fake, policy=TransportPolicy(retry=None))
 
     with pytest.raises(UpstreamStatusError) as raised:
         await client.get("series", expect=nothing)
@@ -81,7 +80,7 @@ async def test_a_reply_function_can_fail_the_network() -> None:
 
     fake = FakeTransport().reply("GET", "/v1/x", refuse)
     with pytest.raises(TransportError):
-        await _client(fake, policy=TransportPolicy(retry=NO_RETRY)).get("x", expect=nothing)
+        await _client(fake, policy=TransportPolicy(retry=None)).get("x", expect=nothing)
 
 
 async def test_a_compressed_reply_is_served_again_and_again() -> None:

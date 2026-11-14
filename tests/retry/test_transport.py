@@ -25,8 +25,8 @@ from headgate._core import (
     RetryScheduled,
     _retry_after,
 )
-from headgate.retry import NO_RETRY, Backoff, Hedge, RetryBudget, RetryPolicy
-from headgate.retry._policy import REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, RetryOutcome
+from headgate.retry import Backoff, Hedge, RetryBudget, RetryPolicy
+from headgate.retry._policy import REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE, RetryOutcome
 from headgate.retry._transport import RetryTransport
 from headgate.testing import (
     ConnectFail,
@@ -285,7 +285,7 @@ async def test_a_calls_own_policy_wins_over_the_transports() -> None:
     clock = TestClock()
     retry, network = _transport([Respond(503), Respond(200)], clock)
     request, context = _request(clock=clock)
-    context.put(RETRY_POLICY, NO_RETRY)
+    context.put(RETRY_POLICY, SEND_ONCE)
 
     response = await retry.handle_async_request(request)
 

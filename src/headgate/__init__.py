@@ -27,7 +27,7 @@ here is what a client is written with:
 * the errors, all under :class:`ClientError`.
 
 Everything else lives once, in its layer's subpackage: the finer policy values (:mod:`headgate.retry`'s ``Backoff``,
-``Hedge``, ``RetryBudget`` and ``NO_RETRY``; :mod:`headgate.ratelimit`'s ``Adaptive``; :mod:`headgate.breaker`'s
+``Hedge`` and ``RetryBudget``; :mod:`headgate.ratelimit`'s ``Adaptive``; :mod:`headgate.breaker`'s
 ``BreakerRegistry``), the cache's filters, partitions and conditional reads (:mod:`headgate.cache`), what a custom
 pager is written with (:mod:`headgate.pagination`), ``Stream`` (:mod:`headgate.streaming`), :mod:`headgate.security`,
 events and their ``Observer`` (:mod:`headgate.events`) and the testing kit (:mod:`headgate.testing`).

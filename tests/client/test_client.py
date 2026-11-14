@@ -33,7 +33,7 @@ from headgate.errors import (
     UpstreamStatusError,
 )
 from headgate.msgspec import reader
-from headgate.ratelimit import UNLIMITED, Rate
+from headgate.ratelimit import Rate
 from headgate.ratelimit._budget import Pacer
 from headgate.retry import Backoff, RetryPolicy
 from headgate.testing import FakeTransport, TestClock
@@ -102,7 +102,7 @@ def test_base_url_is_required_and_rate_defaults_to_unlimited() -> None:
     parameters = inspect.signature(AsyncBaseClient.__init__).parameters
     assert {parameters[name].kind for name in ("base_url", "rate")} == {inspect.Parameter.KEYWORD_ONLY}
     assert parameters["base_url"].default is inspect.Parameter.empty
-    assert parameters["rate"].default is UNLIMITED
+    assert parameters["rate"].default is None
 
 
 async def test_each_client_has_its_own_http_client() -> None:
@@ -139,7 +139,7 @@ def test_an_option_group_refuses_a_nonsense_value(build: Callable[[], object], m
     ("build", "message"),
     [
         (lambda: StubClient(base_url="https://x", rate=cast("Any", 10)), "rate= takes a Rate"),
-        (lambda: TransportPolicy(retry=cast("Any", None)), "retry= takes a RetryPolicy"),
+        (lambda: TransportPolicy(retry=cast("Any", 1)), "retry= takes a RetryPolicy, or None"),
         (lambda: TransportPolicy(breaker=cast("Any", 3)), "breaker= takes a BreakerPolicy"),
         (lambda: TransportPolicy(timeout=cast("Any", 5.0)), "timeout= takes a Timeouts"),
     ],

@@ -249,7 +249,8 @@ def match_route(routes: tuple[Route, ...], path: str) -> Route | None:
 class TransportPolicy:
     """What the transport stack does for every request.
 
-    * ``retry``: how a call is re-sent (:class:`~headgate.RetryPolicy`). A call opts out with ``retry=None``.
+    * ``retry``: how a call is re-sent (:class:`~headgate.RetryPolicy`), or ``None`` to send every call once. A call
+      opts out with ``retry=None``, and a call's or a route's policy replaces this one.
     * ``timeout``: :class:`Timeouts`; a phase it leaves unset takes its default (:data:`DEFAULT_TIMEOUTS`). A phase it
       sets may not be longer than ``deadline``, since it could never take effect.
     * ``deadline``: seconds the whole logical call may take, every attempt, wait and the body read included; ``None``
@@ -262,7 +263,7 @@ class TransportPolicy:
     * ``routes``: per-route retry and deadline overrides (:class:`Route`).
     """
 
-    retry: RetryPolicy = field(default_factory=RetryPolicy)
+    retry: RetryPolicy | None = field(default_factory=RetryPolicy)
     timeout: Timeouts = field(default_factory=Timeouts)
     deadline: float | None = 60.0
     breaker: BreakerPolicy | None = field(default_factory=BreakerPolicy)
@@ -274,11 +275,10 @@ class TransportPolicy:
     def __post_init__(self) -> None:
         """Refuse a retry or breaker of the wrong kind and a deadline that is not positive and finite; freeze the rules.
 
-        :raises TypeError: for a ``retry`` that is not a :class:`~headgate.RetryPolicy` (``None`` included: retries are
-            turned off with :data:`~headgate.retry.NO_RETRY`), or a ``breaker`` that is neither a
-            :class:`~headgate.BreakerPolicy` nor ``None``.
+        :raises TypeError: for a ``retry`` that is neither a :class:`~headgate.RetryPolicy` nor ``None`` (a ``bool``
+            included), or a ``breaker`` that is neither a :class:`~headgate.BreakerPolicy` nor ``None``.
         """
-        check_kind("retry", self.retry, RetryPolicy, "a RetryPolicy; turn retries off with headgate.retry.NO_RETRY")
+        check_kind("retry", self.retry, (RetryPolicy, type(None)), "a RetryPolicy, or None to send every call once")
         check_kind("breaker", self.breaker, (BreakerPolicy, type(None)), "a BreakerPolicy, or None for no breaker")
         check_deadline(self.deadline)
         check_timeout_fits(self.timeout, self.deadline)

@@ -23,7 +23,6 @@ import pytest
 from headgate import HttpOptions, Timeouts, TransportPolicy
 from headgate.cache import HttpCache
 from headgate.errors import ClientTimeoutError
-from headgate.ratelimit import UNLIMITED
 from headgate.retry import RetryPolicy
 from tests.cache._helpers import series_rules, stamped_ttl, stub_client
 from tests.support.clients import StubClient
@@ -105,7 +104,6 @@ async def test_a_black_holing_host_times_out_through_the_cache(storage: AsyncSql
 
     client = StubClient(
         base_url=f"http://127.0.0.1:{port}",
-        rate=UNLIMITED,
         policy=TransportPolicy(
             retry=RetryPolicy(attempts=1),
             cache=HttpCache(**series_rules(), storage=storage),

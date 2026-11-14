@@ -25,7 +25,6 @@ from headgate._core import CallContext, CallInfo
 from headgate.cache import Partition
 from headgate.cache._transport import CACHE_DEGRADATIONS
 from headgate.errors import ForbiddenDestinationError
-from headgate.ratelimit import UNLIMITED
 from tests.cache._helpers import NETWORK_BODY, FaultyStorage, Network, cache_transport, series_rules, stub_client
 from tests.observe.test_otel import Telemetry
 from tests.support.clients import StubClient
@@ -263,7 +262,6 @@ async def test_traced_identical_gets_share_one_download(storage: AsyncSqliteStor
     telemetry = Telemetry()
     client = StubClient(
         base_url="https://x",
-        rate=UNLIMITED,
         policy=TransportPolicy(cache=HttpCache(storage=storage)),
         http=HttpOptions(transport=network),
         observers=(telemetry.observer,),
@@ -303,7 +301,6 @@ async def test_a_guarded_client_is_never_served_an_unguarded_clients_entry(
     unguarded = stub_client(transport=Network(), cache=cache)
     guarded = StubClient(
         base_url="https://x",
-        rate=UNLIMITED,
         policy=TransportPolicy(cache=cache),
         http=HttpOptions(security=SecurityOptions(allow_private_hosts=False, resolver=_Names(x="10.0.0.5"))),
     )

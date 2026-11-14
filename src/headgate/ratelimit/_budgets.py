@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from headgate._core import SYSTEM_TIMING, path_has_fragment, policy_is_disabled
 from headgate.ratelimit._budget import RateBudget
-from headgate.ratelimit._rate import UNLIMITED, Rate
+from headgate.ratelimit._rate import UNPACED, Rate
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -26,17 +26,18 @@ if TYPE_CHECKING:
 __all__ = ["PathBudgets", "as_budget"]
 
 
-def as_budget(rate: Rate | RateBudget, timing: Timing = SYSTEM_TIMING) -> RateBudget:
+def as_budget(rate: Rate | RateBudget | None, timing: Timing = SYSTEM_TIMING) -> RateBudget:
     """Return the budget *rate* names: a shared :class:`RateBudget` as it is, or a new one paced on *timing*.
 
-    Built with transport policy off (:func:`headgate.policy.policy_disabled`), it is a private budget at
-    :data:`UNLIMITED` with no concurrency cap and no throttling, whatever was asked for, a shared budget included.
+    ``None`` is a budget that paces nothing of its own, but still waits out the server's pauses. Built with transport
+    policy off (:func:`headgate.policy.policy_disabled`), it is a private budget that paces nothing, with no
+    concurrency cap and no throttling, whatever was asked for, a shared budget included.
     """
     if policy_is_disabled():
-        return RateBudget(UNLIMITED, adaptive=None, timing=timing)
+        return RateBudget(UNPACED, adaptive=None, timing=timing)
     if isinstance(rate, RateBudget):
         return rate
-    return RateBudget(rate, timing=timing)
+    return RateBudget(UNPACED if rate is None else rate, timing=timing)
 
 
 class PathBudgets:
@@ -49,7 +50,7 @@ class PathBudgets:
     __slots__ = ("_rules", "default")
 
     def __init__(
-        self, *, default: Rate | RateBudget, rules: Sequence[RateRule] = (), timing: Timing = SYSTEM_TIMING
+        self, *, default: Rate | RateBudget | None, rules: Sequence[RateRule] = (), timing: Timing = SYSTEM_TIMING
     ) -> None:
         """Resolve the default budget and one budget per rule, in rule order, building any from a bare rate."""
         self.default = as_budget(default, timing)

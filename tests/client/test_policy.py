@@ -23,8 +23,9 @@ from headgate._responses import nothing
 from headgate.breaker._registry import DEFAULT_REGISTRY
 from headgate.errors import TransportError, UpstreamStatusError
 from headgate.policy import policy_disabled
-from headgate.ratelimit import UNLIMITED, Rate, RateRule
+from headgate.ratelimit import Rate, RateRule
 from headgate.ratelimit._budget import Pacer
+from headgate.ratelimit._rate import UNPACED
 from headgate.retry import RetryPolicy
 
 if TYPE_CHECKING:
@@ -138,7 +139,7 @@ class TestPolicyOff:
             (_RATE.requests, _RATE.period),
             (_RULE_RATE.requests, _RULE_RATE.period),
         ], "control"
-        assert await rates(_built_off(_Wire(httpx2.codes.OK))) == [(UNLIMITED.requests, UNLIMITED.period)] * 2
+        assert await rates(_built_off(_Wire(httpx2.codes.OK))) == [(UNPACED.requests, UNPACED.period)] * 2
 
 
 class TestItIsReadAtConstruction:

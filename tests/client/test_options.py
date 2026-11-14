@@ -39,7 +39,7 @@ from headgate import (
 )
 from headgate._options import DEFAULT_LIMITS
 from headgate._user_agent import DEFAULT_USER_AGENT, headgate_version
-from headgate.retry import NO_RETRY
+from headgate.testing import budget_for
 from tests.support.clients import StubClient
 from tests.support.wire import Script
 
@@ -306,7 +306,7 @@ async def test_a_caller_set_cookie_header_is_still_sent() -> None:
 async def test_max_redirects_bounds_a_redirect_chain() -> None:
     """Raise once a redirect chain exceeds ``max_redirects``."""
     script = Script(httpx2.Response(302, headers={"Location": f"{_BASE}/next"}))
-    client = _client(script, policy=TransportPolicy(retry=NO_RETRY, breaker=None), http=HttpOptions(max_redirects=1))
+    client = _client(script, policy=TransportPolicy(retry=None, breaker=None), http=HttpOptions(max_redirects=1))
 
     with pytest.raises(TransportError, match="redirect"):
         await client.get("start", expect=nothing)
@@ -438,7 +438,9 @@ async def test_every_place_a_deadline_is_set_refuses_the_same_values(
 async def test_a_route_gives_matching_paths_their_own_retry_policy() -> None:
     """Send a matching path under the route's retry policy and every other path under the client's."""
     script = Script(503)
-    policy = TransportPolicy(retry=RetryPolicy(attempts=3), routes=(Route("/reports", retry=NO_RETRY), Route("/x")))
+    policy = TransportPolicy(
+        retry=RetryPolicy(attempts=3), routes=(Route("/reports", retry=RetryPolicy(attempts=1)), Route("/x"))
+    )
     client = _client(script, policy=policy)
     with pytest.raises(UpstreamStatusError):
         await client.get("v1/reports/daily", expect=nothing)
@@ -447,13 +449,13 @@ async def test_a_route_gives_matching_paths_their_own_retry_policy() -> None:
         await client.get("v1/series", expect=nothing)
 
     assert sends_on_the_route == 1
-    assert len(script.sent) - sends_on_the_route == policy.retry.attempts
+    assert len(script.sent) - sends_on_the_route == len(("503", "503", "503"))
 
 
 async def test_a_calls_retry_policy_wins_over_its_route() -> None:
     """Let a call's ``retry=RetryPolicy(...)`` win over the route's policy."""
     script = Script(503)
-    client = _client(script, policy=TransportPolicy(routes=(Route("/reports", retry=NO_RETRY),)))
+    client = _client(script, policy=TransportPolicy(routes=(Route("/reports", retry=RetryPolicy(attempts=1)),)))
     with pytest.raises(UpstreamStatusError):
         await client.get("reports", expect=nothing, retry=RetryPolicy(attempts=2))
 
@@ -509,13 +511,13 @@ def test_check_kind_names_what_it_got(value: object, named: str) -> None:
     """Name a class, a type expression and a plain value apart, so a refusal says which mistake it was."""
     with pytest.raises(TypeError) as caught:
         StubClient(base_url=_BASE, rate=cast("Any", value))
-    assert str(caught.value) == f"rate= takes a Rate, such as Rate.per_second(10), or a RateBudget (got {named})"
+    assert str(caught.value) == f"rate= takes a Rate, such as Rate.per_second(10), a RateBudget or None (got {named})"
 
 
 # Phase 4's moves: timeouts sit with the deadline, observers and middleware with the client.
 
 
-def test_a_policys_timeout_is_checked_against_its_own_deadline() -> None:
+def test_a_timeout_is_checked_against_the_deadline_of_its_policy() -> None:
     """Refuse a policy whose timeout is longer than its deadline where both are written, not in the client."""
     with pytest.raises(ValueError, match=r"^read timeout 120s is longer than the 60s deadline"):
         TransportPolicy(timeout=Timeouts(read=120.0), deadline=60.0)
@@ -571,3 +573,26 @@ async def test_the_clients_observers_hear_its_calls() -> None:
     await client.get("x", expect=nothing)
 
     assert ("CallStarted" in heard, "CallFinished" in heard, seen) == (True, True, ["GET"])
+
+
+async def test_a_policy_of_no_retries_sends_once_and_a_calls_own_policy_wins() -> None:
+    """Send every call once under ``TransportPolicy(retry=None)``, unless the call gives a policy of its own."""
+    script = Script(503, 503, 200)
+    client = _client(script, policy=TransportPolicy(retry=None))
+
+    with pytest.raises(UpstreamStatusError):
+        await client.get("x", expect=nothing)
+    assert len(script.sent) == 1
+
+    await client.get("x", expect=nothing, retry=RetryPolicy(attempts=3))
+    assert len(script.sent) == len(("the first call's 503", "503", "200"))
+
+
+@pytest.mark.parametrize("rate", [None, "absent"], ids=["none", "absent"])
+def test_no_rate_paces_nothing_of_its_own(rate: str | None) -> None:
+    """Build an unpaced budget of the client's own for ``rate=None`` and for no ``rate=`` at all, the same budget."""
+    given: dict[str, Any] = {} if rate == "absent" else {"rate": None}
+    client = StubClient(base_url=_BASE, **given)
+
+    budget = budget_for(client)
+    assert (budget.rate, budget.max_in_flight) == (Rate.per_second(1_000_000), None)
