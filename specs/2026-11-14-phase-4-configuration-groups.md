@@ -127,7 +127,7 @@ Removed:
 
 Three meanings change without an error, so the CHANGELOG puts each first under **Changed**, in bold:
 - **A route's explicit `retry=None` or `deadline=None`.** Each meant "keep the policy's" and now means "off", as a call's does since phase 3. Find them with `grep -rnE "Route\([^)]*(retry|deadline)=None"`.
-- **Routes no longer combine with rate rules.** A path that one route and a separate rate rule both matched used to take its retry and deadline from the route and its budget from the rule. Now it takes everything from its first matching route, and what that route leaves out comes from the policy and the client's budget. The fix is one route per path that sets everything: the rate rule's `rate=` moves into the route. `rate_limits=` itself is refused, so nobody misses this step, and the CHANGELOG entry spells out the merge.
+- **Routes no longer combine with rate rules.** A path that one route and a separate rate rule both matched used to take its retry and deadline from the route and its budget from the rule. Now it takes everything from its first matching route, and what that route leaves out comes from the policy and the client's budget. The fix is one route per path that sets everything: the rate rule's `rate=` moves into the route. This one is not silent for anyone it affects: `rate_limits=` raises `TypeError`, so every such configuration has to be rewritten, and the CHANGELOG entry says so and spells out the merge.
 
 ## Decisions this plan makes
 
@@ -175,7 +175,8 @@ These six cases are not covered by the design's own examples and are the most li
 1. **One route, whole, at every layer.** A path with `Route("/exports", rate=Rate.per_second(1))` and a policy retry of 3 attempts:
    - spends from the route's budget and retries 3 times;
    - a second route `Route("/exports/big", retry=None)` listed first takes the path whole, so it sends once and spends from the client's budget;
-   - a redirect from `/exports/a` to `/other` keeps the call's route on the second hop.
+   - a redirect from `/exports/a` to `/other` keeps the call's route on the second hop;
+   - a redirect to another origin keeps the call's route and spends that hop's turn from the route's budget, but M11's own-origin filter still keeps that hop's 429 `Retry-After` from pausing the budget.
 
    Covered in Task 4.
 2. **The silent changes.**
