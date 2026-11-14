@@ -8,6 +8,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `Client.events(url, ...)` opens a server-sent event stream. It is `stream()` of a GET that sends
+  `Accept: text/event-stream` and gives each read no time limit, unless the call's own `headers=` or `timeout=` say
+  otherwise. It takes `last_event_id=` and every other option `stream()` takes.
 - `headgate.testing.fake_network(transport)`: every `Client` built in its block sends on *transport* in place of the
   network, even one an SDK gave a transport of its own, so an SDK need not forward `transport=` for its tests. Only the
   network is replaced: the SDK's rate budget, cache, retries and breaker run over it.

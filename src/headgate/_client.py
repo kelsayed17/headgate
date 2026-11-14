@@ -32,10 +32,11 @@ import asyncio
 import contextlib
 import copy
 import functools
+import math
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Literal, Self, Unpack, cast, final, overload
+from typing import TYPE_CHECKING, Final, Literal, Self, Unpack, cast, final, overload
 
 import httpx2
 
@@ -86,6 +87,7 @@ from headgate._failures import (
 from headgate._options import (
     KEYED_METHODS,
     HttpOptions,
+    Timeouts,
     TransportPolicy,
     check_deadline,
     check_hooks,
@@ -155,6 +157,9 @@ type _QueryValue = str | int | float | bool | None
 
 #: How much of a refused or failed streamed response is read, for the ``ClientError``'s body snippet.
 _STREAM_ERROR_HEAD_BYTES = 4096
+
+#: The media type ``events()`` asks for.
+_EVENT_STREAM: Final = "text/event-stream"
 
 #: Network errors that say nothing of the origin's health, so its breaker is not charged with them: a request httpx2
 #: refused to write, a scheme it cannot speak, our own connection pool running out of connections, and a redirect chain
@@ -549,6 +554,30 @@ class Client:
             options = options.copy()
             options["headers"] = headers
         return self._streamed(_Call(method, url, options))
+
+    def events(
+        self, url: CallUrl, *, last_event_id: str | None = None, **options: Unpack[StreamOptions]
+    ) -> contextlib.AbstractAsyncContextManager[Stream]:
+        """Open a server-sent event stream: a :meth:`stream` GET asking for ``text/event-stream``, with no read limit.
+
+        ``async with client.events("feed") as stream:`` then ``async for event in stream.aiter_events():``. It sends
+        ``Accept: text/event-stream`` unless the call's own ``headers=`` name an ``Accept``, and gives each read no
+        timeout (``math.inf``) unless the call's ``timeout=`` sets ``read``, since an event stream may be quiet for
+        minutes. The deadline bounds opening it, as for any stream. ``last_event_id=`` resumes after an event, as on
+        :meth:`stream`.
+        """
+        headers = httpx2.Headers(options.get("headers"))
+        headers.setdefault("Accept", _EVENT_STREAM)
+        timeout = options.get("timeout")
+        options = options.copy()
+        options["headers"] = headers
+        if timeout is None:
+            options["timeout"] = Timeouts(read=math.inf)
+        else:
+            check_kind("timeout", timeout, Timeouts, "a Timeouts, such as Timeouts(read=5.0)")
+            if timeout.read is None:
+                options["timeout"] = replace(timeout, read=math.inf)
+        return self.stream(url, last_event_id=last_event_id, **options)
 
     @overload
     def paginate[P, I](

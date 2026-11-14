@@ -47,14 +47,19 @@ and `aiter_events()`.
 ## Server-sent events
 
 ```python
-async with client.stream("events", headers={"Accept": "text/event-stream"}) as stream:
+async with client.events("feed") as stream:
     async for event in stream.aiter_events():
         handle(event.event, event.data)
     resume_from = stream.last_event_id
 
-async with client.stream("events", last_event_id=resume_from) as stream:
+async with client.events("feed", last_event_id=resume_from) as stream:
     ...
 ```
+
+`client.events(url, ...)` is `stream()` of a GET with two defaults: it sends `Accept: text/event-stream` unless your
+`headers=` name an `Accept`, and each read has no time limit (`math.inf`) unless your `timeout=` sets `read`, since an
+event stream may be quiet for minutes. The deadline bounds opening it, as for any stream, and `asyncio.timeout` around
+the block bounds the whole of it. It takes every option `stream()` does.
 
 `aiter_events(max_event_size=1 MiB)` parses each event as soon as its blank line arrives, by the WHATWG grammar, into
 an `httpx2.ServerSentEvent`: `event`, `data` (multi-line joined), `id` and the `retry` its block named. The body is
