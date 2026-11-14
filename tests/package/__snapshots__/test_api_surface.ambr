@@ -364,7 +364,7 @@
   '''
   module headgate.retry
   __all__ = ['IDEMPOTENT_METHODS', 'RETRY_STATUSES', 'Backoff', 'Hedge', 'RetryBudget', 'RetryPolicy', 'RetryShare']
-  IDEMPOTENT_METHODS = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'})
+  IDEMPOTENT_METHODS = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'})
   RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
   class Backoff(object)(*, factor: 'float' = 0.5, max_wait: 'float' = 5.0) -> 'None'
       field factor: float = 0.5
@@ -378,9 +378,9 @@
       def refund(self) -> 'None'
       property share
       def try_spend(self) -> 'bool'
-  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryShare | RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
+  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryShare | RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
       field attempts: int = 3
-      field methods: frozenset[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'})
+      field methods: frozenset[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'})
       field statuses: frozenset[int] = frozenset({408, 425, 429, 500, 502, 503, 504})
       field backoff: Backoff = <factory>
       field max_retry_after: float = 30.0
@@ -575,7 +575,7 @@
       key cache_ttl: float | None (optional)
       key max_response_bytes: int (optional)
   class CircuitOpenError(TransportError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  class Client(object)(*, base_url: 'str', rate: 'Rate | RateBudget | None' = None, auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryShare(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), timeout=Timeouts(connect=None, read=None, write=None, pool=None), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=None), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, response_check=None, security=SecurityOptions(trusted_origins=frozenset(), block_private_hosts=False, resolver=None), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')), observers: 'Sequence[Observer]' = (), middleware: 'Sequence[Middleware]' = ()) -> 'None'
+  class Client(object)(*, base_url: 'str', rate: 'Rate | RateBudget | None' = None, auth: 'httpx2.Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryShare(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), timeout=Timeouts(connect=None, read=None, write=None, pool=None), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=None), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, response_check=None, security=SecurityOptions(trusted_origins=frozenset(), block_private_hosts=False, resolver=None), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')), observers: 'Sequence[Observer]' = (), middleware: 'Sequence[Middleware]' = ()) -> 'None'
       def aclose(self) -> 'None'
       def delete(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def events(self, url: 'CallUrl', *, last_event_id: 'str | None' = None, **options: 'Unpack[StreamOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
@@ -587,6 +587,7 @@
       def patch(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def post(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def put(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
+      def query(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def stream(self, url: 'CallUrl', *, method: 'Method' = 'GET', last_event_id: 'str | None' = None, **options: 'Unpack[StreamOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
       def with_options(self, **options: 'Unpack[ViewOptions]') -> 'Self'
   class ClientConfigurationError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
@@ -662,7 +663,7 @@
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  type Method = Literal['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']
+  type Method = Literal['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'QUERY']
   class Middleware(CredentialCarrier, Protocol)(*args, **kwargs)
       def __call__(self, request: 'httpx2.Request', call_next: 'Next') -> 'httpx2.Response'
   class Minted(Generic)(token: 'TokenT', lifetime: 'float') -> 'None'
@@ -756,9 +757,9 @@
       property content_type
       property status_code
   class ResponseTooLargeError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryShare | RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
+  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryShare | RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
       field attempts: int = 3
-      field methods: frozenset[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'})
+      field methods: frozenset[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'})
       field statuses: frozenset[int] = frozenset({408, 425, 429, 500, 502, 503, 504})
       field backoff: Backoff = <factory>
       field max_retry_after: float = 30.0

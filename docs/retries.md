@@ -25,7 +25,7 @@ policy = TransportPolicy(
 | `RetryPolicy` field | Default | Meaning |
 | --- | --- | --- |
 | `attempts` | `3` | sends per request, the first included (`1` never retries); hedges count |
-| `methods` | `GET HEAD OPTIONS PUT DELETE` | the methods treated as idempotent |
+| `methods` | `GET HEAD OPTIONS PUT DELETE QUERY` | the methods treated as idempotent |
 | `statuses` | `408 425 429 500 502 503 504` | the statuses that are retryable failures |
 | `backoff` | `Backoff(factor=0.5, max_wait=5.0)` | the wait when the response names none |
 | `max_retry_after` | `30.0` | the longest `Retry-After` that is waited |

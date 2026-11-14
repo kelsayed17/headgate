@@ -8,6 +8,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- `Client.query(url, *, expect, body=..., ...)` sends the QUERY method, which is safe and idempotent like a GET and
+  carries a body like a POST. QUERY joins `IDEMPOTENT_METHODS`, so it is retried after any retryable failure and
+  may be hedged. It is never cached. `Method` gains `"QUERY"`, and an OpenTelemetry span for one is named `QUERY`.
 - `Client.events(url, ...)` opens a server-sent event stream. It is `stream()` of a GET that sends
   `Accept: text/event-stream` and gives each read no time limit, unless the call's own `headers=` or `timeout=` say
   otherwise. It takes `last_event_id=` and every other option `stream()` takes.

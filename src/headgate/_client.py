@@ -149,7 +149,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Built", "Client", "Method", "built_with"]
 
-type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]
+type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "QUERY"]
 """The HTTP methods a client sends: one verb each, and :meth:`Client.stream`'s ``method``."""
 
 #: A query value httpx2 encodes itself.
@@ -459,6 +459,21 @@ class Client:
     ) -> T:
         """Send a POST and read the reply through *expect*. See :class:`Client`."""
         call = _Call("POST", url, options)
+        return await self._request(call, expect)
+
+    async def query[T](
+        self,
+        url: CallUrl,
+        *,
+        expect: Reader[T] | Expect[T],
+        **options: Unpack[RequestOptions],
+    ) -> T:
+        """Send a QUERY, the safe and idempotent method that carries a body, and read the reply through *expect*.
+
+        It takes a ``body=`` as :meth:`post` does. Being idempotent, it is re-sent after any retryable failure and may
+        be hedged, as a GET is; it is never cached. See :class:`Client`.
+        """
+        call = _Call("QUERY", url, options)
         return await self._request(call, expect)
 
     async def put[T](

@@ -266,7 +266,9 @@ async def fetch(self, url: LiteralString, **options: Unpack[CallOptions]) -> Ser
 ```
 
 Each is closed, so a misspelled keyword is a type error, and the client refuses one at runtime too, with a `TypeError`
-naming it, before anything is sent. `Method` is the literal type of the six verbs, which `stream(method=...)` takes.
+naming it, before anything is sent. `Method` is the literal type of the seven verbs, which `stream(method=...)` takes.
+`query()` sends the QUERY method: safe and idempotent like a GET, with a `body=` like a POST. It is retried and hedged
+as an idempotent request is, and never cached.
 
 ### Views
 

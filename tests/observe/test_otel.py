@@ -407,3 +407,11 @@ async def test_the_callers_span_is_current_again_after_the_call(telemetry: Telem
         await built.get("x", expect=nothing)
 
         assert trace.get_current_span() is caller
+
+
+async def test_a_query_span_is_named_by_its_method(telemetry: Telemetry) -> None:
+    """Name a QUERY's span ``QUERY``, a method the conventions know, not the generic ``HTTP``."""
+    fake = FakeTransport().reply("QUERY", "/v1/x", 200)
+    await client(fake, telemetry.observer, middleware=(telemetry.observer,)).query("x", expect=nothing)
+
+    assert telemetry.span().name == "QUERY"

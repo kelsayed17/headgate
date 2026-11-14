@@ -78,8 +78,11 @@ __all__ = ["OpenTelemetryObserver"]
 #: The instrumentation scope's name, for the tracer and the meter.
 _SCOPE: Final = "headgate"
 
-#: The methods the conventions name; any other is reported as ``_OTHER``.
-_KNOWN_METHODS: Final = frozenset({"CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"})
+#: The methods reported by name: the conventions' known methods, and QUERY, a verb of the client's own; any other is
+#: reported as ``_OTHER``.
+_KNOWN_METHODS: Final = frozenset(
+    {"CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "QUERY", "TRACE"}
+)
 
 #: The ports a URL without one implies.
 _DEFAULT_PORTS: Final = {"http": 80, "https": 443}

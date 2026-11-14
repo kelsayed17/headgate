@@ -385,7 +385,7 @@ Every option, its validation and the precedence of call, view, route and policy:
 
 ## Per-call options
 
-Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`) takes the URL, `expect=` (on `head`, `nothing` unless
+Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`, `query`) takes the URL, `expect=` (on `head`, `nothing` unless
 given), and optionally `retry=` (a `RetryPolicy`, or `None` to send once), `follow_redirects=`, `cache_ttl=`,
 `timeout=`, `deadline=`, `idempotency_key=`, `max_response_bytes=`, and the request options `params=`, `headers=` and
 `body=` (what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`); an option left out takes the view's or
