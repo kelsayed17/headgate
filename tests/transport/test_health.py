@@ -20,6 +20,7 @@ from hishel import AsyncSqliteStorage, Entry
 from headgate import HttpCache
 from headgate._core import OBSERVER_FAILURES
 from headgate.breaker import BreakerRegistry, BreakerState
+from headgate.cache import _transport
 from headgate.cache._transport import CACHE_DEGRADATIONS, CACHE_DEGRADED_EXT, ResilientCacheTransport
 from headgate.health import breaker_states, cache_degradations, observer_failures
 
@@ -125,3 +126,29 @@ async def test_a_cache_fault_counts_one_degradation_for_its_host() -> None:
         await storage.close()
 
     assert cache_degradations()[_HOST] == _REQUESTS
+
+
+@pytest.fixture
+def _no_other_counts() -> Iterator[None]:
+    """Empty the process-global degradation count for one test, and put back what other tests counted."""
+    held = dict(CACHE_DEGRADATIONS)
+    CACHE_DEGRADATIONS.clear()
+    yield
+    CACHE_DEGRADATIONS.clear()
+    CACHE_DEGRADATIONS.update(held)
+
+
+@pytest.mark.usefixtures("_no_other_counts")
+async def test_the_count_keeps_only_the_most_recently_degraded_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hold at most the bound's worth of hosts, dropping the one least recently degraded to make room."""
+    monkeypatch.setattr(_transport, "DEFAULT_MAX_HOSTS", _REQUESTS)
+    storage = _LookupFails(connection=await anysqlite.connect(":memory:"))
+    transport = ResilientCacheTransport(_Network(), HttpCache(storage=storage), max_body_bytes=1024 * 1024)
+
+    try:
+        for host in ("first.test", "second.test", "first.test", "third.test"):
+            await transport.handle_async_request(httpx2.Request("GET", f"https://{host}/x"))
+    finally:
+        await storage.close()
+
+    assert cache_degradations() == {"first.test": 2, "third.test": 1}, "second.test was degraded least recently"

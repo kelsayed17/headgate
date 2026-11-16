@@ -214,6 +214,7 @@ class Observer(Protocol):
 
 
 #: How many times each observer class raised from ``notify``, since process start.
+#: Unbounded, since its keys are observer classes, which a program defines a fixed few of, not hosts it is handed.
 OBSERVER_FAILURES: Counter[str] = Counter()
 
 

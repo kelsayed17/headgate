@@ -50,5 +50,5 @@ def test_a_record_without_a_url_is_left_alone(caplog: pytest.LogCaptureFixture) 
         "plain text",
         "no arguments",
         "a mapping value",
-        "a url https://api.example/x?token=%2A%2A%2A",
+        "a url https://api.example/x?token=***",
     ]
