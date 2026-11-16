@@ -521,6 +521,13 @@ async def test_closing_the_transport_closes_the_curl_session(sessions: list[_Ses
     assert session.closed
 
 
+async def test_closing_the_transport_twice_closes_curl_once() -> None:
+    """Return from a second close without touching curl, as when two clients that share the transport each close it."""
+    transport = AsyncCurlTransport(impersonate="chrome")
+    await transport.aclose()
+    await transport.aclose()
+
+
 class _Server(ThreadingHTTPServer):
     """A loopback server whose handlers can wait on :attr:`release` and count the POSTs that reached it."""
 

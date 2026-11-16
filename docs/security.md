@@ -109,8 +109,14 @@ The default transport **pins** each connection to the address it vetted, in the 
 answer that changes between the check and the connect (DNS rebinding) cannot redirect it. The request keeps its host
 name, so TLS still sends it as SNI and verifies the certificate against it, and pooled connections are keyed by name.
 
-- A custom transport (`HttpOptions(transport=...)`, the curl transport included) resolves names itself: every hop is
-  still vetted before it is sent, but the transport's own lookup is not pinned.
+- The curl transport (`headgate.curl.AsyncCurlTransport`) pins too: each request's host is vetted through the guard,
+  and curl is handed the vetted addresses, so it never looks the name up itself. curl keeps one DNS cache and one
+  connection pool for all its requests, so a curl transport serves one guard: building a second client on the same
+  transport instance with a different `SecurityOptions` guard, or without the guard, raises `ValueError`. Clients with
+  the same guard may share it. A `CurlOpt.PROXY`, `PRE_PROXY`, `RESOLVE` or `CONNECT_TO` in its `curl_options` chooses
+  the address itself, so the guard refuses them.
+- Any other custom transport (`HttpOptions(transport=...)`) resolves names itself: every hop is still vetted before
+  it is sent, but the transport's own lookup is not pinned.
 - The guard cannot be combined with `proxy=`, since a proxy resolves the target itself.
 - `HttpOptions(security=SecurityOptions(resolver=...))` replaces the event loop's `getaddrinfo` (an async function of
   host and port returning addresses as text), and is accepted only with the guard on.
