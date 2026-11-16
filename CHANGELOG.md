@@ -6,11 +6,6 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
-### Fixed
-
-- `headgate.health.cache_degradations()` holds at most 1024 hosts, as a `BreakerRegistry` holds at most 1024
-  breakers. It gained a key for every host whose cache degraded, so a client calling many hosts grew it without end.
-  Past the bound the host least recently degraded is dropped, and counts from zero if it degrades again.
 ### Changed
 
 - A redacted query value now reads `***`, as a redacted userinfo and fragment credential already did, instead of the
@@ -19,6 +14,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   A search for `***` now finds every redacted credential. A sanitized URL is for display only and is never sent. A
   cassette recorded before still replays under vcrpy's default `query` matcher, which compares decoded values; one
   matched on the raw `uri` needs re-recording.
+
+### Fixed
+
+- `headgate.health.cache_degradations()` holds at most 1024 hosts, as a `BreakerRegistry` holds at most 1024
+  breakers. It gained a key for every host whose cache degraded, so a client calling many hosts grew it without end.
+  Past the bound the host least recently degraded is dropped, and counts from zero if it degrades again.
 
 ## [0.12.0] - 2026-11-15
 
