@@ -100,37 +100,23 @@ async def test_a_protocol_relative_path_keys_the_breaker_on_the_host_it_reaches(
 # --- A redirect to a bad URL ---
 
 
-async def test_an_unparsable_redirect_location_is_a_transport_failure_of_the_host() -> None:
-    """Count an unparsable ``Location`` against the host: httpx2 raises ``RemoteProtocolError``, an ``HTTPError``."""
+@pytest.mark.parametrize(
+    "location",
+    # A relative Location that parses alone but joins past httpx2's 65,536-character limit counts the same way.
+    ["http://[::1", "/" + "b" * 65_530],
+    ids=["unparsable", "joined-too-long"],
+)
+async def test_a_bad_redirect_location_is_a_transport_failure_of_the_host(location: str) -> None:
+    """Count a bad ``Location`` against the host: httpx2 raises ``RemoteProtocolError``, an ``HTTPError``."""
     client = Client(
         rate=Rate.per_second(2),
         base_url=f"https://{_HOST}",
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
-        http=HttpOptions(transport=_redirecting_to("http://[::1")),
+        http=HttpOptions(transport=_redirecting_to(location)),
     )
     with pytest.raises(TransportError, match="Invalid URL in location header"):
         await client.get("start", expect=RESPONSE)
     assert failures(client, _HOST) == 1
-
-
-async def test_a_redirect_whose_joined_url_is_too_long_is_a_client_error_not_a_host_failure() -> None:
-    """Map a redirect whose joined URL is too long to a ``ClientError`` that records nothing against the host.
-
-    A relative ``Location`` that parses alone can push the joined URL past httpx2's 65,536-character limit.
-
-    httpx2 does not wrap that one: it raises a bare ``InvalidURL``, which is not an ``HTTPError``, so the client maps it
-    to a ``ClientError`` itself. It says nothing about the host.
-    """
-    client = Client(
-        rate=Rate.per_second(2),
-        base_url=f"https://{_HOST}",
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
-        http=HttpOptions(transport=_redirecting_to("/" + "b" * 65_530)),
-    )
-    with pytest.raises(ClientError, match="invalid URL") as caught:
-        await client.get("start", expect=RESPONSE)
-    assert not isinstance(caught.value, TransportError)
-    assert failures(client, _HOST) == 0
 
 
 # --- The request is built before the breaker is asked ---
