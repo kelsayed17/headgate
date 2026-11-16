@@ -133,3 +133,13 @@ class TestAddressGuard:
         guard = AddressGuard(_Answer("127.0.0.1"), check=lambda _address: None)
 
         assert await guard.vet("api.example", 80) == ("127.0.0.1",)
+
+    def test_guards_with_the_same_resolver_and_check_are_equal(self) -> None:
+        """Compare and hash guards by their resolver and check, so two built from one configuration are one guard."""
+        resolver = _Answer("8.8.8.8")
+
+        assert AddressGuard(resolver) == AddressGuard(resolver)
+        assert len({AddressGuard(resolver), AddressGuard(resolver)}) == 1
+        assert AddressGuard(resolver) != AddressGuard(resolver, check=lambda _address: None)
+        assert AddressGuard(resolver) != AddressGuard(_Answer("8.8.8.8"))
+        assert AddressGuard(resolver) != resolver

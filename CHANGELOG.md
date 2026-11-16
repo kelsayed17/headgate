@@ -6,6 +6,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Added
+
+- `AsyncCurlTransport.bind_guard(guard)` binds a curl transport to one SSRF guard (or to none). A `Client` calls it
+  when it is built on the transport, so a caller need not call it.
+- `AddressGuard` compares equal, and hashes, by its resolver and check. Two clients whose `SecurityOptions` build equal
+  guards may share one curl transport.
+
 ### Changed
 
 - A redacted query value now reads `***`, as a redacted userinfo and fragment credential already did, instead of the
@@ -20,6 +27,20 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `headgate.health.cache_degradations()` holds at most 1024 hosts, as a `BreakerRegistry` holds at most 1024
   breakers. It gained a key for every host whose cache degraded, so a client calling many hosts grew it without end.
   Past the bound the host least recently degraded is dropped, and counts from zero if it degrades again.
+- The curl transport checks a request's host with the SSRF guard before it reads the request body, so a failed
+  lookup leaves a one-shot body unsent and the call retryable.
+- Closing an `AsyncCurlTransport` a second time does nothing, so clients that share one can each close it. On
+  `curl_cffi` 0.16 the second close raised `TypeError`.
+
+### Security
+
+- The SSRF guard now pins `headgate.curl.AsyncCurlTransport`'s connections, as it pins the default transport's. With
+  `SecurityOptions(block_private_hosts=True)`, each request's host is vetted and curl is handed the vetted addresses,
+  so a DNS answer that changes between the check and curl's own lookup (DNS rebinding) can no longer reach a private
+  address. Since curl shares its DNS cache and connections across requests, a curl transport serves one guard:
+  building a client on a transport another client already uses with a different guard, or without one, raises
+  `ValueError`. The guard also refuses `curl_options` that choose the address (`CurlOpt.PROXY`, `PRE_PROXY`,
+  `RESOLVE`, `CONNECT_TO`). Over any transport, the guard's lookup now counts against the connect timeout.
 
 ## [0.12.0] - 2026-11-15
 

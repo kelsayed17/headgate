@@ -154,7 +154,7 @@ async def test_an_unknown_name_is_a_transport_error_over_a_custom_transport() ->
 
 
 async def test_the_curl_transport_is_vetted_before_it_sends() -> None:
-    """Refuse a loopback hop over the curl transport before curl connects (curl resolves names itself, unpinned)."""
+    """Refuse a loopback hop over the curl transport before curl connects."""
     async with serving() as server:
         options = HttpOptions(
             transport=AsyncCurlTransport(impersonate="chrome"), security=SecurityOptions(block_private_hosts=True)

@@ -65,12 +65,14 @@ The transport behaves like a native httpx2 one wherever the layers above it can 
 * Closing a response before its body is read aborts the transfer, even a stalled one. ``curl_cffi``'s own ``aclose``
   waits for the whole body to arrive into an unbounded queue, which would defeat headgate's response size cap.
 
-**The SSRF guard** (``SecurityOptions(block_private_hosts=True)``) vets every hop's host before this transport sends
-it, but cannot pin the connection to the address it vetted, because curl resolves the name itself. Pinning would take
-``CURLOPT_RESOLVE`` per request, and ``curl_cffi`` 0.16 sets libcurl options only session-wide, after the handle is
-taken from the pool (an ``await``, so a per-request value would race between concurrent requests), and a resolve entry
-stays in the multi handle's shared DNS cache after the transfer. Over this transport the guard therefore refuses a
-forbidden host, but a rebinding DNS answer between the check and curl's own lookup is not ruled out.
+**The SSRF guard** (``SecurityOptions(block_private_hosts=True)``) is bound to the transport when a client is built on
+it (:meth:`AsyncCurlTransport.bind_guard`). Each request's host is then resolved and vetted through the guard, and
+curl is handed every vetted address as a ``CURLOPT_RESOLVE`` entry, so curl connects to them and never looks the name
+up itself; the URL keeps its name, so TLS still sends it as SNI and verifies the certificate against it. libcurl keeps
+a resolve entry in the session's DNS cache after the transfer, and its connection pool is shared by every request, so
+one transport serves one guard: a client built on it with another guard, or none, is refused. A ``CurlOpt.PROXY``,
+``PRE_PROXY``, ``RESOLVE`` or ``CONNECT_TO`` in ``curl_options`` would choose the address itself, so the guard refuses
+those too.
 """
 
 from __future__ import annotations
@@ -86,6 +88,7 @@ import httpx2
 from headgate._core import CallContext
 from headgate._user_agent import DEFAULT_USER_AGENT
 from headgate.retry._policy import IDEMPOTENT_METHODS, RETRY_POLICY, is_keyed
+from headgate.security._transport import vet_request
 
 try:
     import certifi
@@ -103,6 +106,8 @@ if TYPE_CHECKING:
 
     from curl_cffi.requests import Response as _Response
     from curl_cffi.requests.impersonate import BrowserTypeLiteral
+
+    from headgate.security import AddressGuard
 
 __all__ = ["AsyncCurlTransport"]
 
@@ -147,12 +152,20 @@ _WIRE_ENCODING_HEADERS = ("content-encoding", "content-length")
 
 _METHODS: dict[str, HttpMethod] = {method: method for method in get_args(HttpMethod)}
 
+#: The curl options that choose the address a connection reaches, which the SSRF guard must choose instead: a proxy
+#: resolves the target itself, and a resolve or connect-to entry of the caller's would replace the vetted one.
+_ADDRESS_OPTIONS = (CurlOpt.PROXY, CurlOpt.PRE_PROXY, CurlOpt.RESOLVE, CurlOpt.CONNECT_TO)
+
 
 @dataclass
 class _Loan:
-    """One request's claim on a curl handle: whether it needs a fresh connection, and the handle while it holds one."""
+    """One request's claim on a curl handle: a fresh connection or not, its vetted addresses, and the handle it holds.
+
+    ``resolve`` is the ``CURLOPT_RESOLVE`` entry pinning the request to the addresses the SSRF guard vetted, if on.
+    """
 
     fresh: bool
+    resolve: str | None = None
     curl: Curl | None = None
 
 
@@ -192,8 +205,11 @@ class _Session(_AsyncSession):
         curl = await self.pool.get() or _Curl(debug=self.debug)
         loan = _LOAN.get()
         loan.curl = curl
-        if loan.fresh:  # set after the await, so no other request sees it; `release_curl` resets it
+        # Set after the await, so no other request sees them; `release_curl` resets them.
+        if loan.fresh:
             curl.setopt(CurlOpt.FRESH_CONNECT, 1)
+        if loan.resolve is not None:
+            curl.setopt(CurlOpt.RESOLVE, [loan.resolve])
         return curl
 
     @override
@@ -241,6 +257,10 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
             **given,
         }
         self._default_headers = default_headers
+        self._address_options = [option.name for option in _ADDRESS_OPTIONS if option in given]
+        self._bound = False
+        self._guard: AddressGuard | None = None
+        self._closed = False
         self._session = _Session(
             max_clients=max_connections,
             impersonate=impersonate,
@@ -251,12 +271,41 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
             allow_redirects=False,
         )
 
+    def bind_guard(self, guard: AddressGuard | None, /) -> None:
+        """Serve only requests the SSRF *guard* vets (``None``: an unguarded client), pinning each to its addresses.
+
+        A ``Client`` calls this when it is built on this transport. curl keeps one DNS cache and one connection pool for
+        every request it sends, so the transport serves one guard: clients with the same guard may share it.
+
+        :raises ValueError: when the transport already serves another guard (or none, or one where *guard* is none),
+            or when *guard* is given and ``curl_options`` choose the connection's address (a proxy, a resolve or a
+            connect-to entry).
+        """
+        if self._bound and guard != self._guard:
+            msg = (
+                "this AsyncCurlTransport already serves a client with a different SSRF guard "
+                "(SecurityOptions(block_private_hosts=..., resolver=...)): curl shares its DNS cache and connections "
+                "across requests, so give each client its own transport"
+            )
+            raise ValueError(msg)
+        if guard is not None and self._address_options:
+            names = ", ".join(self._address_options)
+            msg = (
+                f"block_private_hosts=True cannot be combined with curl_options {names}: "
+                "they choose the address curl connects to, which the SSRF guard must choose"
+            )
+            raise ValueError(msg)
+        self._bound = True
+        self._guard = guard
+
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         method = _METHODS.get(request.method)
         if method is None:
             msg = f"curl cannot send an HTTP {request.method} request"
             raise httpx2.UnsupportedProtocol(msg, request=request)
+        # Vetted before the body is read, so a lookup that fails leaves a one-shot body unread, and the call retryable.
+        resolve = None if self._guard is None else _resolve_entry(request, await vet_request(self._guard, request))
         # Read from the stream on every send, as a native transport does: `aread()` would keep the first read and send
         # it again, hiding a one-shot body sent twice.
         # shortcut: the body counts as written before curl connects, so an unkeyed POST that never connected is not
@@ -266,7 +315,7 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
             for name, value in _httpx_default_headers():
                 if request.headers.get(name) == value:
                     del request.headers[name]
-        loan = _Loan(fresh=not _replay_safe(request))
+        loan = _Loan(fresh=not _replay_safe(request), resolve=resolve)
         token = _LOAN.set(loan)
         try:
             response = await self._session.request(
@@ -290,6 +339,10 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
 
     @override
     async def aclose(self) -> None:
+        # Clients sharing the transport each close it; `curl_cffi` 0.16 crashes closing a closed session.
+        if self._closed:
+            return
+        self._closed = True
         await self._session.close()
 
 
@@ -340,6 +393,18 @@ class _CurlByteStream(httpx2.AsyncByteStream):
         if isinstance(task, asyncio.Task):
             task.cancel()
             await asyncio.wait([task])
+
+
+def _resolve_entry(request: httpx2.Request, addresses: tuple[str, ...]) -> str:
+    """Return the ``CURLOPT_RESOLVE`` entry pinning *request*'s host and port to *addresses*, IPv6 ones bracketed."""
+    url = request.url
+    pinned = ",".join(map(_bracketed, addresses))
+    return f"{_bracketed(url.raw_host.decode('ascii'))}:{url.origin.port}:{pinned}"
+
+
+def _bracketed(address: str) -> str:
+    """Return *address* as curl reads it in a resolve entry: an IPv6 address in brackets, any other as it is."""
+    return f"[{address}]" if ":" in address else address
 
 
 def _replay_safe(request: httpx2.Request) -> bool:
