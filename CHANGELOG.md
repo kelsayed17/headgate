@@ -6,6 +6,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-16
+
+The SSRF guard now pins the curl transport's connections to the addresses it vetted, as it already pinned the default
+transport's, so a name that rebinds after the check is never reached over curl. A redacted query value reads `***`,
+and headgate needs httpx2 2.16.1 or newer.
+
 ### Added
 
 - `AsyncCurlTransport.bind_guard(guard)` binds a curl transport to one SSRF guard (or to none). A `Client` calls it
@@ -1168,7 +1174,8 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/kelsayed17/headgate/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/kelsayed17/headgate/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/kelsayed17/headgate/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/kelsayed17/headgate/compare/v0.9.0...v0.10.0
