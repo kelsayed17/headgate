@@ -60,7 +60,7 @@ def test_a_recorded_request_has_its_secret_query_values_redacted() -> None:
     recorded = cassettes.before_record_request(_VcrRequest("https://user:pw@h.test/x?api_key=s3cret&page=2"))
 
     assert recorded is not None
-    assert recorded.uri == "https://***@h.test/x?api_key=%2A%2A%2A&page=2"
+    assert recorded.uri == "https://***@h.test/x?api_key=***&page=2"
 
 
 def test_a_recorded_response_loses_its_cookies() -> None:
@@ -77,7 +77,7 @@ def test_a_recorded_response_loses_the_credential_headers_the_filter_names() -> 
 
 
 _SIGNED = "https://cdn.test/file?X-Amz-Signature=abc123&part=1"
-_REDACTED = "https://cdn.test/file?X-Amz-Signature=%2A%2A%2A&part=1"
+_REDACTED = "https://cdn.test/file?X-Amz-Signature=***&part=1"
 
 
 @pytest.mark.parametrize(

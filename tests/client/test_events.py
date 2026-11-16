@@ -103,7 +103,7 @@ async def test_a_call_reports_its_start_each_send_and_its_end_under_one_call_inf
         method="GET",
         url="series/GDP%2Freal",
         route="series/{series_id}",
-        full_url=f"{_BASE}/series/GDP%2Freal?token=%2A%2A%2A",
+        full_url=f"{_BASE}/series/GDP%2Freal?token=***",
         call_id=info.call_id,
     )
     assert attempt == AttemptFinished(call=info, attempt=1, status_code=200, elapsed=attempt.elapsed)

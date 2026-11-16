@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 _API_HOST = "api.example.test"
 _EXCHANGE_URL = "https://auth.example.test/token?client_secret=S3CR3T"
 #: The token URL as every message names it.
-_LOGGED_EXCHANGE_URL = "https://auth.example.test/token?client_secret=%2A%2A%2A"
+_LOGGED_EXCHANGE_URL = "https://auth.example.test/token?client_secret=***"
 
 
 class _MintsOver(CachedTokenAuth):
@@ -173,7 +173,7 @@ async def test_a_failed_mint_keeps_the_token_url_secret_everywhere_it_can_be_rea
 
     rendered = "".join(traceback.format_exception(raised.value))
     assert "S3CR3T" not in rendered
-    assert "client_secret=%2A%2A%2A" in rendered
+    assert "client_secret=***" in rendered
 
 
 class _Unread(httpx2.AsyncByteStream):
