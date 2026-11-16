@@ -29,6 +29,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   Past the bound the host least recently degraded is dropped, and counts from zero if it degrades again.
 - The curl transport checks a request's host with the SSRF guard before it reads the request body, so a failed
   lookup leaves a one-shot body unsent and the call retryable.
+- Closing an `AsyncCurlTransport` a second time does nothing, so clients that share one can each close it. On
+  `curl_cffi` 0.16 the second close raised `TypeError`.
 
 ### Security
 

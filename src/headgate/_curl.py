@@ -260,6 +260,7 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
         self._address_options = [option.name for option in _ADDRESS_OPTIONS if option in given]
         self._bound = False
         self._guard: AddressGuard | None = None
+        self._closed = False
         self._session = _Session(
             max_clients=max_connections,
             impersonate=impersonate,
@@ -338,6 +339,10 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
 
     @override
     async def aclose(self) -> None:
+        # Clients sharing the transport each close it; `curl_cffi` 0.16 crashes closing a closed session.
+        if self._closed:
+            return
+        self._closed = True
         await self._session.close()
 
 
