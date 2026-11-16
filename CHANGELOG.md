@@ -6,6 +6,16 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-15
+
+The API redesign. A call takes its options and one `body=` in a single place, configuration is grouped by what it
+governs, each path's limits are one `Route`, and `Client` is final: an SDK holds one rather than subclassing it. Errors
+are read-only, and `retryable` means the request is safe to send again. The top level is 52 names, each exported from
+one module. It also fixes every finding of a full review of the code, among them one-shot bodies sent twice below the
+retry layer, credentials leaking past redirects and into logs, and the cache answering one caller with another's
+response. This minor release changes the public API: each change is listed under **Changed** and **Removed** with what
+to write instead.
+
 ### Added
 
 - `Client.query(url, *, expect, body=..., ...)` sends the QUERY method, which is safe and idempotent like a GET and
@@ -1119,7 +1129,8 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/kelsayed17/headgate/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/kelsayed17/headgate/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/kelsayed17/headgate/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/kelsayed17/headgate/compare/v0.8.0...v0.9.0
