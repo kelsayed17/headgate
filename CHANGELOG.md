@@ -6,6 +6,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Added
+
+- `AsyncCurlTransport.bind_guard(guard)` binds a curl transport to one SSRF guard (or to none). A `Client` calls it
+  when it is built on the transport, so a caller need not call it.
+- `AddressGuard` compares equal, and hashes, by its resolver and check. Two clients whose `SecurityOptions` build equal
+  guards may share one curl transport.
+
 ### Changed
 
 - A redacted query value now reads `***`, as a redacted userinfo and fragment credential already did, instead of the
@@ -20,6 +27,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `headgate.health.cache_degradations()` holds at most 1024 hosts, as a `BreakerRegistry` holds at most 1024
   breakers. It gained a key for every host whose cache degraded, so a client calling many hosts grew it without end.
   Past the bound the host least recently degraded is dropped, and counts from zero if it degrades again.
+- The curl transport checks a request's host with the SSRF guard before it reads the request body, so a failed
+  lookup leaves a one-shot body unsent and the call retryable.
 
 ### Security
 
