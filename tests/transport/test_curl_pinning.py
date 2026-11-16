@@ -12,6 +12,7 @@ address rather than looking the name up itself.
 from __future__ import annotations
 
 import asyncio
+import socket
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx2
@@ -37,6 +38,20 @@ _PUBLIC: Final = "127.0.0.1"
 _PRIVATE: Final = "127.0.0.2"
 #: IPv6 loopback: a server listens there only when a test binds it, so it otherwise refuses a connection at once.
 _V6: Final = "::1"
+
+
+def _binds_v6() -> bool:
+    """Say whether this host can listen on IPv6 loopback: some containers and CI runners have no IPv6."""
+    try:
+        with socket.socket(socket.AF_INET6) as probe:
+            probe.bind((_V6, 0))
+    except OSError:
+        return False
+    return True
+
+
+#: Skip a test that listens on IPv6 loopback where the host cannot.
+_needs_v6: Final = pytest.mark.skipif(not _binds_v6(), reason="this host cannot listen on IPv6 loopback")
 
 
 def _admitting(*allowed: str) -> Callable[[str], str | None]:
@@ -90,6 +105,7 @@ class TestRealCurl:
 
         assert [seen.path for seen in server.requests] == ["/first"]
 
+    @_needs_v6
     async def test_an_ipv6_address_is_pinned_in_brackets(self) -> None:
         """Pin a name to an IPv6 address, which curl reads only in brackets."""
         resolver = _Resolver(_V6)
@@ -100,7 +116,9 @@ class TestRealCurl:
         assert response.status_code == httpx2.codes.OK
         assert resolver.lookups == ["api.example"]
 
-    @pytest.mark.parametrize(("bound", "host"), [(_PUBLIC, _PUBLIC), (_V6, f"[{_V6}]")], ids=["ipv4", "ipv6"])
+    @pytest.mark.parametrize(
+        ("bound", "host"), [(_PUBLIC, _PUBLIC), pytest.param(_V6, f"[{_V6}]", marks=_needs_v6)], ids=["ipv4", "ipv6"]
+    )
     async def test_an_ip_literal_host_is_reached_without_a_lookup(self, bound: str, host: str) -> None:
         """Connect to a literal address as it is, checked but never looked up."""
         resolver = _Resolver()
