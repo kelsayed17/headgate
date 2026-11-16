@@ -41,7 +41,7 @@
 
 ## Coordination with phase 5
 
-Phase 5 is being planned at the same time (the `hg-phase-3` session). Both phases touch:
+Phase 5 is being planned at the same time. Both phases touch:
 
 - **`errors.py` and `_failures.py`.** Phase 5's rename changes the docstrings that name `AsyncBaseClient`. This phase changes the classes and `CallSite`. The overlap is text, not design.
 - **`_client.py`.** This phase changes only the `except` arms of `_exchange`, where the breaker and budget refusals are raised, and the two `_site` helpers. Phase 5 renames the class and changes its construction.

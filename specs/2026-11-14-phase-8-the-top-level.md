@@ -11,7 +11,7 @@
 
 **Tech Stack:** Python 3.14, httpx2 2.16, ty, ruff, pytest, syrupy (API snapshot).
 
-**Status:** approved by the lead, with two conditions folded into Task 4 (the errors table in `docs/errors.md`, and the CHANGELOG wording for the six errors) and one into Task 5 (every public name of the fault steps is re-exported from `headgate.testing`).
+**Status:** approved, with two conditions folded into Task 4 (the errors table in `docs/errors.md`, and the CHANGELOG wording for the six errors) and one into Task 5 (every public name of the fault steps is re-exported from `headgate.testing`).
 
 **Spec:** `specs/2026-11-05-public-api-redesign-design.md`, section 8. Phases 1–7a have merged: #56, #60, #85, #94, #100 and #101 for phases 1–5, #97 for phase 6, #99 for 7a. This plan assumes phase 7b has merged too (see **Coordination with phase 7b**).
 

@@ -34,7 +34,10 @@ cached for each mutant. A function reached only through a warm cache (the names 
 schema the first time it compiles a type) is never run under a mutant, which then survives; test such a function
 directly.
 
-## Latest score
+## Last full run (0.9.0)
+
+This run predates the API redesign that 0.12.0 shipped, which changed 76 of the source files, so its figures describe
+0.9.0 and not the current code. No full run of 0.12.0 has been recorded yet.
 
 A full run on 2026-10-27 (mutmut 3.8.0 on pytest 9.1.1, 10 workers, about 20 minutes) generated 6,649 mutants. It ran
 against the source of headgate 0.9.0 at [`c887aa3`](https://github.com/kelsayed17/headgate/tree/c887aa3/src/headgate),
