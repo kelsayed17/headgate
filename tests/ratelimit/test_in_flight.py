@@ -12,18 +12,15 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
 from typing import TYPE_CHECKING, override
 
 import httpx2
 import pytest
 
-from headgate import HttpOptions
-from headgate.ratelimit import Rate, RateBudget
+from headgate import Client, HttpOptions, Rate, RateBudget
 from headgate.ratelimit._budgets import PathBudgets
 from headgate.ratelimit._inflight import InFlightLimit
 from headgate.ratelimit._transport import RateLimitTransport
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -32,9 +29,8 @@ if TYPE_CHECKING:
 #: Fast enough never to pace in a test.
 _INSTANT = Rate.per_second(1_000_000)
 
-#: How long the cross-thread test waits for the other thread, and how often it looks.
+#: How long the cross-thread test waits for the other thread.
 _THREAD_TIMEOUT = 5.0
-_POLL = 0.001
 
 #: How many concurrent calls a capped client serves in the end-to-end test.
 _CALLS = 6
@@ -202,18 +198,22 @@ def test_a_slot_is_handed_across_threads_and_loops() -> None:
     """Wake a waiter on another thread's loop when this thread frees the slot."""
     limit = InFlightLimit(1)
     asyncio.run(limit.acquire())
+    parked = threading.Event()
     acquired = threading.Event()
 
+    async def park_then_wait() -> None:
+        waiting = asyncio.create_task(limit.acquire())
+        await asyncio.sleep(0)  # the acquire runs to its first await: parked on the limit, the slot being held
+        parked.set()
+        await waiting
+
     def wait_in_another_loop() -> None:
-        asyncio.run(limit.acquire())
+        asyncio.run(park_then_wait())
         acquired.set()
 
     thread = threading.Thread(target=wait_in_another_loop)
     thread.start()
-    deadline = time.monotonic() + _THREAD_TIMEOUT
-    while not limit.waiting and time.monotonic() < deadline:
-        time.sleep(_POLL)
-    assert limit.waiting == 1, "the other thread is parked on the limit"
+    assert parked.wait(_THREAD_TIMEOUT), "the other thread is parked on the limit"
     limit.release()
     thread.join(timeout=_THREAD_TIMEOUT)
     assert acquired.is_set()
@@ -264,7 +264,7 @@ async def test_a_response_already_read_and_closed_frees_its_slot_at_once() -> No
     """Free the slot of a response the transport returns read and closed, which no later close reaches."""
     budget = RateBudget(_INSTANT, max_in_flight=1)
     wire = httpx2.MockTransport(lambda _request: httpx2.Response(200, json={"ok": True}))
-    client = StubClient(base_url="https://x", rate=budget, http=HttpOptions(transport=wire))
+    client = Client(base_url="https://x", rate=budget, http=HttpOptions(transport=wire))
     for _ in range(_CALLS):
         response = await asyncio.wait_for(client.get("y", expect=RESPONSE), _THREAD_TIMEOUT)
         assert response.json() == {"ok": True}
@@ -274,7 +274,7 @@ async def test_a_response_already_read_and_closed_frees_its_slot_at_once() -> No
 async def test_a_capped_client_frees_every_slot_it_reads() -> None:
     """Serve more concurrent calls than the cap through a client: each buffered read frees its slot."""
     budget = RateBudget(_INSTANT, max_in_flight=2)
-    client = StubClient(base_url="https://x", rate=budget, http=HttpOptions(transport=_Wire()))
+    client = Client(base_url="https://x", rate=budget, http=HttpOptions(transport=_Wire()))
     responses = await asyncio.gather(*(client.get("y", expect=RESPONSE) for _ in range(_CALLS)))
     assert [response.content for response in responses] == [b"ab"] * _CALLS
     assert budget.in_flight == 0

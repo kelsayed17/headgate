@@ -1,20 +1,14 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""A rate (:class:`Rate`), adaptive throttling (:class:`Adaptive`), and the per-path rules (:class:`RateRule`)."""
+"""A rate (:class:`Rate`) and adaptive throttling (:class:`Adaptive`)."""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-from headgate._core import check_fragment
-
-if TYPE_CHECKING:
-    from headgate.ratelimit._budget import RateBudget
-
-__all__ = ["UNLIMITED", "Adaptive", "Rate", "RateRule"]
+__all__ = ["UNPACED", "Adaptive", "Rate"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,12 +23,16 @@ class Rate:
     period: float
 
     def __post_init__(self) -> None:
-        """Reject a rate that cannot pace: non-positive, NaN, or an infinite period."""
-        if math.isnan(self.requests) or self.requests <= 0:
-            msg = f"requests must be > 0 (got {self.requests})"
+        """Reject a rate that cannot pace: non-positive, NaN or infinite, or one whose interval is infinite."""
+        if not math.isfinite(self.requests) or self.requests <= 0:
+            msg = f"requests must be > 0 and finite (got {self.requests})"
             raise ValueError(msg)
         if not math.isfinite(self.period) or self.period <= 0:
             msg = f"period must be > 0 and finite (got {self.period})"
+            raise ValueError(msg)
+        if not math.isfinite(self.period / self.requests):
+            # A request count so small that the spacing overflows would turn every send time into NaN.
+            msg = f"requests must be > 0 and leave a finite interval (got {self.requests} per {self.period}s)"
             raise ValueError(msg)
 
     @classmethod
@@ -68,7 +66,7 @@ class Rate:
 
 
 #: A rate that never throttles in practice (1M req/s): what a budget built with transport policy off paces at.
-UNLIMITED = Rate.per_second(1_000_000)
+UNPACED = Rate.per_second(1_000_000)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -97,22 +95,3 @@ class Adaptive:
         if not 0 < self.min_rate <= 1:
             msg = f"min_rate must be > 0 and <= 1 (got {self.min_rate})"
             raise ValueError(msg)
-
-
-@dataclass(frozen=True, slots=True)
-class RateRule:
-    """A budget of their own for the requests whose URL path holds ``fragment``'s segments.
-
-    ``rate`` is a :class:`Rate`, from which the client builds a budget of its own, or a
-    :class:`~headgate.ratelimit.RateBudget` shared with whoever else holds it. The fragment is one or more whole path
-    segments, matched anywhere in the path (``"/exports"`` matches ``/v2/exports/orders.csv``, not
-    ``/v2/exports-archive``), as :class:`~headgate.Route` and the cache's path filter match. The first matching rule
-    wins, and a matching request spends from that rule's budget instead of the client's, not from both.
-    """
-
-    fragment: str
-    rate: Rate | RateBudget
-
-    def __post_init__(self) -> None:
-        """Refuse a fragment that names no path segment, which would match every request."""
-        check_fragment(self.fragment)

@@ -77,7 +77,7 @@ def _redirect_method(response: httpx2.Response) -> str:
 async def refuse_unreplayable_redirect(response: httpx2.Response) -> None:
     """Stop httpx2 following a redirect that would send a one-shot request body again (a response hook).
 
-    A ``content=`` given as an async iterable is consumed by the first send (:data:`~headgate.retry.REPLAYABLE_BODY`),
+    A ``Raw`` body of an async iterable is consumed by the first send (:data:`~headgate.retry.REPLAYABLE_BODY`),
     so following a redirect that keeps the method (a 307 or 308, or a 301 answering anything but a POST) would fail
     inside httpx2 with ``StreamConsumed``. The ``Location`` is removed instead, as
     :func:`~headgate.security.refuse_https_downgrade` does: the 3xx reaches the call as its final answer, raised through
@@ -94,5 +94,5 @@ async def refuse_unreplayable_redirect(response: httpx2.Response) -> None:
     del response.headers["Location"]
     context.add_note(
         f"did not follow the {response.status_code} redirect: it asks for the request body again, and the body was a "
-        "one-shot stream (pass content= a factory to make it replayable)"
+        "one-shot stream (give Raw a factory to make it replayable)"
     )

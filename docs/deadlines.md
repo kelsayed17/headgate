@@ -48,25 +48,36 @@ A deadline that cuts off an attempt already on the network is a timeout of the o
 [circuit breaker](breaker.md#what-counts) counts it as a failure; one that passes before the send counts nothing.
 
 For [`stream()`](streaming.md) the deadline bounds opening the stream (every attempt, backoff and the head checks), not
-reading it: the caller's pace of iteration decides how long the body takes. Wrap the block in `asyncio.timeout` to
-bound the whole body.
+reading it: the caller's pace of iteration decides how long the body takes. **Once the response head has arrived, only
+the per-read timeout bounds a stream**: each read waits at most `Timeouts.read`, and a stream that keeps sending runs
+past its deadline for as long as it does. So a stream's own `timeout=Timeouts(read=...)` may be longer than its
+deadline. To bound the whole stream, wrap the block in `asyncio.timeout`:
+
+```python
+async with asyncio.timeout(600), client.stream("export.csv") as stream:
+    async for chunk in stream.aiter_bytes():
+        sink.write(chunk)
+```
 
 ## Timeouts
 
 `Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)` are the defaults, per phase, in seconds: obtaining a pooled
 connection (`pool`), connecting, writing the request, and waiting for each read. A `Timeouts` sets only the phases it
-names, so `HttpOptions(timeout=Timeouts(read=60.0))` keeps the other three defaults. The defaults are
-`headgate.DEFAULT_TIMEOUTS`, and `timeout.over(DEFAULT_TIMEOUTS)` is what a `Timeouts` resolves to on a client, every
-phase set. A client computing a deadline from its timeouts reads them there, such as one that leaves every attempt its
+names, so `TransportPolicy(timeout=Timeouts(read=60.0))` keeps the other three defaults. A phase set to `math.inf`
+has no limit of its own (`Timeouts(read=math.inf)`), while one left `None` takes the layer beneath's: under a
+deadline, an unlimited phase gets the time the deadline leaves, and it is never refused as longer than the deadline.
+The defaults are
+`Timeouts.DEFAULT`, and `timeout.over(Timeouts.DEFAULT)` is what a `Timeouts` resolves to on a client, every phase
+set. A client computing a deadline from its timeouts reads them there, such as one that leaves every attempt its
 whole connect and read timeout:
 
 ```python
-from headgate import DEFAULT_TIMEOUTS, RetryPolicy, Timeouts
+from headgate import RetryPolicy, Timeouts
 
 SLOW_READ = Timeouts(read=120.0)
 RETRY = RetryPolicy()
 
-phases = SLOW_READ.over(DEFAULT_TIMEOUTS)
+phases = SLOW_READ.over(Timeouts.DEFAULT)
 SLOW_READ_DEADLINE = RETRY.attempts * (phases.connect + phases.read) + (RETRY.attempts - 1) * RETRY.backoff.max_wait
 ```
 

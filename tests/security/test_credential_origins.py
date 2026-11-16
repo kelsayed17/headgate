@@ -17,20 +17,21 @@ import pytest
 
 from headgate import (
     CachedTokenAuth,
-    ForbiddenDestinationError,
+    Client,
     HttpOptions,
     Minted,
     QueryParamAuth,
+    Raw,
     SecurityOptions,
     StaticHeaderAuth,
     TransportPolicy,
 )
 from headgate._core import CredentialStamper
-from headgate.ratelimit import UNLIMITED
-from headgate.retry import NO_RETRY
+from headgate.errors import ForbiddenDestinationError
+from headgate.msgspec import reader
+from headgate.pagination import LinkHeader
 from headgate.security._credentials import CHAIN_ORIGIN, CredentialGuard
 from tests.security._web import BASE, Web
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 from tests.support.tokens import premint
 
@@ -62,6 +63,21 @@ class _HeaderToken(CachedTokenAuth):
         request.headers["X-Token"] = token
 
 
+class _QueryToken(CachedTokenAuth):
+    """A token riding the query, as a provider taking ``?access_token=`` wants, declared in ``token_params``."""
+
+    token_headers: ClassVar = frozenset[str]()
+    token_params: ClassVar = frozenset({"access_token"})
+
+    @override
+    async def mint_token(self) -> tuple[str, float]:
+        raise NotImplementedError
+
+    @override
+    def attach(self, request: httpx2.Request, token: str) -> None:
+        request.url = request.url.copy_set_param("access_token", token)
+
+
 def _auths() -> list[httpx2.Auth]:
     """Return one of each auth, ready to stamp without a network exchange."""
     return [
@@ -69,10 +85,11 @@ def _auths() -> list[httpx2.Auth]:
         QueryParamAuth({"api_key": "k"}),
         premint(_Bearer()),
         premint(_HeaderToken()),
+        premint(_QueryToken()),
     ]
 
 
-_AUTH_IDS = ["static-header", "query-param", "bearer", "custom-header-token"]
+_AUTH_IDS = ["static-header", "query-param", "bearer", "custom-header-token", "query-token"]
 
 
 def _carries(request: httpx2.Request, auth: httpx2.Auth) -> set[str]:
@@ -82,8 +99,8 @@ def _carries(request: httpx2.Request, auth: httpx2.Auth) -> set[str]:
     return headers | {name for name in auth.credential_params if name in request.url.params}
 
 
-#: A key the server echoes into a redirect's ``Location``, as an open redirect that copies the query does.
-_ECHOED_KEY = "?api_key=k"
+#: Query credentials the server echoes into a redirect's ``Location``, as an open redirect that copies the query does.
+_ECHOED_KEY = "?api_key=k&access_token=t"
 
 
 @pytest.mark.parametrize("auth", _auths(), ids=_AUTH_IDS)
@@ -189,7 +206,20 @@ async def test_a_default_header_credential_is_withheld_from_a_foreign_origin() -
     assert "Authorization" not in web.sent[0].headers
 
 
-def _cookie_client(sent: list[httpx2.Request], headers: dict[str, str] | None = None) -> StubClient:
+async def test_a_body_keeps_its_content_type_on_a_foreign_origin() -> None:
+    """Send ``Content-Type`` to any origin, client-wide or a view's: it names the body, never a caller."""
+    web = Web()
+    http = HttpOptions(headers={"Content-Type": "application/json"})
+    async with web.client(http=http) as client:
+        await client.post("https://cdn.example/x", body=Raw(b"{}"), expect=RESPONSE)
+        await client.with_options(headers={"Content-Type": "text/csv"}).post(
+            "https://cdn.example/x", body=Raw(b"a,b"), expect=RESPONSE
+        )
+
+    assert [request.headers.get("content-type") for request in web.sent] == ["application/json", "text/csv"]
+
+
+def _cookie_client(sent: list[httpx2.Request], headers: dict[str, str] | None = None) -> Client:
     """Return a client with a cookie jar and *headers*, over a web where ``/login`` on any origin sets a cookie for it.
 
     Each request is recorded in *sent*.
@@ -202,7 +232,7 @@ def _cookie_client(sent: list[httpx2.Request], headers: dict[str, str] | None = 
         return httpx2.Response(httpx2.codes.OK, text="ok")
 
     http = HttpOptions(cookies=True, headers=headers or {}, transport=httpx2.MockTransport(answer))
-    return StubClient(base_url=BASE, rate=UNLIMITED, policy=TransportPolicy(retry=NO_RETRY), http=http)
+    return Client(base_url=BASE, policy=TransportPolicy(retry=None), http=http)
 
 
 async def test_a_cookie_jar_sends_each_origin_its_own_cookies() -> None:
@@ -316,7 +346,7 @@ def _signed(request: httpx2.Request) -> set[str]:
 async def test_a_middlewares_declared_credentials_stay_off_a_foreign_redirect_hop() -> None:
     """Withhold what a middleware declares from a hop to another origin, though it signs the hop after the hook ran."""
     web = Web({f"{BASE}/start": "https://files.example/signed"})
-    async with web.client(http=HttpOptions(middleware=(_Signer(),))) as client:
+    async with web.client(http=HttpOptions(), middleware=(_Signer(),)) as client:
         resp = await client.get("start", expect=RESPONSE)
 
     first, hop = web.sent
@@ -328,10 +358,8 @@ async def test_a_middlewares_declared_credentials_stay_off_a_foreign_redirect_ho
 async def test_a_middlewares_credentials_reach_a_trusted_origin() -> None:
     """Keep a middleware's credentials on a hop to an origin in ``trusted_origins``."""
     web = Web({f"{BASE}/start": "https://files.example/signed"})
-    http = HttpOptions(
-        middleware=(_Signer(),), security=SecurityOptions(trusted_origins=frozenset({"https://files.example"}))
-    )
-    async with web.client(http=http) as client:
+    http = HttpOptions(security=SecurityOptions(trusted_origins=frozenset({"https://files.example"})))
+    async with web.client(http=http, middleware=(_Signer(),)) as client:
         await client.get("start", expect=RESPONSE)
 
     assert all(_signed(request) == {"X-Signature", "sig"} for request in web.sent)
@@ -340,7 +368,7 @@ async def test_a_middlewares_credentials_reach_a_trusted_origin() -> None:
 async def test_a_middlewares_credentials_stay_off_a_mint_hops_token_host() -> None:
     """Withhold a middleware's credentials from a mint hop, whose origin is trusted for the mint's credentials only."""
     web = Web()
-    async with web.client(auth=_MintingAuth(), http=HttpOptions(middleware=(_Signer(),))) as client:
+    async with web.client(auth=_MintingAuth(), http=HttpOptions(), middleware=(_Signer(),)) as client:
         await client.get("data", expect=RESPONSE)
 
     mint_hop, call = web.sent
@@ -394,6 +422,71 @@ async def test_a_client_wide_negotiation_header_still_reaches_a_foreign_origin()
         await client.get("https://cdn.example/x", expect=RESPONSE)
 
     assert {name: web.sent[0].headers[name] for name in negotiation} == negotiation
+
+
+async def test_a_views_and_a_calls_headers_stay_off_a_foreign_redirect_hop() -> None:
+    """Withhold a view's ``headers=`` and a call's own from a redirect to another origin, as client-wide ones are."""
+    web = Web({f"{BASE}/start": "https://files.example/signed"})
+    async with web.client() as client:
+        view = client.with_options(headers={"X-Tenant-Key": "view-secret"})
+        await view.get("start", expect=RESPONSE, headers={"X-Call-Key": "call-secret", "Accept": "text/csv"})
+
+    home, foreign = web.sent
+    assert (home.headers["X-Tenant-Key"], home.headers["X-Call-Key"]) == ("view-secret", "call-secret")
+    assert "X-Tenant-Key" not in foreign.headers
+    assert "X-Call-Key" not in foreign.headers
+    assert foreign.headers["Accept"] == "text/csv"
+
+
+async def test_a_calls_headers_reach_the_foreign_url_it_names_but_a_views_do_not() -> None:
+    """Send a call's own headers to the other origin it names itself; a view's, like a client's, stay home."""
+    web = Web()
+    async with web.client() as client:
+        view = client.with_options(headers={"X-Tenant-Key": "view-secret"})
+        await view.get("https://files.example/upload", expect=RESPONSE, headers={"X-Upload-Token": "meant-for-it"})
+
+    (sent,) = web.sent
+    assert sent.headers["X-Upload-Token"] == "meant-for-it"
+    assert "X-Tenant-Key" not in sent.headers
+
+
+async def test_a_views_headers_reach_a_trusted_origin() -> None:
+    """Keep a view's headers on a redirect hop to an origin in ``trusted_origins``."""
+    web = Web({f"{BASE}/start": "https://files.example/signed"})
+    http = HttpOptions(security=SecurityOptions(trusted_origins=frozenset({"https://files.example"})))
+    async with web.client(http=http) as client:
+        await client.with_options(headers={"X-Tenant-Key": "k"}).get("start", expect=RESPONSE)
+
+    assert [request.headers["X-Tenant-Key"] for request in web.sent] == ["k", "k"]
+
+
+@pytest.mark.parametrize(
+    ("first", "following", "kept"),
+    [
+        ("items", "https://evil.example/p2", False),
+        ("https://partner.example/items", "https://partner.example/p2", True),
+        ("https://partner.example/items", "https://evil.example/p2", False),
+    ],
+    ids=["home-then-foreign", "foreign-then-same", "foreign-then-other"],
+)
+async def test_a_walks_own_headers_reach_a_later_page_only_on_the_first_pages_origin(
+    first: LiteralString, following: str, *, kept: bool
+) -> None:
+    """Send a walk's ``headers=`` to a later page the server named only on the origin the first page went to."""
+    sent: list[httpx2.Request] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        link = "" if len(sent) > 1 else f'<{following}>; rel="next"'
+        return httpx2.Response(httpx2.codes.OK, json=[1], headers={"Link": link})
+
+    http = HttpOptions(transport=httpx2.MockTransport(answer))
+    async with Client(base_url=BASE, policy=TransportPolicy(retry=None), http=http) as client:
+        pages = client.paginate(first, expect=reader(list[int]), pages=LinkHeader(items=list), headers={"X-Key": "k"})
+        assert [item async for item in pages] == [1, 1]
+
+    assert sent[0].headers["X-Key"] == "k"
+    assert ("X-Key" in sent[1].headers) is kept
 
 
 async def test_a_client_wide_header_named_like_the_mint_hops_own_stays_on_the_token_host() -> None:

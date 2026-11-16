@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``headgate.testing.faults``: each scheduled step does what it says, and the call log records it."""
+"""``headgate.testing``'s fault steps: each scheduled step does what it says, and the call log records it."""
 
 from __future__ import annotations
 

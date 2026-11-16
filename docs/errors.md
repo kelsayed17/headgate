@@ -1,6 +1,30 @@
 # Errors
 
-Every failure a client raises is a `headgate.errors.ClientError`, and the shape of the tree is part of the contract:
+Every error class has one module to import it from:
+
+| Error | Import it from |
+| --- | --- |
+| `ClientError` | `headgate` |
+| `TransportError` | `headgate` |
+| `ClientTimeoutError` | `headgate` |
+| `CircuitOpenError` | `headgate.errors` |
+| `UpstreamStatusError` | `headgate` |
+| `AuthError` | `headgate` |
+| `RateLimitError` | `headgate` |
+| `ResponseParseError` | `headgate.errors` |
+| `ResponseTooLargeError` | `headgate.errors` |
+| `ForbiddenDestinationError` | `headgate.errors` |
+| `PageLimitError` | `headgate.errors` |
+| `ClientConfigurationError` | `headgate.errors` |
+| `DecodeError` | `headgate.errors` |
+| `RefusedError` | `headgate.errors` |
+| `UnmatchedRequestError` | `headgate.testing` |
+
+The six a caller catches most are at the top level, the test kit's own is in `headgate.testing`, and the rest live in
+`headgate.errors`. `headgate.errors` also defines the six, so `from headgate.errors import ClientError` still works,
+but type checkers and these docs name `headgate.ClientError`.
+
+Every failure a client raises is a `headgate.ClientError`, and the shape of the tree is part of the contract:
 an application boundary can map it onto its own answers without knowing which client failed.
 
 ```text
@@ -28,12 +52,13 @@ names.
 
 | Attribute | Meaning |
 | --- | --- |
-| `source` | the client class's name; it also prefixes the message, `[CatalogClient] ...` |
+| `source` | the host of the client's `base_url`; it also prefixes the message, `[api.catalog.example] ...` |
 | `method`, `url` | the request line of the call, the URL as the call gave it, with credentials redacted and cut to 300 characters |
 | `request_id` | the upstream's request id, from the first of `HttpOptions.request_id_headers` the response carried |
 | `attempts` | how many sends the call made, retries and followed redirects included |
-| `retryable` | whether the call's `RetryPolicy` would re-send after this outcome: a status in its `statuses` or a network failure, and only when sending again is safe for the method (see [retries](retries.md#what-retryable-means)) |
+| `retryable` | whether sending the call again later could succeed and is safe as it stands: for a status or a network failure, the call's `RetryPolicy` verdict, and `True` for the refusals headgate makes before sending (an open breaker, a rate budget past the deadline) (see [retries](retries.md#what-retryable-means)) |
 | `retry_after` | the seconds the upstream (or an open breaker, or a paused budget) asked to wait, or `None` |
+| `sent` | whether any byte of the call can have reached the network, by any send, retry or followed redirect: `False` only when none can have, so the call is safe to send again whatever its method; `True` when some may have, so a write may have been processed; `None` on an error no client call raised. A token mint's own requests never count |
 | notes | one line per attempt, and the reason the retries stopped (see [retries](retries.md#attempt-history)) |
 
 An error your own code raises takes these attributes, the notes aside, as optional keywords:
@@ -44,7 +69,8 @@ quote it when you contact the provider.
 
 `UpstreamStatusError` (and `AuthError`, `RateLimitError`) adds:
 
-- `status_code`: the status the wire sent, never invented. A refusal written in a 200 body carries 200;
+- `status_code`: the status the wire sent, never invented. A refusal written in a 200 body carries 200, and the rate
+  budget's own refusal, which no response answered, carries `None`, so code that orders it (`>=`) narrows it first;
 - `code`: the provider's own code, where a reader's `RefusedError` named one;
 - `problem`: the RFC 9457 problem detail, when the body was `application/problem+json` (`type`, `title`, `status`,
   `detail`, `instance`, and `extensions` read-only at any depth). The message then quotes its title and detail;
@@ -60,22 +86,21 @@ engine.
 ## Reading a failure
 
 ```python
-from headgate import ClientError, RateLimitError, UpstreamStatusError
+from headgate import ClientError, UpstreamStatusError
 
 try:
     series = await catalog.get_series("GDP")
-except RateLimitError as exc:
-    reschedule(after=exc.retry_after)
-except UpstreamStatusError as exc:
-    if exc.problem is not None:
-        report(exc.problem.title, exc.problem.detail)
-    raise
 except ClientError as exc:
-    if exc.retryable:
-        reschedule(after=exc.retry_after)
-    else:
+    if not exc.retryable:
+        if isinstance(exc, UpstreamStatusError) and exc.problem is not None:
+            report(exc.problem.title, exc.problem.detail)
         raise
+    reschedule(after=exc.retry_after)
 ```
+
+`retryable` covers every error the same way, so one check reschedules a surviving 503 on a GET, a 429, an open
+breaker and a rate budget's own refusal, each after its `retry_after`. A write that is not retryable re-raises, and its
+`sent` says whether it may have reached the server, which is what decides whether to reconcile before trying again.
 
 ## Messages are safe to show
 

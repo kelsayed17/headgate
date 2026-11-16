@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""What the per-host circuit breaker counts, and who it lets through, tested through ``AsyncBaseClient``.
+"""What the per-host circuit breaker counts, and who it lets through, tested through ``Client``.
 
 The breaker stops calling a host that is failing and finds out cheaply when it has recovered. These properties depend
 on the seam (what ``_sent`` marks, and that the tracked block spans the body read) as much as on the state machine, so
@@ -25,22 +25,21 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, HttpOptions, TransportPolicy
-from headgate.breaker import BreakerState, CircuitBreaker
-from headgate.breaker._registry import DEFAULT_REGISTRY
-from headgate.errors import (
-    CircuitOpenError,
-    ClientConfigurationError,
+from headgate import (
+    BreakerPolicy,
+    Client,
     ClientError,
     ClientTimeoutError,
-    ResponseTooLargeError,
+    HttpOptions,
+    Rate,
+    RetryPolicy,
     TransportError,
+    TransportPolicy,
     UpstreamStatusError,
 )
+from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
+from headgate.errors import CircuitOpenError, ClientConfigurationError, ResponseTooLargeError
 from headgate.policy import policy_disabled
-from headgate.ratelimit import Rate
-from headgate.retry import RetryPolicy
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -111,22 +110,26 @@ class _TruncatedBodyTransport(httpx2.AsyncBaseTransport):
         return httpx2.Response(200, stream=_TruncatedBodyStream(), headers={"content-type": "application/json"})
 
 
-#: The policy of every client below but the last test's: the fixture breaker's threshold and cooldown, so they share it.
-_FAST_BREAKER = BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
+#: The registry every client below but the last test's shares, so the fixture breaker is theirs.
+_SHARED = BreakerRegistry()
+
+#: The policy of every client below but the last test's: the fixture breaker's threshold, cooldown and registry.
+_FAST_BREAKER = BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN, registry=_SHARED)
 
 
 @pytest.fixture
 def breaker() -> CircuitBreaker:
     """Return the test host's breaker for :data:`_FAST_BREAKER`, fast-recovering (the default is 60s).
 
-    The autouse ``reset_circuit_breakers`` clears the registry around the test. The cooldown is 50 ms rather than the
-    1 ms ``test_breaker.py`` uses, so that a test asserting a healthy client is not refused cannot pass on a breaker
-    that opened and whose cooldown already elapsed, admitting the request as a probe.
+    The shared registry is cleared first, so no state carries in from an earlier test. The cooldown is 50 ms rather
+    than the 1 ms ``test_breaker.py`` uses, so that a test asserting a healthy client is not refused cannot pass on a
+    breaker that opened and whose cooldown already elapsed, admitting the request as a probe.
     """
-    return DEFAULT_REGISTRY.breaker_for(_URL, failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
+    _SHARED.clear()
+    return _SHARED.breaker_for(_URL, failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
 
 
-async def _fail(client: StubClient, times: int) -> None:
+async def _fail(client: Client, times: int) -> None:
     """Make *times* requests that each fail with a ``ClientError``."""
     for _ in range(times):
         with pytest.raises(ClientError):
@@ -135,7 +138,7 @@ async def _fail(client: StubClient, times: int) -> None:
 
 async def test_a_cancelled_request_neither_counts_nor_resets(breaker: CircuitBreaker) -> None:
     """Leave the record alone when the caller's own timeout cancels a request: it says nothing about the host."""
-    client = StubClient(
+    client = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
@@ -144,7 +147,7 @@ async def test_a_cancelled_request_neither_counts_nor_resets(breaker: CircuitBre
     await _fail(client, _BELOW_THRESHOLD)
     assert breaker.failure_count == _BELOW_THRESHOLD
 
-    hanging = StubClient(
+    hanging = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
@@ -163,7 +166,7 @@ async def test_a_cancelled_request_neither_counts_nor_resets(breaker: CircuitBre
 async def test_only_one_request_probes_a_recovered_host(breaker: CircuitBreaker) -> None:
     """Admit a single probe once half-open, not every caller that happened to be waiting."""
     transport = _ScriptedTransport(503)
-    client = StubClient(
+    client = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
@@ -182,7 +185,7 @@ async def test_only_one_request_probes_a_recovered_host(breaker: CircuitBreaker)
 
 async def test_a_cancelled_probe_frees_the_slot(breaker: CircuitBreaker) -> None:
     """Free the slot when the probe is cancelled, or the breaker waits forever on a probe that never reports."""
-    failing = StubClient(
+    failing = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
@@ -191,7 +194,7 @@ async def test_a_cancelled_probe_frees_the_slot(breaker: CircuitBreaker) -> None
     await _fail(failing, _THRESHOLD)
     await asyncio.sleep(_PAST_COOLDOWN)
 
-    hanging = StubClient(
+    hanging = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
@@ -201,7 +204,7 @@ async def test_a_cancelled_probe_frees_the_slot(breaker: CircuitBreaker) -> None
         await asyncio.wait_for(hanging.get("x", expect=RESPONSE), timeout=_CALLER_TIMEOUT)  # takes the probe slot
 
     healthy = _ScriptedTransport(200)
-    recovered = StubClient(
+    recovered = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
@@ -220,7 +223,7 @@ async def test_a_body_read_failure_counts_as_a_failure(breaker: CircuitBreaker) 
     The client streams the response and caps the body afterwards, so a connection that dies mid-body raises after any
     layer wrapped around the transport has already seen a 200.
     """
-    client = StubClient(
+    client = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
@@ -273,7 +276,7 @@ async def test_a_call_its_deadline_cuts_off_on_the_wire_counts_as_a_failure(
     breaker: CircuitBreaker, transport: httpx2.AsyncBaseTransport
 ) -> None:
     """Count an origin that hangs, as a timeout: the call's deadline, not httpx2's own timeout, is what ends it."""
-    client = StubClient(
+    client = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER, deadline=_DEADLINE),
@@ -289,11 +292,12 @@ async def test_a_call_its_deadline_cuts_off_on_the_wire_counts_as_a_failure(
 async def test_a_deadline_passing_before_the_send_counts_nothing(breaker: CircuitBreaker) -> None:
     """Leave the breaker alone when the deadline passes before the send: the origin was never asked."""
     transport = _ScriptedTransport(200)
-    client = StubClient(
+    client = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER, deadline=_DEADLINE),
-        http=HttpOptions(transport=transport, middleware=(_StallingMiddleware(),)),
+        http=HttpOptions(transport=transport),
+        middleware=(_StallingMiddleware(),),
     )
 
     with pytest.raises(ClientTimeoutError, match="deadline exceeded"):
@@ -306,7 +310,7 @@ async def test_a_deadline_passing_before_the_send_counts_nothing(breaker: Circui
 async def test_a_retried_request_counts_one_failure(breaker: CircuitBreaker) -> None:
     """Record one verdict per fetch, however many times the retry layer re-sent it."""
     transport = _ScriptedTransport(503)
-    client = StubClient(
+    client = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=_ATTEMPTS), breaker=_FAST_BREAKER),
@@ -347,7 +351,7 @@ class _CachedHitTransport(httpx2.AsyncBaseTransport):
 
 async def test_an_auth_flow_failure_does_not_open_the_breaker_for_the_host(breaker: CircuitBreaker) -> None:
     """Leave the breaker alone on a refused token mint: counting it would open the breaker for every client."""
-    refusing = StubClient(
+    refusing = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         auth=_RefusingAuth(),
@@ -359,7 +363,7 @@ async def test_an_auth_flow_failure_does_not_open_the_breaker_for_the_host(break
             await refusing.get("x", expect=RESPONSE)
 
     assert breaker.failure_count == 0
-    healthy = StubClient(
+    healthy = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
@@ -372,7 +376,7 @@ async def test_an_auth_flow_failure_does_not_open_the_breaker_for_the_host(break
 
 async def test_an_oversized_body_does_not_count_against_the_host(breaker: CircuitBreaker) -> None:
     """Leave the breaker alone on a body over the size cap: the cap is the client's own limit."""
-    client = StubClient(
+    client = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
@@ -388,13 +392,13 @@ async def test_an_oversized_body_does_not_count_against_the_host(breaker: Circui
 
 async def test_a_cache_hit_neither_resets_failures_nor_closes_a_probe(breaker: CircuitBreaker) -> None:
     """Treat a cache hit as untested: it neither wipes the failure count nor closes a probe the host never saw."""
-    failing = StubClient(
+    failing = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=_ScriptedTransport(503)),
     )
-    cached = StubClient(
+    cached = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
@@ -413,7 +417,7 @@ async def test_a_cache_hit_neither_resets_failures_nor_closes_a_probe(breaker: C
     assert breaker.state is not BreakerState.CLOSED
 
     healthy = _ScriptedTransport(200)
-    recovered = StubClient(
+    recovered = Client(
         rate=Rate.per_second(2),
         base_url=_URL,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
@@ -427,52 +431,49 @@ async def test_a_cache_hit_neither_resets_failures_nor_closes_a_probe(breaker: C
 async def test_an_opted_out_client_is_not_refused_by_a_breaker_another_client_opened() -> None:
     """Skip the registry read, not only the recording, with ``breaker=None`` and with policy off.
 
-    The registry is process-global and keyed by origin, so a client that merely stopped recording
-    would still be refused by a breaker some other client opened on the same host. Runs on the
-    registry's own 60s breaker rather than the ``breaker`` fixture: a 50ms cooldown could elapse
-    mid-test and admit the control below as a probe.
+    A registry the clients share is keyed by origin, so a client that merely stopped recording would still be refused
+    by a breaker another client opened on the same host. Runs on the default 60s breaker rather than the ``breaker``
+    fixture: a 50ms cooldown could elapse mid-test and admit the control below as a probe.
     """
-    DEFAULT_REGISTRY.clear()
-    try:
-        await _fail(
-            StubClient(
-                rate=Rate.per_second(2),
-                base_url=_URL,
-                policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
-                http=HttpOptions(transport=_ScriptedTransport(503)),
-            ),
-            _THRESHOLD,
-        )
-        assert [breaker.state for breaker in DEFAULT_REGISTRY.breakers(_URL)] == [BreakerState.OPEN]
-
-        refused = _ScriptedTransport(200)
-        with pytest.raises(CircuitOpenError):
-            await StubClient(
-                rate=Rate.per_second(2),
-                base_url=_URL,
-                policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
-                http=HttpOptions(transport=refused),
-            ).get("x", expect=RESPONSE)
-        assert refused.calls == 0, "control: a client that consults the breaker is refused"
-
-        no_breaker = _ScriptedTransport(200)
-        await StubClient(
+    shared = BreakerRegistry()
+    policy = TransportPolicy(retry=RetryPolicy(attempts=1), breaker=BreakerPolicy(registry=shared))
+    await _fail(
+        Client(
             rate=Rate.per_second(2),
             base_url=_URL,
-            policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=None),
-            http=HttpOptions(transport=no_breaker),
-        ).get("x", expect=RESPONSE)
-        policy_off = _ScriptedTransport(200)
-        with policy_disabled():
-            policy_off_client = StubClient(
-                rate=Rate.per_second(2),
-                base_url=_URL,
-                policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
-                http=HttpOptions(transport=policy_off),
-            )
-        await policy_off_client.get("x", expect=RESPONSE)
+            policy=policy,
+            http=HttpOptions(transport=_ScriptedTransport(503)),
+        ),
+        _THRESHOLD,
+    )
+    assert [breaker.state for breaker in shared.breakers(_URL)] == [BreakerState.OPEN]
 
-        assert no_breaker.calls == 1, "breaker=None must reach the network"
-        assert policy_off.calls == 1, "a policy-off client must reach the network"
-    finally:
-        DEFAULT_REGISTRY.clear()
+    refused = _ScriptedTransport(200)
+    with pytest.raises(CircuitOpenError):
+        await Client(
+            rate=Rate.per_second(2),
+            base_url=_URL,
+            policy=policy,
+            http=HttpOptions(transport=refused),
+        ).get("x", expect=RESPONSE)
+    assert refused.calls == 0, "control: a client that consults the breaker is refused"
+
+    no_breaker = _ScriptedTransport(200)
+    await Client(
+        rate=Rate.per_second(2),
+        base_url=_URL,
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=None),
+        http=HttpOptions(transport=no_breaker),
+    ).get("x", expect=RESPONSE)
+    policy_off = _ScriptedTransport(200)
+    with policy_disabled():
+        policy_off_client = Client(
+            rate=Rate.per_second(2),
+            base_url=_URL,
+            policy=policy,
+            http=HttpOptions(transport=policy_off),
+        )
+    await policy_off_client.get("x", expect=RESPONSE)
+
+    assert no_breaker.calls == 1, "breaker=None must reach the network"
+    assert policy_off.calls == 1, "a policy-off client must reach the network"

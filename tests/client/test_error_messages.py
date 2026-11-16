@@ -19,23 +19,24 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Expect, HttpOptions, Reader, StaticHeaderAuth, TransportPolicy
-from headgate._failures import MESSAGE_TEXT_LIMIT, CallSite, transport_error
-from headgate._responses import as_bytes
-from headgate.errors import (
+from headgate import (
     AuthError,
+    Client,
     ClientError,
-    DecodeError,
+    Expect,
+    HttpOptions,
     RateLimitError,
-    RefusedError,
-    ResponseParseError,
+    Reader,
+    RetryPolicy,
+    StaticHeaderAuth,
     TransportError,
+    TransportPolicy,
     UpstreamStatusError,
 )
-from headgate.ratelimit import UNLIMITED
-from headgate.retry import RetryPolicy
+from headgate._failures import MESSAGE_TEXT_LIMIT, CallSite, transport_error
+from headgate._responses import as_bytes
+from headgate.errors import DecodeError, RefusedError, ResponseParseError
 from tests.support.breakers import failures
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -51,11 +52,10 @@ _URL_IN_MESSAGE = 400
 
 def _client(
     handler: Callable[[httpx2.Request], httpx2.Response], *, response_check: ResponseCheck | None = None
-) -> StubClient:
+) -> Client:
     """Return a client over *handler* that sends each request once."""
-    return StubClient(
+    return Client(
         base_url=f"https://{_HOST}",
-        rate=UNLIMITED,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(
             transport=httpx2.MockTransport(handler),
@@ -99,9 +99,8 @@ async def test_a_header_value_the_http_library_refuses_is_never_quoted(local_ser
 
     The message is fixed and value-free, and nothing is chained, since the cause carries the same text.
     """
-    client = StubClient(
+    client = Client(
         base_url=local_server,
-        rate=UNLIMITED,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         auth=StaticHeaderAuth({"Authorization": f"Bearer {_CANARY}\n"}),
     )
@@ -163,7 +162,7 @@ async def test_a_surviving_transient_status_names_the_method_the_relative_url_an
             await client.get("series?api_key=SECRET", expect=as_bytes)
 
     assert str(raised.value) == (
-        f'[StubClient] transient {status} for GET series?api_key=%2A%2A%2A (status={status}) — {{"error": '
+        f'[example.test] transient {status} for GET series?api_key=%2A%2A%2A (status={status}) — {{"error": '
         '"maintenance until 5pm"}'
     )
 
@@ -301,6 +300,7 @@ async def test_a_readers_refusal_is_chained_to_the_error_it_becomes() -> None:
             await client.get("series", expect=refuse)
 
     assert caught.value.__cause__ is refusal
+    assert caught.value.status_code == httpx2.codes.OK, "a quota refusal written in a 200 body carries the 200"
 
 
 # --- A response_check that raises rather than returns ---
@@ -327,7 +327,7 @@ async def test_a_response_check_that_raises_is_treated_like_one_that_returns() -
 
     assert caught.value.status_code == httpx2.codes.FOUND
     assert caught.value.code == "KEY"
-    assert failures(_HOST) == 0
+    assert failures(client, _HOST) == 0
 
 
 async def test_a_response_check_that_raises_on_a_stream_is_treated_like_one_that_returns() -> None:

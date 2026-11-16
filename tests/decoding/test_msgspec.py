@@ -17,12 +17,11 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate import HttpOptions
+from headgate import Client, HttpOptions
 from headgate._failures import MESSAGE_TEXT_LIMIT
 from headgate.errors import DecodeError, ResponseParseError
 from headgate.msgspec import MsgspecCodec, decode, reader, to_builtins
 from headgate.testing import FakeTransport
-from tests.support.clients import StubClient
 from tests.support.responses import response
 
 if TYPE_CHECKING:
@@ -336,7 +335,7 @@ async def test_a_body_nested_too_deeply_is_a_parse_error() -> None:
     """Raise ``ResponseParseError`` where msgspec overflows its stack, not a raw ``RecursionError``."""
     body = b'[{"x": 1}]'
     fake = FakeTransport().reply("GET", "/x", httpx2.Response(200, content=body))
-    client = StubClient(base_url="https://api.test", http=HttpOptions(transport=fake))
+    client = Client(base_url="https://api.test", http=HttpOptions(transport=fake))
     with pytest.raises(ResponseParseError) as raised:
         await client.get("x", expect=reader(list[_Overflows]))
     assert str(raised.value).endswith("nested too deeply")

@@ -14,7 +14,11 @@ Each origin (`scheme://host:port`) has a breaker with three states:
   the cooldown left. After `recovery_timeout` seconds (default 60) the next call becomes the probe.
 - **half-open**: exactly one call, the probe, is let through; its outcome closes or re-opens the breaker. Other calls
   meanwhile are refused with `retry_after=None`, since the probe's outcome decides. The probe keeps its own retries, so
-  its whole retry sequence is the one recovery test.
+  its whole retry sequence is the one recovery test. A `stream()` probe is settled at its response head, so a
+  long-lived stream does not hold the origin half-open while its body is read.
+
+A call admitted before the breaker opened records nothing when it finishes, even after the probe has closed the breaker
+again, and its retries are refused: its outcome belongs to the outage the breaker already counted.
 
 The breaker spans the send **and the body read**, so a connection that dies mid-body is a failure of the fetch. A
 retry sequence counts once, however many attempts it made, and the retry layer stops re-sending as soon as the breaker
@@ -33,6 +37,7 @@ Only what the origin itself showed:
 | | a failure on a hop an auth flow made to mint a credential (that is the token host's failure) |
 | | a cache hit, a stored 5xx, or an outcome shared from another identical request's fetch |
 | | a call its caller cancelled, a deadline passing before the request reached the network, a body over the size cap, a refused SSRF destination |
+| | a response a middleware answered itself, without sending the request |
 | | an exception a `stream()` block's own code raises, even an `OSError` or an httpx2 error: it is the caller's, not the origin's |
 
 Every other response is a success: a 4xx says the origin is answering.
@@ -41,15 +46,22 @@ A call that ends on its deadline while an attempt is on the network, waiting for
 **does** count, as a timeout: an origin that hangs is failing, and it is the deadline's timer, not httpx2's own
 timeout, that ends such a call (each attempt's timeouts are cut to the time left, but httpx2 starts each phase's clock
 later). A deadline that passes before the attempt reached the network (in a rate-budget wait, a middleware or a token
-mint) records nothing, as does a caller cancelling the call itself, with `asyncio.timeout` or `wait_for` around it.
+mint), or while the auth waits for or makes a token mint (a re-mint after a 401 included), records nothing, as does a caller cancelling the call itself, with `asyncio.timeout` or `wait_for` around it.
 
 ## Sharing and keying
 
-Breakers live in a `BreakerRegistry`, by default one the whole process shares. Every client
-whose `BreakerPolicy` names the same registry and the same thresholds shares an origin's breaker, so two clients of one
-upstream cannot each spend a full quota of failures against it. A client that asks for other thresholds gets a breaker
-of its own for that origin, with exactly the thresholds it asked for, rather than whichever thresholds the first client
-to call happened to set.
+Breakers live in a `BreakerRegistry`. A client builds one of its own, so its failures open no other client's breakers;
+there is no process-wide registry. Clients that should pool their failures against an upstream, so that two clients of
+it cannot each spend a full quota of failures, are given one registry: `BreakerPolicy(registry=shared)`. A registry
+keys a breaker by origin and fixes its thresholds the first time a client binds it, so every breaker it holds trips as
+each client sharing it expects. A client whose policy asks for other thresholds is refused with `ValueError` when it is
+built:
+
+```text
+this BreakerRegistry's breakers trip after 3 failures with a 30s cooldown, so a client with
+BreakerPolicy(failure_threshold=5, recovery_timeout=60) cannot share it: give that client the same thresholds, or a
+registry of its own
+```
 
 ```python
 from headgate import BreakerPolicy, TransportPolicy
@@ -63,16 +75,16 @@ no_breaker = TransportPolicy(breaker=None)
 A registry is thread-safe (clients on different event loops and threads can share it) and bounded: past `max_hosts`
 breakers (default 1024) it drops the least recently used closed one, or, when every breaker is open or half-open, the
 least recently used of all. `TransportPolicy(breaker=None)` turns the breaker off; such a client never reads a registry,
-so it is not refused by a breaker another client opened.
+so it is not refused by a breaker a client sharing one opened.
 
 ## Watching it
 
 Every transition a call causes is a `BreakerChanged` event (origin, previous and new state, failure count, and the
 call); a state is a `BreakerState`, a string enum of `closed`, `open` and `half_open`.
-`headgate.health.breaker_states()` returns a snapshot per origin of the shared registry (pass `registry=` for another),
-with `refusing` alongside `state`: an open breaker whose cooldown has elapsed still reads open until a call takes the
-probe, so `refusing` is what says whether a call made now would be turned away. Where clients with different thresholds
-keep several breakers for one origin, the snapshot reports the most degraded. See [observability](observability.md).
+`headgate.health.breaker_states(registry)` returns a snapshot per origin of the registry you pass (the one your clients
+share), with `refusing` alongside `state`: an open breaker whose cooldown has elapsed still reads open until a call
+takes the probe, so `refusing` is what says whether a call made now would be turned away. See
+[observability](observability.md).
 
-In tests, `headgate.testing.isolated_breakers()` gives the clients built in its block a fresh registry, so no breaker
-state crosses between tests. See [testing](testing.md).
+In tests, no breaker state crosses between tests, since each client keeps its own;
+`headgate.testing.breakers_of(client)` returns the registry a client's breakers live in. See [testing](testing.md).

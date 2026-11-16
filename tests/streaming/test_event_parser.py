@@ -90,3 +90,46 @@ def test_an_event_past_the_size_limit_is_refused(body: bytes) -> None:
 def test_comments_do_not_count_toward_the_size_limit() -> None:
     """Leave a comment line out of the event's size, however long it is."""
     assert _data(b": " + b"x" * 50 + b"\ndata: abcd\n\n", max_event_size=10) == ["abcd"]
+
+
+#: A body whose limit a chunk boundary could tip: a BOM before the first line, and a comment far longer than the limit.
+_EDGES = b"\xef\xbb\xbf: " + b"c" * 40 + b"\ndata: abcd\n\n: " + b"c" * 40 + b"\r\ndata: efgh\n\n"
+
+
+def test_the_size_limit_holds_however_the_body_is_cut() -> None:
+    """Read events of exactly ``max_event_size`` the same way however the body is cut into three chunks.
+
+    Neither a comment, which is never part of an event, nor the byte order mark the first line drops counts while its
+    line is still arriving.
+    """
+    assert _data(_EDGES, max_event_size=10) == ["abcd", "efgh"]
+    for first in range(len(_EDGES) + 1):
+        for second in range(first, len(_EDGES) + 1):
+            chunks = (_EDGES[:first], _EDGES[first:second], _EDGES[second:])
+            assert _data(*chunks, max_event_size=10) == ["abcd", "efgh"], chunks
+
+
+def test_a_comment_that_never_ends_is_not_held() -> None:
+    """Read on past a comment line that keeps arriving without end, holding none of it."""
+    parser = EventParser(max_event_size=10)
+    for chunk in (b": ", *(b"c" * 4096 for _ in range(64)), b"\ndata: abcd\n\n"):
+        events = list(parser.feed(chunk))
+
+    assert [event.data for event in events] == ["abcd"]
+
+
+@pytest.mark.parametrize(
+    ("value", "retry"),
+    [
+        pytest.param("0" * 5000 + "5", 5, id="leading-zeros-past-int-digit-limit"),
+        pytest.param("9" * 400, 2**63 - 1, id="past-a-float"),
+        pytest.param("9" * 5000, 2**63 - 1, id="past-int-digit-limit"),
+        pytest.param(str(2**63 - 1), 2**63 - 1, id="the-largest-kept"),
+    ],
+)
+def test_a_huge_reconnection_time_is_held_at_the_largest_one_kept(value: str, retry: int) -> None:
+    """Read a ``retry:`` of any length of digits, holding one past 2**63 - 1 milliseconds at that."""
+    parser = EventParser()
+    (event,) = parser.feed(f"retry: {value}\ndata: x\n\n".encode())
+
+    assert (event.retry, parser.retry) == (retry, retry)

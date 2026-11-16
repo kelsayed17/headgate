@@ -3,23 +3,30 @@
 `headgate.testing` tests a client through its real stack (retries, the rate budget, the breaker, the error mapping)
 with nothing private patched. Two seams make that possible:
 
-- **the network** is `HttpOptions(transport=...)`. Have the client accept a transport and pass it through, as the
-  [examples](https://github.com/kelsayed17/headgate/tree/main/examples) do: `CatalogClient(api_key, transport=fake)`;
-- **time and breaker state** are read when a client is **constructed**, from context variables the kit's context
-  managers set. Build the client inside them; entering one around a client that already exists changes nothing.
+- **the network**: `fake_network(transport)` sends every `Client` built in its block on *transport*, in place of the
+  network, even one the SDK gave a transport of its own (`HttpOptions(transport=AsyncCurlTransport(...))`). Only the
+  network is replaced: the SDK's rate budget, cache, retries and breaker run over the fake as they would in production;
+  a token an auth mints on an `httpx2.AsyncClient` of its own (`mint_token`) does not reach the fake, while one minted
+  through `mint_flow` does;
+- **time**: `TestClock.install()` and `instant_retries()` set the timing the clients built in their block run on.
+
+All three are read when a client is **constructed**, so build the SDK inside them; entering one around a client that
+already exists changes nothing, and the block need not stay open while the client is used. Breaker state needs no
+seam: each client keeps its own.
 
 ```python
 from collections.abc import Iterator
 
 import pytest
 
-from headgate.testing import FakeTransport, Respond, instant_retries, isolated_breakers
+from headgate.testing import FakeTransport, Respond, fake_network, instant_retries
 
 
 @pytest.fixture
 def catalog() -> Iterator[CatalogClient]:
-    with instant_retries(), isolated_breakers():
-        yield CatalogClient("test-key", transport=FakeTransport().reply("GET", "/v1/series/GDP", Respond(json=GDP)))
+    fake = FakeTransport().reply("GET", "/v1/series/GDP", Respond(json=GDP))
+    with fake_network(fake), instant_retries():
+        yield CatalogClient("test-key")
 ```
 
 ## FakeTransport
@@ -48,10 +55,20 @@ fake = (
 
 ## TestClock and instant retries
 
-`TestClock()` is a monotonic clock that moves only when told: `clock.now`, `clock.advance(seconds)`, and an async
-`clock.sleep` that records the wait in `clock.sleeps` and advances the clock instead of waiting. Clients built inside
-`clock.install()` measure every duration on it (deadlines, events, rate pacing, and the cooldowns of a registry built by
-`isolated_breakers()` in the same block) and wait through its sleep, so a test of a 60-second cooldown runs in no time.
+`TestClock(start=0.0, *, epoch=..., random=...)` is a monotonic clock that moves only when told: `clock.now`,
+`clock.advance(seconds)`, and an async `clock.sleep` that records the wait in `clock.sleeps` and advances the clock
+instead of waiting. Its wall clock reads `epoch` plus the reading, so a `Retry-After` date agrees with it, and `random`
+is the backoff's jitter draw: pass `random=lambda: 1.0` for a full backoff a test can predict.
+
+Everything built inside `clock.install()` with no `timing=` of its own runs on it: a client's deadlines, events, retry
+backoff and retry budget, a `CachedTokenAuth`'s token lifetimes, a `RateBudget` the block builds (shared by any number
+of clients), and a `BreakerRegistry`'s cooldowns. So a test of a 60-second cooldown, or of a token that expires in an
+hour, runs in no time. What was built before the block keeps the clock it was built with.
+
+`install()` is `headgate.timing.timing_override(clock.timing)`. The seam is public, so a test kit of your own can
+install a clock the same way: a `Timing(clock=..., sleep=..., wall_clock=..., random=...)`, whose four fields satisfy
+the `Clock`, `Sleep` and `RandomSource` protocols, set for a block with `timing_override`, and read back with
+`current_timing()`. Each object takes `timing=` too, to run on one timing whatever block it is built in.
 
 Concurrent sleeps overlap as they would in real time: each sleeper wakes at the reading it began at plus its delay.
 The clock moves to the earliest wake after 16 turns of the event loop in which no sleep begins or ends, room for the
@@ -63,19 +80,19 @@ reading.
 `instant_retries()` leaves the clock as it is (the real one, or a `TestClock`) and makes every wait return at once, so a
 mocked failure is retried exactly as production retries it, without the backoff.
 
-## Isolated breakers
+## Breakers
 
-`isolated_breakers()` gives the clients built in its block a fresh `BreakerRegistry` (and yields it), so failures in one
-test open no breaker in the next. Assert on it with `headgate.health.breaker_states(registry)`. A client configured
-with a registry of its own keeps it.
+Each client keeps its breakers in a `BreakerRegistry` of its own, unless its `BreakerPolicy` names one to share, so
+failures in one test open no breaker in the next. `breakers_of(client)` returns that registry (or `None` for a client
+without a breaker); assert on it with `headgate.health.breaker_states(registry)`.
 
 ## What a client was built with
 
 A client fixes its options in its `__init__`, so a test of its configuration reads them back. `cache_of(client)` returns
 the `HttpCache` it was built with (or `None`), whose `caches_request(method, path)` and `stores_status(status)` say
-what it stores, from its `methods`, `paths` and `statuses`. `budget_for(client, url)` returns the
-`RateBudget` a request to `url` spends from, the first `RateRule` that matches it or the default; without a `url`, the
-default budget, built from `rate=`.
+what it stores, from its `methods`, `paths` and `statuses`. `budget_for(client, url)` returns the `RateBudget` a
+request to `url` spends from: that of the first `Route` that matches it, when that route sets `rate=`, or the default;
+without a `url`, the default budget, built from `rate=`.
 
 ```python
 from headgate.testing import budget_for, cache_of
@@ -139,7 +156,7 @@ def vcr_config() -> dict[str, object]:
     return CASSETTES.vcr_config()
 
 
-http = HttpOptions(middleware=(CASSETTES,))  # on the client under test
+middleware = (CASSETTES,)  # the client under test's middleware=
 ```
 
 It filters `Authorization`, `Proxy-Authorization`, `Cookie`, every header and parameter the auths declare and the names
@@ -155,7 +172,7 @@ calls it first.
 Some tests, and connectivity probes, want the first failure as it is: no retries, no breaker, no pacing.
 `headgate.policy.policy_disabled()` builds the clients constructed in its block with retries off (whatever a call or
 route asks for), no breaker (the client never reads a registry, so it cannot be refused by one another client opened),
-and an effectively unlimited rate, also for its `rate_limits` rules and a shared `RateBudget` passed in.
+and a budget that paces nothing, also for its routes' `rate=` and a shared `RateBudget` passed in.
 
 ```python
 from collections.abc import Iterator

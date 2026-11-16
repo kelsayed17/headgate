@@ -12,28 +12,30 @@ from __future__ import annotations
 
 import gzip
 import math
+import traceback
 from typing import TYPE_CHECKING, override
 
 import httpx2
 import pytest
 
-from headgate import MAX_MINT_RESPONSE_BYTES, CachedTokenAuth, HttpOptions, Minted, Timeouts, TransportPolicy
-from headgate._responses import as_bytes, nothing
-from headgate.errors import (
+from headgate import (
     AuthError,
-    ClientConfigurationError,
+    CachedTokenAuth,
+    Client,
     ClientTimeoutError,
-    DecodeError,
-    ResponseParseError,
-    ResponseTooLargeError,
+    HttpOptions,
+    Minted,
+    RetryPolicy,
+    Timeouts,
     TransportError,
+    TransportPolicy,
     UpstreamStatusError,
 )
-from headgate.ratelimit import UNLIMITED
-from headgate.retry import RetryPolicy
+from headgate._auth import _MAX_MINT_RESPONSE_BYTES
+from headgate._responses import as_bytes, nothing
+from headgate.errors import ClientConfigurationError, DecodeError, ResponseParseError, ResponseTooLargeError
 from headgate.testing import FakeTransport
 from tests.support.breakers import failures
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Callable
@@ -82,11 +84,10 @@ class _FlowReadsJson(CachedTokenAuth):
         yield Minted(response.json()["access_token"], 3600.0)
 
 
-def _api(auth: httpx2.Auth, handler: Callable[[httpx2.Request], httpx2.Response] | None = None) -> StubClient:
+def _api(auth: httpx2.Auth, handler: Callable[[httpx2.Request], httpx2.Response] | None = None) -> Client:
     """Return a client of the API host signing with *auth*, every API call answering 200 unless *handler* says."""
-    return StubClient(
+    return Client(
         base_url=f"https://{_API_HOST}",
-        rate=UNLIMITED,
         auth=auth,
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(transport=httpx2.MockTransport(handler or (lambda _r: httpx2.Response(httpx2.codes.OK)))),
@@ -97,6 +98,15 @@ async def _call(auth: httpx2.Auth, handler: Callable[[httpx2.Request], httpx2.Re
     """Make one API call signed by *auth*, closing the client afterwards."""
     async with _api(auth, handler) as client:
         await client.get("series", expect=as_bytes)
+
+
+def _assert_unchained(error: BaseException, original: type[BaseException]) -> None:
+    """Assert *error* carries no link to the raw failure, whose message may name the token URL unredacted.
+
+    A note names the original's type instead, so the cause is still on record.
+    """
+    assert (error.__cause__, error.__context__) == (None, None)
+    assert any(note.startswith(f"from {original.__name__}") for note in getattr(error, "__notes__", []))
 
 
 def _refused(request: httpx2.Request) -> httpx2.Response:
@@ -113,13 +123,15 @@ def _slow(request: httpx2.Request) -> httpx2.Response:
 
 async def test_an_unreachable_token_host_names_the_token_endpoint_and_spares_the_api_host() -> None:
     """Name the token endpoint (its secret redacted), chain the cause, and leave the API host's breaker untouched."""
+    client = _api(_MintsOver(_refused))
     with pytest.raises(TransportError) as raised:
-        await _call(_MintsOver(_refused))
+        async with client:
+            await client.get("series", expect=as_bytes)
 
     assert type(raised.value) is TransportError
     assert str(raised.value) == f"[_MintsOver] POST {_LOGGED_EXCHANGE_URL} (token mint): connection refused"
-    assert isinstance(raised.value.__cause__, httpx2.ConnectError)
-    assert failures(_API_HOST) == 0
+    _assert_unchained(raised.value, httpx2.ConnectError)
+    assert failures(client, _API_HOST) == 0
 
 
 async def test_a_token_host_that_times_out_is_a_client_timeout() -> None:
@@ -148,7 +160,20 @@ async def test_a_checked_token_response_is_the_status_it_was(status: int, kind: 
     assert raised.value.status_code == status
     assert f"token mint failed for POST {_LOGGED_EXCHANGE_URL}" in str(raised.value)
     assert '"invalid_client"' in str(raised.value)
-    assert isinstance(raised.value.__cause__, httpx2.HTTPStatusError)
+    _assert_unchained(raised.value, httpx2.HTTPStatusError)
+
+
+async def test_a_failed_mint_keeps_the_token_url_secret_everywhere_it_can_be_read() -> None:
+    """Keep the token URL's secret out of the error, its chain and its notes: a log of the traceback shows all three.
+
+    httpx2's own ``raise_for_status()`` message names the URL as sent, secret and all.
+    """
+    with pytest.raises(UpstreamStatusError) as raised:
+        await _call(_MintsOver(lambda _r: httpx2.Response(httpx2.codes.BAD_REQUEST)))
+
+    rendered = "".join(traceback.format_exception(raised.value))
+    assert "S3CR3T" not in rendered
+    assert "client_secret=%2A%2A%2A" in rendered
 
 
 class _Unread(httpx2.AsyncByteStream):
@@ -184,7 +209,8 @@ async def test_an_unreadable_token_response_is_a_parse_error(auth: CachedTokenAu
     with pytest.raises(ResponseParseError, match=r"^\[_\w+\] unreadable token response: ") as raised:
         await _call(auth)
 
-    assert raised.value.__cause__ is not None
+    assert raised.value.__cause__ is None
+    assert raised.value.__notes__
 
 
 async def test_an_unreadable_token_response_without_a_message_names_the_error_type() -> None:
@@ -227,7 +253,7 @@ async def test_a_mint_failure_that_names_no_request_names_the_token_endpoint(exc
     with pytest.raises(TransportError, match=r"^\[_Raises\] token endpoint \(token mint\): ") as raised:
         await _call(_Raises(exc))
 
-    assert raised.value.__cause__ is exc
+    _assert_unchained(raised.value, type(exc))
 
 
 async def test_a_client_error_from_a_mint_is_raised_as_it_is() -> None:
@@ -259,14 +285,14 @@ class _ThreeHops(CachedTokenAuth):
         yield Minted("t", math.inf)
 
 
-def _hopping_client(max_redirects: int) -> tuple[StubClient, FakeTransport]:
+def _hopping_client(max_redirects: int) -> tuple[Client, FakeTransport]:
     """Return a client minting through :class:`_ThreeHops` with *max_redirects*, and its network."""
     fake = FakeTransport().reply("GET", "/v1/x", 200)
     for hop in range(_ThreeHops.hops):
         fake.reply("GET", f"/step/{hop}", 200)
     auth = _ThreeHops()
     http = HttpOptions(transport=fake, max_redirects=max_redirects)
-    return StubClient(base_url="https://api.example.test/v1", rate=UNLIMITED, auth=auth, http=http), fake
+    return Client(base_url="https://api.example.test/v1", auth=auth, http=http), fake
 
 
 async def test_a_mints_hops_count_toward_max_redirects() -> None:
@@ -331,9 +357,9 @@ async def test_a_mint_flow_is_handed_its_hops_body_read() -> None:
 
 
 async def test_an_oversized_token_response_is_refused_as_too_large() -> None:
-    """Refuse a hop's body past ``MAX_MINT_RESPONSE_BYTES`` as ``ResponseTooLargeError`` naming the token mint."""
+    """Refuse a hop's body past the 1 MiB mint cap as ``ResponseTooLargeError`` naming the token mint."""
     chunk = b" " * (64 * 1024)
-    chunks = [chunk] * (MAX_MINT_RESPONSE_BYTES // len(chunk) + 1)
+    chunks = [chunk] * (_MAX_MINT_RESPONSE_BYTES // len(chunk) + 1)
     with pytest.raises(ResponseTooLargeError, match=r"\(token mint\)") as raised:
         await _call(_FlowReadsJson(), _token_host(_Streamed(*chunks)))
 
@@ -347,14 +373,14 @@ async def test_an_oversized_token_response_is_refused_as_too_large() -> None:
 
 async def test_a_token_response_is_capped_after_decompression() -> None:
     """Count a gzip hop's decompressed bytes, so a small compressed body that inflates past the cap is refused."""
-    bomb = gzip.compress(b"\0" * (MAX_MINT_RESPONSE_BYTES + 1))
+    bomb = gzip.compress(b"\0" * (_MAX_MINT_RESPONSE_BYTES + 1))
 
     def handle(request: httpx2.Request) -> httpx2.Response:
         """Answer the token hop with the compressed body."""
         headers = {"Content-Type": "application/json", "Content-Encoding": "gzip"}
         return httpx2.Response(httpx2.codes.OK, stream=_Streamed(bomb), headers=headers, request=request)
 
-    assert len(bomb) < MAX_MINT_RESPONSE_BYTES
+    assert len(bomb) < _MAX_MINT_RESPONSE_BYTES
     with pytest.raises(ResponseTooLargeError, match=r"\(token mint\)"):
         await _call(_FlowReadsJson(), handle)
 
@@ -380,7 +406,7 @@ async def test_a_misread_token_response_is_a_parse_error(exc: Exception) -> None
     with pytest.raises(ResponseParseError, match=r"^\[_Raises\] unreadable token response: ") as raised:
         await _call(_Raises(exc))
 
-    assert raised.value.__cause__ is exc
+    _assert_unchained(raised.value, type(exc))
 
 
 #: The client's timeouts in the timeout tests, every phase longer than their deadline.
@@ -413,12 +439,11 @@ async def _hop_timeouts(auth: CachedTokenAuth, *, deadline: float | None) -> dic
         seen[request.url.path] = request.extensions["timeout"]
         return httpx2.Response(httpx2.codes.OK, text="t")
 
-    client = StubClient(
+    client = Client(
         base_url=f"https://{_API_HOST}",
-        rate=UNLIMITED,
         auth=auth,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), deadline=None),
-        http=HttpOptions(transport=httpx2.MockTransport(handle), timeout=_CALL_TIMEOUTS),
+        policy=TransportPolicy(retry=RetryPolicy(attempts=1), deadline=None, timeout=_CALL_TIMEOUTS),
+        http=HttpOptions(transport=httpx2.MockTransport(handle)),
     )
     async with client:
         # Per call: a client whose own timeouts outlast its deadline is refused when it is built.
@@ -446,3 +471,56 @@ async def test_a_hop_that_sets_its_own_timeouts_keeps_them() -> None:
     timeouts = await _hop_timeouts(_OneHop({"timeout": _HOP_TIMEOUTS}), deadline=None)
 
     assert timeouts == _HOP_TIMEOUTS
+
+
+class _Tracked(httpx2.AsyncByteStream):
+    """A token response body that records whether it was closed."""
+
+    def __init__(self) -> None:
+        """Open."""
+        self.closed = False
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"{}"
+
+    @override
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+async def test_a_token_response_refused_by_its_length_closes_its_stream() -> None:
+    """Close a hop's network stream refused by its ``Content-Length`` unread, or its pooled connection leaks."""
+    body = _Tracked()
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/token":
+            return httpx2.Response(
+                httpx2.codes.OK, stream=body, headers={"Content-Length": str(_MAX_MINT_RESPONSE_BYTES + 1)}
+            )
+        return httpx2.Response(httpx2.codes.OK)
+
+    with pytest.raises(ResponseTooLargeError, match=r"\(token mint\)"):
+        await _call(_FlowReadsJson(), handle)
+
+    assert body.closed
+
+
+async def test_a_mint_hops_network_failure_names_the_token_endpoint_not_the_api_call() -> None:
+    """Report a ``mint_flow`` hop that cannot connect as the token endpoint's failure, named for the auth class.
+
+    httpx2 raises the hop's error outside the auth flow, so the client maps it, as a mint's failure, not the call's.
+    """
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/token":
+            return _refused(request)
+        return httpx2.Response(httpx2.codes.OK)
+
+    client = _api(_FlowReadsJson(), handle)
+    with pytest.raises(TransportError) as raised:
+        async with client:
+            await client.get("series", expect=as_bytes)
+
+    assert str(raised.value) == f"[_FlowReadsJson] POST https://{_API_HOST}/token (token mint): connection refused"
+    assert failures(client, _API_HOST) == 0

@@ -5,7 +5,8 @@
 
 from http import HTTPStatus
 
-from headgate import ClientConfigurationError, ClientError, ClientTimeoutError
+from headgate import ClientError, ClientTimeoutError
+from headgate.errors import ClientConfigurationError
 
 
 def gateway_status(error: ClientError) -> HTTPStatus:

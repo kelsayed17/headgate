@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""What an :class:`~headgate.cache.HttpCache` keeps: :meth:`caches_request` and :meth:`stores_status`.
+"""What an :class:`~headgate.HttpCache` keeps: :meth:`caches_request` and :meth:`stores_status`.
 
 Each rule reads only the method, the URL path or the status, never the body or a credential.
 """
@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from headgate.cache import HttpCache
+from headgate import HttpCache
 
 if TYPE_CHECKING:
     from collections.abc import Callable

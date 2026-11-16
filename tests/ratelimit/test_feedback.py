@@ -53,6 +53,21 @@ def test_an_exhausted_policy_pauses_for_its_window() -> None:
     assert _feedback(RateLimit='"default";r=0;t=30') == Feedback(pushback=True, pause=30.0)
 
 
+@pytest.mark.parametrize(
+    ("window", "pause"),
+    [
+        (int(_RESET_IN), _RESET_IN),
+        (int(_NOW + _RESET_IN), _RESET_IN),
+        (int((_NOW + _RESET_IN) * 1000), _RESET_IN),
+        (int(_NOW - _RESET_IN), 0.0),
+    ],
+    ids=["seconds", "unix seconds", "unix millis", "unix time past"],
+)
+def test_an_exhausted_window_given_as_a_unix_time_is_measured_from_now(window: int, pause: float) -> None:
+    """Read a ``t`` some servers send as a Unix time as the seconds until it, as ``X-RateLimit-Reset`` is read."""
+    assert _feedback(RateLimit=f'"default";r=0;t={window}') == Feedback(pushback=True, pause=pause)
+
+
 def test_quota_left_says_nothing() -> None:
     """Treat a policy with quota left as no feedback."""
     assert _feedback(RateLimit='"default";r=50;t=30', RateLimit_Policy='"default";q=100;w=60') == Feedback()

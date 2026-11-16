@@ -16,16 +16,14 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import HttpOptions, TransportPolicy
-from headgate._client import AsyncBaseClient
+from headgate import HttpOptions, Rate, RetryPolicy, Route, TransportPolicy, UpstreamStatusError
+from headgate._client import Client
 from headgate._core import policy_is_disabled
 from headgate._responses import nothing
-from headgate.breaker._registry import DEFAULT_REGISTRY
-from headgate.errors import TransportError, UpstreamStatusError
 from headgate.policy import policy_disabled
-from headgate.ratelimit import UNLIMITED, Rate, RateRule
 from headgate.ratelimit._budget import Pacer
-from headgate.retry import RetryPolicy
+from headgate.ratelimit._rate import UNPACED
+from headgate.testing import breakers_of
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -36,9 +34,6 @@ _HOST = "example.test"
 _RATE = Rate.per_second(2.0)
 _RULE_RATE = Rate.per_second(8.0)
 _MAX_ATTEMPTS = 3
-
-#: More consecutive failures than any breaker threshold, so the loop that opens one always terminates.
-_ENOUGH_FAILURES = 50
 
 
 class _Wire:
@@ -55,26 +50,21 @@ class _Wire:
         return httpx2.Response(self.status)
 
 
-class _Client(AsyncBaseClient):
-    """A typical subclass: it fixes its own policy in ``super().__init__()`` and exposes none of it."""
+def _client(wire: Callable[[httpx2.Request], httpx2.Response]) -> Client:
+    """Build over *wire*, with a secondary budget for ``/r``.
 
-    def __init__(self, wire: Callable[[httpx2.Request], httpx2.Response]) -> None:
-        """Build over *wire*, with a secondary budget for ``/r``.
-
-        The ``rate_limits`` rule is why the switch is enforced where budgets are built rather than by overriding the
-        client's ``rate=``, which would leave the secondary budget throttled.
-        """
-        super().__init__(
-            base_url=f"https://{_HOST}",
-            rate=_RATE,
-            policy=TransportPolicy(
-                retry=RetryPolicy(attempts=_MAX_ATTEMPTS), rate_limits=(RateRule("/r", _RULE_RATE),)
-            ),
-            http=HttpOptions(transport=httpx2.MockTransport(wire)),
-        )
+    The route's ``rate=`` is why the switch is enforced where budgets are built rather than by overriding the client's
+    ``rate=``, which would leave the secondary budget throttled.
+    """
+    return Client(
+        base_url=f"https://{_HOST}",
+        rate=_RATE,
+        policy=TransportPolicy(retry=RetryPolicy(attempts=_MAX_ATTEMPTS), routes=(Route("/r", rate=_RULE_RATE),)),
+        http=HttpOptions(transport=httpx2.MockTransport(wire)),
+    )
 
 
-async def _sends_for_a_503(client_factory: Callable[[_Wire], _Client]) -> int:
+async def _sends_for_a_503(client_factory: Callable[[_Wire], Client]) -> int:
     """Return how many sends one call through a fresh client gets when every attempt answers 503."""
     wire = _Wire(httpx2.codes.SERVICE_UNAVAILABLE)
     with pytest.raises(UpstreamStatusError):
@@ -82,41 +72,22 @@ async def _sends_for_a_503(client_factory: Callable[[_Wire], _Client]) -> int:
     return wire.sends
 
 
-async def _open_the_breaker() -> None:
-    """Fail a normally built client against the host until the shared breaker refuses it."""
-    failing = _Client(_Wire(httpx2.codes.SERVICE_UNAVAILABLE))
-    for _ in range(_ENOUGH_FAILURES):
-        if any(breaker.refusing for breaker in DEFAULT_REGISTRY):
-            return
-        with pytest.raises(UpstreamStatusError):
-            await failing.get("x", expect=nothing)
-    msg = "the breaker never opened"
-    raise AssertionError(msg)
-
-
-def _built_off(wire: _Wire) -> _Client:
+def _built_off(wire: _Wire) -> Client:
     with policy_disabled():
-        return _Client(wire)
+        return _client(wire)
 
 
 class TestPolicyOff:
     """With ``policy_disabled()`` around construction, a client keeps none of its transport policy."""
 
-    async def test_an_open_breaker_does_not_refuse_it(self) -> None:
-        """Check that a policy-off client is not refused by a breaker another client opened on the same host.
-
-        Not recording failures is not enough: the registry is shared, so a client that still read it would be refused.
-        """
-        await _open_the_breaker()
-        with pytest.raises(TransportError, match="circuit"):
-            await _Client(_Wire(httpx2.codes.OK)).get("x", expect=nothing)
-        wire = _Wire(httpx2.codes.OK)
-        await _built_off(wire).get("x", expect=nothing)
-        assert wire.sends == 1
+    def test_it_keeps_no_breaker(self) -> None:
+        """Check that a policy-off client has no breaker to record in or be refused by, not merely one never tripped."""
+        assert breakers_of(_client(_Wire(httpx2.codes.OK))) is not None, "control: a normally built client has one"
+        assert breakers_of(_built_off(_Wire(httpx2.codes.OK))) is None
 
     async def test_retries_are_zero_not_merely_instant(self) -> None:
         """Check that policy-off removes the retries themselves, not just the backoff between them."""
-        assert await _sends_for_a_503(_Client) == _MAX_ATTEMPTS, "control: a normally built client retries"
+        assert await _sends_for_a_503(_client) == _MAX_ATTEMPTS, "control: a normally built client retries"
         assert await _sends_for_a_503(_built_off) == 1
 
     async def test_primary_and_secondary_budgets_are_both_unthrottled(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -128,17 +99,17 @@ class TestPolicyOff:
 
         monkeypatch.setattr(Pacer, "wait", recording_wait)
 
-        async def rates(client: _Client) -> list[tuple[float, float]]:
+        async def rates(client: Client) -> list[tuple[float, float]]:
             built.clear()
             await client.get("x", expect=nothing)
             await client.get("r", expect=nothing)
             return list(built)
 
-        assert await rates(_Client(_Wire(httpx2.codes.OK))) == [
+        assert await rates(_client(_Wire(httpx2.codes.OK))) == [
             (_RATE.requests, _RATE.period),
             (_RULE_RATE.requests, _RULE_RATE.period),
         ], "control"
-        assert await rates(_built_off(_Wire(httpx2.codes.OK))) == [(UNLIMITED.requests, UNLIMITED.period)] * 2
+        assert await rates(_built_off(_Wire(httpx2.codes.OK))) == [(UNPACED.requests, UNPACED.period)] * 2
 
 
 class TestItIsReadAtConstruction:
@@ -161,7 +132,7 @@ class TestItIsReadAtConstruction:
     async def test_an_already_built_client_is_unaffected(self) -> None:
         """Check that entering the block around an existing client changes nothing, by design."""
         wire = _Wire(httpx2.codes.SERVICE_UNAVAILABLE)
-        client = _Client(wire)
+        client = _client(wire)
         with policy_disabled(), pytest.raises(UpstreamStatusError):
             await client.get("x", expect=nothing)
         assert wire.sends == _MAX_ATTEMPTS

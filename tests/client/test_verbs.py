@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The verb methods on ``AsyncBaseClient``: get/post/put/patch/delete/head.
+"""The verb methods on ``Client``: get/post/put/patch/delete/head.
 
 A recording ``MockTransport`` captures every outgoing ``httpx2.Request``, so each test asserts the verb maps to the
 right HTTP method and threads its arguments through. Every verb takes the call's declared responses as ``expect=``
@@ -23,14 +23,25 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate import EncodedBody, Expect, HttpOptions, TransportPolicy, Writer
+from headgate import (
+    AuthError,
+    EncodedBody,
+    Expect,
+    Form,
+    HttpOptions,
+    Json,
+    Multipart,
+    Rate,
+    Raw,
+    RetryPolicy,
+    TransportPolicy,
+    UpstreamStatusError,
+    Writer,
+)
 from headgate import msgspec as flavor
-from headgate._client import AsyncBaseClient
+from headgate._client import Client
 from headgate._responses import as_bytes, nothing
-from headgate.errors import AuthError, UpstreamStatusError
 from headgate.msgspec import reader
-from headgate.ratelimit import Rate
-from headgate.retry import RetryPolicy
 from tests.support.responses import RESPONSE
 
 _VALUE = 7
@@ -70,9 +81,9 @@ class _Wire:
         return self.sent[-1]
 
 
-def _client(wire: _Wire) -> AsyncBaseClient:
-    """Return an ``AsyncBaseClient`` whose network is *wire*, sending each request once."""
-    return AsyncBaseClient(
+def _client(wire: _Wire) -> Client:
+    """Return an ``Client`` whose network is *wire*, sending each request once."""
+    return Client(
         base_url="https://example.test",
         rate=Rate.per_second(2),
         policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
@@ -117,7 +128,7 @@ async def test_post_json_body_reaches_content_with_json_content_type() -> None:
     """Check that ``json=`` is serialized compactly by httpx2 and stamped with the JSON content type."""
     wire = _Wire(body={"value": _VALUE})
     async with _client(wire) as c:
-        await c.post("thing", json=flavor.to_builtins(_Body(name="x")), expect=reader(_Model))
+        await c.post("thing", body=Json(flavor.to_builtins(_Body(name="x"))), expect=reader(_Model))
 
     assert b'"name":"x"' in wire.last.content
     assert wire.last.headers.get("content-type") == "application/json"
@@ -154,9 +165,9 @@ async def test_a_calls_content_type_wins_over_the_writers() -> None:
     assert wire.last.headers["content-type"] == "application/merge-patch+json"
 
 
-def _defaulting(wire: _Wire, headers: dict[str, str]) -> AsyncBaseClient:
+def _defaulting(wire: _Wire, headers: dict[str, str]) -> Client:
     """Return a client over *wire* sending *headers* on every call, as client-wide defaults."""
-    return AsyncBaseClient(
+    return Client(
         base_url="https://example.test", http=HttpOptions(transport=httpx2.MockTransport(wire), headers=headers)
     )
 
@@ -173,6 +184,27 @@ async def test_the_writers_content_type_wins_over_the_clients_default() -> None:
     first, from_a_view = wire.sent
     assert first.headers.get_list("content-type") == ["application/msgpack"]
     assert from_a_view.headers.get_list("content-type") == ["application/cbor"]
+
+
+async def test_an_encoded_bodys_content_type_wins_over_the_clients_default() -> None:
+    """Send the type a ``Json``, ``Form`` or ``Multipart`` body is encoded with, so multipart keeps its boundary."""
+    wire = _Wire()
+    async with _defaulting(wire, {"Content-Type": "application/xml"}) as c:
+        await c.post("x", body=Json({"a": 1}), expect=nothing)
+        await c.post("x", body=Form({"a": "1"}), expect=nothing)
+        await c.post("x", body=Multipart({"f": ("f.txt", b"hi")}), expect=nothing)
+        await c.post("x", body=Raw(b"<a/>"), expect=nothing)
+        await c.post("x", body=Json({"a": 1}), headers={"Content-Type": "application/vnd.api+json"}, expect=nothing)
+
+    json, form, multipart, content, explicit = (request.headers.get_list("content-type") for request in wire.sent)
+    assert (json, form, content, explicit) == (
+        ["application/json"],
+        ["application/x-www-form-urlencoded"],
+        ["application/xml"],
+        ["application/vnd.api+json"],
+    )
+    (boundary,) = (value.split("boundary=")[1] for value in multipart)
+    assert wire.sent[2].content.startswith(f"--{boundary}".encode())
 
 
 async def test_a_declarations_headers_win_over_the_clients_defaults_but_not_the_calls() -> None:
@@ -195,7 +227,7 @@ async def test_an_encoded_body_is_sent_again_on_a_retry() -> None:
         sent.append(request.content)
         return httpx2.Response(next(statuses))
 
-    client = AsyncBaseClient(base_url="https://example.test", http=HttpOptions(transport=httpx2.MockTransport(answer)))
+    client = Client(base_url="https://example.test", http=HttpOptions(transport=httpx2.MockTransport(answer)))
     async with client:
         await client.put("orders/1", body=_NEW_ORDER(_Order(sku="A-1", note=None)), expect=nothing)
 
@@ -213,23 +245,6 @@ def test_drop_none_leaves_out_none_fields_a_struct_would_send() -> None:
 
     assert flavor.writer(_Patch, drop_none=True)(_Patch(name=None, size=3)).content == b'{"size":3}'
     assert flavor.writer(_Patch)(_Patch(name=None, size=3)).content == b'{"name":null,"size":3}'
-
-
-async def test_body_combines_with_no_other_body_option() -> None:
-    """Refuse ``body=`` beside ``json=``, which httpx2 would drop one of."""
-    async with _client(_Wire()) as c:
-        with pytest.raises(ValueError, match="body= is the whole request body"):
-            await c.post("orders", body=_NEW_ORDER(_Order(sku="A-1")), json={}, expect=nothing)
-
-
-async def test_json_combines_with_no_form_body() -> None:
-    """Refuse ``json=`` beside ``data=``: httpx2 would send the form and drop the JSON without a word."""
-    wire = _Wire()
-    async with _client(wire) as c:
-        with pytest.raises(ValueError, match="json= and data= are each a whole body"):
-            await c.post("orders", json={"a": 1}, data={"b": "2"}, expect=nothing)
-
-    assert not wire.sent
 
 
 async def test_head_maps_to_head_method() -> None:

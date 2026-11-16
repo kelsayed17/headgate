@@ -10,14 +10,10 @@ from typing import TYPE_CHECKING, override
 
 import httpx2
 
-from headgate import HttpOptions, TransportError, TransportPolicy
-from headgate.cache import HttpCache
+from headgate import Client, HttpCache, HttpOptions, TransportError, TransportPolicy
 from headgate.cache._transport import served_from_cache
 from headgate.events import CacheOutcome, CacheResult, Event
-from headgate.ratelimit import UNLIMITED
-from headgate.retry import NO_RETRY
 from tests.cache._helpers import FaultyStorage, Network, every_get_rules
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -60,13 +56,13 @@ class _GatedNetwork(httpx2.AsyncBaseTransport):
         return httpx2.Response(httpx2.codes.OK, content=b"body")
 
 
-def _client(network: httpx2.AsyncBaseTransport, storage: AsyncBaseStorage, recorder: _Recorder) -> StubClient:
+def _client(network: httpx2.AsyncBaseTransport, storage: AsyncBaseStorage, recorder: _Recorder) -> Client:
     """Build a client caching every GET into *storage*, reporting to *recorder*, retrying nothing."""
-    return StubClient(
+    return Client(
         base_url="https://x",
-        rate=UNLIMITED,
-        policy=TransportPolicy(retry=NO_RETRY, cache=HttpCache(**every_get_rules(), storage=storage)),
-        http=HttpOptions(transport=network, observers=(recorder,)),
+        policy=TransportPolicy(retry=None, cache=HttpCache(**every_get_rules(), storage=storage)),
+        http=HttpOptions(transport=network),
+        observers=(recorder,),
     )
 
 
@@ -131,9 +127,8 @@ async def test_requests_that_shared_a_failure_report_it_shared(storage: AsyncSql
 async def test_a_client_without_observers_emits_nothing(storage: AsyncSqliteStorage) -> None:
     """Without observers no event is built; the cache still works."""
     network = Network()
-    client = StubClient(
+    client = Client(
         base_url="https://x",
-        rate=UNLIMITED,
         policy=TransportPolicy(cache=HttpCache(**every_get_rules(), storage=storage)),
         http=HttpOptions(transport=network),
     )

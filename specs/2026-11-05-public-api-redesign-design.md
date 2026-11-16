@@ -1,6 +1,6 @@
 # headgate public API redesign
 
-Status: for approval · 2026-11-05
+Status: approved · 2026-11-05. Phases 1 (#56) and 2 (#60) are done; phases 3 to 8 are not started.
 
 ## Why
 
@@ -144,7 +144,8 @@ response.
 ### 3. One set of per-call options
 
 **3.1 `CallOptions`.** One `TypedDict` holds every per-call option except the URL, `expect=` and the body:
-`params`, `headers`, `timeout`, `deadline`, `retry`, `follow_redirects`, `cache_ttl`, `idempotency_key`.
+`params`, `headers`, `timeout`, `deadline`, `retry`, `follow_redirects`, `cache_ttl`, `idempotency_key`,
+`max_response_bytes` (one call's size cap, raising or lowering the client's; amended with the phase 3 plan).
 
 - Every verb, `stream`, `paginate` and `with_options` takes `**options: Unpack[...]` of it or a documented subset.
 - `retry`, `follow_redirects` and `cache_ttl` stop being separate parameters, so a wrapper typed on the options can
@@ -152,7 +153,8 @@ response.
   leaving it out inherits; `True` and `False` are gone.
 - `RequestOptions` = `CallOptions` plus `body=` (3.3).
 - `ViewOptions` = the subset a view can default: `headers`, `timeout`, `deadline`, `retry`, `follow_redirects`.
-- `stream` takes `CallOptions` minus `cache_ttl`, plus `method` and `last_event_id`.
+- `stream` takes `StreamOptions` (in `headgate.streaming`): `CallOptions` minus `cache_ttl` and `max_response_bytes`,
+  since a stream is never buffered, plus `body=`, `method` and `last_event_id`. (Amended with the phase 3 plan.)
 - `expect=` and `pages=` stay named parameters, since they drive the return type.
 
 **3.2 A walk's body is `query=`.** `paginate(query=value)` names the raw value the pager rewrites per page, and
@@ -170,11 +172,13 @@ become one parameter, `body: Body | None`, whose value says what it is:
 | `EncodedBody` (from a `writer_for` writer) | its bytes, with its `Content-Type` | `body=` |
 | `Json(value)` | JSON of builtins | `json=` |
 | `Form(fields)` | `application/x-www-form-urlencoded` | `data=` |
-| `Multipart(fields, files)` | `multipart/form-data` | `files=` with `data=` |
+| `Multipart(files, fields)` | `multipart/form-data` | `files=` with `data=` |
 | `Raw(content)` | bytes, an async iterable of bytes (streamed once, so not re-sent), or a callable returning one (re-sent) | `content=` |
 
 `Json`, `Form`, `Multipart` and `Raw` are small frozen classes in `headgate`. A conflicting body can no longer be
-written, so `check_one_body` and its five refusals are deleted. My call.
+written, so `check_one_body` and its five refusals are deleted. My call. `Raw` and `Multipart` state whether they can
+be re-sent, as a read-only `replayable` derived from the value, and the client reads only that. (Amended with the
+phase 3 plan.)
 
 ### 4. Configuration grouped by what it is for
 
@@ -220,10 +224,12 @@ per-path rule.
   on that is rewritten as one route per path. My call.
 - `RateRule` and `TransportPolicy.rate_limits` are removed; `Route(..., rate=)` takes a `Rate` or a shared
   `RateBudget`.
-- `cache=False` on a route keeps that path out of the cache. `HttpCache(paths=)` stays as the cache's own filter, for
-  a cache that should keep only a few paths.
-- A route may also match a call's t-string template (`Route(t"orders/{id}")`), not only a path fragment. Whether to
-  include this is left to the builder.
+- `cache=None` on a route keeps that path out of the cache, `None` being off as in `TransportPolicy(cache=None)`.
+  `HttpCache(paths=)` stays as the cache's own filter, for a cache that should keep only a few paths. (Amended with the
+  phase 4 plan, which also writes `Route(fragment, /, **options)` as a final class and moves `observers` and
+  `middleware` to the constructor.)
+- A route may also match a call's t-string template (`Route(t"orders/{id}")`), not only a path fragment. The phase 4
+  plan leaves this out: it is additive and can follow on the new shape. (Amended with the phase 4 plan.)
 
 ### 5. Seams and shared state
 
@@ -235,7 +241,10 @@ per-path rule.
 - Every injectable clock takes `timing: Timing`. Today it is `clock=`, `timing=` or `wall_clock=` depending on the
   class.
 - A new `headgate.call_info(request) -> CallInfo | None` gives middleware a read-only view of the call: route
-  template, attempt number, time left before the deadline. Today it takes `headgate._core.CallContext`.
+  template, attempt number, time left before the deadline. Today it takes `headgate._core.CallContext`. (Amended
+  with the phase 5 plan: it returns a `CallView` snapshot holding the call's `CallInfo`, its attempt and the time left,
+  since `CallInfo` is the record events carry, made once. `Timing` holds four seams: clock, sleep, wall clock and
+  random source.)
 
 **5.2 Naming.**
 
@@ -247,7 +256,9 @@ per-path rule.
   it is a frozen value with hidden per-client state. `RetryPolicy.budget` defaults to `None`, and a client with no
   budget given makes its own, shared by every route and view of that client: today's per-client behavior, unchanged.
   Only a `RetryBudget` object the caller constructs and passes to several clients is shared between them. A
-  `RetryPolicy` stays frozen and hashable, holding the budget by identity. My call.
+  `RetryPolicy` stays frozen and hashable, holding the budget by identity. My call. (Amended with the phase 5 plan:
+  the frozen value is `RetryShare`, from which each client builds its own budget, as from a `Rate`; a `RetryBudget` is
+  the live object, shared; and `budget=None` stays "no cap", so `None` keeps meaning off.)
 - `BreakerRegistry` is already an object you construct.
 
 **5.3 Breakers are shared only when a registry is passed.** Each client keeps its own breakers by default, one per
@@ -262,7 +273,8 @@ origin. Clients that should pool their failure counts are given the same `Breake
 - Today two clients on one origin share a breaker only when their thresholds happen to be equal, because the global
   registry keys by origin and thresholds, and `breaker_states` reports the most degraded one. A passed registry holds
   one breaker per origin; a client whose thresholds differ from the ones that registry's breaker for that origin was
-  made with raises `ValueError` at construction.
+  made with raises `ValueError` at construction. (Amended with the phase 5 plan: a registry fixes its thresholds when
+  first used, so the check runs before any origin is known.)
 - This is a behavior change, the one exception to the non-goal: two clients on one origin no longer pool failures
   unless given one registry. The maintainer asked for the cleanest design; this is my recommendation.
 
@@ -287,54 +299,73 @@ class GitHub:
   becomes a plain `Client`.
 - Testing an SDK no longer needs its author to forward `transport=`: `headgate.testing` gains a way to build every
   `Client` in a block over a fake transport (the builder picks its shape, alongside the existing construction-time
-  switches it replaces).
+  switches it replaces). (Amended with the phase 5 plan: `fake_network(transport)`. An error's `[source]` prefix names
+  the `base_url`'s host, since a final `Client` has no subclass name to give.)
 - My call.
 
 ### 6. Errors
 
-- **`retryable` means one thing:** sending this call again later could succeed. `CircuitOpenError` and a budget
-  pause become `retryable=True` with their `retry_after`. Today `CircuitOpenError` says `retryable=False` with
-  `retry_after≈60`, so the recipe in `docs/errors.md` re-raises the one error that says "come back in a minute".
-- **`sent`** is a new read-only attribute: whether any byte of the request reached the network.
-- A refusal by headgate's own rate budget carries `status_code=None` rather than another call's 429.
+(Amended with the phase 6 plan.)
+
+- **`retryable` means one thing:** sending this call again later could succeed, and is safe as the call stands (an
+  idempotent method, an idempotency key, or nothing of it sent). `CircuitOpenError` and a budget pause become
+  `retryable=True` with their `retry_after`. Today `CircuitOpenError` says `retryable=False` with `retry_after≈60`, so
+  the recipe in `docs/errors.md` re-raises the one error that says "come back in a minute".
+- **`sent`** is a new read-only attribute, `bool | None`: whether any byte of the request can have reached the
+  network. It is `False` only when headgate knows none did, and `None` on an error no client call raised.
+- A refusal by headgate's own rate budget carries `status_code=None` rather than another call's 429, so
+  `UpstreamStatusError.status_code` is `int | None`.
 - Every error attribute is a read-only property. Today `UpstreamStatusError.status_code` can be assigned.
 - Using a closed client keeps raising `RuntimeError`, which is pinned by a test and deliberate: it is a programming
   error, like the `ValueError` for a bad t-string.
 
 ### 7. Streams, pages and smaller items
 
+(Amended with the phase 7 plan.)
+
 - **Streams.**
-  - A stream's read timeout is not checked against the deadline, which bounds only opening it.
-  - `Timeouts` gains a way to say "no limit" for a phase (`UNBOUNDED`); `None` keeps meaning "inherit".
+  - A stream's read timeout is neither checked against the deadline nor cut to it, since the deadline bounds only
+    opening the stream.
+  - `Timeouts` gains a way to say "no limit" for a phase: `math.inf`, which headgate already reads as "never" (a
+    `Minted` lifetime), rather than a new `UNBOUNDED` name. `None` keeps meaning "inherit".
   - `client.events(url, ...)` opens a server-sent-event stream with `Accept: text/event-stream` and no read limit.
 - **Pages.**
   - `Paginated[I, P = object]`, item type first, so a return annotation is `Paginated[Issue]`.
   - `paginate(max_pages=, on_limit=)` replaces `limit=PageLimit(...)`, which collided with every API's `limit` query
     parameter.
-  - `Offset(size_param=...)` sends the page size itself.
+  - `Offset(size_param=...)` sends the page size itself, or reads it from the caller's own query parameter when they
+    give one (#53).
   - Pager constructors that bind the page type from the reader (`Cursor.of(reader, ...)`), so a module-level pager
     written with lambdas keeps its item type, are left to the builder.
 - **QUERY.** httpx2 2.6 added the safe, idempotent QUERY method. headgate gains a `query()` verb, and QUERY joins the
   idempotent methods in `retry/_policy.py` and the known methods in `otel.py`.
 - **Kind checks.** Every option is checked for its kind at construction or at the call, with a `TypeError` naming the
   option (PR #54 started this). `paginate`'s limit is the known gap.
-- **Nested query values.** A nested `params` value (a mapping, a set, bytes) raises `TypeError` instead of being sent
-  as its Python `repr`.
+- **Nested query values.** A nested `params` value (a mapping, a set, bytes, or a sequence inside a sequence) raises
+  `TypeError` instead of being sent as its Python `repr`. A scalar httpx2 does not encode (a `UUID`, a `Decimal`) is
+  still sent as its `str()`.
 
 ### 8. The top level
 
-`headgate.__all__` keeps about 48 names:
+(Amended with the phase 8 plan.)
+
+`headgate.__all__` keeps 52 names:
 
 | Area | Names |
 | --- | --- |
-| The client | `Client`, `RequestOptions`, `CallOptions`, `ViewOptions` |
-| Configuration | `TransportPolicy`, `HttpOptions`, `SecurityOptions`, `Timeouts`, `Route`, `RouteOptions`, `IdempotencyKeys`, `Middleware` |
+| The client | `Client`, `Method`, `RequestOptions`, `CallOptions`, `ViewOptions` |
+| Configuration | `TransportPolicy`, `HttpOptions`, `SecurityOptions`, `Timeouts`, `Route`, `RouteOptions`, `IdempotencyKeys`, `ResponseCheck` |
+| Middleware | `Middleware`, `Next`, `call_info` |
 | Policy values | `RetryPolicy`, `BreakerPolicy`, `Rate`, `RateBudget`, `HttpCache` |
-| Responses | `Expect`, `Reader`, `Writer`, `Codec`, `reader_for`, `writer_for`, `body_reader`, `as_json`, `as_bytes`, `nothing`, `event_stream` |
-| Bodies | `Body`, `EncodedBody`, `Json`, `Form`, `Multipart`, `Raw` |
+| Responses | `Expect`, `Reader`, `as_json`, `as_bytes`, `body_reader`, `nothing`, `event_stream` |
+| Codecs | `Codec`, `reader_for`, `writer_for`, `decode_with` |
+| Bodies | `Body`, `EncodedBody`, `Json`, `Form`, `Multipart`, `Raw`, `Writer` |
 | Auth | `BearerAuth`, `StaticHeaderAuth`, `QueryParamAuth`, `SigningAuth`, `CachedTokenAuth`, `Minted` |
 | Pages | `Paginated` |
 | Errors | `ClientError`, `TransportError`, `ClientTimeoutError`, `UpstreamStatusError`, `AuthError`, `RateLimitError` |
+
+`call_info` (5.1), `ResponseCheck` and `decode_with` were not in the first table. Each has no subpackage to live in,
+and goal 4 forbids making a seam private.
 
 Everything else lives once, in its subpackage:
 
@@ -342,11 +373,12 @@ Everything else lives once, in its subpackage:
 - the other errors and `Problem`, in `headgate.errors`;
 - the seam types (5.1), in `headgate.security` and `headgate.timing`.
 
-`Method` and `Next` stay at the top level, beside the `stream(method=)` and `Middleware` that need them (two more
-names than the table). `DEFAULT_TIMEOUTS` becomes the class attribute `Timeouts.DEFAULT`, and
-`MAX_MINT_RESPONSE_BYTES`, which no option sets, becomes private, with its value stated in the auth guide. My call.
+`DEFAULT_TIMEOUTS` becomes the class attribute `Timeouts.DEFAULT`, and `MAX_MINT_RESPONSE_BYTES`, which no option
+sets, becomes private, with its value stated in the auth guide. My call.
 
-No name is exported from two places.
+No object is exported from two places, where "exported" means listed in a public module's `__all__`. So the
+subpackages stop re-exporting what the top level exports (`headgate.retry.RetryPolicy` goes), and
+`headgate.testing.faults` becomes private, since `headgate.testing` exports all of it. A test enforces the rule.
 
 ## Migration
 

@@ -7,7 +7,7 @@ Every event is a frozen value carrying sanitized data only: a URL with its crede
 template, statuses, exception type names and durations on the client's clock. No header, body or credential is ever
 put in one. :mod:`headgate.events` is the public face of this module.
 
-An :class:`Observer` installed through ``HttpOptions(observers=...)`` receives them. Observers run inline, in the order
+An :class:`Observer` installed through the client's ``observers=...`` receives them. Observers run inline, in the order
 they were given, so one should hand slow work to a queue. An exception an observer raises never reaches the call: the
 :class:`Emitter` swallows it and counts it in :data:`OBSERVER_FAILURES`, which ``headgate.health.observer_failures``
 reads.
@@ -206,7 +206,7 @@ type Event = (
 
 
 class Observer(Protocol):
-    """Receives a client's events. Installed with ``HttpOptions(observers=(...))``."""
+    """Receives a client's events. Installed with the client's ``observers=(...)``."""
 
     def notify(self, event: Event) -> None:
         """Handle *event*; any exception raised here is counted and swallowed, never raised into the call."""

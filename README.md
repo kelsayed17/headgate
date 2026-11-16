@@ -8,7 +8,7 @@
 <p align="center">
   <strong>The Swiss Army knife for HTTP API clients in Python.</strong><br>
   Retries, rate limits, deadlines, circuit breaking, caching, pagination, streaming, auth and security,
-  in one async base class built on <a href="https://pypi.org/project/httpx2/">httpx2</a>.
+  in one async client built on <a href="https://pypi.org/project/httpx2/">httpx2</a>.
 </p>
 
 <p align="center">
@@ -53,13 +53,14 @@ environment.
 
 ## A client in one screen
 
-A client is a subclass. The configuration lives in `__init__`, and each endpoint method stays one line. This is part of
-[`examples/github_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/github_client.py), a tested
-client for the GitHub REST API:
+An SDK holds a `Client`. The configuration lives where it is built, and each endpoint method stays one line. This is
+part of [`examples/github_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/github_client.py), a
+tested client for the GitHub REST API:
 
 ```python
-from headgate import AsyncBaseClient, BearerAuth, Expect, HttpOptions, LinkHeader, Rate, RateBudget, nothing
+from headgate import BearerAuth, Client, Expect, HttpOptions, Rate, RateBudget, nothing
 from headgate.msgspec import reader
+from headgate.pagination import LinkHeader
 
 # Readers and pagers are values: build them once, at import, where a bad declaration fails.
 REPOSITORY = reader(Repository)
@@ -68,34 +69,34 @@ ISSUES = reader(list[Issue])
 ISSUE_PAGES = LinkHeader(items=_issues)
 
 
-class GitHub(AsyncBaseClient):
+class GitHub:
     """Read repositories and their open issues from the GitHub REST API."""
 
-    def __init__(self, token: str, *, transport: httpx2.AsyncBaseTransport | None = None) -> None:
-        """Authenticate with *token*; *transport* replaces the network, as a test does."""
-        super().__init__(
+    def __init__(self, token: str) -> None:
+        """Authenticate with *token*."""
+        self._http = Client(
             base_url=API,
             # Well under the 5,000 requests an hour a token gets, and never more than 50 at once.
             rate=RateBudget(Rate.per_second(10), max_in_flight=50),
             auth=BearerAuth(token),
             http=HttpOptions(
-                transport=transport,
                 headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
             ),
         )
 
     async def repository(self, owner: str, name: str) -> Repository | None:
         """Return the repository *owner*/*name*, or ``None`` when it does not exist or the token cannot see it."""
-        return await self.get(t"repos/{owner}/{name}", expect=REPOSITORY_OR_NONE)
+        return await self._http.get(t"repos/{owner}/{name}", expect=REPOSITORY_OR_NONE)
 
-    def open_issues(self, owner: str, name: str) -> Paginated[list[Issue], Issue]:
+    def open_issues(self, owner: str, name: str) -> Paginated[Issue]:
         """Return the open issues (and pull requests) of *owner*/*name*, 100 a page, fetched as they are iterated."""
         params = {"state": "open", "per_page": 100}
-        return self.paginate(t"repos/{owner}/{name}/issues", expect=ISSUES, pages=ISSUE_PAGES, params=params)
+        return self._http.paginate(t"repos/{owner}/{name}/issues", expect=ISSUES, pages=ISSUE_PAGES, params=params)
 ```
 
 Nothing in those methods mentions retries, pacing, GitHub's `X-RateLimit-*` headers, timeouts or where the token may
-go, and nothing needs to. Those come from the base class.
+go, and nothing needs to. Those come from the `Client` it holds. The SDK forwards `async with` and `aclose()` to it in
+three short methods, shown in the quickstart below.
 
 ## What it replaces
 
@@ -142,14 +143,16 @@ is the better pick.
 Python 3.14 or newer.
 
 ```bash
-pip install 'headgate[msgspec]'    # or: uv add 'headgate[msgspec]'. headgate, and the msgspec codec
-pip install 'headgate[pydantic]'   # headgate, and the pydantic codec
-pip install 'headgate[curl]'       # + AsyncCurlTransport: a browser's TLS fingerprint, via curl_cffi
-pip install 'headgate[otel]'       # + OpenTelemetryObserver (opentelemetry-api only)
-pip install 'headgate[cache]'      # + what hishel's AsyncSqliteStorage needs (hishel[async]: anysqlite)
+uv add 'headgate[msgspec]'    # headgate, and the msgspec codec
+uv add 'headgate[pydantic]'   # headgate, and the pydantic codec
+uv add 'headgate[curl]'       # + AsyncCurlTransport: a browser's TLS fingerprint, via curl_cffi
+uv add 'headgate[otel]'       # + OpenTelemetryObserver (opentelemetry-api only)
+uv add 'headgate[cache]'      # + what hishel's AsyncSqliteStorage needs (hishel[async]: anysqlite)
 ```
 
-`pip install headgate` alone brings no serialization library: httpx2, hishel and typing-extensions only. Pick a codec as
+With pip, install the same extras with `pip install 'headgate[msgspec]'` and so on.
+
+`uv add headgate` alone brings no serialization library: httpx2, hishel and typing-extensions only. Pick a codec as
 an extra, or bring your own (see [codecs](https://kelsayed17.github.io/headgate/codecs/)).
 
 <details>
@@ -172,16 +175,15 @@ every value is escaped as one segment; `expect=` declares what the endpoint answ
 
 ```python
 from http import HTTPStatus
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 
 import msgspec
 
-from headgate import AsyncBaseClient, BearerAuth, Cursor, Expect, HttpOptions, Rate, nothing
+from headgate import BearerAuth, Client, Expect, Rate, nothing
 from headgate.msgspec import reader
+from headgate.pagination import Cursor
 
 if TYPE_CHECKING:
-    import httpx2
-
     from headgate import Paginated
 
 
@@ -223,29 +225,40 @@ SERIES_OR_NONE = Expect(SERIES).on(HTTPStatus.NOT_FOUND, nothing)  # the API doc
 RELEASE_PAGES = Cursor(items=releases_on, next=cursor_after, param="cursor")
 
 
-class CatalogClient(AsyncBaseClient):
+class CatalogClient:
     """The catalog API: one method per endpoint, each one line."""
 
-    def __init__(self, api_key: str, *, transport: httpx2.AsyncBaseTransport | None = None) -> None:
-        """Authenticate with *api_key*; *transport* replaces the network, as a test does."""
-        super().__init__(
+    def __init__(self, api_key: str) -> None:
+        """Authenticate with *api_key*."""
+        self._http = Client(
             base_url="https://api.catalog.example/v1",
             rate=Rate.per_second(10),
             auth=BearerAuth(api_key),
-            http=HttpOptions(transport=transport),
         )
+
+    async def __aenter__(self) -> Self:
+        """Return the client; leaving the block closes it."""
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        """Close the client."""
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        """Close the connection pool."""
+        await self._http.aclose()
 
     async def get_series(self, series_id: str) -> Series:
         """Return the series *series_id*; a 404, undeclared here, raises ``UpstreamStatusError``."""
-        return await self.get(t"series/{series_id}", expect=SERIES)
+        return await self._http.get(t"series/{series_id}", expect=SERIES)
 
     async def find_series(self, series_id: str) -> Series | None:
         """Return the series *series_id*, or ``None`` when the API answers 404."""
-        return await self.get(t"series/{series_id}", expect=SERIES_OR_NONE)
+        return await self._http.get(t"series/{series_id}", expect=SERIES_OR_NONE)
 
-    def releases(self) -> Paginated[ReleasePage, Release]:
+    def releases(self) -> Paginated[Release]:
         """Return every release, fetched a page at a time as the iteration reaches it."""
-        return self.paginate("releases", expect=reader(ReleasePage), pages=RELEASE_PAGES)
+        return self._http.paginate("releases", expect=reader(ReleasePage), pages=RELEASE_PAGES)
 ```
 
 Use it with `async with`, which closes the connection pool on the way out:
@@ -287,11 +300,11 @@ token, an idempotent POST, a declared business refusal, `Link`-header pages and 
 | [Response cap](https://kelsayed17.github.io/headgate/configuration/#httpoptions) | 32 MiB per buffered body, counted after decompression |
 | [Caching](https://kelsayed17.github.io/headgate/caching/) | Opt-in hishel cache, partitioned by credential, never storing one; coalesced identical GETs; conditional reads |
 | [Streaming and uploads](https://kelsayed17.github.io/headgate/streaming/) | `stream()` for bodies and server-sent events with resume; raw, streamed and multipart request bodies |
-| [Pagination](https://kelsayed17.github.io/headgate/pagination/) | `paginate()` with `Cursor`, `Offset`, `PageNumber`, `LinkHeader` or `NextUrl`, and walks of POSTs given `body=` or `json=` (`BodyCursor`, `BodyOffset`); lazy, loop-safe, bounded by pages or items |
+| [Pagination](https://kelsayed17.github.io/headgate/pagination/) | `paginate()` with `Cursor`, `Offset`, `PageNumber`, `LinkHeader` or `NextUrl`, and walks of POSTs given `query=` (`BodyCursor`, `BodyOffset`); lazy, loop-safe, bounded by pages or items |
 | [Errors](https://kelsayed17.github.io/headgate/errors/) | One `ClientError` tree; method, URL, request id, attempts, `retryable`, `retry_after`, RFC 9457 problems |
 | [Auth](https://kelsayed17.github.io/headgate/auth/) | Static headers, query keys, per-attempt signatures, re-sent once on a 401, and a cached minted token with one re-mint on a 401 |
 | [Observability](https://kelsayed17.github.io/headgate/observability/) | Typed events, OpenTelemetry spans and metrics, request ids, `Deprecation` / `Sunset` notices, health snapshots |
-| [Testing kit](https://kelsayed17.github.io/headgate/testing/) | `FakeTransport`, `FaultyTransport`, `TestClock`, `isolated_breakers`, vcrpy cassette filters |
+| [Testing kit](https://kelsayed17.github.io/headgate/testing/) | `FakeTransport`, `FaultyTransport`, `TestClock`, `breakers_of`, vcrpy cassette filters |
 | [Per-call options](https://kelsayed17.github.io/headgate/configuration/#per-call-options) | `retry=`, `deadline=`, `timeout=`, `idempotency_key=`, `cache_ttl=`, and `with_options()` views |
 
 How the pieces fit together, for contributors and the curious: [design](https://kelsayed17.github.io/headgate/design/).
@@ -311,16 +324,17 @@ How the pieces fit together, for contributors and the curious: [design](https://
 
 ## Configuration
 
-`AsyncBaseClient(*, base_url, rate=UNLIMITED, auth=None, policy=TransportPolicy(), http=HttpOptions())`. `rate` is a
-`Rate` (a budget of the client's own) or a `RateBudget` shared with other clients; without one the client paces nothing
-itself but still waits out the pauses the server asks for. `TransportPolicy` says what the stack does to
-every request, `HttpOptions` how requests are sent and read. Both are frozen and validate on construction.
+`Client(*, base_url, rate=None, auth=None, policy=TransportPolicy(), http=HttpOptions(), observers=(),
+middleware=())`. `rate` is a `Rate` (a budget of the client's own) or a `RateBudget` shared with other clients; without
+one the client paces nothing itself but still waits out the pauses the server asks for. `TransportPolicy` says what the
+stack does to every request, `HttpOptions` how requests are sent and read. Both are frozen and validate on
+construction.
 
 <details>
 <summary><b>A fuller client's configuration</b></summary>
 
 ```python
-class OrdersClient(AsyncBaseClient):
+class OrdersClient:
     """The shop's order API."""
 
     def __init__(
@@ -329,26 +343,22 @@ class OrdersClient(AsyncBaseClient):
         client_secret: str,
         *,
         observers: tuple[Observer, ...] = (),
-        transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
-        """Mint tokens with *client_id* and *client_secret*; report to *observers*; *transport* replaces the network."""
-        super().__init__(
+        """Mint tokens with *client_id* and *client_secret*; report to *observers*."""
+        self._http = Client(
             base_url="https://api.shop.example/v2",
             rate=Rate.per_second(20),
             auth=ShopTokenAuth(client_id, client_secret),
             policy=TransportPolicy(
                 retry=RetryPolicy(attempts=4),  # four sends at most, the first included
+                timeout=Timeouts(read=20.0),
                 deadline=30.0,  # each call, every attempt and wait included
                 idempotency=IdempotencyKeys(),  # every POST and PATCH carries a key, so it is retried safely
-                rate_limits=(RateRule("/exports", Rate.per_minute(6)),),  # a slower lane for the export endpoint
-                routes=(Route("/exports", deadline=300.0),),  # and a longer deadline
+                # the export endpoint gets a slower lane and a longer deadline
+                routes=(Route("/exports", rate=Rate.per_minute(6), deadline=300.0),),
             ),
-            http=HttpOptions(
-                transport=transport,
-                timeout=Timeouts(read=20.0),
-                user_agent="shop-sync/1.4",
-                observers=observers,
-            ),
+            http=HttpOptions(user_agent="shop-sync/1.4"),
+            observers=observers,
         )
 ```
 
@@ -359,31 +369,31 @@ class OrdersClient(AsyncBaseClient):
 | `retry` | `RetryPolicy()`: 3 attempts |
 | `deadline` | `60.0` seconds per call |
 | `breaker` | `BreakerPolicy()`: 5 failures, 60 s |
-| `rate_limits` | none |
+| `timeout` | `Timeouts()`: connect 10 s, read 30 s, write 10 s, pool 15 s |
 | `cache` | none |
 | `idempotency` | none |
-| `routes` | none |
+| `routes` | none: `Route(fragment, retry=, deadline=, rate=, cache=)` per path, first match wins |
 
 | `HttpOptions` | Default |
 | --- | --- |
-| `timeout` | `Timeouts()`: connect 10 s, read 30 s, write 10 s, pool 15 s |
 | `headers` | none beyond `User-Agent` |
 | `follow_redirects`, `max_redirects` | `True`, `5` |
 | `max_response_bytes` | 32 MiB |
 | `security` | `SecurityOptions()`: credentials to `base_url`'s origin only, SSRF guard off |
 | `response_check` | none |
-| `observers`, `middleware` | none |
 
 Every option, its validation and the precedence of call, view, route and policy:
 [configuration](https://kelsayed17.github.io/headgate/configuration/).
 
 ## Per-call options
 
-Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`) takes the URL, `expect=` (on `head`, `nothing` unless
-given), and optionally `retry=False` or a `RetryPolicy`, `follow_redirects=`, `cache_ttl=`, `timeout=`, `deadline=`,
-`idempotency_key=`, and the request options `params=`, `headers=`, `body=` (what a flavor's `writer` wrote), `json=`,
-`data=`, `content=` and `files=`. `client.with_options(headers=..., timeout=..., deadline=..., retry=...)` returns a
-view with other defaults that shares the pool, the budgets and the breakers; the client it came from owns the pool.
+Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`, `query`) takes the URL, `expect=` (on `head`, `nothing` unless
+given), and optionally `retry=` (a `RetryPolicy`, or `None` to send once), `follow_redirects=`, `cache_ttl=`,
+`timeout=`, `deadline=`, `idempotency_key=`, `max_response_bytes=`, and the request options `params=`, `headers=` and
+`body=` (what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`); an option left out takes the view's or
+the client's.
+`client.with_options(headers=..., timeout=..., deadline=..., retry=..., follow_redirects=...)` returns a view with other
+defaults that shares the pool, the budgets and the breakers; the client it came from owns the pool.
 
 ## Errors
 
@@ -424,13 +434,13 @@ More in [errors](https://kelsayed17.github.io/headgate/errors/).
 
 ## Testing your client
 
-`headgate.testing` tests a client through its real stack, with nothing private patched: a `FakeTransport` stands in
-for the network, and a `TestClock` makes every wait instant.
+`headgate.testing` tests a client through its real stack, with nothing private patched: `fake_network` puts the SDKs
+built in its block on a `FakeTransport` in place of the network, and a `TestClock` makes every wait instant.
 
 ```python
 from quickstart import CatalogClient
 
-from headgate.testing import FakeTransport, Respond, TestClock, isolated_breakers
+from headgate.testing import FakeTransport, Respond, TestClock, fake_network
 
 GDP = {"id": "GDP", "title": "Gross domestic product", "values": [27.4, 28.1]}
 
@@ -438,7 +448,9 @@ GDP = {"id": "GDP", "title": "Gross domestic product", "values": [27.4, 28.1]}
 async def test_find_series_reads_a_404_as_none() -> None:
     """Return ``None`` for the 404 the endpoint documents, signing the request with the key."""
     fake = FakeTransport().reply("GET", "/v1/series/RETIRED", 404)
-    async with CatalogClient("test-key", transport=fake) as catalog:
+    with fake_network(fake):
+        catalog = CatalogClient("test-key")
+    async with catalog:
         assert await catalog.find_series("RETIRED") is None
     assert fake.calls[0].headers["Authorization"] == "Bearer test-key"
 
@@ -447,8 +459,8 @@ async def test_a_503_is_retried_after_the_wait_it_asks_for() -> None:
     """Retry a 503 once its ``Retry-After`` has passed, on a test clock that makes the wait instant."""
     fake = FakeTransport().reply("GET", "/v1/series/GDP", Respond(503, retry_after=2.0), Respond(json=GDP))
     clock = TestClock()
-    with clock.install(), isolated_breakers():  # the clients built in the block use them
-        catalog = CatalogClient("test-key", transport=fake)
+    with clock.install(), fake_network(fake):  # the clients built in the block run on both
+        catalog = CatalogClient("test-key")
     async with catalog:
         series = await catalog.get_series("GDP")
     assert series.values == [27.4, 28.1]

@@ -69,10 +69,9 @@ def location(response: httpx2.Response) -> str:
 repr(location)  # 'Reader(location)'
 ```
 
-A reader's `repr` and its read-only `name` give the `name=` it was given, or else its function's name. A reader wrapped
-in another `Reader` keeps its own name. `Reader` raises `TypeError` for something that cannot be called, where it is
-written rather than at the first response. `expect=`, `Expect` and `conditional` take only a
-`Reader` (or, for `expect=`, an `Expect`) and raise `TypeError` for anything else, such as a model class (`expect=Order`
+A reader's `repr` names its function, or the `name=` it was given. `Reader` raises `TypeError` for something that
+cannot be called, where it is written rather than at the first response. `expect=`, `Expect` and `conditional` take
+only a `Reader` (or, for `expect=`, an `Expect`) and raise `TypeError` for anything else, such as a model class (`expect=Order`
 where `expect=reader(Order)` was meant) or a bare function, which are callable too.
 
 ## Declared non-2xx answers
@@ -132,7 +131,8 @@ which runs on the decoded value and returns a refusal or `None`:
 ```python
 import msgspec
 
-from headgate.errors import RateLimitError, RefusedError
+from headgate.errors import RefusedError
+from headgate import RateLimitError
 from headgate.msgspec import reader
 
 
@@ -172,8 +172,8 @@ The core imports no serialization library. `headgate.msgspec` and `headgate.pyda
 - `reader(Type, *, strict=True, allow_empty_body=False, refuse=None)`: a reader built on `decode`;
 - `writer(Type, *, drop_none=False)`: the mirror of `reader`, a writer whose `body=WRITER(value)` sends the value
   as JSON (see [request bodies](streaming.md#request-bodies));
-- `to_builtins(value, *, drop_none=False)`: a struct or model (or a list or mapping of them) as builtins for `json=` or
-  `data=`, with field renames applied and `drop_none=True` removing `None` fields recursively.
+- `to_builtins(value, *, drop_none=False)`: a struct or model (or a list or mapping of them) as builtins for
+  `body=Json(...)` or `Form(...)`, with field renames applied and `drop_none=True` removing `None` fields recursively.
 
 `Type` is any type expression, so one function serves an envelope (`reader(Page)`), a bare array
 (`reader(list[Row])`), a map, or a genuine union (`reader(list[A] | A)`), and the reader is typed exactly that.

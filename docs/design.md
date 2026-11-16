@@ -24,7 +24,7 @@ describe what each piece does; this describes how they fit together.
 ```text
 src/headgate/
   __init__.py        the public API, re-exported
-  _client.py         AsyncBaseClient: a call end to end
+  _client.py         Client: a call end to end
   _stack.py          the transport stack, assembled in one place
   _options.py        TransportPolicy, HttpOptions, Timeouts, IdempotencyKeys, Route
   _responses.py      Reader, Expect and the built-in readers
@@ -36,7 +36,7 @@ src/headgate/
   _core/             shared seams only: time, origins, CallContext, events, the policy switch
   retry/             RetryPolicy and its values, RetryTransport, send tracking, the budget ledger
   breaker/           BreakerPolicy, BreakerRegistry, CircuitBreaker
-  ratelimit/         Rate, RateBudget, Adaptive, RateRule, RateLimitTransport, server feedback
+  ratelimit/         Rate, RateBudget, Adaptive, RateLimitTransport, server feedback
   cache/             HttpCache, partitions, the resilient cache transport, conditional reads
   security/          the credential guard, the https-downgrade refusal, the SSRF guard
   streaming/         Stream
@@ -58,7 +58,7 @@ The codecs are the other boundary: the core imports no serialization library at 
 ## A call, top to bottom
 
 ```text
-AsyncBaseClient.get(url, expect=..., **options)
+Client.get(url, expect=..., **options)
   _prepare           render the t-string; build the httpx2.Request once; stamp its CallContext
   _reported          CallStarted ... CallFinished; the call's notes added to the ClientError it raises
   _deadline          asyncio.timeout(time left) around everything below

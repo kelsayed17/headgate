@@ -107,12 +107,12 @@ few families:
 | `headgate.pydantic` | `_reason #23` | `typing.cast` ignores its type argument at runtime |
 | `headgate.pydantic` | `to_builtins #6` | pydantic-core's `to_jsonable_python` serializes a model by alias already |
 | `headgate.msgspec` | `encoder #3` | `MsgspecCodec.encoder` drops the type expression: msgspec encodes a value by its own type |
-| `headgate._client` | `AsyncBaseClient.with_options #17` | `_owns_pool` is only tested for truth |
-| `headgate._client` | `AsyncBaseClient.stream #12` | header-name case |
-| `headgate._client` | `AsyncBaseClient.stream #13` | header-name case |
-| `headgate._client` | `AsyncBaseClient._one_key_for_every_page #7` | the name is lower-cased on the next step |
-| `headgate._client` | `AsyncBaseClient._one_key_for_every_page #8` | the name is lower-cased on the next step |
-| `headgate._client` | `AsyncBaseClient._dispatch #30` | header-name case |
+| `headgate._client` | `Client.with_options #17` | `_owns_pool` is only tested for truth |
+| `headgate._client` | `Client.stream #12` | header-name case |
+| `headgate._client` | `Client.stream #13` | header-name case |
+| `headgate._client` | `Client._one_key_for_every_page #7` | the name is lower-cased on the next step |
+| `headgate._client` | `Client._one_key_for_every_page #8` | the name is lower-cased on the next step |
+| `headgate._client` | `Client._dispatch #30` | header-name case |
 | `headgate._client` | `_query_value #2` | httpx2 sends any other value as its `str()`, exactly what the function returns; it exists for the static type |
 | `headgate._failures` | `CallSite._request_id #3` | a missing header read as `None` is as falsy as `""` |
 | `headgate._failures` | `CallSite._request_id #5` | a missing header read as `None` is as falsy as `""` |
@@ -213,14 +213,14 @@ few families:
 | `headgate.testing._time` | `TestClock.__init__ #7` | `_drive` resets the count before any turn reads it |
 | `headgate.testing._time` | `TestClock.__init__ #8` | `_drive` resets the count before any turn reads it |
 | `headgate.testing._time` | `TestClock._turn #11` | `_driven_on` is only compared by identity with a loop, which `""` is not any more than `None` |
-| `headgate.testing.faults` | `_read_timeout #12` | the only non-number a read timeout can be is `None`, which the fallback also returns |
-| `headgate.testing.faults` | `FaultyTransport._take #48` | `body` is only tested for truth |
-| `headgate.testing.faults` | `_write #14` | a write cut at 0 bytes is only asked whether it completed; its count is never read |
-| `headgate.testing.faults` | `_write #15` | `complete` is only tested for truth |
-| `headgate.testing.faults` | `_write #16` | a write cut at 0 bytes is only asked whether it completed; its count is never read |
-| `headgate.testing.faults` | `_write #18` | a write cut at 0 bytes is only asked whether it completed; its count is never read |
-| `headgate.testing.faults` | `_write #54` | `complete` is only tested for truth |
-| `headgate.testing.faults` | `_write #57` | each fault call is written once, so `=` and `+=` agree |
+| `headgate.testing._faults` | `_read_timeout #12` | the only non-number a read timeout can be is `None`, which the fallback also returns |
+| `headgate.testing._faults` | `FaultyTransport._take #48` | `body` is only tested for truth |
+| `headgate.testing._faults` | `_write #14` | a write cut at 0 bytes is only asked whether it completed; its count is never read |
+| `headgate.testing._faults` | `_write #15` | `complete` is only tested for truth |
+| `headgate.testing._faults` | `_write #16` | a write cut at 0 bytes is only asked whether it completed; its count is never read |
+| `headgate.testing._faults` | `_write #18` | a write cut at 0 bytes is only asked whether it completed; its count is never read |
+| `headgate.testing._faults` | `_write #54` | `complete` is only tested for truth |
+| `headgate.testing._faults` | `_write #57` | each fault call is written once, so `=` and `+=` agree |
 | `headgate.ratelimit._feedback` | `_ietf_quota #9` | header-name case |
 | `headgate.ratelimit._feedback` | `_ietf_quota #10` | header-name case |
 | `headgate.ratelimit._feedback` | `_policy_units #9` | header-name case |

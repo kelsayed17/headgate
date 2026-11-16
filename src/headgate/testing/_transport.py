@@ -5,15 +5,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from typing import Self, override
+from collections.abc import Awaitable, Callable, Generator
+from contextlib import contextmanager
+from typing import Self, cast, override
 
 import httpx2
 
+from headgate._stack import NETWORK_OVERRIDE
 from headgate._url import sanitize_url
-from headgate.testing.faults import Respond
+from headgate.testing._faults import Respond
 
-__all__ = ["FakeTransport", "Reply", "UnmatchedRequestError"]
+__all__ = ["FakeTransport", "Reply", "UnmatchedRequestError", "fake_network"]
 
 type Reply = Respond | httpx2.Response | int | Callable[[httpx2.Request], httpx2.Response | Awaitable[httpx2.Response]]
 """What a route answers with: a :class:`Respond`, a response, a bare status, or a function of the request."""
@@ -49,6 +51,14 @@ class _Route:
         return reply
 
 
+async def _snapshot(request: httpx2.Request) -> httpx2.Request:
+    """Return a copy of *request* as it is sent now: its headers, and its body read from its stream on this send."""
+    body = b"".join([chunk async for chunk in cast("httpx2.AsyncByteStream", request.stream)])
+    sent = httpx2.Request(request.method, request.url, content=body, extensions=dict(request.extensions))
+    sent.headers = request.headers.copy()  # as sent: `content=` would add a `Content-Length` a chunked body lacks
+    return sent
+
+
 class FakeTransport(httpx2.AsyncBaseTransport):
     """Answer requests from a route table keyed by method and path, and record every request in :attr:`calls`.
 
@@ -66,8 +76,12 @@ class FakeTransport(httpx2.AsyncBaseTransport):
     too; an ``httpx2.Response`` built with ``content=``, ``json=`` or ``text=`` (copied for each request, so it can be
     served many times; a response over a one-shot async stream cannot); a status for an empty response; or a
     function of the request returning a response, possibly awaitable, for a reply that depends on what was sent or
-    that raises an ``httpx2`` error to simulate a network failure. Every request's body is read before it is logged
-    and answered.
+    that raises an ``httpx2`` error to simulate a network failure.
+
+    Every send is logged as a snapshot of the request as it went out: its headers then, and its body read from the
+    request's stream on that send, as a network transport reads it. A request changed between attempts therefore
+    shows each attempt's own headers, and a one-shot body sent a second time raises ``httpx2.StreamConsumed`` (or the
+    retry layer's refusal) instead of replaying the first read. A reply function is given the snapshot.
     """
 
     def __init__(self) -> None:
@@ -93,12 +107,12 @@ class FakeTransport(httpx2.AsyncBaseTransport):
 
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
-        await request.aread()
-        self._calls.append(request)
-        route = self._routes.get((request.method, _path(request)))
+        sent = await _snapshot(request)
+        self._calls.append(sent)
+        route = self._routes.get((sent.method, _path(sent)))
         if route is None:
             known = ", ".join(f"{method} {path}" for method, path in self._routes) or "none"
-            msg = f"no route for {request.method} {sanitize_url(str(request.url))} (routes: {known})"
+            msg = f"no route for {sent.method} {sanitize_url(str(sent.url))} (routes: {known})"
             raise UnmatchedRequestError(msg)
         reply = route.next_reply()
         if isinstance(reply, Respond):
@@ -109,7 +123,7 @@ class FakeTransport(httpx2.AsyncBaseTransport):
         if isinstance(reply, httpx2.Response):
             # A response built with ``content=`` holds an in-memory stream, which can be iterated again and again.
             return httpx2.Response(reply.status_code, headers=reply.headers, stream=reply.stream, request=request)
-        answer = reply(request)
+        answer = reply(sent)
         if isinstance(answer, httpx2.Response):
             return answer
         return await answer
@@ -118,3 +132,22 @@ class FakeTransport(httpx2.AsyncBaseTransport):
     async def aclose(self) -> None:
         """Record that the client closed the transport."""
         self.closed = True
+
+
+@contextmanager
+def fake_network[T: httpx2.AsyncBaseTransport](transport: T) -> Generator[T]:
+    """Send every client built in the block on *transport*, in place of the network, and yield it.
+
+    It replaces even a transport the client was given itself (``HttpOptions(transport=...)``), so an SDK that fixes
+    its own transport in its constructor can still be tested over a :class:`FakeTransport`. Only the network is
+    replaced: the rate budget, the cache, the retries, the breaker and the SSRF guard above it are the client's own. A
+    client is read when it is built, so build the SDK inside the block; the block need not stay open while it is used.
+    A token an auth mints on an ``httpx2.AsyncClient`` of its own (:meth:`~headgate.CachedTokenAuth.mint_token`) is
+    not a ``Client``'s and does not reach the fake; one it mints through :meth:`~headgate.CachedTokenAuth.mint_flow`
+    does.
+    """
+    token = NETWORK_OVERRIDE.set(transport)
+    try:
+        yield transport
+    finally:
+        NETWORK_OVERRIDE.reset(token)

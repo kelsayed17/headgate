@@ -238,7 +238,7 @@ def to_builtins[T](value: list[T], *, drop_none: bool = ...) -> list[object]: ..
 @overload
 def to_builtins(value: object, *, drop_none: bool = ...) -> object: ...
 def to_builtins(value: object, *, drop_none: bool = False) -> object:
-    """Convert a model, or a list or mapping of them, to builtins ready for httpx2's ``json=`` or ``data=``.
+    """Convert a model, or a list or mapping of them, to builtins ready for ``body=Json(...)`` or ``Form(...)``.
 
     Field aliases are applied (``by_alias=True``), so a model declares the wire's names once. A ``RootModel``
     converts to whatever its root converts to. ``drop_none=True`` also removes ``None``-valued fields recursively,

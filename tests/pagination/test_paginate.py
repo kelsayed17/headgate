@@ -1,13 +1,13 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``AsyncBaseClient.paginate``: each strategy, laziness, the full stack per page, and termination."""
+"""``Client.paginate``: each strategy, laziness, the full stack per page, and termination."""
 
 from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, assert_type, cast
 
 import httpx2
@@ -16,27 +16,11 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from headgate import (
-    ClientError,
-    Cursor,
-    Expect,
-    HttpOptions,
-    LinkHeader,
-    NextUrl,
-    Offset,
-    PageLimit,
-    PageLimitError,
-    PageNumber,
-    Reader,
-    RequestOptions,
-    ResponseParseError,
-    UpstreamStatusError,
-)
+from headgate import Client, ClientError, Expect, HttpOptions, Rate, Reader, UpstreamStatusError
 from headgate._client import _paired
+from headgate.errors import ForbiddenDestinationError, PageLimitError, ResponseParseError
 from headgate.msgspec import reader
-from headgate.pagination import PageRequest
-from headgate.ratelimit import Rate
-from tests.support.clients import StubClient
+from headgate.pagination import Cursor, LinkHeader, NextUrl, Offset, PageNumber, PageRequest
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -93,9 +77,9 @@ class _Api:
         self.sent.append(request.url)
         return self.answer(request)
 
-    def client(self) -> StubClient:
+    def client(self) -> Client:
         """Return a client over this API."""
-        return StubClient(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=httpx2.MockTransport(self.handle)))
+        return Client(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=httpx2.MockTransport(self.handle)))
 
 
 def _page(request: httpx2.Request, ids: Sequence[int], **links: str | None) -> httpx2.Response:
@@ -129,27 +113,6 @@ async def test_cursor_pages_are_followed_and_items_are_typed() -> None:
         f"{_BASE}/v1/items?kind=a&after=b",
         f"{_BASE}/v1/items?kind=a&after=c",
     ]
-
-
-async def test_a_walk_does_not_go_through_methods_a_subclass_may_rename() -> None:
-    """Fetch pages through the base client's own verbs, so an SDK whose ``get`` or ``post`` is an endpoint still pages.
-
-    The shadowing is done on the instance, as a subclass's ``async def get(self, order_id)`` would on the class.
-    """
-
-    async def endpoint(*args: object, **kwargs: object) -> None:
-        """Stand for an endpoint method that takes none of a verb's keywords."""
-        raise AssertionError((args, kwargs))
-
-    api = _Api(_by_cursor)
-    client = api.client()
-    vars(client).update(get=endpoint, post=endpoint)
-    pages = Cursor(items=items_of, next=cursor_of, param="after")
-    gets = [item.id async for item in client.paginate("items", expect=reader(Page), pages=pages)]
-    query: dict[str, object] = {}
-    posting = Cursor[Page, Item, dict[str, object]](items=items_of, next=cursor_of, param="after")
-    posts = [item.id async for item in client.paginate("items", json=query, expect=reader(Page), pages=posting)]
-    assert gets == posts == [1, 2, 3, 4]
 
 
 async def test_iteration_is_lazy_and_restarts_from_the_first_page() -> None:
@@ -342,6 +305,23 @@ async def test_link_header_pages_are_followed_as_absolute_urls() -> None:
     ]
 
 
+@pytest.mark.parametrize("kind", ["body", "link"])
+async def test_a_next_page_from_https_down_to_http_is_refused_before_it_is_sent(kind: str) -> None:
+    """Refuse a next page an ``https`` page names on plain ``http``, as a downgrading redirect is, sending nothing."""
+    following = "http://api.test/items?cursor=c"
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        response = _page(request, [1], next=following)
+        response.headers["Link"] = f'<{following}>; rel="next"'
+        return response
+
+    pages = NextUrl(items=items_of, next=next_of) if kind == "body" else LinkHeader(items=items_of)
+    api = _Api(answer)
+    with pytest.raises(ForbiddenDestinationError, match=r"from https to http://api\.test/items"):
+        _ = [item async for item in api.client().paginate("start", expect=reader(Page), pages=pages)]
+    assert [str(url) for url in api.sent] == [f"{_BASE}/start"]
+
+
 async def test_next_url_pages_are_followed_from_the_body() -> None:
     """Follow a next URL the page names, relative or absolute."""
 
@@ -491,10 +471,10 @@ async def test_a_page_that_leads_back_raises_instead_of_looping() -> None:
     with pytest.raises(ClientError, match="pagination loop") as raised:
         _ = [item async for item in paginated]
     assert raised.value.url == f"{_BASE}/items"
-    assert raised.value.source == "StubClient"
+    assert raised.value.source == "api.test"
     assert raised.value.method == "GET"
     assert str(raised.value) == (
-        f"[StubClient] pagination loop: the page after page 2 repeats an earlier page's request ({_BASE}/items)"
+        f"[api.test] pagination loop: the page after page 1 repeats an earlier page's request ({_BASE}/items)"
     )
 
 
@@ -509,19 +489,22 @@ async def test_a_repeating_cursor_on_a_template_url_raises() -> None:
     with pytest.raises(ClientError, match="pagination loop") as raised:
         _ = [page async for page in paginated.pages()]
     assert raised.value.url is None
-    assert str(raised.value) == "[StubClient] pagination loop: the page after page 2 repeats an earlier page's request"
+    assert str(raised.value) == "[api.test] pagination loop: the page after page 2 repeats an earlier page's request"
 
 
 #: One request body of each kind no pager can rewrite.
-_BODIES: list[RequestOptions] = [{"data": {}}, {"content": b"x"}, {"files": {"f": b"x"}}]
+_BODIES: list[dict[str, Any]] = [{"data": {}}, {"content": b"x"}, {"files": {"f": b"x"}}]
 
 
 @pytest.mark.parametrize("body", _BODIES, ids=["data", "content", "files"])
-def test_a_body_no_pager_can_rewrite_is_refused(body: RequestOptions) -> None:
+def test_a_body_no_pager_can_rewrite_is_refused(body: dict[str, Any]) -> None:
     """Refuse a form, raw or multipart body: a walk's body is ``json=``, or ``body=`` with ``write=``."""
     client = _Api(_by_cursor).client()
-    with pytest.raises(ValueError, match="takes no data=, content= or files="):
-        client.paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of), **cast("dict[str, Any]", body))
+    name = next(iter(body))
+    with pytest.raises(
+        TypeError, match=rf"argument '{name}': a walk's body is query=, the value its pager rewrites for each page$"
+    ):
+        client.paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of), **body)
 
 
 @pytest.mark.parametrize(
@@ -580,7 +563,7 @@ def test_pagination_terminates_for_any_page_graph(links: list[int | None]) -> No
     names it; the cursor repeating after that ends the walk.
     """
     graph = _Graph(links)
-    client = StubClient(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=graph))
+    client = Client(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=graph))
     paginated = client.paginate("items", expect=reader(Page), pages=Cursor(items=items_of, next=cursor_of, param="at"))
 
     path = [0]
@@ -676,7 +659,7 @@ async def test_an_empty_page_can_be_walked_past(strategy: Callable[..., Pager[Pa
 async def test_a_walk_past_its_page_limit_raises_with_what_it_fetched() -> None:
     """Raise ``PageLimitError`` once the budget is spent with pages to come, after yielding the pages it allowed."""
     api = _Api(_endless)
-    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
+    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), max_pages=_BUDGET)
     items = aiter(paginated)
 
     allowed = [(await anext(items)).id for _ in range(_BUDGET)]
@@ -689,29 +672,28 @@ async def test_a_walk_past_its_page_limit_raises_with_what_it_fetched() -> None:
     assert isinstance(raised.value, ClientError)
     assert (raised.value.method, raised.value.url) == ("GET", "items")
     assert str(raised.value) == (
-        f"[StubClient] pagination reached its limit of {_BUDGET} pages with more to come (items); the result is"
-        " incomplete. Raise PageLimit.max_pages, or set on_limit='stop' to end the walk there"
+        f"[api.test] pagination reached its limit of {_BUDGET} pages with more to come (items); the result is"
+        " incomplete. Raise max_pages=, or set on_limit='stop' to end the walk there"
     )
 
 
 async def test_a_limit_on_a_template_url_raises_without_naming_it() -> None:
     """Raise past the limit on a templated URL, without naming the URL."""
     client = _Api(_endless).client()
-    paginated = client.paginate(t"items/{'x'}", expect=reader(Page), pages=_cursor(), limit=PageLimit(1))
+    paginated = client.paginate(t"items/{'x'}", expect=reader(Page), pages=_cursor(), max_pages=1)
     with pytest.raises(PageLimitError) as raised:
         _ = [page async for page in paginated.pages()]
     assert (raised.value.method, raised.value.url) == ("GET", None)
     assert str(raised.value) == (
-        "[StubClient] pagination reached its limit of 1 pages with more to come; the result is incomplete."
-        " Raise PageLimit.max_pages, or set on_limit='stop' to end the walk there"
+        "[api.test] pagination reached its limit of 1 pages with more to come; the result is incomplete."
+        " Raise max_pages=, or set on_limit='stop' to end the walk there"
     )
 
 
 async def test_a_walk_can_stop_quietly_at_its_page_limit() -> None:
     """End the walk at the budget with ``on_limit="stop"``, for a caller that wants only the first pages."""
     api = _Api(_endless)
-    limit = PageLimit(_BUDGET, on_limit="stop")
-    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), limit=limit)
+    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), max_pages=_BUDGET, on_limit="stop")
 
     assert [item.id async for item in paginated] == list(range(_BUDGET))
     assert len(api.sent) == _BUDGET
@@ -726,25 +708,36 @@ async def test_a_walk_that_ends_exactly_at_its_limit_is_complete() -> None:
             "items",
             expect=reader(Page),
             pages=Cursor(items=items_of, next=cursor_of, param="after"),
-            limit=PageLimit(3),
+            max_pages=3,
         )
     )
     assert [item.id async for item in paginated] == [1, 2, 3, 4]
 
 
 @pytest.mark.parametrize(
-    ("build", "message"),
+    ("budget", "error", "message"),
     [
-        (lambda: PageLimit(0), "max_pages must be >= 1 (got 0)"),
-        (lambda: PageLimit(max_pages=True), "max_pages must be >= 1 (got True)"),
-        (lambda: replace(PageLimit(5), on_limit="truncate"), "on_limit must be 'raise' or 'stop' (got 'truncate')"),
+        ({"max_pages": 0}, ValueError, "max_pages= takes None or an int of at least 1 (got 0)"),
+        ({"max_pages": True}, TypeError, "max_pages= takes None or an int of at least 1 (got bool)"),
+        ({"max_pages": 5, "on_limit": "truncate"}, ValueError, "on_limit= takes 'raise' or 'stop' (got 'truncate')"),
+        ({"on_limit": "stop"}, ValueError, "on_limit='stop' says what happens at max_pages=, so it needs one"),
     ],
-    ids=["zero", "a-bool", "unknown-outcome"],
+    ids=["zero", "a-bool", "unknown-outcome", "stop-without-a-budget"],
 )
-def test_a_bad_page_limit_is_refused(build: Callable[[], object], message: str) -> None:
-    """Refuse a budget below one page, a ``bool`` passed as a count, and an outcome that does not exist."""
-    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
-        build()
+def test_a_bad_page_budget_is_refused_before_anything_is_sent(
+    budget: dict[str, Any], error: type[Exception], message: str
+) -> None:
+    """Refuse a budget below one page, a ``bool`` count, an outcome that does not exist, and a stop with no budget."""
+    api = _Api(_endless)
+    with pytest.raises(error, match=f"^{re.escape(message)}$"):
+        api.client().paginate("items", expect=reader(Page), pages=_cursor(), **budget)
+    assert api.sent == []
+
+
+def test_the_removed_limit_keyword_is_refused() -> None:
+    """Refuse ``limit=``, which ``max_pages=`` and ``on_limit=`` replace, as any unknown option is."""
+    with pytest.raises(TypeError, match="limit"):
+        _Api(_endless).client().paginate("items", expect=reader(Page), pages=_cursor(), **cast("Any", {"limit": 1}))
 
 
 async def test_collect_returns_every_item_in_order() -> None:
@@ -793,7 +786,7 @@ async def test_collect_of_no_items_sends_nothing() -> None:
 async def test_collect_within_the_page_limit_raises_nothing() -> None:
     """Return the items when they are all collected before the page budget is spent, though more pages follow."""
     api = _Api(_endless)
-    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
+    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), max_pages=_BUDGET)
     assert [item.id for item in await paginated.collect(max_items=_BUDGET)] == list(range(_BUDGET))
     assert len(api.sent) == _BUDGET
 
@@ -801,7 +794,7 @@ async def test_collect_within_the_page_limit_raises_nothing() -> None:
 async def test_collect_past_the_page_limit_raises() -> None:
     """Propagate ``PageLimitError`` when the budget is spent before the walk or *max_items* is done."""
     api = _Api(_endless)
-    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), limit=PageLimit(_BUDGET))
+    paginated = api.client().paginate("items", expect=reader(Page), pages=_cursor(), max_pages=_BUDGET)
     with pytest.raises(PageLimitError):
         await paginated.collect(max_items=_BUDGET + 1)
     assert len(api.sent) == _BUDGET
@@ -815,3 +808,189 @@ async def test_collect_refuses_a_bad_count(max_items: int) -> None:
     with pytest.raises(ValueError, match=f"^max_items must be None or >= 0 \\(got {max_items!r}\\)$"):
         await paginated.collect(max_items=max_items)
     assert api.sent == []
+
+
+#: A page budget that only ends a walk the loop check failed to end.
+_BACKSTOP = 10
+
+
+async def test_an_offset_walk_the_server_does_not_page_raises_at_the_repeated_page() -> None:
+    """Raise once a page repeats an earlier one's body, rather than walking the same page forever."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return _page(request, [0, 1])  # the offset is ignored
+
+    api = _Api(answer)
+    pages = Offset(items=items_of, page_size=2)
+    with pytest.raises(ClientError, match="pagination loop") as raised:
+        _ = [
+            item async for item in api.client().paginate("items", expect=reader(Page), pages=pages, max_pages=_BACKSTOP)
+        ]
+
+    assert len(api.sent) == len(("first", "repeated"))
+    assert str(raised.value) == (
+        f"[api.test] pagination loop: page 2 repeats an earlier page's body, so the server is not paging the walk "
+        f"({_BASE}/items?offset=2)"
+    )
+
+
+async def test_a_numbered_walk_the_server_does_not_page_raises_at_the_repeated_page() -> None:
+    """Raise at the second page when the server answers every page number with the first page."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return _page(request, [1], next="more")
+
+    api = _Api(answer)
+    pages = PageNumber(items=items_of, more=has_next)
+    with pytest.raises(ClientError, match="page 2 repeats an earlier page's body"):
+        _ = [
+            item async for item in api.client().paginate("items", expect=reader(Page), pages=pages, max_pages=_BACKSTOP)
+        ]
+
+    assert len(api.sent) == len(("first", "repeated"))
+
+
+async def test_empty_pages_that_repeat_are_walked_past() -> None:
+    """Walk past empty pages with the same body when told to, since an empty page proves nothing about paging."""
+    last = 4
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        number = int(request.url.params["page"])
+        return _page(request, [number] if number in {1, last} else [], next=None if number == last else "more")
+
+    api = _Api(answer)
+    pages = PageNumber(items=items_of, more=has_next, stop_on_empty=False)
+    items = [item.id async for item in api.client().paginate("items", expect=reader(Page), pages=pages)]
+
+    assert items == [1, 4]
+
+
+async def test_link_header_pages_with_the_same_body_are_walked() -> None:
+    """Follow ``Link`` pages whose bodies are alike: their next page comes from the response, not the request."""
+    last = 3
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        page = int(request.url.params.get("page", "1"))
+        link = f'</items?page={page + 1}>; rel="next"' if page < last else ""
+        return httpx2.Response(200, json={"data": [{"id": 1}]}, headers={"link": link}, request=request)
+
+    api = _Api(answer)
+    paginated = api.client().paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of))
+
+    assert [item.id async for item in paginated] == [1, 1, 1]
+
+
+async def test_an_offset_walk_starts_at_the_callers_own_offset() -> None:
+    """Start at the offset the caller's ``params=`` give, as a numbered walk starts at the caller's page."""
+    end = 22
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        offset = int(request.url.params["offset"])
+        return _page(request, [offset] if offset < end else [])
+
+    api = _Api(answer)
+    pages = Offset(items=items_of, page_size=1)
+    paginated = api.client().paginate("items", expect=reader(Page), pages=pages, params={"offset": "20"})
+
+    assert [item.id async for item in paginated] == [20, 21]
+    assert [url.params["offset"] for url in api.sent] == ["20", "21", "22"]
+
+
+def test_an_offset_that_is_not_one_is_refused() -> None:
+    """Refuse a caller's offset that is no offset when the walk is built."""
+    with pytest.raises(ValueError, match="offset must be an offset"):
+        Offset(items=items_of, page_size=1).first(PageRequest("items", {"offset": "x"}))
+
+
+@pytest.mark.parametrize("served", [2, 1], ids=["full-pages", "capped-pages"])
+async def test_a_one_based_offset_walk_reaches_its_total(served: int) -> None:
+    """Fetch every item of a 1-based walk up to its total, even when the server caps pages below ``page_size``."""
+    total = 3
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        offset = int(request.url.params["offset"])
+        return _page(request, [i for i in range(offset, offset + served) if i <= total], cursor=str(total))
+
+    api = _Api(answer)
+    pages = Offset(items=items_of, page_size=2, start=1, total=lambda page: int(page.cursor or 0))
+
+    assert [item.id async for item in api.client().paginate("items", expect=reader(Page), pages=pages)] == [1, 2, 3]
+
+
+async def test_a_next_page_url_that_does_not_parse_is_a_client_error() -> None:
+    """Raise ``ClientError`` for a next URL httpx2 cannot parse, rather than its bare ``InvalidURL``."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return _page(request, [1], next="http://[::1")
+
+    paginated = (
+        _Api(answer).client().paginate("items", expect=reader(Page), pages=NextUrl(items=items_of, next=next_of))
+    )
+    with pytest.raises(ClientError, match="invalid next-page URL after page 1") as raised:
+        _ = [item async for item in paginated]
+
+    assert type(raised.value) is ClientError
+    assert raised.value.source == "api.test"
+
+
+async def test_a_link_anchored_to_another_resource_ends_the_walk() -> None:
+    """Stop at a page whose only ``rel="next"`` is anchored to another resource: it names no page after this one."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        link = '</items?page=2>; rel="next"; anchor="/elsewhere"'
+        return httpx2.Response(200, json={"data": [{"id": 1}]}, headers={"link": link}, request=request)
+
+    api = _Api(answer)
+    paginated = api.client().paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of))
+
+    assert [item.id async for item in paginated] == [1]
+    assert len(api.sent) == 1
+
+
+def _soda(total: int) -> Callable[[httpx2.Request], httpx2.Response]:
+    """Serve *total* items by ``$offset`` and ``$limit``, as a SODA endpoint pages them."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        offset, limit = int(request.url.params["$offset"]), int(request.url.params["$limit"])
+        return _page(request, list(range(offset, min(offset + limit, total))))
+
+    return answer
+
+
+#: A SODA walk's pager: the offset in ``$offset``, the page size in ``$limit``.
+_SODA_PAGES = Offset(items=items_of, page_size=2, param="$offset", size_param="$limit")
+
+
+async def test_an_offset_walk_steps_by_the_page_size_the_caller_sends() -> None:
+    """Step by the caller's own ``$limit``, send it with every page, and end at the page shorter than it."""
+    api = _Api(_soda(total=8))
+    paginated = api.client().paginate("rows", expect=reader(Page), pages=_SODA_PAGES, params={"$limit": "3"})
+
+    assert [item.id async for item in paginated] == list(range(8))
+    assert [(url.params["$offset"], url.params["$limit"]) for url in api.sent] == [("0", "3"), ("3", "3"), ("6", "3")]
+
+
+async def test_an_offset_walk_sends_its_page_size_when_the_caller_sends_none() -> None:
+    """Send ``page_size`` under ``size_param`` when the caller's ``params=`` name no size."""
+    api = _Api(_soda(total=3))
+    paginated = api.client().paginate("rows", expect=reader(Page), pages=_SODA_PAGES)
+
+    assert [item.id async for item in paginated] == [0, 1, 2]
+    assert [(url.params["$offset"], url.params["$limit"]) for url in api.sent] == [("0", "2"), ("2", "2")]
+
+
+@pytest.mark.parametrize("size", ["x", "0", 0, -1, True])
+def test_a_page_size_that_is_not_one_is_refused(size: object) -> None:
+    """Refuse a caller's page size that is not an int of at least 1, or a string of digits, when the walk is built."""
+    with pytest.raises(ValueError, match=r"\$limit must be a page size"):
+        _SODA_PAGES.first(PageRequest("rows", {"$limit": size}))
+
+
+@pytest.mark.parametrize(
+    ("size_param", "message"),
+    [("", "size_param must name a query parameter"), ("$offset", "size_param must differ from param")],
+)
+def test_an_offset_refuses_a_size_param_it_cannot_send(size_param: str, message: str) -> None:
+    """Refuse an empty size parameter, and one that names the offset's own parameter."""
+    with pytest.raises(ValueError, match=re.escape(message)):
+        Offset(items=items_of, page_size=2, param="$offset", size_param=size_param)

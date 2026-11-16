@@ -16,11 +16,9 @@ from typing import override
 import httpx2
 import pytest
 
-from headgate import ClientTimeoutError, HttpOptions, Rate, Route, TransportPolicy, nothing
-from headgate.retry import NO_RETRY
+from headgate import Client, ClientTimeoutError, HttpOptions, Rate, Route, TransportPolicy, nothing
 from headgate.testing import TestClock
 from tests.support.breakers import failures
-from tests.support.clients import StubClient
 
 _HOST = "slow.example.test"
 _SHORT = 0.05
@@ -41,9 +39,9 @@ class _Network(httpx2.AsyncBaseTransport):
         return httpx2.Response(200)
 
 
-def _client(policy: TransportPolicy, delay: float = 3600.0) -> StubClient:
+def _client(policy: TransportPolicy, delay: float = 3600.0) -> Client:
     """Build a client over a network that answers after *delay* seconds."""
-    return StubClient(
+    return Client(
         base_url=f"https://{_HOST}",
         rate=Rate.per_second(1000),
         policy=policy,
@@ -53,7 +51,7 @@ def _client(policy: TransportPolicy, delay: float = 3600.0) -> StubClient:
 
 async def test_the_policy_deadline_bounds_a_call_that_hangs() -> None:
     """Raise ``ClientTimeoutError`` naming the request once the policy's deadline passes, and charge the host."""
-    client = _client(TransportPolicy(deadline=_SHORT, retry=NO_RETRY))
+    client = _client(TransportPolicy(deadline=_SHORT, retry=None))
 
     with pytest.raises(ClientTimeoutError, match="deadline exceeded") as raised:
         await client.get("series", expect=nothing)
@@ -61,7 +59,7 @@ async def test_the_policy_deadline_bounds_a_call_that_hangs() -> None:
     error = raised.value
     assert (error.method, error.url, error.attempts) == ("GET", "series", 1)
     assert error.retryable is False
-    assert failures(_HOST) == 1, "the host never answered the attempt the deadline cut off"
+    assert failures(client, _HOST) == 1, "the host never answered the attempt the deadline cut off"
 
 
 async def test_a_route_deadline_applies_to_its_paths() -> None:
@@ -125,10 +123,10 @@ class _HourLongNetwork(httpx2.AsyncBaseTransport):
 async def test_the_deadline_message_writes_the_elapsed_time_plainly(spent: float, written: str) -> None:
     """Write the elapsed time to the hundredth, never in scientific notation, without trailing zeros."""
     with TestClock().install() as clock:
-        client = StubClient(
+        client = Client(
             base_url=f"https://{_HOST}",
             rate=Rate.per_second(1000),
-            policy=TransportPolicy(deadline=_SHORT, retry=NO_RETRY),
+            policy=TransportPolicy(deadline=_SHORT, retry=None),
             http=HttpOptions(transport=_HourLongNetwork(clock, spent)),
         )
         with pytest.raises(ClientTimeoutError) as raised:

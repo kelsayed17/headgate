@@ -3,6 +3,10 @@
 
 """The failure taxonomy: raised by clients, caught by their callers.
 
+This module defines every error class. The six a caller catches most, ``ClientError``, ``TransportError``,
+``ClientTimeoutError``, ``UpstreamStatusError``, ``AuthError`` and ``RateLimitError``, are exported from ``headgate``;
+the rest from here.
+
 Every layer above a client imports this module, so it imports nothing at runtime beyond the standard library.
 
 The shape of the tree is part of the contract, as well as the names: a boundary handler can map
@@ -15,7 +19,16 @@ client turns it into ``ResponseParseError`` (a 2xx body) or the status error (a 
 too deep to parse.
 
 :class:`RefusedError` is deliberately not a ``ClientError`` either. A reader or a client's ``response_check`` produces
-it, and the base client converts it into the ``ClientError`` its ``kind`` names, so a caller of a client never sees it.
+it, and the client converts it into the ``ClientError`` its ``kind`` names, so a caller of a client never sees it.
+
+``retryable`` has one meaning on every error: sending the call again later could succeed, and is safe as the call
+stands (an idempotent method, an idempotency key, or nothing of it sent). For a status or a network failure it is the
+call's retry policy's verdict. The refusals the client makes before sending, :class:`CircuitOpenError` and the rate
+budget's own :class:`RateLimitError` and :class:`ClientTimeoutError`, are retryable after their ``retry_after``.
+:class:`ForbiddenDestinationError`, :class:`ResponseTooLargeError`, :class:`ResponseParseError`,
+:class:`ClientConfigurationError` and :class:`PageLimitError` are not: sending again meets the same refusal.
+``sent`` says whether any byte of the call can have reached the network, so a write that is not retryable may still
+have been processed when it is ``True``.
 
 Every ``ClientError`` pickles, so it can cross a process or a durable-workflow boundary. The default exception reduce,
 ``(cls, self.args)``, re-runs ``__init__``: that fails on a required keyword-only argument (``status_code``) and would
@@ -33,22 +46,16 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 __all__ = [
-    "AuthError",
     "CircuitOpenError",
     "ClientConfigurationError",
-    "ClientError",
-    "ClientTimeoutError",
     "DecodeError",
     "ErrorDetails",
     "ForbiddenDestinationError",
     "PageLimitError",
     "Problem",
-    "RateLimitError",
     "RefusedError",
     "ResponseParseError",
     "ResponseTooLargeError",
-    "TransportError",
-    "UpstreamStatusError",
 ]
 
 
@@ -76,10 +83,11 @@ def _rebuild_client_error(cls: type[ClientError], args: tuple[object, ...], stat
 class ErrorDetails(TypedDict, total=False):
     """What a ``ClientError`` records about the call that raised it, beyond its message; every key is optional.
 
-    ``source`` names the client that raised it. ``url`` is sanitized and bounded. ``attempts`` counts the call's sends;
-    ``retryable`` says whether the call's retry policy would re-send after the outcome that raised the error (a status
-    in its ``statuses`` or a network failure, and only when sending again is safe for the method); ``retry_after`` is
-    the delay the upstream asked for, in seconds.
+    ``source`` names the client that raised it, by its ``base_url``'s host. ``url`` is sanitized and bounded.
+    ``attempts`` counts the call's sends; ``retryable`` says whether the call's retry policy would re-send after the
+    outcome that raised the error (a status in its ``statuses`` or a network failure, and only when sending again is
+    safe for the method); ``retry_after`` is the delay the upstream asked for, in seconds; ``sent`` says whether any
+    byte of the call can have reached the network.
     """
 
     source: str | None
@@ -89,27 +97,39 @@ class ErrorDetails(TypedDict, total=False):
     attempts: int | None
     retryable: bool
     retry_after: float | None
+    sent: bool | None
 
 
 class ClientError(Exception):
     """Base for every transport-layer failure.
 
-    ``source`` names the originating client and prefixes the message as ``[source]``. Subclasses distinguish failure
-    modes so callers can branch on them. The read-only attributes :attr:`method`, :attr:`url`, :attr:`request_id`,
-    :attr:`attempts`, :attr:`retryable` and :attr:`retry_after` describe the call (see :class:`ErrorDetails`); each is
-    ``None`` (``retryable``: ``False``) when the raiser did not know it.
+    ``source`` names the originating client by its ``base_url``'s host (``api.github.com``), and prefixes the message
+    as ``[source]``. Subclasses distinguish failure
+    modes so callers can branch on them. The read-only attributes :attr:`source`, :attr:`method`, :attr:`url`,
+    :attr:`request_id`, :attr:`attempts`, :attr:`retryable`, :attr:`retry_after` and :attr:`sent` describe the call (see
+    :class:`ErrorDetails`); each is ``None`` (``retryable``: ``False``) when the raiser did not know it. Every attribute
+    of every error is read-only, so what an error says about a call cannot be rewritten after it is raised.
     """
 
     def __init__(self, message: str, **details: Unpack[ErrorDetails]) -> None:
         """Record *details*, and build the message, prefixed with ``[source]`` when a source is named."""
-        self.source = source = details.get("source")
+        self._source = source = details.get("source")
         self._method = details.get("method")
         self._url = details.get("url")
         self._request_id = details.get("request_id")
         self._attempts = details.get("attempts")
         self._retryable = details.get("retryable", False)
         self._retry_after = details.get("retry_after")
+        self._sent = details.get("sent")
         super().__init__(message if _is_absent(source) else f"[{source}] {message}")
+
+    @property
+    def source(self) -> str | None:
+        """The host of the ``base_url`` of the client that raised the error, which also prefixes its message.
+
+        A token mint's failure names the auth's class instead (``ShopTokenAuth``), since the mint is the auth's.
+        """
+        return self._source
 
     @property
     def method(self) -> str | None:
@@ -140,6 +160,15 @@ class ClientError(Exception):
     def retry_after(self) -> float | None:
         """The seconds the upstream (or an open breaker) asked the caller to wait before sending again."""
         return self._retry_after
+
+    @property
+    def sent(self) -> bool | None:
+        """Whether any byte of the call can have reached the network, by any send of it, its redirects included.
+
+        ``False`` only when no byte left: every send was refused or failed before it wrote anything. ``True`` when some
+        may have, so a write may have been processed. ``None`` on an error no client call raised.
+        """
+        return self._sent
 
     @override
     def __reduce__(self) -> tuple[_ClientErrorRebuild, _ClientErrorState]:
@@ -216,7 +245,8 @@ class UpstreamStatusError(ClientError):
     """The upstream answered with a failure: a non-2xx that survived retries, or a refusal written in a 2xx body.
 
     ``status_code`` is the status the wire sent, or the endpoint's documented success status for a refusal written
-    inside a success body. It is never invented.
+    inside a success body. It is never invented, so it is ``None`` for the one refusal no response answered: a
+    :class:`RateLimitError` from the client's own rate budget, paused at the server's request past the call's deadline.
 
     ``code`` is the provider's own code where something named one (a reader's ``RefusedError``). The status ladder sets
     none, so an undeclared 4xx or 5xx carries ``code=None`` and its body only as the snippet in the message. An empty
@@ -236,19 +266,32 @@ class UpstreamStatusError(ClientError):
         self,
         message: str,
         *,
-        status_code: int,
+        status_code: int | None,
         code: str | None = None,
         body: str | None = None,
         problem: Problem | None = None,
         **details: Unpack[ErrorDetails],
     ) -> None:
         """Record the status, code and problem, and fold the status, code and body snippet into the message."""
-        self.status_code = status_code
-        self.code = code
+        self._status_code = status_code
+        self._code = code
         self._problem = problem
-        tag = f"status={status_code}" if code is None else f"status={status_code}, code={code}"
+        tags = [f"status={status_code}"] if status_code is not None else []
+        if code is not None:
+            tags.append(f"code={code}")
+        tag = f" ({', '.join(tags)})" if tags else ""
         detail = "" if _is_absent(body) else f" — {body}"
-        super().__init__(f"{message} ({tag}){detail}", **details)
+        super().__init__(f"{message}{tag}{detail}", **details)
+
+    @property
+    def status_code(self) -> int | None:
+        """The status the wire sent, the success status of a refusal in a success body, or ``None`` with no response."""
+        return self._status_code
+
+    @property
+    def code(self) -> str | None:
+        """The provider's own code for the refusal, where something named one."""
+        return self._code
 
     @property
     def problem(self) -> Problem | None:
@@ -294,9 +337,24 @@ class RefusedError(Exception):
     ) -> None:
         """Record the refusal's *message*, the provider's *code*, and the ``ClientError`` *kind* it becomes."""
         super().__init__(message)
-        self.message = message
-        self.code = code
-        self.kind = kind
+        self._message = message
+        self._code = code
+        self._kind = kind
+
+    @property
+    def message(self) -> str:
+        """The refusal's message, as the reader or check wrote it."""
+        return self._message
+
+    @property
+    def code(self) -> str | None:
+        """The provider's own code for the refusal."""
+        return self._code
+
+    @property
+    def kind(self) -> type[UpstreamStatusError]:
+        """The ``ClientError`` class the client raises the refusal as."""
+        return self._kind
 
 
 class ClientConfigurationError(ClientError):
@@ -352,7 +410,7 @@ class ResponseTooLargeError(ClientError):
 class ForbiddenDestinationError(ClientError):
     """A request was refused before it was sent, because of where it was going.
 
-    Raised by the SSRF guard (``SecurityOptions(allow_private_hosts=False)``) for a host that is, or resolves to, an
+    Raised by the SSRF guard (``SecurityOptions(block_private_hosts=True)``) for a host that is, or resolves to, an
     address that is not globally routable: loopback, private, link-local, multicast, reserved or unspecified,
     IPv4-mapped and NAT64 forms included. The destination usually comes from data (a redirect, a cursor URL, a URL a
     user supplied) rather than from configuration, so it is its own subtype rather than a
@@ -363,7 +421,7 @@ class ForbiddenDestinationError(ClientError):
 
 
 class PageLimitError(ClientError):
-    """A paginated walk reached its page budget (``limit=PageLimit(max_pages)``) with more pages still to come.
+    """A paginated walk reached its page budget (``paginate(max_pages=...)``) with more pages still to come.
 
     The pages fetched so far were yielded; what follows was not fetched, so the result is incomplete. ``pages`` is the
     number of pages fetched. A walk whose last page falls exactly on the budget ends normally, and
@@ -373,4 +431,9 @@ class PageLimitError(ClientError):
     def __init__(self, message: str, *, pages: int, **details: Unpack[ErrorDetails]) -> None:
         """Record *pages*, the pages fetched, with the *details* of the page that would have come next."""
         super().__init__(message, **details)
-        self.pages = pages
+        self._pages = pages
+
+    @property
+    def pages(self) -> int:
+        """The number of pages the walk fetched."""
+        return self._pages

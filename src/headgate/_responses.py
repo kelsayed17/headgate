@@ -9,9 +9,9 @@ a ``ClientError``. So each call declares, where it is made, what it can get back
 * a :class:`Reader` for any 2xx, the success reader: a function of the response, wrapped as ``Reader(fn)``;
 * optionally an :class:`Expect`, which adds the exact non-2xx statuses the provider documents as answers.
 
-Anything a call did not declare raises through the base client's status ladder. There is no raw mode, so no call can
+Anything a call did not declare raises through the client's status ladder. There is no raw mode, so no call can
 receive an undeclared status. A refusal the provider writes inside a body is raised by the reader as
-:class:`RefusedError`, and the base client turns it into a ``ClientError`` carrying the status the wire sent.
+:class:`RefusedError`, and the client turns it into a ``ClientError`` carrying the status the wire sent.
 
 This module is codec-free: it imports neither msgspec nor pydantic. The typed JSON ``reader`` a client builds its
 success reader with comes from the flavor module it chose, :mod:`headgate.msgspec` or :mod:`headgate.pydantic`, and both
@@ -34,7 +34,7 @@ from typing import Final, NoReturn, final, override
 
 import httpx2
 
-from headgate._core import check_kind, kind_of
+from headgate._core import check_kind
 from headgate.errors import DecodeError, RefusedError
 from headgate.streaming._events import EventParser
 
@@ -60,14 +60,14 @@ class Reader[T]:
     body is not what was declared; a ``ValueError``, ``LookupError`` or ``TypeError`` from code over
     ``response.json()``, or nesting too deep to parse, counts the same) or :class:`RefusedError` (the provider said no
     inside the body). A ``RecursionError`` it raises is read as a body nested too deeply to parse, a shape error like
-    the others. It never builds a ``ClientError`` itself: the base client does, so the error carries the real status
-    and the client's name.
+    the others. It never builds a ``ClientError`` itself: the client does, so the error carries the real status
+    and the client's host.
 
     It is a class rather than any function of a response so that ``expect=`` refuses what only looks like one: a model
     class, ``str`` and a bare function are all callable, and each is a mistake there.
 
-    Its ``repr`` is ``Reader(<name>)``: *name* when given, else a wrapped reader's own name, else the function's
-    ``__name__`` (a ``functools.partial``'s function's), else its type's.
+    Its ``repr`` is ``Reader(<name>)``: *name* when given, else the function's ``__name__`` (a ``functools.partial``'s
+    function's), else its type's.
     """
 
     __slots__ = ("_name", "_read")
@@ -78,18 +78,12 @@ class Reader[T]:
         :raises TypeError: for a *read* that cannot be called, here rather than at the first response.
         """
         if not callable(read):
-            msg = f"Reader takes a function of the response (got {kind_of(read)})"
+            # Anything not callable is an instance, so its type's name is what _kinds would print.
+            msg = f"Reader takes a function of the response (got {type(read).__name__})"
             raise TypeError(msg)
         # Private, so the type parameter stays covariant: a Reader[Order] is a Reader[Order | None].
         self._read = read
-        if name is None:
-            name = read.name if isinstance(read, Reader) else _name_of(read)
-        self._name = name
-
-    @property
-    def name(self) -> str:
-        """What the reader reads, as its ``repr`` names it: ``as_json``, ``MsgspecCodec list[Order]``."""
-        return self._name
+        self._name = _name_of(read) if name is None else name
 
     def __call__(self, response: httpx2.Response, /) -> T:
         """Return what the wrapped function reads from *response*."""
@@ -98,7 +92,7 @@ class Reader[T]:
     @override
     def __repr__(self) -> str:
         """Return ``Reader(<name>)``."""
-        return f"Reader({self.name})"
+        return f"Reader({self._name})"
 
 
 def _name_of(read: object) -> str:
@@ -138,7 +132,7 @@ type ResponseCheck = Callable[[httpx2.Response], RefusedError | None]
 It names a refusal the status line alone cannot show, such as a key-error redirect, and returns ``None`` for
 everything else; raising the :class:`RefusedError` instead of returning it is treated the same. It reads the status
 line and headers, never the body: a refusal written in a body is its reader's to raise. A client carrying one does not
-follow redirects (the base client enforces it), because the check sees only the final response.
+follow redirects (the client enforces it), because the check sees only the final response.
 """
 
 
@@ -148,7 +142,7 @@ class Expect[T]:
     """One endpoint's documented responses: a success reader for any 2xx, plus exact-status answers.
 
     ``answers`` holds the statuses the provider documents as answers, each declared with :meth:`on` in the client
-    method whose endpoint returns it. The base client reads an exact declared status first, applies its status ladder
+    method whose endpoint returns it. The client reads an exact declared status first, applies its status ladder
     to any other non-2xx, and hands every other 2xx to :attr:`ok`. A declared non-2xx whose body its reader cannot
     decode falls through to the ladder with its real status, so a claim covers only the body shape it names: a declared
     business 403 never swallows a real permission 403.

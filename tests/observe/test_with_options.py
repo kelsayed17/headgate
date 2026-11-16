@@ -13,20 +13,20 @@ import pytest
 
 from headgate import (
     BreakerPolicy,
+    ClientTimeoutError,
     HttpOptions,
     RetryPolicy,
     Route,
     Timeouts,
     TransportPolicy,
+    UpstreamStatusError,
     as_bytes,
     nothing,
 )
-from headgate.errors import CircuitOpenError, ClientTimeoutError, UpstreamStatusError
+from headgate.errors import CircuitOpenError
 from headgate.policy import policy_disabled
-from headgate.retry import NO_RETRY
-from headgate.testing import FakeTransport, isolated_breakers
-from tests.observe._support import BASE, RATE, client
-from tests.support.clients import StubClient
+from headgate.testing import FakeTransport
+from tests.observe._support import client
 
 #: Long enough that a short deadline expires first, short enough to keep the suite fast when one does not.
 _SLOW_SEND = 0.05
@@ -68,7 +68,7 @@ async def test_the_client_itself_is_unchanged() -> None:
     """Leave the client's own calls without the view's headers."""
     fake = FakeTransport().reply("GET", "/v1/x")
     root = client(fake)
-    root.with_options(headers={"X-View": "v"}, retry=False, deadline=None, timeout=Timeouts(read=1.0))
+    root.with_options(headers={"X-View": "v"}, retry=None, deadline=None, timeout=Timeouts(read=1.0))
     await root.get("x", expect=nothing)
     assert "x-view" not in fake.calls[0].headers
 
@@ -76,7 +76,9 @@ async def test_the_client_itself_is_unchanged() -> None:
 async def test_a_view_replaces_only_the_phases_it_sets() -> None:
     """Keep the client's other timeouts and replace the one the view sets."""
     fake = FakeTransport().reply("GET", "/v1/x")
-    root = client(fake, http=HttpOptions(timeout=Timeouts(connect=1.0, read=2.0, write=3.0, pool=4.0)))
+    root = client(
+        fake, http=HttpOptions(), policy=TransportPolicy(timeout=Timeouts(connect=1.0, read=2.0, write=3.0, pool=4.0))
+    )
     await root.with_options(timeout=Timeouts(read=9.0)).get("x", expect=nothing)
     assert _sent_timeout(fake.calls[0]) == {"connect": 1.0, "read": 9.0, "write": 3.0, "pool": 4.0}
 
@@ -84,7 +86,7 @@ async def test_a_view_replaces_only_the_phases_it_sets() -> None:
 async def test_each_layer_replaces_the_phases_it_sets_and_a_call_wins() -> None:
     """Lay the view's phases over the client's and the defaults; a call's own phases then win over both."""
     fake = FakeTransport().reply("GET", "/v1/x")
-    view = client(fake, http=HttpOptions(timeout=Timeouts(read=5.0))).with_options(
+    view = client(fake, http=HttpOptions(), policy=TransportPolicy(timeout=Timeouts(read=5.0))).with_options(
         timeout=Timeouts(connect=1.0, read=2.0)
     )
     await view.get("x", expect=nothing)
@@ -97,7 +99,7 @@ async def test_each_layer_replaces_the_phases_it_sets_and_a_call_wins() -> None:
 async def test_phases_no_layer_sets_keep_the_defaults() -> None:
     """Send the default timeout for every phase that neither the client nor the view sets."""
     fake = FakeTransport().reply("GET", "/v1/x")
-    root = client(fake, http=HttpOptions(timeout=Timeouts(read=5.0)))
+    root = client(fake, http=HttpOptions(), policy=TransportPolicy(timeout=Timeouts(read=5.0)))
     await root.with_options(timeout=Timeouts(read=6.0)).get("x", expect=nothing)
     assert _sent_timeout(fake.calls[0]) == {"connect": 10.0, "read": 6.0, "write": 10.0, "pool": 15.0}
 
@@ -143,48 +145,39 @@ def test_a_bad_timeout_is_refused() -> None:
         client(FakeTransport()).with_options(timeout=Timeouts(read=0.0))
 
 
-async def test_retry_false_sends_once() -> None:
-    """Send a view's calls once when it says ``retry=False``."""
+async def test_retry_none_sends_once() -> None:
+    """Send a view's calls once when it says ``retry=None``."""
     fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
     with pytest.raises(UpstreamStatusError):
-        await client(fake).with_options(retry=False).get("x", expect=nothing)
+        await client(fake).with_options(retry=None).get("x", expect=nothing)
     assert len(fake.calls) == 1
 
 
 async def test_a_view_policy_wins_over_the_routes_and_loses_to_the_calls() -> None:
     """Retry under the view's policy despite a no-retry route, and not at all when the call says so."""
     fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
-    policy = TransportPolicy(routes=(Route("/x", retry=NO_RETRY),))
+    policy = TransportPolicy(routes=(Route("/x", retry=None),))
     view = client(fake, policy=policy).with_options(retry=RetryPolicy(attempts=2))
     await view.get("x", expect=nothing)
     assert len(fake.calls) == len(("503", "200"))
 
     fake.reply("GET", "/v1/x", 503, 200)
     with pytest.raises(UpstreamStatusError):
-        await view.get("x", expect=nothing, retry=False)
+        await view.get("x", expect=nothing, retry=None)
 
 
-async def test_retry_true_restores_the_clients_policy() -> None:
-    """Undo an outer view's ``retry=False`` with ``retry=True``."""
+async def test_an_inner_views_policy_replaces_an_outer_views_none() -> None:
+    """Retry under an inner view's policy although the outer view sends once."""
     fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
-    await client(fake).with_options(retry=False).with_options(retry=True).get("x", expect=nothing)
+    await client(fake).with_options(retry=None).with_options(retry=RetryPolicy(attempts=2)).get("x", expect=nothing)
     assert len(fake.calls) == len(("503", "200"))
 
 
-async def test_a_calls_retry_true_undoes_its_views_retry_false() -> None:
-    """Re-send a call that says ``retry=True`` on a view that says ``retry=False``: the call's own option wins."""
+async def test_a_calls_policy_wins_over_its_views_none() -> None:
+    """Retry a call that gives its own policy on a view that sends once: the call's own option wins."""
     fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
-    await client(fake).with_options(retry=False).get("x", expect=nothing, retry=True)
+    await client(fake).with_options(retry=None).get("x", expect=nothing, retry=RetryPolicy(attempts=2))
     assert len(fake.calls) == len(("503", "200"))
-
-
-async def test_a_calls_retry_true_keeps_its_routes_policy() -> None:
-    """Keep a route's policy under ``retry=True``, which restores the client's configuration, routes included."""
-    fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
-    policy = TransportPolicy(routes=(Route("/x", retry=NO_RETRY),))
-    with pytest.raises(UpstreamStatusError):
-        await client(fake, policy=policy).with_options(retry=False).get("x", expect=nothing, retry=True)
-    assert len(fake.calls) == 1
 
 
 async def test_a_view_cannot_retry_a_client_built_with_its_policy_off() -> None:
@@ -199,9 +192,8 @@ async def test_a_view_cannot_retry_a_client_built_with_its_policy_off() -> None:
 async def test_a_view_shares_the_breakers() -> None:
     """Refuse a view's call once the client's own calls opened the host's breaker."""
     fake = FakeTransport().reply("GET", "/v1/x", 503)
-    policy = TransportPolicy(retry=NO_RETRY, breaker=BreakerPolicy(failure_threshold=1))
-    with isolated_breakers():
-        root = client(fake, policy=policy)
+    policy = TransportPolicy(retry=None, breaker=BreakerPolicy(failure_threshold=1))
+    root = client(fake, policy=policy)
     with pytest.raises(UpstreamStatusError):
         await root.get("x", expect=nothing)
     with pytest.raises(CircuitOpenError):
@@ -212,7 +204,7 @@ async def test_closing_a_view_closes_nothing_and_the_client_closes_the_pool() ->
     """Leave the pool open when a view is closed or its block exits; close it with the client."""
     fake = FakeTransport().reply("GET", "/v1/x", httpx2.Response(200, content=b"ok"))
     root = client(fake)
-    async with root.with_options(retry=False) as view:
+    async with root.with_options(retry=None) as view:
         assert await view.get("x", expect=as_bytes) == b"ok"
     await view.aclose()
     assert not fake.closed
@@ -220,29 +212,3 @@ async def test_closing_a_view_closes_nothing_and_the_client_closes_the_pool() ->
 
     await root.aclose()
     assert fake.closed
-
-
-class _Counting(StubClient):
-    """A client with state of its own, which views share."""
-
-    def __init__(self, transport: httpx2.AsyncBaseTransport) -> None:
-        """Build over *transport* with an empty log."""
-        super().__init__(base_url=BASE, rate=RATE, http=HttpOptions(transport=transport))
-        self.log: list[str] = []
-
-    async def fetch(self) -> None:
-        """Make one call, logging it."""
-        self.log.append("fetch")
-        await self.get("x", expect=nothing)
-
-
-async def test_a_view_is_the_same_subclass_sharing_its_state() -> None:
-    """Return the subclass, its methods using the view's defaults and its attributes shared."""
-    fake = FakeTransport().reply("GET", "/v1/x")
-    root = _Counting(fake)
-    view = root.with_options(headers={"X-View": "v"})
-    await view.fetch()
-
-    assert isinstance(view, _Counting)
-    assert root.log == ["fetch"]
-    assert fake.calls[0].headers["x-view"] == "v"

@@ -6,6 +6,8 @@
 * :class:`CredentialStamper`: what an auth declares about the credentials it puts on a request. The credential guard
   uses it to keep them on trusted origins; the cache uses it to partition entries by credential and to keep
   credentials out of storage. Its first two members, :class:`CredentialCarrier`, are what every middleware declares.
+* :data:`EXPLICIT_HEADERS`: set by the client on every request whose call or view sets ``headers=``. The credential
+  guard keeps those headers off untrusted origins; the cache partitions entries by the view's.
 * :data:`BREAKER_GATE`: set by the client on every call, read by the retry layer, so a retry sequence stops as soon as
   the origin's breaker opens without the retry layer knowing about breakers.
 * :class:`BudgetBacklogError` and :class:`BudgetPausedError`: raised by the rate budget for an attempt whose turn, or
@@ -17,11 +19,23 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 from headgate._core._context import Slot
 
-__all__ = ["BREAKER_GATE", "BudgetBacklogError", "BudgetPausedError", "CredentialCarrier", "CredentialStamper"]
+if TYPE_CHECKING:
+    import httpx2
+
+__all__ = [
+    "BREAKER_GATE",
+    "EXPLICIT_HEADERS",
+    "BudgetBacklogError",
+    "BudgetPausedError",
+    "CredentialCarrier",
+    "CredentialStamper",
+    "ExplicitHeaders",
+]
 
 
 @runtime_checkable
@@ -48,6 +62,32 @@ class CredentialStamper(CredentialCarrier, Protocol):
         ...
 
 
+#: The request extension holding a request's :class:`ExplicitHeaders`. httpx2 hands a request's extensions to the
+#: redirects that follow it.
+EXPLICIT_HEADERS: Final = "headgate.explicit_headers"
+
+
+@dataclass(frozen=True, slots=True)
+class ExplicitHeaders:
+    """The headers a call set beyond the client's: its view's (``with_options(headers=...)``) and its own.
+
+    Names are lower case. *origin* is the origin the code addressed: the call's URL, or for a later page of a walk, the
+    first page's, since the server chose the later page's URL.
+    """
+
+    origin: httpx2.Origin
+    view: frozenset[str]
+    call: frozenset[str]
+
+    def withheld_at(self, origin: httpx2.Origin) -> frozenset[str]:
+        """Return the names to withhold from untrusted *origin*: the view's always, the call's off the addressed one.
+
+        A view's headers are defaults like ``HttpOptions.headers``; a call's are meant for the URL the call named, so
+        they still reach it when it is another origin, but no redirect or next page taking them elsewhere.
+        """
+        return self.view if origin == self.origin else self.view | self.call
+
+
 #: Answers whether the breaker for the call's origin is refusing right now. The client puts it on every call's
 #: context; the retry layer checks it before scheduling another attempt.
 BREAKER_GATE = Slot[Callable[[], bool]]("breaker_gate")
@@ -69,12 +109,11 @@ class BudgetBacklogError(Exception):
 class BudgetPausedError(Exception):
     """Raised by ``Pacer.wait`` when the server's pause outlasts the call's deadline, so the attempt is never sent.
 
-    ``AsyncBaseClient`` raises it to its caller as :class:`headgate.errors.RateLimitError`. ``retry_after`` is the
-    seconds left in the pause; ``status_code`` is the status of the response that asked for it.
+    ``Client`` raises it to its caller as :class:`headgate.RateLimitError` with no status code, since
+    the call it refuses got no response. ``retry_after`` is the seconds left in the pause.
     """
 
-    def __init__(self, message: str, *, retry_after: float, status_code: int) -> None:
-        """Record *message*, *retry_after* and *status_code*."""
+    def __init__(self, message: str, *, retry_after: float) -> None:
+        """Record *message* and *retry_after*."""
         super().__init__(message)
         self.retry_after = retry_after
-        self.status_code = status_code

@@ -28,8 +28,9 @@ if TYPE_CHECKING:
 __all__ = ["DEFAULT_MAX_RESPONSE_BYTES", "read_capped", "read_head"]
 
 #: Ceiling on a single **decompressed** response body, in bytes. httpx2 has no body-size ceiling of its own
-#: (``httpx2.Limits`` caps connections only), and a ~500 KB gzipped body can expand to 524 MB. Raise it per client
-#: with ``max_response_bytes=``, or use ``stream()`` for a body too large to hold.
+#: (``httpx2.Limits`` caps connections only), and a ~500 KB gzipped body can expand to 524 MB. Set it per client with
+#: ``HttpOptions(max_response_bytes=)``, raise or lower it for one call with that call's ``max_response_bytes=``, or
+#: use ``stream()`` for a body too large to hold.
 DEFAULT_MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 
 #: Headers describing the on-the-wire encoding, dropped from a rebuilt response because its body is already decoded.
@@ -115,7 +116,8 @@ def _rebuilt(streamed: httpx2.Response, content: bytes) -> httpx2.Response:
     dropped = _WIRE_ENCODING_HEADERS if _has_body(streamed) else ()
     return httpx2.Response(
         status_code=streamed.status_code,
-        headers=[(k, v) for k, v in streamed.headers.multi_items() if k.lower() not in dropped],
+        # Raw bytes, so a value that is not ASCII (a UTF-8 file name, say) goes back exactly as it came.
+        headers=[(k, v) for k, v in streamed.headers.raw if k.lower().decode("latin-1") not in dropped],
         content=content,
         request=streamed.request,
         history=streamed.history,

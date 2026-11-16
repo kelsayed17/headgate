@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``AsyncBaseClient``: construction, the transport stack, retries, the breaker, requests, auth and responses.
+"""``Client``: construction, the transport stack, retries, the breaker, requests, auth and responses.
 
 The declared-response pipeline (response check, declared answers, the status ladder) is pinned at the end.
 """
@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import inspect
 import json
+import uuid
 from contextlib import AbstractAsyncContextManager
 from decimal import Decimal
+from enum import Enum
 from typing import TYPE_CHECKING, Any, TypedDict, cast, override
 
 import httpx2
@@ -19,26 +21,33 @@ import msgspec
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from headgate import CachedTokenAuth, HttpOptions, Minted, Reader, Timeouts, TransportPolicy
-from headgate import pydantic as pydantic_flavor
-from headgate._auth import AUTH_HOP, StaticHeaderAuth
-from headgate._client import AsyncBaseClient
-from headgate._responses import Expect, ResponseCheck, as_bytes, nothing
-from headgate.errors import (
+import headgate
+from headgate import (
     AuthError,
+    CachedTokenAuth,
+    Client,
+    Form,
+    HttpOptions,
+    Json,
+    Minted,
+    Rate,
     RateLimitError,
-    RefusedError,
-    ResponseParseError,
+    Reader,
+    RetryPolicy,
+    Timeouts,
     TransportError,
+    TransportPolicy,
     UpstreamStatusError,
 )
+from headgate import pydantic as pydantic_flavor
+from headgate._auth import AUTH_HOP, StaticHeaderAuth
+from headgate._responses import Expect, ResponseCheck, as_bytes, nothing
+from headgate.errors import RefusedError, ResponseParseError
 from headgate.msgspec import reader
-from headgate.ratelimit import UNLIMITED, Rate
 from headgate.ratelimit._budget import Pacer
-from headgate.retry import Backoff, RetryPolicy
+from headgate.retry import Backoff
 from headgate.testing import FakeTransport, TestClock
 from tests.support.breakers import failures
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -73,7 +82,7 @@ async def test_every_retry_is_paced_by_the_rate_budget(monkeypatch: pytest.Monke
         return httpx2.Response(next(statuses))
 
     max_attempts = 3
-    client = StubClient(
+    client = Client(
         rate=_RATE,
         base_url="https://x",
         policy=TransportPolicy(retry=RetryPolicy(attempts=max_attempts)),
@@ -86,12 +95,10 @@ async def test_every_retry_is_paced_by_the_rate_budget(monkeypatch: pytest.Monke
 async def test_a_client_reports_its_failures_to_the_shared_breaker(httpx2_mock: HTTPXMock) -> None:
     """Check that a failed call is charged to the process-wide breaker of the host it addressed."""
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.SERVICE_UNAVAILABLE)
-    client = StubClient(
-        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=1))
-    )
+    client = Client(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=1)))
     with pytest.raises(UpstreamStatusError):
         await client.get("x", expect=RESPONSE)
-    assert failures("api.example") == 1
+    assert failures(client, "api.example") == 1
 
 
 # --- Construction ---
@@ -99,10 +106,10 @@ async def test_a_client_reports_its_failures_to_the_shared_breaker(httpx2_mock: 
 
 def test_base_url_is_required_and_rate_defaults_to_unlimited() -> None:
     """Check that a client must state its base URL, and paces nothing itself unless it states a rate."""
-    parameters = inspect.signature(AsyncBaseClient.__init__).parameters
+    parameters = inspect.signature(Client.__init__).parameters
     assert {parameters[name].kind for name in ("base_url", "rate")} == {inspect.Parameter.KEYWORD_ONLY}
     assert parameters["base_url"].default is inspect.Parameter.empty
-    assert parameters["rate"].default is UNLIMITED
+    assert parameters["rate"].default is None
 
 
 async def test_each_client_has_its_own_http_client() -> None:
@@ -113,8 +120,8 @@ async def test_each_client_has_its_own_http_client() -> None:
         sent.append(str(request.url))
         return httpx2.Response(httpx2.codes.OK)
 
-    a = StubClient(rate=_RATE, base_url="https://a.example", http=HttpOptions(transport=httpx2.MockTransport(handler)))
-    b = StubClient(rate=_RATE, base_url="https://b.example", http=HttpOptions(transport=httpx2.MockTransport(handler)))
+    a = Client(rate=_RATE, base_url="https://a.example", http=HttpOptions(transport=httpx2.MockTransport(handler)))
+    b = Client(rate=_RATE, base_url="https://b.example", http=HttpOptions(transport=httpx2.MockTransport(handler)))
     await a.get("x", expect=nothing)
     await a.aclose()
     await b.get("x", expect=nothing)
@@ -125,7 +132,7 @@ async def test_each_client_has_its_own_http_client() -> None:
     ("build", "match"),
     [
         (lambda: TransportPolicy(retry=RetryPolicy(attempts=0)), "attempts"),
-        (lambda: HttpOptions(timeout=Timeouts(read=0)), "read"),
+        (lambda: TransportPolicy(timeout=Timeouts(read=0)), "read"),
         (lambda: HttpOptions(max_response_bytes=0), "max_response_bytes"),
     ],
 )
@@ -138,10 +145,10 @@ def test_an_option_group_refuses_a_nonsense_value(build: Callable[[], object], m
 @pytest.mark.parametrize(
     ("build", "message"),
     [
-        (lambda: StubClient(base_url="https://x", rate=cast("Any", 10)), "rate= takes a Rate"),
-        (lambda: TransportPolicy(retry=cast("Any", None)), "retry= takes a RetryPolicy"),
+        (lambda: Client(base_url="https://x", rate=cast("Any", 10)), "rate= takes a Rate"),
+        (lambda: TransportPolicy(retry=cast("Any", 1)), "retry= takes a RetryPolicy, or None"),
         (lambda: TransportPolicy(breaker=cast("Any", 3)), "breaker= takes a BreakerPolicy"),
-        (lambda: HttpOptions(timeout=cast("Any", 5.0)), "timeout= takes a Timeouts"),
+        (lambda: TransportPolicy(timeout=cast("Any", 5.0)), "timeout= takes a Timeouts"),
     ],
     ids=["rate", "retry", "breaker", "timeout"],
 )
@@ -154,7 +161,7 @@ def test_a_value_of_the_wrong_kind_is_refused_where_it_is_written(build: Callabl
 async def test_a_calls_timeout_of_the_wrong_kind_is_refused_before_anything_is_sent() -> None:
     """Refuse ``timeout=5.0`` on a call or a view with a ``TypeError`` naming ``Timeouts``, and send nothing."""
     fake = FakeTransport().reply("GET", "/x", 200)
-    async with StubClient(base_url="https://a.example", rate=_RATE, http=HttpOptions(transport=fake)) as client:
+    async with Client(base_url="https://a.example", rate=_RATE, http=HttpOptions(transport=fake)) as client:
         with pytest.raises(TypeError, match="timeout= takes a Timeouts"):
             await client.get("x", expect=nothing, timeout=cast("Any", 5.0))
         with pytest.raises(TypeError, match="timeout= takes a Timeouts"):
@@ -164,14 +171,14 @@ async def test_a_calls_timeout_of_the_wrong_kind_is_refused_before_anything_is_s
 
 def test_init_config_not_exposed_on_self() -> None:
     """Check that construction arguments configure the stack and none is kept as an attribute."""
-    client = StubClient(base_url="https://x", rate=Rate(requests=99, period=2.0))
+    client = Client(base_url="https://x", rate=Rate(requests=99, period=2.0))
     assert not hasattr(client, "base_url")
     assert not hasattr(client, "rate")
 
 
 async def test_the_client_is_an_async_context_manager_that_closes_on_exit() -> None:
     """Check that the client satisfies the stdlib protocol and that leaving the block closes it."""
-    client = StubClient(rate=_RATE, base_url="https://a.example")
+    client = Client(rate=_RATE, base_url="https://a.example")
     assert isinstance(client, AbstractAsyncContextManager)
     async with client as entered:
         assert entered is client
@@ -185,7 +192,7 @@ async def test_the_client_is_an_async_context_manager_that_closes_on_exit() -> N
 async def test_base_url_joins_relative_path(httpx2_mock: HTTPXMock) -> None:
     """Check that a relative path joins onto a base URL that has no trailing slash."""
     httpx2_mock.add_response(url="https://api.example/v1/foo", json={"ok": True})
-    client = StubClient(rate=_RATE, base_url="https://api.example/v1")
+    client = Client(rate=_RATE, base_url="https://api.example/v1")
     resp = await client.get("foo", expect=RESPONSE)
     assert str(resp.url) == "https://api.example/v1/foo"
 
@@ -193,7 +200,7 @@ async def test_base_url_joins_relative_path(httpx2_mock: HTTPXMock) -> None:
 async def test_absolute_url_passes_through(httpx2_mock: HTTPXMock) -> None:
     """Check that an absolute ``str`` URL is sent as given, not joined onto the base URL."""
     httpx2_mock.add_response(url="https://other.example/raw", json={"ok": True})
-    client = StubClient(rate=_RATE, base_url="https://api.example/v1")
+    client = Client(rate=_RATE, base_url="https://api.example/v1")
     resp = await client.get("https://other.example/raw", expect=RESPONSE)
     assert str(resp.url) == "https://other.example/raw"
 
@@ -216,7 +223,7 @@ async def test_query_params_are_encoded_as_httpx2_encodes_a_mapping() -> None:
         seen.append(request.url.query)
         return httpx2.Response(httpx2.codes.OK)
 
-    client = StubClient(
+    client = Client(
         rate=_RATE, base_url="https://api.example", http=HttpOptions(transport=httpx2.MockTransport(handler))
     )
     params = {"a": ["1", 2], "b": None, "c": True, "d": Decimal("1.5"), "e": ("x",)}
@@ -224,6 +231,73 @@ async def test_query_params_are_encoded_as_httpx2_encodes_a_mapping() -> None:
     query: _SeriesQuery = {"series_id": "GDP", "limit": 3}
     await client.get("x", expect=nothing, params=query)
     assert seen == [b"a=1&a=2&b=&c=true&d=1.5&e=x", b"series_id=GDP&limit=3"]
+
+
+class _OrderState(Enum):
+    """A query value an ``Enum`` member stands for."""
+
+    OPEN = "open"
+
+
+async def test_a_scalar_httpx2_does_not_encode_is_sent_as_its_str() -> None:
+    """Send a ``UUID`` and an ``Enum`` member as their ``str()``, which is what they mean in a query."""
+    seen: list[str] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request.url.query.decode())
+        return httpx2.Response(httpx2.codes.OK)
+
+    client = Client(
+        rate=_RATE, base_url="https://api.example", http=HttpOptions(transport=httpx2.MockTransport(handler))
+    )
+    order = uuid.UUID("12345678-1234-5678-1234-567812345678")
+    await client.get("x", expect=nothing, params={"order": order, "status": _OrderState.OPEN})
+
+    assert seen == [f"order={order}&status={_OrderState.OPEN}"]
+
+
+@pytest.mark.parametrize(
+    ("value", "got"),
+    [
+        ({"a": 1}, "dict"),
+        ({"a", "b"}, "set"),
+        (frozenset({"a"}), "frozenset"),
+        (b"raw", "bytes"),
+        (bytearray(b"raw"), "bytearray"),
+        (memoryview(b"raw"), "memoryview"),
+        ([["a", "b"]], "list"),
+        (["a", ("b",)], "tuple"),
+        ([{"a": 1}], "dict"),
+    ],
+    ids=[
+        "mapping",
+        "set",
+        "frozenset",
+        "bytes",
+        "bytearray",
+        "memoryview",
+        "nested-list",
+        "nested-tuple",
+        "listed-dict",
+    ],
+)
+async def test_a_nested_query_value_is_refused_before_anything_is_sent(value: object, got: str) -> None:
+    """Refuse a value no query parameter can carry, naming the parameter and its type, rather than send its ``repr``."""
+    seen: list[httpx2.Request] = []
+    client = Client(
+        rate=_RATE,
+        base_url="https://api.example",
+        http=HttpOptions(transport=httpx2.MockTransport(lambda request: seen.append(request) or httpx2.Response(200))),
+    )
+
+    with pytest.raises(TypeError) as raised:
+        await client.get("x", expect=nothing, params={"filter": value})
+
+    assert str(raised.value) == (
+        f"params= takes a str, int, float, bool or None for each value, or a list or tuple of them (got {got} under"
+        " 'filter'): encode a nested value into text first, such as with json.dumps"
+    )
+    assert seen == []
 
 
 # --- Retry on transient status ---
@@ -234,9 +308,7 @@ async def test_retries_on_503_then_succeeds(httpx2_mock: HTTPXMock) -> None:
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.SERVICE_UNAVAILABLE)
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.SERVICE_UNAVAILABLE)
     httpx2_mock.add_response(url="https://api.example/x", json={"ok": True})
-    client = StubClient(
-        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3))
-    )
+    client = Client(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3)))
     resp = await client.get("x", expect=RESPONSE)
     assert resp.status_code == httpx2.codes.OK
 
@@ -245,9 +317,7 @@ async def test_raises_after_exhausting_retries(httpx2_mock: HTTPXMock) -> None:
     """Check that a 5xx surviving every attempt raises."""
     for _ in range(3):
         httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.SERVICE_UNAVAILABLE)
-    client = StubClient(
-        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3))
-    )
+    client = Client(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3)))
     with pytest.raises(UpstreamStatusError):
         await client.get("x", expect=RESPONSE)
 
@@ -269,7 +339,7 @@ async def test_honors_retry_after_on_429(httpx2_mock: HTTPXMock) -> None:
     policy = TransportPolicy(retry=RetryPolicy(attempts=2, backoff=Backoff(factor=0.0)))
     clock = TestClock()
     with clock.install():
-        client = StubClient(rate=_RATE, base_url="https://api.example", policy=policy)
+        client = Client(rate=_RATE, base_url="https://api.example", policy=policy)
     resp = await client.get("x", expect=RESPONSE)
 
     assert resp.status_code == httpx2.codes.OK
@@ -281,9 +351,7 @@ async def test_honors_retry_after_on_429(httpx2_mock: HTTPXMock) -> None:
 
 async def test_circuit_breaker_opens_after_threshold(httpx2_mock: HTTPXMock) -> None:
     """Check that five consecutive failures open the host's breaker, which then refuses without sending."""
-    client = StubClient(
-        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=1))
-    )
+    client = Client(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=1)))
     for _ in range(5):
         httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.SERVICE_UNAVAILABLE)
         with pytest.raises(UpstreamStatusError):
@@ -297,14 +365,12 @@ async def test_circuit_breaker_opens_after_threshold(httpx2_mock: HTTPXMock) -> 
 async def test_circuit_breaker_resets_on_success(httpx2_mock: HTTPXMock) -> None:
     """Check that a success after a failure resets the host's failure count."""
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.SERVICE_UNAVAILABLE)
-    client = StubClient(
-        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=1))
-    )
+    client = Client(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=1)))
     with pytest.raises(UpstreamStatusError):
         await client.get("x", expect=RESPONSE)
     httpx2_mock.add_response(url="https://api.example/x", json={"ok": True})
     await client.get("x", expect=RESPONSE)
-    assert failures("api.example") == 0
+    assert failures(client, "api.example") == 0
 
 
 class _HopAuth(CachedTokenAuth):
@@ -324,7 +390,7 @@ async def test_a_failed_auth_hop_is_not_charged_to_the_called_host() -> None:
         msg = "credential host down"
         raise httpx2.ConnectError(msg, request=request)
 
-    client = StubClient(
+    client = Client(
         rate=_RATE,
         base_url="https://api.example",
         auth=_HopAuth(),
@@ -333,7 +399,7 @@ async def test_a_failed_auth_hop_is_not_charged_to_the_called_host() -> None:
     )
     with pytest.raises(TransportError, match="credential host down"):
         await client.get("x", expect=nothing)
-    assert failures("api.example") == 0
+    assert failures(client, "api.example") == 0
 
 
 # --- Request bodies ---
@@ -355,8 +421,8 @@ def _order_json() -> dict[str, object]:
 async def test_json_body_kwarg_rides_through_with_content_type(httpx2_mock: HTTPXMock) -> None:
     """Check that ``json=`` builtins are serialized by httpx2 and stamped with the JSON content type."""
     httpx2_mock.add_response(url="https://api.example/o", json={"ok": True})
-    client = StubClient(rate=_RATE, base_url="https://api.example")
-    await client.post("o", expect=RESPONSE, json=_order_json())
+    client = Client(rate=_RATE, base_url="https://api.example")
+    await client.post("o", expect=RESPONSE, body=Json(_order_json()))
     req = httpx2_mock.get_requests()[0]
     assert req.headers["content-type"] == "application/json"
     assert json.loads(req.content) == {"orderSide": "buy"}
@@ -365,8 +431,10 @@ async def test_json_body_kwarg_rides_through_with_content_type(httpx2_mock: HTTP
 async def test_json_body_content_type_is_overridable(httpx2_mock: HTTPXMock) -> None:
     """Check that an explicit caller ``Content-Type`` wins over the one ``json=`` stamps."""
     httpx2_mock.add_response(url="https://api.example/o", json={})
-    client = StubClient(rate=_RATE, base_url="https://api.example")
-    await client.post("o", expect=RESPONSE, json=_order_json(), headers={"Content-Type": "application/vnd.api+json"})
+    client = Client(rate=_RATE, base_url="https://api.example")
+    await client.post(
+        "o", expect=RESPONSE, body=Json(_order_json()), headers={"Content-Type": "application/vnd.api+json"}
+    )
     req = httpx2_mock.get_requests()[0]
     assert req.headers["content-type"] == "application/vnd.api+json"
 
@@ -374,9 +442,9 @@ async def test_json_body_content_type_is_overridable(httpx2_mock: HTTPXMock) -> 
 async def test_json_body_does_not_mutate_caller_headers(httpx2_mock: HTTPXMock) -> None:
     """Check that httpx2 copies the caller's headers rather than adding the content type to them."""
     httpx2_mock.add_response(url="https://api.example/o", json={})
-    client = StubClient(rate=_RATE, base_url="https://api.example")
+    client = Client(rate=_RATE, base_url="https://api.example")
     caller_headers: dict[str, str] = {"X-Custom": "1"}
-    await client.post("o", expect=RESPONSE, json=_order_json(), headers=caller_headers)
+    await client.post("o", expect=RESPONSE, body=Json(_order_json()), headers=caller_headers)
     assert caller_headers == {"X-Custom": "1"}
 
 
@@ -388,10 +456,10 @@ async def test_a_form_body_rides_data() -> None:
         seen.append(request.content)
         return httpx2.Response(httpx2.codes.OK)
 
-    client = StubClient(
+    client = Client(
         rate=_RATE, base_url="https://api.example", http=HttpOptions(transport=httpx2.MockTransport(handler))
     )
-    await client.post("o", expect=nothing, data={"side": "buy"})
+    await client.post("o", expect=nothing, body=Form({"side": "buy"}))
     assert seen == [b"side=buy"]
 
 
@@ -414,7 +482,7 @@ async def test_timeout_named_param_forwarded_to_httpx(per_call: Timeouts, expect
         captured["timeout"] = req.extensions.get("timeout")
         return httpx2.Response(httpx2.codes.OK, json={})
 
-    client = StubClient(
+    client = Client(
         rate=_RATE, base_url="https://api.example", http=HttpOptions(transport=httpx2.MockTransport(handler))
     )
     await client.get("x", expect=RESPONSE, timeout=per_call)
@@ -427,9 +495,7 @@ async def test_timeout_named_param_forwarded_to_httpx(per_call: Timeouts, expect
 async def test_non_transient_4xx_raises_after_one_request(httpx2_mock: HTTPXMock) -> None:
     """Check that a non-transient 4xx (a 404) is not retried and raises with its real status."""
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.NOT_FOUND)
-    client = StubClient(
-        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3))
-    )
+    client = Client(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3)))
     with pytest.raises(UpstreamStatusError) as ei:
         await client.get("x", expect=RESPONSE)
     assert ei.value.status_code == httpx2.codes.NOT_FOUND
@@ -439,9 +505,7 @@ async def test_non_transient_4xx_raises_after_one_request(httpx2_mock: HTTPXMock
 async def test_403_raises_auth_error_after_one_request(httpx2_mock: HTTPXMock) -> None:
     """Check that a 403 is not retried and raises ``AuthError``, naming this client's credential."""
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.FORBIDDEN)
-    client = StubClient(
-        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3))
-    )
+    client = Client(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3)))
     with pytest.raises(AuthError) as ei:
         await client.get("x", expect=RESPONSE)
     assert ei.value.status_code == httpx2.codes.FORBIDDEN
@@ -459,9 +523,7 @@ async def test_reported_failure_reflects_the_last_attempt_kind(httpx2_mock: HTTP
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.SERVICE_UNAVAILABLE)
     httpx2_mock.add_exception(httpx2.ConnectError("net"))
     httpx2_mock.add_exception(httpx2.ConnectError("net"))
-    client = StubClient(
-        rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3))
-    )
+    client = Client(rate=_RATE, base_url="https://api.example", policy=TransportPolicy(retry=RetryPolicy(attempts=3)))
     with pytest.raises(TransportError) as ei:
         await client.get("x", expect=RESPONSE)
 
@@ -488,7 +550,7 @@ async def test_an_undeclared_4xx_folds_its_body_into_the_message(httpx2_mock: HT
         status_code=httpx2.codes.BAD_REQUEST,
         content=b'{"code":3003,"message":"insufficient balance to cover this order"}',
     )
-    client = StubClient(rate=_RATE, base_url="https://api.example")
+    client = Client(rate=_RATE, base_url="https://api.example")
     with pytest.raises(UpstreamStatusError) as ei:
         await client.get("x", expect=reader(_M))
     assert "insufficient balance to cover this order" in str(ei.value)
@@ -499,7 +561,7 @@ async def test_an_undeclared_403_folds_its_body_into_the_message(httpx2_mock: HT
     httpx2_mock.add_response(
         url="https://api.example/x", status_code=httpx2.codes.FORBIDDEN, content=b'{"message":"token expired"}'
     )
-    client = StubClient(rate=_RATE, base_url="https://api.example")
+    client = Client(rate=_RATE, base_url="https://api.example")
     with pytest.raises(AuthError) as ei:
         await client.get("x", expect=reader(_M))
     assert "token expired" in str(ei.value)
@@ -512,7 +574,7 @@ async def test_4xx_body_snippet_is_bounded_and_single_line(httpx2_mock: HTTPXMoc
         status_code=httpx2.codes.BAD_REQUEST,
         content=b"<html>\n" + b"x" * 5000 + b"\nTAIL-MARKER</html>",
     )
-    client = StubClient(rate=_RATE, base_url="https://api.example")
+    client = Client(rate=_RATE, base_url="https://api.example")
     with pytest.raises(UpstreamStatusError) as ei:
         await client.get("x", expect=reader(_M))
     msg = str(ei.value)
@@ -524,7 +586,7 @@ async def test_4xx_body_snippet_is_bounded_and_single_line(httpx2_mock: HTTPXMoc
 async def test_a_blank_error_body_adds_no_snippet(httpx2_mock: HTTPXMock) -> None:
     """Check that a whitespace-only error body leaves the error without a body snippet."""
     httpx2_mock.add_response(url="https://api.example/x", status_code=httpx2.codes.BAD_REQUEST, content=b" \n\t ")
-    client = StubClient(rate=_RATE, base_url="https://api.example")
+    client = Client(rate=_RATE, base_url="https://api.example")
     with pytest.raises(UpstreamStatusError) as ei:
         await client.get("x", expect=reader(_M))
     assert str(ei.value).endswith(f"(status={httpx2.codes.BAD_REQUEST})")
@@ -536,7 +598,7 @@ async def test_a_blank_error_body_adds_no_snippet(httpx2_mock: HTTPXMock) -> Non
 async def test_no_auth_no_authorization_header(httpx2_mock: HTTPXMock) -> None:
     """Check that a client built without ``auth=`` sends no Authorization header."""
     httpx2_mock.add_response(url="https://api.example/x", json={})
-    client = StubClient(rate=_RATE, base_url="https://api.example")
+    client = Client(rate=_RATE, base_url="https://api.example")
     await client.get("x", expect=RESPONSE)
     req = httpx2_mock.get_requests()[0]
     assert "Authorization" not in req.headers
@@ -545,9 +607,7 @@ async def test_no_auth_no_authorization_header(httpx2_mock: HTTPXMock) -> None:
 async def test_explicit_headers_win_over_auth(httpx2_mock: HTTPXMock) -> None:
     """Check that an explicit ``headers=`` value wins a clash with the auth flow (``StaticHeaderAuth`` setdefaults)."""
     httpx2_mock.add_response(url="https://api.example/x", json={})
-    client = StubClient(
-        rate=_RATE, base_url="https://api.example", auth=StaticHeaderAuth({"Authorization": "Bearer T"})
-    )
+    client = Client(rate=_RATE, base_url="https://api.example", auth=StaticHeaderAuth({"Authorization": "Bearer T"}))
     await client.get("x", expect=RESPONSE, headers={"Authorization": "X"})
     req = httpx2_mock.get_requests()[0]
     assert req.headers.get("Authorization") == "X"
@@ -565,7 +625,7 @@ class _StampAuth(httpx2.Auth):
 async def test_auth_param_threaded_to_async_client(httpx2_mock: HTTPXMock) -> None:
     """Check that an ``httpx2.Auth`` passed as ``auth=`` runs at send time and stamps the request."""
     httpx2_mock.add_response(url="https://api.example/x", json={})
-    client = StubClient(rate=_RATE, base_url="https://api.example", auth=_StampAuth())
+    client = Client(rate=_RATE, base_url="https://api.example", auth=_StampAuth())
     await client.get("x", expect=RESPONSE)
     req = httpx2_mock.get_requests()[0]
     assert req.headers["X-A"] == "1"
@@ -589,10 +649,10 @@ class _Oi(msgspec.Struct):
     oi: float | None = None
 
 
-def _replying(content: bytes) -> StubClient:
+def _replying(content: bytes) -> Client:
     """Return a client whose every request is answered 200 with *content*."""
     transport = httpx2.MockTransport(lambda _request: httpx2.Response(httpx2.codes.OK, content=content))
-    return StubClient(rate=_RATE, base_url="https://api.example", http=HttpOptions(transport=transport))
+    return Client(rate=_RATE, base_url="https://api.example", http=HttpOptions(transport=transport))
 
 
 async def test_struct_decode_lax_opt_in_coerces_strings() -> None:
@@ -639,10 +699,10 @@ class _Status(msgspec.Struct, frozen=True):
 
 def _serving(
     *responses: httpx2.Response, follow_redirects: bool = True, response_check: ResponseCheck | None = None
-) -> StubClient:
+) -> Client:
     """Return a client whose successive requests are answered by *responses*, in order."""
     it = iter(responses)
-    return StubClient(
+    return Client(
         rate=_RATE,
         base_url="https://api.example",
         http=HttpOptions(
@@ -677,7 +737,7 @@ async def test_a_response_check_refuses_a_sign_in_redirect() -> None:
         await client.get("x", expect=reader(dict[str, str]))
     assert ei.value.status_code == httpx2.codes.FOUND
     assert ei.value.code == "missing_key"
-    assert ei.value.source == "StubClient"
+    assert ei.value.source == "api.example"
     assert "Moved to key page" in str(ei.value)
 
 
@@ -809,7 +869,7 @@ async def test_a_refused_reader_becomes_its_kind_with_the_real_status_and_code()
     assert (ei.value.status_code, ei.value.code, ei.value.source) == (
         httpx2.codes.OK,
         "REQUEST_NOT_PROCESSED",
-        "StubClient",
+        "api.example",
     )
     assert "quota spent" in str(ei.value)
 
@@ -870,12 +930,48 @@ async def test_a_client_without_a_rate_paces_nothing_but_obeys_a_server_pause() 
     fake = FakeTransport().reply("GET", "/x", 200, 200, httpx2.Response(429, headers={"Retry-After": "2"}), 200)
     clock = TestClock()
     with clock.install():
-        client = AsyncBaseClient(base_url="https://api.example", http=HttpOptions(transport=fake))
+        client = Client(base_url="https://api.example", http=HttpOptions(transport=fake))
     async with client:
         for _ in range(2):
             await client.get("x", expect=nothing)
         assert clock.sleeps == []
         with pytest.raises(RateLimitError):
-            await client.get("x", expect=nothing, retry=False)
+            await client.get("x", expect=nothing, retry=None)
         await client.get("x", expect=nothing)
     assert clock.sleeps == [2.0]
+
+
+def test_a_client_is_held_not_subclassed() -> None:
+    """Refuse a subclass, naming what to write instead; the old base class is gone."""
+    with pytest.raises(TypeError, match=r"^GitHub cannot subclass Client: hold one instead, as self\._http = Client"):
+        type("GitHub", (cast("Any", Client),), {})
+    assert not hasattr(headgate, "AsyncBaseClient")
+
+
+def test_a_view_is_a_client() -> None:
+    """Return a ``Client`` from ``with_options``."""
+    view = Client(base_url="https://api.example", rate=Rate.per_second(10)).with_options(headers={"X-View": "v"})
+
+    assert type(view) is Client
+
+
+def _answering_404() -> HttpOptions:
+    """Return options sending every request to a network that answers 404."""
+    return HttpOptions(transport=httpx2.MockTransport(lambda _request: httpx2.Response(404)))
+
+
+async def test_an_error_names_the_clients_host() -> None:
+    """Prefix an error with the ``base_url``'s host and any port other than the default, which tells SDKs apart."""
+    client = Client(
+        base_url="https://api.github.com:443",
+        rate=Rate.per_second(10),
+        policy=TransportPolicy(retry=None),
+        http=_answering_404(),
+    )
+
+    with pytest.raises(UpstreamStatusError, match=r"^\[api\.github\.com\] ") as raised:
+        await client.get("repos/x/y", expect=nothing)
+    assert raised.value.source == "api.github.com"
+    on_a_port = Client(base_url="http://localhost:8000/v1", http=_answering_404())
+    with pytest.raises(UpstreamStatusError, match=r"^\[localhost:8000\] "):
+        await on_a_port.get("x", expect=nothing)

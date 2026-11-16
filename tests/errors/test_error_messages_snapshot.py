@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from typing import TYPE_CHECKING, Final, override
 
 import httpx2
@@ -23,9 +24,10 @@ from headgate import (
     AuthError,
     BreakerPolicy,
     CachedTokenAuth,
+    Client,
     ClientError,
     HttpOptions,
-    Problem,
+    Json,
     RateLimitError,
     Reader,
     RetryPolicy,
@@ -35,11 +37,9 @@ from headgate import (
     nothing,
 )
 from headgate.breaker import BreakerRegistry
-from headgate.errors import RefusedError
-from headgate.ratelimit import UNLIMITED
-from headgate.retry import NO_RETRY, Backoff
+from headgate.errors import Problem, RefusedError
 from headgate.testing import TestClock
-from tests.support.clients import StubClient
+from headgate.timing import Timing, current_timing, timing_override
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
@@ -89,15 +89,14 @@ def _client(
     policy: TransportPolicy | None = None,
     http: HttpOptions | None = None,
     auth: httpx2.Auth | None = None,
-) -> StubClient:
+) -> Client:
     """Return a client over a script serving *responses*, sending each call once unless *policy* says otherwise."""
     transport = Script(*responses).transport()
     options = http or HttpOptions()
-    return StubClient(
+    return Client(
         base_url=_BASE,
-        rate=UNLIMITED,
         auth=auth,
-        policy=policy or TransportPolicy(retry=NO_RETRY, breaker=None),
+        policy=policy or TransportPolicy(retry=None, breaker=None),
         http=HttpOptions(
             transport=options.transport or transport,
             max_response_bytes=options.max_response_bytes,
@@ -119,7 +118,7 @@ def _fail(exc_type: type[httpx2.TransportError], message: str) -> httpx2.MockTra
     return httpx2.MockTransport(handler)
 
 
-async def _get(client: StubClient, *, expect: Reader[object] = nothing) -> None:
+async def _get(client: Client, *, expect: Reader[object] = nothing) -> None:
     """Send one GET for an order through *client*, with a credential in its query, closing the client afterwards."""
     async with client:
         await client.get("orders" + _KEYED_QUERY, expect=expect)
@@ -165,10 +164,10 @@ async def _surviving_429() -> None:
 
 async def _surviving_503() -> None:
     """Answer 503 on every attempt of three, under a policy with a fixed backoff: the history is in the notes."""
-    policy = TransportPolicy(
-        retry=RetryPolicy(attempts=3, backoff=Backoff(jitter=lambda: 0.0), budget=None), breaker=None
-    )
-    await _get(_client(httpx2.Response(503, text="maintenance", headers={"request-id": "req-503"}), policy=policy))
+    policy = TransportPolicy(retry=RetryPolicy(attempts=3, budget=None), breaker=None)
+    with timing_override(replace(current_timing(), random=lambda: 0.0)):
+        built = _client(httpx2.Response(503, text="maintenance", headers={"request-id": "req-503"}), policy=policy)
+    await _get(built)
 
 
 async def _surviving_429_past_max_retry_after() -> None:
@@ -185,7 +184,7 @@ async def _surviving_500() -> None:
 async def _surviving_503_on_a_post() -> None:
     """Answer 503 to a POST without an idempotency key: transient, but not retryable."""
     async with _client(503) as client:
-        await client.post("orders", expect=nothing, json={"sku": "a"})
+        await client.post("orders", expect=nothing, body=Json({"sku": "a"}))
 
 
 async def _surviving_501() -> None:
@@ -254,10 +253,9 @@ class _Hanging(httpx2.AsyncBaseTransport):
 
 async def _deadline_exceeded() -> None:
     """Hang past the call's deadline: ``ClientTimeoutError`` naming the request line."""
-    async with StubClient(
+    async with Client(
         base_url=_BASE,
-        rate=UNLIMITED,
-        policy=TransportPolicy(retry=NO_RETRY, breaker=None),
+        policy=TransportPolicy(retry=None, breaker=None),
         http=HttpOptions(transport=_Hanging()),
     ) as client:
         await client.get("orders" + _KEYED_QUERY, expect=nothing, deadline=_DEADLINE)
@@ -265,9 +263,9 @@ async def _deadline_exceeded() -> None:
 
 async def _open_breaker() -> None:
     """Call an origin whose breaker a 503 opened: ``CircuitOpenError`` with the whole cooldown left."""
-    registry = BreakerRegistry(clock=lambda: 0.0)
+    registry = BreakerRegistry(timing=Timing(clock=lambda: 0.0))
     policy = TransportPolicy(
-        retry=NO_RETRY, breaker=BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=registry)
+        retry=None, breaker=BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=registry)
     )
     async with _client(503, policy=policy) as client:
         with pytest.raises(ClientError):
@@ -277,11 +275,10 @@ async def _open_breaker() -> None:
 
 async def _forbidden_destination() -> None:
     """Call a loopback address with the SSRF guard on: ``ForbiddenDestinationError`` before anything is sent."""
-    async with StubClient(
+    async with Client(
         base_url="https://127.0.0.1:8443",
-        rate=UNLIMITED,
-        policy=TransportPolicy(retry=NO_RETRY, breaker=None),
-        http=HttpOptions(transport=Script().transport(), security=SecurityOptions(allow_private_hosts=False)),
+        policy=TransportPolicy(retry=None, breaker=None),
+        http=HttpOptions(transport=Script().transport(), security=SecurityOptions(block_private_hosts=True)),
     ) as client:
         await client.get("admin" + _KEYED_QUERY, expect=nothing)
 

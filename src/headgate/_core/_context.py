@@ -3,7 +3,7 @@
 
 """The per-call context: what every layer of the stack knows about the logical call a request belongs to.
 
-``AsyncBaseClient`` builds one :class:`CallContext` per call and stamps it on the request in a single extension.
+``Client`` builds one :class:`CallContext` per call and stamps it on the request in a single extension.
 httpx2 hands a request's extensions to every redirect hop, and the cache layer restores them below hishel, so every
 layer from the auth flow down to the network transport finds the same object with :meth:`CallContext.find`. Layers
 read and write it through its methods, never through extension keys of their own:
@@ -23,6 +23,7 @@ read and write it through its methods, never through extension keys of their own
 from __future__ import annotations
 
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, cast, override
 
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
     from headgate._core._events import Emitter, Event
     from headgate._core._time import Clock
 
-__all__ = ["CallContext", "SendProgress", "Slot"]
+__all__ = ["SENDING", "CallContext", "CallView", "SendProgress", "Slot", "call_info", "progress_of"]
 
 #: The one request extension headgate keeps its per-call state in.
 _EXTENSION: Final = "headgate.call"
@@ -48,13 +49,22 @@ _FITTED_TIMEOUT: Final = "headgate.fitted_timeout"
 type PhaseTimeouts = tuple[tuple[str, float | None], ...]
 
 
-def _named(timeout: object) -> PhaseTimeouts:
-    """Return *timeout*, a request's ``timeout`` extension, as :data:`PhaseTimeouts`; empty when it is not one."""
+def _phases(timeout: object) -> dict[str, float | None]:
+    """Return *timeout*, a request's ``timeout`` extension, as limits by phase; empty when it is not one."""
     if not isinstance(timeout, dict):
-        return ()
-    # Sorted by phase, which is unique, so the values (a float or None) are never compared.
-    pairs: list[tuple[str, float | None]] = sorted((str(phase), limit) for phase, limit in timeout.items())
-    return tuple(pairs)
+        return {}
+    return {str(phase): limit for phase, limit in timeout.items()}
+
+
+def _requested(request: httpx2.Request) -> dict[str, float | None]:
+    """Return the limits by phase *request* asked for, as :meth:`CallContext.requested_timeouts` describes."""
+    extensions = request.extensions
+    original = _phases(extensions.get(_REQUESTED_TIMEOUT))
+    fitted = _phases(extensions.get(_FITTED_TIMEOUT))
+    return {
+        phase: original.get(phase, limit) if phase in fitted and limit == fitted[phase] else limit
+        for phase, limit in _phases(extensions.get("timeout")).items()
+    }
 
 
 @dataclass(slots=True)
@@ -107,6 +117,7 @@ class CallContext:
         "_emitter",
         "_notes",
         "_progress",
+        "_sent",
         "_slots",
         "follow_redirects",
         "idempotency_key",
@@ -130,6 +141,7 @@ class CallContext:
         self._emitter = emitter
         self._attempt = 0
         self._progress = SendProgress()
+        self._sent = False
         self._notes: list[str] = []
         self._slots: dict[object, object] = {}
         #: The ``Idempotency-Key`` (or configured header) value every attempt of the call carries, if any.
@@ -197,7 +209,7 @@ class CallContext:
         if remaining is None or not isinstance(timeout, dict):
             return
         # Recorded on the request itself: a call's hops (a token mint, say) may ask for timeouts of their own.
-        request.extensions[_REQUESTED_TIMEOUT] = dict(self.requested_timeouts(request))
+        request.extensions[_REQUESTED_TIMEOUT] = _requested(request)
         left = max(remaining, floor)
         request.extensions["timeout"] = {
             phase: left if limit is None else min(limit, left) for phase, limit in timeout.items()
@@ -212,18 +224,13 @@ class CallContext:
         the last fit is a new requested limit, including a middleware override on a later retry. An override equal to
         the last fitted value is treated as unchanged.
         """
-        current = _named(request.extensions.get("timeout"))
-        original = dict(_named(request.extensions.get(_REQUESTED_TIMEOUT)))
-        fitted = dict(_named(request.extensions.get(_FITTED_TIMEOUT)))
-        return tuple(
-            (phase, original.get(phase, limit) if phase in fitted and limit == fitted[phase] else limit)
-            for phase, limit in current
-        )
+        # Sorted by phase, which is unique, so the limits (a float or None) are never compared.
+        return tuple(sorted(_requested(request).items()))
 
     @staticmethod
     def timeouts_cut(request: httpx2.Request) -> bool:
         """Return whether :meth:`fit_timeouts` cut *request*'s timeouts below the ones it asked for."""
-        return _named(request.extensions.get("timeout")) != CallContext.requested_timeouts(request)
+        return _phases(request.extensions.get("timeout")) != _requested(request)
 
     # Attempts.
 
@@ -246,6 +253,15 @@ class CallContext:
     def withdraw_attempt(self) -> None:
         """Record that the attempt just begun was never sent (its rate-budget turn came too late): it does not count."""
         self._attempt -= 1
+
+    @property
+    def sent(self) -> bool:
+        """Whether any byte of the call can have reached the network, by any attempt (see :meth:`mark_sent`)."""
+        return self._sent
+
+    def mark_sent(self) -> None:
+        """Record that an attempt of the call may have written a byte, which no later attempt can undo."""
+        self._sent = True
 
     # Notes and events.
 
@@ -277,3 +293,46 @@ class CallContext:
     def put[T](self, slot: Slot[T], value: T) -> None:
         """Put *value* in *slot*."""
         self._slots[slot] = value
+
+
+#: The call, attempt progress and attempt number the current task is sending for, set by the retry layer around each
+#: send. Every hedge sends in a task of its own, so each sees its own attempt here, while the call's ``progress`` and
+#: ``attempt`` are the latest.
+SENDING: Final = ContextVar[tuple[CallContext, SendProgress, int] | None]("headgate_sending", default=None)
+
+
+def progress_of(context: CallContext) -> SendProgress:
+    """Return the progress of the attempt this task sends for *context* (:data:`SENDING`), else its latest attempt's."""
+    sending = SENDING.get()
+    return sending[1] if sending is not None and sending[0] is context else context.progress
+
+
+@dataclass(frozen=True, slots=True)
+class CallView:
+    """A read-only view of the call a request belongs to, taken when :func:`call_info` is called.
+
+    * ``call``: the :class:`~headgate.events.CallInfo` every event about the call carries: its method, URL and route
+      template (the t-string the URL was rendered from, or ``None``).
+    * ``attempt``: how many sends the call has begun, so inside a middleware 1 on the first send and 2 on the first
+      retry (or hedge).
+    * ``remaining``: the seconds left before the call's deadline (negative once past it), or ``None`` without one.
+    """
+
+    call: CallInfo
+    attempt: int
+    remaining: float | None
+
+
+def call_info(request: httpx2.Request) -> CallView | None:
+    """Return a view of the call *request* belongs to, now, or ``None`` for a request no client call built.
+
+    A middleware reads it to tell its call apart (by route template), to know a re-send from a first send, and to
+    leave a slow step out when the deadline is near. Every reading is fresh: the attempt and the time left are the
+    call's as they stand.
+    """
+    context = CallContext.find(request)
+    if context is None:
+        return None
+    sending = SENDING.get()
+    attempt = sending[2] if sending is not None and sending[0] is context else context.attempt
+    return CallView(call=context.info, attempt=attempt, remaining=context.remaining())

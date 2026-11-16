@@ -8,7 +8,7 @@ It imports only the standard library and ``httpx2``, so the policy subpackages (
 between those subpackages goes through what is defined here and is wired together in :mod:`headgate._stack`.
 """
 
-from headgate._core._context import CallContext, SendProgress, Slot
+from headgate._core._context import SENDING, CallContext, CallView, SendProgress, Slot, call_info, progress_of
 from headgate._core._events import (
     OBSERVER_FAILURES,
     SILENT,
@@ -28,16 +28,18 @@ from headgate._core._events import (
     RateLimited,
     RetryScheduled,
 )
-from headgate._core._kinds import check_kind, kind_of, type_text
-from headgate._core._origin import origin_of, origin_text, same_origin
-from headgate._core._paths import check_fragment, path_has_fragment
-from headgate._core._retry_after import RETRY_AFTER_STATUSES, parse_retry_after, retry_after_of
+from headgate._core._kinds import check_callable, check_collection, check_int, check_kind, check_names, type_text
+from headgate._core._origin import origin_of, origin_text
+from headgate._core._paths import check_fragment, path_has_fragment, path_segments, segments_hold, url_path
+from headgate._core._retry_after import parse_retry_after, retry_after_of
 from headgate._core._seams import (
     BREAKER_GATE,
+    EXPLICIT_HEADERS,
     BudgetBacklogError,
     BudgetPausedError,
     CredentialCarrier,
     CredentialStamper,
+    ExplicitHeaders,
 )
 from headgate._core._switch import policy_disabled, policy_is_disabled
 from headgate._core._time import (
@@ -54,8 +56,9 @@ from headgate._core._time import (
 
 __all__ = [
     "BREAKER_GATE",
+    "EXPLICIT_HEADERS",
     "OBSERVER_FAILURES",
-    "RETRY_AFTER_STATUSES",
+    "SENDING",
     "SILENT",
     "SYSTEM_TIMING",
     "AttemptFinished",
@@ -70,12 +73,14 @@ __all__ = [
     "CallFinished",
     "CallInfo",
     "CallStarted",
+    "CallView",
     "Clock",
     "CredentialCarrier",
     "CredentialStamper",
     "Deprecated",
     "Emitter",
     "Event",
+    "ExplicitHeaders",
     "Observer",
     "RandomSource",
     "RateLimited",
@@ -85,19 +90,26 @@ __all__ = [
     "Slot",
     "Timing",
     "asyncio_sleep",
+    "call_info",
+    "check_callable",
+    "check_collection",
     "check_fragment",
+    "check_int",
     "check_kind",
+    "check_names",
     "current_timing",
-    "kind_of",
     "origin_of",
     "origin_text",
     "parse_retry_after",
     "path_has_fragment",
+    "path_segments",
     "policy_disabled",
     "policy_is_disabled",
+    "progress_of",
     "retry_after_of",
-    "same_origin",
+    "segments_hold",
     "system_random",
     "timing_override",
     "type_text",
+    "url_path",
 ]

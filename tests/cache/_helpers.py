@@ -11,11 +11,8 @@ from typing import TYPE_CHECKING, TypedDict, override
 import httpx2
 from hishel import AsyncBaseStorage, AsyncSqliteStorage, Entry, Request, Response
 
-from headgate import HttpOptions, TransportPolicy
-from headgate.cache import HttpCache
+from headgate import Client, HttpCache, HttpOptions, TransportPolicy
 from headgate.cache._transport import ResilientCacheTransport, store_accepted
-from headgate.ratelimit import UNLIMITED
-from tests.support.clients import StubClient
 
 if TYPE_CHECKING:
     import re
@@ -62,17 +59,19 @@ def stub_client(
     *,
     transport: httpx2.AsyncBaseTransport | None = None,
     cache: HttpCache | None = None,
-    rate: Rate = UNLIMITED,
+    rate: Rate | None = None,
     http: HttpOptions | None = None,
-) -> StubClient:
+    policy: TransportPolicy | None = None,
+) -> Client:
     """Build a client for ``https://x`` over *transport*, caching through *cache* when given.
 
-    *http* carries any other HTTP setting; its ``transport`` is replaced by the one given here.
+    *http* carries any other HTTP setting; its ``transport`` is replaced by the one given here. *policy* carries any
+    other policy setting; its ``cache`` is replaced by *cache*.
     """
-    return StubClient(
+    return Client(
         base_url="https://x",
         rate=rate,
-        policy=TransportPolicy(cache=cache),
+        policy=dataclasses.replace(policy or TransportPolicy(), cache=cache),
         http=dataclasses.replace(http or HttpOptions(), transport=transport),
     )
 
@@ -137,18 +136,19 @@ class TrackedStream(httpx2.AsyncByteStream):
 class TrackingNetwork(httpx2.AsyncBaseTransport):
     """The network leg, keeping every body it hands out and every URL it was asked for."""
 
-    def __init__(self, chunks: tuple[bytes, ...] = (NETWORK_BODY,)) -> None:
-        """Answer every request with a fresh :class:`TrackedStream` of *chunks*."""
+    def __init__(self, chunks: tuple[bytes, ...] = (NETWORK_BODY,), *, status: int = httpx2.codes.OK) -> None:
+        """Answer every request with *status* and a fresh :class:`TrackedStream` of *chunks*."""
         self.streams: list[TrackedStream] = []
         self.urls: list[str] = []
         self._chunks = chunks
+        self._status = status
 
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         self.urls.append(str(request.url))
         stream = TrackedStream(self._chunks)
         self.streams.append(stream)
-        return httpx2.Response(httpx2.codes.OK, stream=stream)
+        return httpx2.Response(self._status, stream=stream)
 
 
 class FaultyStorage(AsyncBaseStorage):

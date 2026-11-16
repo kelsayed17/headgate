@@ -3,10 +3,10 @@
 
 """OpenTelemetry for headgate clients: one CLIENT span and one duration measurement per logical call.
 
-Install it once on the client's options::
+Pass it to the client twice, once as each of the two things it is::
 
     otel = OpenTelemetryObserver()
-    http = otel.install(HttpOptions(...))      # adds it to observers= and middleware=
+    client = Client(base_url=..., observers=(otel,), middleware=(otel,))
 
 It is two things, so it goes in two places. As an :class:`~headgate.events.Observer` it turns a call's events into a
 span named by the HTTP client semantic conventions (``GET``, or ``GET series/{series_id}`` when the URL was a t-string)
@@ -46,7 +46,7 @@ Requires the ``otel`` extra: ``pip install headgate[otel]`` (``opentelemetry-api
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Final
 from urllib.parse import urlsplit
 
@@ -61,6 +61,7 @@ except ImportError as exc:
 
 from headgate._core import CallContext, CallFinished, CallInfo, CallStarted
 from headgate._user_agent import headgate_version
+from headgate.cache._transport import TRACE_HEADERS
 
 if TYPE_CHECKING:
     import httpx2
@@ -71,15 +72,17 @@ if TYPE_CHECKING:
 
     from headgate._core import Event
     from headgate._middleware import Next
-    from headgate._options import HttpOptions
 
 __all__ = ["OpenTelemetryObserver"]
 
 #: The instrumentation scope's name, for the tracer and the meter.
 _SCOPE: Final = "headgate"
 
-#: The methods the conventions name; any other is reported as ``_OTHER``.
-_KNOWN_METHODS: Final = frozenset({"CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"})
+#: The methods reported by name: the conventions' known methods, and QUERY, a verb of the client's own; any other is
+#: reported as ``_OTHER``.
+_KNOWN_METHODS: Final = frozenset(
+    {"CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "QUERY", "TRACE"}
+)
 
 #: The ports a URL without one implies.
 _DEFAULT_PORTS: Final = {"http": 80, "https": 443}
@@ -182,10 +185,6 @@ class OpenTelemetryObserver:
         self._propagator = propagator or TraceContextTextMapPropagator()
         self._live: dict[int, _LiveCall] = {}
 
-    def install(self, http: HttpOptions) -> HttpOptions:
-        """Return *http* with this observer added as an observer and as the outermost middleware."""
-        return replace(http, observers=(*http.observers, self), middleware=(self, *http.middleware))
-
     def notify(self, event: Event) -> None:
         """Open a span on ``CallStarted``; close it and record the duration on ``CallFinished``."""
         if isinstance(event, CallStarted):
@@ -226,6 +225,8 @@ class OpenTelemetryObserver:
         A request of no call this observer saw (an auth flow's token mint, a client that has this as middleware but
         not as an observer) carries the caller's current context instead, if there is one.
         """
+        # Named for the cache, which leaves them out of what identical GETs must agree on to share a download.
+        request.extensions[TRACE_HEADERS] = self._propagator.fields
         call = CallContext.find(request)
         live = None if call is None else self._live.get(call.info.call_id)
         if live is None:

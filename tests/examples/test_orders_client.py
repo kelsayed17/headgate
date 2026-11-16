@@ -11,7 +11,7 @@ from orders_client import NewOrder, Order, OrdersClient, Rejection
 
 from headgate import AuthError
 from headgate.events import CallFinished, Event
-from headgate.testing import FakeTransport
+from headgate.testing import FakeTransport, fake_network
 
 _TOKEN = httpx2.Response(200, json={"access_token": "tok-1", "expires_in": 3600})
 _ORDER = {"id": "o-1", "sku": "SKU-9", "quantity": 2, "status": "open"}
@@ -41,7 +41,9 @@ def _shop(*routes: tuple[str, str, tuple[httpx2.Response | int, ...]]) -> FakeTr
 async def test_a_token_is_minted_once_and_signs_every_call() -> None:
     """Mint one token through the client's stack, then send it as a bearer on every call."""
     fake = _shop(("GET", "/v2/orders/o-1", (httpx2.Response(200, json=_ORDER),)), ("DELETE", "/v2/orders/o-1", (204,)))
-    async with OrdersClient("id", "secret", transport=fake) as shop:
+    with fake_network(fake):
+        shop = OrdersClient("id", "secret")
+    async with shop:
         assert await shop.get_order("o-1") == Order(id="o-1", sku="SKU-9", quantity=2, status="open")
         await shop.cancel_order("o-1")
 
@@ -55,7 +57,9 @@ async def test_a_token_is_minted_once_and_signs_every_call() -> None:
 async def test_a_refused_mint_raises_auth_error() -> None:
     """Raise ``AuthError`` when the token endpoint refuses the client's credentials."""
     fake = FakeTransport().reply("POST", "/oauth/token", 401)
-    async with OrdersClient("id", "wrong", transport=fake) as shop:
+    with fake_network(fake):
+        shop = OrdersClient("id", "wrong")
+    async with shop:
         with pytest.raises(AuthError, match="token mint failed"):
             await shop.get_order("o-1")
 
@@ -64,7 +68,9 @@ async def test_a_post_carries_one_idempotency_key_across_its_retries() -> None:
     """Retry a POST after a 503 because it carries an idempotency key, the same key on both sends."""
     created = httpx2.Response(201, json=_ORDER)
     fake = _shop(("POST", "/v2/orders", (503, created)))
-    async with OrdersClient("id", "secret", transport=fake) as shop:
+    with fake_network(fake):
+        shop = OrdersClient("id", "secret")
+    async with shop:
         placed = await shop.place_order(NewOrder(sku="SKU-9", quantity=2))
 
     assert isinstance(placed, Order)
@@ -76,7 +82,9 @@ async def test_a_post_carries_one_idempotency_key_across_its_retries() -> None:
 async def test_a_rejected_order_is_the_declared_422_answer() -> None:
     """Return the 422 body as a ``Rejection`` rather than raising."""
     fake = _shop(("POST", "/v2/orders", (httpx2.Response(422, json={"reason": "out of stock"}),)))
-    async with OrdersClient("id", "secret", transport=fake) as shop:
+    with fake_network(fake):
+        shop = OrdersClient("id", "secret")
+    async with shop:
         assert await shop.place_order(NewOrder(sku="SKU-9", quantity=99, note="rush")) == Rejection("out of stock")
 
 
@@ -89,7 +97,9 @@ async def test_orders_follow_the_link_header_and_report_events() -> None:
     )
     fake = _shop(("GET", "/v2/orders", pages))
     recorder = Recorder()
-    async with OrdersClient("id", "secret", transport=fake, observers=(recorder,)) as shop:
+    with fake_network(fake):
+        shop = OrdersClient("id", "secret", observers=(recorder,))
+    async with shop:
         ids = [order.id async for order in shop.orders(status="open")]
 
     assert ids == ["o-1", "o-2"]
@@ -106,7 +116,9 @@ async def test_the_export_streams_in_chunks() -> None:
     """Hand the export to the writer as it arrives."""
     fake = _shop(("GET", "/v2/exports/orders.csv", (httpx2.Response(200, content=b"id,sku\no-1,SKU-9\n"),)))
     chunks: list[bytes] = []
-    async with OrdersClient("id", "secret", transport=fake) as shop:
+    with fake_network(fake):
+        shop = OrdersClient("id", "secret")
+    async with shop:
         await shop.export_orders(chunks.append)
 
     assert b"".join(chunks) == b"id,sku\no-1,SKU-9\n"

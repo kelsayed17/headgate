@@ -42,13 +42,17 @@ def test_a_secret_parameter_is_redacted_and_the_others_are_kept() -> None:
         ("https://api.example.test/x?api%5Fkey=abc", "https://api.example.test/x?api%5Fkey=%2A%2A%2A"),
         ("https://ghp_SECRETTOKEN@api.example.test/x", "https://***@api.example.test/x"),
         ("https://user:@api.example.test/x", "https://***@api.example.test/x"),
+        ("https://user:pa#ss@api.example.test/x", "https://***@api.example.test/x"),
+        ("https://us#er:pw@api.example.test/x?api_key=k", "https://***@api.example.test/x?api_key=***"),
+        ("https://api.example.test/x#a@b", "https://api.example.test/x#a@b"),
     ],
 )
 def test_credentials_outside_known_query_names_are_redacted(url: str, expected: str) -> None:
     """Redact the whole userinfo, a fragment credential, and a percent-encoded parameter name.
 
     A bare username is redacted too, since a token sent as the username (``https://ghp_…@host``) is how several hosts
-    take one.
+    take one. A raw ``#`` in the userinfo ends the host early when the URL is split, so the whole userinfo is still
+    found; an ``@`` in a fragment after a path is no userinfo.
     """
     assert sanitize_url(url) == expected
 
@@ -136,6 +140,8 @@ def test_a_registered_name_is_secret_whatever_its_spelling() -> None:
         ("failed to reach https://u:p;w@d@h.test/x", "failed to reach https://***@h.test/x"),
         ("failed to reach https://user:p@ss@h.test#f=a@b", "failed to reach https://***@h.test#f=a@b"),
         ("see https://u:pw@h1.test https://x@h2.test/y", "see https://***@h1.test https://***@h2.test/y"),
+        ("failed to reach https://user:pa#ss@h.test/x", "failed to reach https://***@h.test/x"),
+        ("failed to reach https://us#er:p@ss@h.test/x", "failed to reach https://***@h.test/x"),
     ],
 )
 def test_redact_secrets_replaces_a_url_userinfo_in_free_text(text: str, expected: str) -> None:

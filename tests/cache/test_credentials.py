@@ -24,20 +24,19 @@ from hishel import AsyncSqliteStorage
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from headgate import ClientConfigurationError, HttpOptions, StaticHeaderAuth, TransportPolicy
+from headgate import Client, HttpCache, HttpOptions, StaticHeaderAuth, TransportPolicy
 from headgate._core import CredentialStamper
-from headgate.cache import HttpCache, Partition
+from headgate.cache import Partition
 from headgate.cache._credentials import CredentialScope, credential_scope
 from headgate.cache._transport import served_from_cache
-from headgate.ratelimit import UNLIMITED
+from headgate.errors import ClientConfigurationError
 from tests.cache._helpers import accept, cache_transport, series_rules
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Generator, Mapping
 
-    from headgate import Next
+    from headgate import Middleware, Next
 
 _URL = "https://x/series?id=A"
 _HEADER = "X-Api-Key"
@@ -120,14 +119,15 @@ def _client(
     *,
     partition: Partition = Partition.CREDENTIAL,
     http: HttpOptions | None = None,
-) -> StubClient:
+    middleware: tuple[Middleware, ...] = (),
+) -> Client:
     """Build a client caching ``/series`` into *storage*, with *auth* and *partition*, and *http* over *network*."""
-    return StubClient(
+    return Client(
         base_url="https://x",
-        rate=UNLIMITED,
         auth=auth,
         policy=TransportPolicy(cache=HttpCache(**series_rules(), storage=storage, partition=partition)),
         http=dataclasses.replace(http or HttpOptions(), transport=network),
+        middleware=middleware,
     )
 
 
@@ -238,8 +238,8 @@ async def test_a_middlewares_declared_credential_partitions_and_is_never_stored(
 ) -> None:
     """A key a middleware stamps and declares keeps each key's entries apart, and no stored row carries it."""
     network = _Recorder()
-    alice = _client(network, inspected, None, http=HttpOptions(middleware=(_KeyMiddleware("alice-middleware-key"),)))
-    bob = _client(network, inspected, None, http=HttpOptions(middleware=(_KeyMiddleware("bob-middleware-key"),)))
+    alice = _client(network, inspected, None, http=HttpOptions(), middleware=(_KeyMiddleware("alice-middleware-key"),))
+    bob = _client(network, inspected, None, http=HttpOptions(), middleware=(_KeyMiddleware("bob-middleware-key"),))
 
     await alice.get(_URL, expect=RESPONSE)
     await bob.get(_URL, expect=RESPONSE)
@@ -266,6 +266,24 @@ async def test_a_client_wide_header_partitions_and_is_never_stored(
     assert len(network.sent) == len(("alice", "bob")), "bob missed alice's entry"
     assert served_from_cache(hit)
     assert b"client-key" not in await _stored_bytes(connection)
+
+
+async def test_a_views_header_partitions_and_is_never_stored(
+    inspected: AsyncSqliteStorage, connection: anysqlite.Connection
+) -> None:
+    """A key a view sets (``with_options(headers=...)``, one tenant's) keeps each tenant's entries to that tenant."""
+    network = _Recorder()
+    client = _client(network, inspected, None)
+    alice = client.with_options(headers={_HEADER: "alice-view-key"})
+    bob = client.with_options(headers={_HEADER: "bob-view-key"})
+
+    await alice.get(_URL, expect=RESPONSE)
+    await bob.get(_URL, expect=RESPONSE)
+    hit = await alice.get(_URL, expect=RESPONSE)
+
+    assert len(network.sent) == len(("alice", "bob")), "bob was served alice's entry"
+    assert served_from_cache(hit)
+    assert b"view-key" not in await _stored_bytes(connection)
 
 
 async def test_a_shared_partition_stores_no_header_value_as_sent(
@@ -343,8 +361,11 @@ async def test_a_response_that_varies_on_everything_is_never_a_hit(storage: Asyn
 
 def test_an_auth_that_declares_nothing_is_refused_a_credential_partition(storage: AsyncSqliteStorage) -> None:
     """A cache partitioned by credential cannot work with an auth that declares nothing, so the client is refused."""
-    with pytest.raises(ClientConfigurationError, match=r"_OpaqueAuth does not declare its credentials.*SHARED"):
+    with pytest.raises(
+        ClientConfigurationError, match=r"_OpaqueAuth does not declare its credentials.*SHARED"
+    ) as raised:
         _client(_Recorder(), storage, _OpaqueAuth())
+    assert "headgate.security.CredentialStamper" in str(raised.value), "it names the public protocol, not a private one"
 
 
 async def test_an_auth_that_declares_nothing_may_share_explicitly(storage: AsyncSqliteStorage) -> None:
@@ -375,9 +396,8 @@ async def test_the_network_gets_the_request_exactly_as_an_uncached_client_sends_
     cached, uncached = _Recorder(), _Recorder()
 
     await _client(cached, storage, _KeyAuth("alice"), http=HttpOptions(headers=headers)).get(url, expect=RESPONSE)
-    await StubClient(
+    await Client(
         base_url="https://x",
-        rate=UNLIMITED,
         auth=_KeyAuth("alice"),
         http=HttpOptions(transport=uncached, headers=headers),
     ).get(url, expect=RESPONSE)

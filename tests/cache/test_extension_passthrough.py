@@ -20,13 +20,8 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, Timeouts, TransportPolicy
-from headgate.cache import HttpCache
-from headgate.errors import ClientTimeoutError
-from headgate.ratelimit import UNLIMITED
-from headgate.retry import RetryPolicy
+from headgate import Client, ClientTimeoutError, HttpCache, HttpOptions, RetryPolicy, Timeouts, TransportPolicy
 from tests.cache._helpers import series_rules, stamped_ttl, stub_client
-from tests.support.clients import StubClient
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -57,7 +52,8 @@ async def test_the_timeout_survives_the_cache_layer(storage: AsyncSqliteStorage)
     base = _RecordingTransport()
     client = stub_client(
         transport=base,
-        http=HttpOptions(timeout=Timeouts(read=_CLIENT_TIMEOUT)),
+        http=HttpOptions(),
+        policy=TransportPolicy(timeout=Timeouts(read=_CLIENT_TIMEOUT)),
         cache=HttpCache(**series_rules(), storage=storage),
     )
 
@@ -74,7 +70,8 @@ async def test_a_per_call_timeout_still_wins_through_the_cache(storage: AsyncSql
     base = _RecordingTransport()
     client = stub_client(
         transport=base,
-        http=HttpOptions(timeout=Timeouts(read=_CLIENT_TIMEOUT)),
+        http=HttpOptions(),
+        policy=TransportPolicy(timeout=Timeouts(read=_CLIENT_TIMEOUT)),
         cache=HttpCache(**series_rules(), storage=storage),
     )
 
@@ -101,11 +98,14 @@ async def test_a_black_holing_host_times_out_through_the_cache(storage: AsyncSql
     listener.listen(4)  # accepts, never answers
     port = listener.getsockname()[1]
 
-    client = StubClient(
+    client = Client(
         base_url=f"http://127.0.0.1:{port}",
-        rate=UNLIMITED,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), cache=HttpCache(**series_rules(), storage=storage)),
-        http=HttpOptions(timeout=Timeouts(read=_SHORT_TIMEOUT)),
+        policy=TransportPolicy(
+            retry=RetryPolicy(attempts=1),
+            cache=HttpCache(**series_rules(), storage=storage),
+            timeout=Timeouts(read=_SHORT_TIMEOUT),
+        ),
+        http=HttpOptions(),
     )
     started = time.monotonic()
     try:

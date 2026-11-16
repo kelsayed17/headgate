@@ -14,13 +14,21 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, QueryParamAuth, Rate, RetryPolicy, TransportPolicy, as_bytes, nothing
-from headgate.errors import TransportError, UpstreamStatusError
+from headgate import (
+    Client,
+    HttpOptions,
+    QueryParamAuth,
+    Rate,
+    RetryPolicy,
+    TransportError,
+    TransportPolicy,
+    UpstreamStatusError,
+    as_bytes,
+    nothing,
+)
 from headgate.events import AttemptFinished, CallFinished, CallInfo, CallStarted, Event
 from headgate.health import observer_failures
-from headgate.retry import NO_RETRY
 from headgate.testing import FakeTransport, Reply, TestClock
-from tests.support.clients import StubClient
 from tests.support.events import Recorder
 
 if TYPE_CHECKING:
@@ -67,14 +75,15 @@ def _client(
     *observers: Recorder | _Broken,
     policy: TransportPolicy | None = None,
     auth: httpx2.Auth | None = None,
-) -> StubClient:
+) -> Client:
     """Build a client over *fake* reporting to *observers*."""
-    return StubClient(
+    return Client(
         base_url=_BASE,
         rate=_RATE,
         auth=auth,
         policy=policy or TransportPolicy(),
-        http=HttpOptions(transport=fake, observers=observers),
+        http=HttpOptions(transport=fake),
+        observers=observers,
     )
 
 
@@ -134,7 +143,7 @@ async def test_a_failed_call_reports_the_error_types() -> None:
     """Name what a send raised on its attempt, and the ``ClientError`` the call raised on its end."""
     recorder = Recorder()
     with pytest.raises(TransportError):
-        await _client(_get("x", _refuse), recorder, policy=TransportPolicy(retry=NO_RETRY)).get("x", expect=nothing)
+        await _client(_get("x", _refuse), recorder, policy=TransportPolicy(retry=None)).get("x", expect=nothing)
 
     _, attempt, finished = recorder.events
     assert isinstance(attempt, AttemptFinished)
@@ -227,5 +236,5 @@ async def test_a_network_failure_mid_stream_is_the_calls_error() -> None:
 async def test_a_client_without_observers_emits_nothing_and_still_works() -> None:
     """Send normally with no observers installed."""
     fake = _get("x")
-    await StubClient(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=fake)).get("x", expect=nothing)
+    await Client(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=fake)).get("x", expect=nothing)
     assert len(fake.calls) == 1

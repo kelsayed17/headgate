@@ -29,6 +29,10 @@ _LINE_END: Final = re.compile(rb"\r\n|\r|\n")
 #: The UTF-8 byte order mark, skipped once at the start of the stream.
 _BOM: Final = b"\xef\xbb\xbf"
 
+#: The longest reconnection time kept, in milliseconds: a ``retry:`` past it is held at it. ``int()`` refuses more than
+#: 4,300 digits, and the seconds of a few hundred overflow a float.
+_MAX_RETRY: Final = 2**63 - 1
+
 
 class EventTooLargeError(Exception):
     """An event outgrew the parser's ``max_event_size``: the caller maps it onto its own error."""
@@ -37,9 +41,11 @@ class EventTooLargeError(Exception):
 class EventParser:
     """An incremental event-stream parser: :meth:`feed` it the body's bytes, in chunks of any size, for its events.
 
-    *max_event_size* bounds the bytes one event's field lines hold (comments and line endings aside), counting a line
-    not yet ended; past it, :meth:`feed` raises :class:`EventTooLargeError`. ``None`` sets no bound. An event that no
-    blank line ends when the body does is dropped, as the grammar asks.
+    *max_event_size* bounds the bytes one event's field lines hold (comments, line endings and the byte order mark
+    aside), counting a line not yet ended; past it, :meth:`feed` raises :class:`EventTooLargeError`. ``None`` sets no
+    bound. However the body is cut into chunks, the same events are read and the same one is refused. A comment is
+    dropped as it arrives, so one that never ends holds nothing. An event that no blank line ends when the body does is
+    dropped, as the grammar asks.
     """
 
     __slots__ = (
@@ -47,6 +53,7 @@ class EventParser:
         "_data",
         "_first_line",
         "_id",
+        "_in_comment",
         "_line",
         "_max_event_size",
         "_retry",
@@ -62,6 +69,7 @@ class EventParser:
         self._line = bytearray()
         self._after_cr = False
         self._first_line = True
+        self._in_comment = False
         self._size = 0
         self._type = ""
         self._data: list[str] = []
@@ -79,14 +87,31 @@ class EventParser:
             self._after_cr = False
             start = 1 if chunk.startswith(b"\n") else 0
         for match in _LINE_END.finditer(chunk, start):
-            self._line += chunk[start : match.start()]
+            if self._in_comment:
+                # The comment's line ends here, and what it held was dropped as it arrived.
+                self._in_comment = False
+                event = None
+            else:
+                self._line += chunk[start : match.start()]
+                event = self._end_line()
             start = match.end()
             self._after_cr = start == len(chunk) and match.group() == b"\r"
-            event = self._end_line()
             if event is not None:
                 yield event
-        self._line += chunk[start:]
-        if self._max_event_size is not None and self._size + len(self._line) > self._max_event_size:
+        if not self._in_comment:
+            self._line += chunk[start:]
+            self._hold_line()
+
+    def _hold_line(self) -> None:
+        """Drop the line still arriving if it is a comment, and refuse it if the event it joins is past the limit."""
+        # On the first line, a byte order mark, or the part of one that has arrived, is no part of the line.
+        bom = _BOM[: len(self._line)] if self._first_line else b""
+        skip = len(bom) if self._line.startswith(bom) else 0
+        if self._line[skip : skip + 1] == b":":
+            self._line.clear()
+            self._in_comment = True
+            self._first_line = False
+        elif self._max_event_size is not None and self._size + len(self._line) - skip > self._max_event_size:
             raise EventTooLargeError
 
     def _end_line(self) -> httpx2.ServerSentEvent | None:
@@ -113,7 +138,9 @@ class EventParser:
             case "id" if "\0" not in value:
                 self._id = value
             case "retry" if value.isascii() and value.isdigit():
-                self._retry = self.retry = int(value)
+                digits = value.lstrip("0") or "0"
+                retry = _MAX_RETRY if len(digits) > len(str(_MAX_RETRY)) else min(int(digits), _MAX_RETRY)
+                self._retry = self.retry = retry
         return None
 
     def _dispatch(self) -> httpx2.ServerSentEvent | None:

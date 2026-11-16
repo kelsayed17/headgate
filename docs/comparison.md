@@ -5,7 +5,7 @@ title: Compared with others
 # Compared with others
 
 headgate is a Swiss Army knife for HTTP API clients. Most libraries do one job well: send requests, retry, rate-limit,
-cache, break circuits, mock. headgate does all of those jobs in one base class, and makes them agree with each other.
+cache, break circuits, mock. headgate does all of those jobs in one client, and makes them agree with each other.
 This page shows what that buys you, library by library, and when another tool is the better pick.
 
 <div class="hg-legend" markdown>

@@ -19,6 +19,9 @@ _FORBIDDEN = {
     "upstream httpx": re.compile(r"^\s*(import|from)\s+httpx\b(?!2)"),
 }
 
+#: The one module that touches logging: it writes no record, it redacts the URL in httpx2's own request line.
+_REDACTS_HTTPX2_LOG = _ROOT / "src/headgate/security/_logging.py"
+
 
 @pytest.mark.parametrize("contract", sorted(_FORBIDDEN))
 def test_shipped_code_keeps_the_contract(contract: str) -> None:
@@ -27,7 +30,14 @@ def test_shipped_code_keeps_the_contract(contract: str) -> None:
     offenders = [
         f"{path.relative_to(_ROOT)}:{n}: {line.strip()}"
         for path in _SHIPPED
+        if not (contract == "logging" and path == _REDACTS_HTTPX2_LOG)
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
         if pattern.search(line)
     ]
     assert not offenders, "\n".join(offenders)
+
+
+def test_the_log_redaction_writes_no_record() -> None:
+    """Keep the logging contract's one exemption to a filter: it calls no method that writes a record."""
+    writes = re.compile(r"\.(debug|info|warning|warn|error|exception|critical|log)\(")
+    assert not writes.search(_REDACTS_HTTPX2_LOG.read_text(encoding="utf-8"))

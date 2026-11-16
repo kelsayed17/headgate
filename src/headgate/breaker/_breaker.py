@@ -14,7 +14,7 @@ Three design choices, each fixing a failure mode of the usual ``with breaker:`` 
   an auth flow failing to mint or a body over the size cap. See :meth:`CircuitBreaker.track`.
 * **Half-open admits one probe.** An origin that has just failed gets one call as its recovery test, not the full
   concurrent load.
-* **The breaker spans the body read.** ``AsyncBaseClient`` drives it around the send and the body read, so a connection
+* **The breaker spans the body read.** ``Client`` drives it around the send and the body read, so a connection
   dying mid-body is a failure of the fetch. A transport layer would see only the response headers, which is why there
   is no breaker transport.
 
@@ -32,16 +32,15 @@ from __future__ import annotations
 
 import enum
 import threading
-import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, NamedTuple
 
-from headgate._core import BreakerState
+from headgate._core import BreakerState, current_timing
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
-    from headgate._core import Clock
+    from headgate._core import Timing
 
 __all__ = ["BreakerOpenError", "CircuitBreaker", "Transition", "Verdict"]
 
@@ -49,7 +48,7 @@ __all__ = ["BreakerOpenError", "CircuitBreaker", "Transition", "Verdict"]
 class BreakerOpenError(Exception):
     """Raised by :meth:`CircuitBreaker.track` when it refuses a call: open, or its one probe already out.
 
-    ``AsyncBaseClient`` raises it to its caller as :class:`headgate.errors.CircuitOpenError`. ``retry_after`` is how
+    ``Client`` raises it to its caller as :class:`headgate.errors.CircuitOpenError`. ``retry_after`` is how
     many seconds remain until the breaker admits a probe, or ``None`` while a probe is out (its outcome decides).
     """
 
@@ -76,20 +75,36 @@ class _Outcome(enum.Enum):
 
 
 class Verdict:
-    """What one fetch established about its origin, marked by ``AsyncBaseClient`` inside :meth:`CircuitBreaker.track`.
+    """What one fetch established about its origin, marked by ``Client`` inside :meth:`CircuitBreaker.track`.
 
     Unmarked means "nothing": only an explicit mark makes a raise an origin failure, and only a clean exit that was not
     marked untested is an origin success. See :meth:`CircuitBreaker.track` for why the default is not the reverse.
-    ``probe`` says whether this fetch is the half-open breaker's one probe.
+    ``probe`` says whether this fetch is the half-open breaker's one probe, and ``generation`` how many times the
+    breaker had opened when it was admitted.
     """
 
-    __slots__ = ("failed", "probe", "untested")
+    __slots__ = ("_listener", "_refuses", "_settle", "failed", "generation", "probe", "untested")
 
-    def __init__(self, *, probe: bool = False) -> None:
-        """Start unmarked."""
+    def __init__(
+        self,
+        generation: int = 0,
+        settle: Callable[[Verdict, _Outcome], Transition | None] | None = None,
+        refuses: Callable[[Verdict], bool] | None = None,
+        listener: TransitionListener | None = None,
+        *,
+        probe: bool = False,
+    ) -> None:
+        """Start unmarked, with the breaker's *settle* and *refuses* and the fetch's *listener*.
+
+        A verdict built without them (a client with no breaker) settles nothing early and refuses nothing.
+        """
         self.failed = False
         self.untested = False
         self.probe = probe
+        self.generation = generation
+        self._settle = settle
+        self._refuses = refuses
+        self._listener = listener
 
     def mark_failed(self) -> None:
         """Record that the wire failed: a transport error or timeout, or a 5xx that survived retries."""
@@ -98,6 +113,33 @@ class Verdict:
     def mark_untested(self) -> None:
         """Record that the fetch reached no network (a cache hit), so its success says nothing about the origin."""
         self.untested = True
+
+    def mark_answered(self) -> None:
+        """Record that the response head arrived and was checked: settle what it showed now, a probe included.
+
+        The rest of the block (a body the caller reads at its own pace) is then tracked as a call admitted now, so a
+        stream that took the probe does not hold the probe slot until its block exits.
+        """
+        if self._settle is not None:
+            transition = self._settle(self, _clean_exit_outcome(self))
+            self.probe = self.failed = False
+            _notify(self._listener, transition)
+
+    def refused(self) -> bool:
+        """Return whether the breaker would refuse a re-send by this fetch now (never for the probe).
+
+        A fetch admitted before the breaker last opened is refused even once a probe would be admitted, or the probe
+        has closed the breaker again, so its retries cannot reach the recovering origin beside the probe.
+        """
+        return self._refuses is not None and self._refuses(self)
+
+    def release(self) -> None:
+        """Drop the breaker's methods and the listener once the fetch is settled.
+
+        A call's context still holds :meth:`refused` as its gate, and the listener holds that context, so keeping them
+        would make a reference cycle of every observed call. A released verdict settles and refuses nothing.
+        """
+        self._settle = self._refuses = self._listener = None
 
 
 type TransitionListener = Callable[[Transition], None]
@@ -111,6 +153,7 @@ class CircuitBreaker:
         "_clock",
         "_failure_threshold",
         "_failures",
+        "_generation",
         "_lock",
         "_name",
         "_opened_at",
@@ -125,14 +168,15 @@ class CircuitBreaker:
         failure_threshold: int = 5,
         recovery_timeout: float = 60.0,
         name: str = "",
-        clock: Clock = time.monotonic,
+        timing: Timing | None = None,
     ) -> None:
         """Trip after *failure_threshold* consecutive failures; admit a probe *recovery_timeout* seconds later.
 
-        *name* (the origin) appears in the :class:`BreakerOpenError` message. *clock* returns monotonic seconds; it is
-        a parameter so the cooldown can be driven by a test without waiting.
+        *name* (the origin) appears in the :class:`BreakerOpenError` message. The cooldown runs on *timing*'s clock, or,
+        without one, on the timing current when the breaker is built (:func:`headgate.timing.current_timing`), so a
+        test drives it without waiting.
         """
-        self._clock = clock
+        self._clock = (current_timing() if timing is None else timing).clock
         self._failure_threshold = failure_threshold
         self._recovery_timeout = recovery_timeout
         self._name = name
@@ -141,6 +185,8 @@ class CircuitBreaker:
         self._failures = 0
         self._opened_at = 0.0
         self._probe_in_flight = False
+        # Bumped on every opening, so a call admitted before it can tell it is stale.
+        self._generation = 0
 
     @property
     def name(self) -> str:
@@ -198,7 +244,7 @@ class CircuitBreaker:
         Raises :class:`BreakerOpenError` instead of yielding when the origin is being refused. Otherwise yields a
         :class:`Verdict` the fetch marks as it goes, and what the call records on the way out is:
 
-        * **a failure**: only when the fetch marked :meth:`Verdict.mark_failed`, which ``AsyncBaseClient`` does for a
+        * **a failure**: only when the fetch marked :meth:`Verdict.mark_failed`, which ``Client`` does for a
           transport error or timeout (the call's own deadline cutting off a send on the wire included) and for a 5xx
           that survived retries. Those are what the wire said about this origin, so the mark counts however the block
           then exits, raising, cancelled or not;
@@ -213,30 +259,48 @@ class CircuitBreaker:
         open``; and a clean exit is not a success when it never reached the origin, so a cache hit cannot close a
         probe.
 
-        Only the call that took the probe slot settles a probe. A call admitted while the breaker was closed that
-        finishes after it tripped (realistic, since three 30 s attempts plus backoff outlast the cooldown) changes no
-        state at all: its cancellation must not free the probe slot, admitting a second concurrent probe, and its
-        failure must not re-open the breaker while the real probe is still out.
+        :meth:`Verdict.mark_answered` settles early what the response head showed, as though the block exited cleanly
+        there, and tracks the rest of the block as a call admitted while closed.
+
+        Only the call that took the probe slot settles a probe. A call admitted before the breaker last opened
+        (realistic, since three 30 s attempts plus backoff outlast the cooldown) changes no state at all, even after
+        the probe closed the breaker again: its cancellation must not free the probe slot, admitting a second
+        concurrent probe, and its failure must not re-open the breaker for another full cooldown.
         """
         with self._lock:
             admitted = self._admits()
             retry_after = None if admitted else self._cooldown_left()
             probing = admitted and self._state is not BreakerState.CLOSED
             taken = self._take_probe() if probing else None
+            generation = self._generation
         if not admitted:
             msg = f"circuit breaker open for {self._name}"
             raise BreakerOpenError(msg, retry_after=retry_after)
-        _notify(on_change, taken)
 
-        verdict = Verdict(probe=probing)
-        settle = self._settle_probe if probing else self._settle_call
+        # Positional: the hot path, where parsing keywords costs a measurable share of the call.
+        verdict = Verdict(generation, self._settle, self._refuses, on_change, probe=probing)
         try:
+            # Inside the try, so a listener raising here still frees the probe slot it was told of.
+            _notify(on_change, taken)
             yield verdict
         except BaseException:
-            _notify(on_change, settle(_Outcome.FAILURE if verdict.failed else _Outcome.NOTHING))
+            _notify(on_change, self._settle(verdict, _Outcome.FAILURE if verdict.failed else _Outcome.NOTHING))
             raise
         else:
-            _notify(on_change, settle(_clean_exit_outcome(verdict)))
+            _notify(on_change, self._settle(verdict, _clean_exit_outcome(verdict)))
+        finally:
+            verdict.release()
+
+    def _settle(self, verdict: Verdict, outcome: _Outcome) -> Transition | None:
+        """Apply *outcome* to the probe when *verdict* holds it, else as a call admitted in its generation."""
+        if verdict.probe:
+            return self._settle_probe(outcome)
+        return self._settle_call(outcome, verdict.generation)
+
+    def _refuses(self, verdict: Verdict) -> bool:
+        """Return whether a re-send by *verdict*'s fetch would be refused (see :meth:`Verdict.refused`)."""
+        with self._lock:
+            return not verdict.probe and (verdict.generation != self._generation or not self._admits())
 
     def _take_probe(self) -> Transition | None:
         """Make this caller the canary, refusing concurrent callers until it reports. Called with the lock held."""
@@ -258,10 +322,10 @@ class CircuitBreaker:
                 self._open()
             return self._transition(previous)
 
-    def _settle_call(self, outcome: _Outcome) -> Transition | None:
-        """Apply a call admitted while closed; a stale one finishing after the trip must not touch the probe."""
+    def _settle_call(self, outcome: _Outcome, generation: int) -> Transition | None:
+        """Apply a call admitted while closed in *generation*; one admitted before the last opening changes nothing."""
         with self._lock:
-            if self._state is not BreakerState.CLOSED:
+            if self._state is not BreakerState.CLOSED or generation != self._generation:
                 return None
             if outcome is _Outcome.SUCCESS:
                 self._failures = 0
@@ -275,6 +339,7 @@ class CircuitBreaker:
         """Trip the breaker, starting its cooldown now. Called with the lock held."""
         self._state = BreakerState.OPEN
         self._opened_at = self._clock()
+        self._generation += 1
 
     def _transition(self, previous: BreakerState) -> Transition | None:
         """Return the move from *previous* to the current state, or ``None`` when the state did not change."""

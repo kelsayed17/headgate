@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Expect, Reader, UpstreamStatusError, nothing
+from headgate import Expect, Raw, Reader, UpstreamStatusError, nothing
 from headgate.testing import FakeTransport
 from tests.integration._support import client
 
@@ -39,7 +39,7 @@ async def test_a_one_shot_body_answered_503_is_not_sent_again(method: Method) ->
     built = client(fake)
 
     with pytest.raises(UpstreamStatusError) as raised:
-        async with built.stream("upload", method=method, content=_chunks(), idempotency_key="k"):
+        async with built.stream("upload", method=method, body=Raw(_chunks()), idempotency_key="k"):
             pass
 
     assert raised.value.status_code == httpx2.codes.SERVICE_UNAVAILABLE
@@ -53,7 +53,7 @@ async def test_a_factory_body_is_sent_whole_on_every_attempt(method: Method) -> 
     fake = FakeTransport().reply(method, "/v1/upload", 503, 200)
     built = client(fake)
 
-    async with built.stream("upload", method=method, content=_chunks, idempotency_key="k") as stream:
+    async with built.stream("upload", method=method, body=Raw(_chunks), idempotency_key="k") as stream:
         assert stream.status_code == httpx2.codes.OK
 
     assert [request.content for request in fake.calls] == [_BODY, _BODY]
@@ -72,14 +72,14 @@ async def test_a_redirect_asking_for_a_one_shot_body_again_is_not_followed(statu
     built = client(fake)
 
     with pytest.raises(UpstreamStatusError) as raised:
-        async with built.stream("upload", method=method, content=_chunks()):
+        async with built.stream("upload", method=method, body=Raw(_chunks())):
             pytest.fail("the block runs only for a 2xx")
 
     assert raised.value.status_code == status
     assert len(fake.calls) == 1
     assert raised.value.__notes__[-1] == (
         f"did not follow the {status} redirect: it asks for the request body again, and the body was a one-shot stream "
-        "(pass content= a factory to make it replayable)"
+        "(give Raw a factory to make it replayable)"
     )
 
 
@@ -92,7 +92,7 @@ async def test_a_call_not_following_redirects_keeps_the_location_of_a_one_shot_b
     location = await built.post(
         "upload",
         expect=Expect(nothing).on(httpx2.codes.TEMPORARY_REDIRECT, _location),
-        content=_chunks(),
+        body=Raw(_chunks()),
         follow_redirects=False,
     )
 
@@ -112,7 +112,7 @@ async def test_a_declared_redirect_answer_reads_the_unfollowed_hop() -> None:
     built = client(fake)
 
     status = await built.post(
-        "upload", expect=Expect(nothing).on(httpx2.codes.TEMPORARY_REDIRECT, _status), content=_chunks()
+        "upload", expect=Expect(nothing).on(httpx2.codes.TEMPORARY_REDIRECT, _status), body=Raw(_chunks())
     )
 
     assert status == httpx2.codes.TEMPORARY_REDIRECT
@@ -134,7 +134,7 @@ async def test_a_redirect_that_drops_the_body_is_followed(status: int, method: M
     fake = FakeTransport().reply(method, "/v1/upload", moved).reply("GET", "/v1/done", 200)
     built = client(fake)
 
-    async with built.stream("upload", method=method, content=_chunks()) as stream:
+    async with built.stream("upload", method=method, body=Raw(_chunks())) as stream:
         assert stream.status_code == httpx2.codes.OK
 
     assert [request.method for request in fake.calls] == [method, "GET"]
@@ -146,6 +146,6 @@ async def test_a_factory_body_follows_a_307() -> None:
     fake = FakeTransport().reply("POST", "/v1/upload", moved).reply("POST", "/v1/elsewhere", 200)
     built = client(fake)
 
-    await built.post("upload", expect=nothing, content=_chunks)
+    await built.post("upload", expect=nothing, body=Raw(_chunks))
 
     assert [request.content for request in fake.calls] == [_BODY, _BODY]

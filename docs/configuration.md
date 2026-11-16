@@ -1,20 +1,41 @@
 # Configuration
 
 ```text
-AsyncBaseClient(
+Client(
     *,
     base_url: str,
-    rate: Rate | RateBudget = UNLIMITED,
+    rate: Rate | RateBudget | None = None,
     auth: httpx2.Auth | None = None,
     policy: TransportPolicy = TransportPolicy(),
     http: HttpOptions = HttpOptions(),
+    observers: Sequence[Observer] = (),
+    middleware: Sequence[Middleware] = (),
 )
 ```
 
-A client class fixes these in `super().__init__()` and exposes only what its callers should choose (a key, a region,
-observers, a transport for tests). Every option object is a frozen, keyword-only dataclass that validates when it is
-built, so a bad value fails where it is written, and freezes the collections it is given. Change one with
-`dataclasses.replace`.
+An SDK fixes these where it builds its `Client` and exposes only what its callers should choose (a key, a region,
+observers). It holds the client rather than inheriting from it (`Client` is final, and subclassing it raises
+`TypeError`), and forwards `async with` and `aclose()` to it:
+
+```python
+class GitHub:
+    def __init__(self, token: str) -> None:
+        self._http = Client(base_url="https://api.github.com", rate=Rate.per_second(10), auth=BearerAuth(token))
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+```
+
+A `ClientError` the client raises names its `base_url`'s host as its `source`, `[api.github.com] ...`.
+
+Every option object is a frozen, keyword-only dataclass that validates when it is built, so a bad value fails where it
+is written, and freezes the collections it is given. Change one with `dataclasses.replace`.
 
 - **`base_url`**: the API root. A relative path in a call is joined onto it (a trailing `/` is added if missing), and
   its origin is the one credentials are sent to.
@@ -22,6 +43,9 @@ built, so a bad value fails where it is written, and freezes the collections it 
   given the same instance. See [rate budgets](rate-budgets.md).
 - **`auth`**: an `httpx2.Auth`, usually one of headgate's. See [auth](auth.md). An upstream `httpx` object raises
   `TypeError`.
+- **`observers`**: receive the client's [events](observability.md#events).
+- **`middleware`**: per-attempt hooks; see [middleware](#middleware). They are parts of the stack, not settings of how a
+  request is sent, so they are the client's own rather than `HttpOptions` fields.
 
 ## TransportPolicy
 
@@ -29,22 +53,34 @@ What the stack does to every request.
 
 | Field | Default | |
 | --- | --- | --- |
-| `retry` | `RetryPolicy()` | how a call is re-sent; see [retries](retries.md) |
+| `retry` | `RetryPolicy()` | how a call is re-sent, or `None` to send every call once; see [retries](retries.md) |
+| `timeout` | `Timeouts()` | per-phase timeouts; a phase left unset takes its default from `Timeouts.DEFAULT`, `math.inf` is no limit, and a phase set longer than `deadline` is refused |
 | `deadline` | `60.0` | seconds the whole call may take, or `None`; see [deadlines](deadlines.md) |
 | `breaker` | `BreakerPolicy()` | the per-origin breaker, or `None`; see [breaker](breaker.md) |
-| `rate_limits` | `()` | `RateRule`s: per-path budgets; see [rate budgets](rate-budgets.md#per-path-lanes) |
 | `cache` | `None` | an `HttpCache`; see [caching](caching.md) |
 | `idempotency` | `None` | `IdempotencyKeys()` stamps a key on every POST and PATCH; see [retries](retries.md#idempotency-keys) |
-| `routes` | `()` | `Route(fragment, retry=..., deadline=...)`: per-path overrides, first match wins |
+| `routes` | `()` | `Route(fragment, retry=..., deadline=..., rate=..., cache=...)`: the per-path rules, first match wins |
 
-A `Route` changes an endpoint's retry policy or deadline in configuration, so the endpoint method stays one line:
+A `Route` changes an endpoint's retry policy, deadline, rate or caching in configuration, so the endpoint method stays
+one line:
 
 ```python
-from headgate import Route, TransportPolicy
-from headgate.retry import NO_RETRY
+from headgate import Rate, Route, TransportPolicy
 
-policy = TransportPolicy(routes=(Route("/charges", retry=NO_RETRY), Route("/reports", deadline=300.0)))
+policy = TransportPolicy(
+    routes=(
+        Route("/charges", retry=None),  # sent once
+        Route("/reports", deadline=300.0, rate=Rate.per_minute(6)),  # a long deadline and a lane of its own
+        Route("/live", cache=None),  # never cached
+    )
+)
 ```
+
+`Route(fragment, /, **options)` takes `RouteOptions`. An option left out takes the policy's (or, for `rate`, the
+client's budget), and `None` turns it off: `retry=None` sends once, `deadline=None` sets no deadline, `rate=None`
+paces nothing of the route's own, and `cache=None` keeps the paths out of the cache. The first route whose fragment a
+call's path holds is the call's route, whole; two routes never combine. A call's own options, and its view's, win
+over its route's. An unknown option, or a value of the wrong kind (`retry=False`), raises `TypeError`.
 
 ## HttpOptions
 
@@ -54,10 +90,9 @@ How requests are sent and responses read.
 | --- | --- | --- |
 | `transport` | `None` | a custom network transport (a test double, `headgate.curl.AsyncCurlTransport`); the default is an HTTP/2 `httpx2.AsyncHTTPTransport` |
 | `headers` | `{}` | sent on every request to `base_url`'s origin and the `trusted_origins`; any other origin gets only `User-Agent` and the `Accept` headers among them ([security](security.md)); any header the call implies or sets wins a clash (see [precedence](#precedence)) |
-| `timeout` | `Timeouts()` | per-phase timeouts; a phase left unset takes its default |
 | `follow_redirects` | `True` | the client's default; a call can override it |
 | `max_redirects` | `5` | the hop limit, auth-flow hops included |
-| `max_response_bytes` | 32 MiB | the cap on a buffered body, counted after decompression; `stream()` is uncapped |
+| `max_response_bytes` | 32 MiB | the cap on a buffered body, counted after decompression; a call's own `max_response_bytes=` replaces it for that call; `stream()` is uncapped |
 | `response_check` | `None` | a check of every final response; requires `follow_redirects=False` |
 | `security` | `SecurityOptions()` | where requests and credentials may go: see below |
 | `ssl_context` | `None` | TLS for the default transport: a private CA, mutual TLS, pinning |
@@ -66,8 +101,6 @@ How requests are sent and responses read.
 | `user_agent` | `None` | your product token, sent before headgate's |
 | `cookies` | `False` | `True` keeps httpx2's cookie jar; by default no cookie is stored or sent back |
 | `request_id_headers` | `x-request-id`, `request-id`, `x-amzn-requestid`, `x-ms-request-id`, `cf-ray` | where `request_id` is read from |
-| `observers` | `()` | receive the client's [events](observability.md#events) |
-| `middleware` | `()` | per-attempt hooks; see [middleware](#middleware) |
 
 `SecurityOptions`, passed as `HttpOptions(security=SecurityOptions(...))`, groups the settings that decide where
 requests and credentials may go:
@@ -75,7 +108,7 @@ requests and credentials may go:
 | Field | Default | |
 | --- | --- | --- |
 | `trusted_origins` | `frozenset()` | origins besides `base_url`'s that may receive credentials |
-| `allow_private_hosts` | `True` | `False` turns on the SSRF guard |
+| `block_private_hosts` | `False` | `True` turns on the SSRF guard |
 | `resolver` | `None` | how the SSRF guard resolves names; only with the guard on |
 
 `ssl_context`, `limits` and `proxy` configure the default transport, so passing any of them with `transport=` is a
@@ -126,7 +159,8 @@ class AttemptId:
 
 A signature that must be fresh on every attempt (a timestamp, a nonce) belongs in a
 [`SigningAuth`](auth.md#signingauth) passed as the client's `auth=`, not in a middleware: it signs each attempt inside
-the retry layer too, after the last middleware, and the class refuses a signer that declares nothing it stamps.
+the retry layer too, after the last middleware and the rate-limit wait, and the class refuses a signer that declares
+nothing it stamps.
 
 ```python
 import hashlib
@@ -158,48 +192,97 @@ A middleware runs inside the transport stack, below the [credential guard](secur
 the client runs as a request hook, so the guard runs again below the last middleware. The headers and query parameters a
 middleware declares in `credential_headers` and `credential_params` are removed there from any hop not addressed to
 `base_url`'s origin or a trusted one, a cross-origin redirect hop included. Both are required, each a `frozenset` of
-names, empty when the middleware stamps none, as a class attribute or a property; `HttpOptions` raises `TypeError` for a
+names, empty when the middleware stamps none, as a class attribute or a property; the client raises `TypeError` for a
 middleware that lacks either, and for a plain function. `request.content` is available for a
 buffered body; a streamed body is not readable there. A middleware that replaces the request
 (`call_next(httpx2.Request(...))`) keeps `request.extensions` on the new one, or a `SigningAuth` cannot sign that
 attempt. Even then the signature goes on the replacement, not on the request the client made, so a `SigningAuth`'s one
 re-send on a 401 is lost.
 
+The two declarations are the `headgate.security.CredentialCarrier` protocol, and an auth that also gives a
+`credential_identity()` (so a cache can partition by it) is a `headgate.security.CredentialStamper`; implement either
+from `headgate.security`, never from a private module.
+
+A middleware reads its call through `headgate.call_info(request)`, a `headgate.events.CallView` taken when asked: the
+call's `CallInfo` (method, URL and route template, the same record events carry), its `attempt` (1 on the first send,
+2 on the first retry or hedge) and the seconds `remaining` before its deadline, or `None` without one. It returns
+`None` for a request no client call built.
+
+```python
+from headgate import call_info
+
+
+class TracesFirstReportSends:
+    credential_headers = frozenset[str]()
+    credential_params = frozenset[str]()
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        view = call_info(request)
+        if view is not None and view.call.route == "reports/{report_id}" and view.attempt == 1:
+            request.headers["X-Trace-Report"] = "1"
+        return await call_next(request)
+```
+
 ## Per-call options
 
 Every verb, `get`, `post`, `put`, `patch`, `delete` and `head`, has the same signature, except that `head` reads
-`expect=nothing` unless it is given another reader, since a HEAD has no body:
+`expect=nothing` unless it is given another reader, since a HEAD has no body. An option left out takes the view's, the
+route's or the client's; `None` turns it off:
 
 ```python
 await client.get(
     url,  # a literal, a t-string (escaped, and the call's route) or an httpx2.URL (sent as it is)
     expect=reader_or_expect,
-    retry=None,  # None: the view's; False: send once; a RetryPolicy: replace the client's; True: undo the view's
-    follow_redirects=None,  # None: the client's default
-    cache_ttl=None,  # this response's cache lifetime, over HttpCache.ttl
+    retry=RetryPolicy(attempts=5),  # replaces the view's, the route's or the client's; None: send once
+    follow_redirects=False,  # a 3xx raises as itself; True follows it
+    cache_ttl=60.0,  # this response's cache lifetime, over HttpCache.ttl; None: no lifetime limit
     params={"q": "gdp"},  # a list or tuple value repeats the key
     headers={"Accept-Language": "en"},
     timeout=Timeouts(read=5.0),  # the phases it sets replace the view's or the client's
     deadline=10.0,  # seconds for this call, or None for none
+    max_response_bytes=256 * 1024 * 1024,  # this call's body cap, over HttpOptions.max_response_bytes
 )
 ```
 
-plus `body=` (what a flavor's `writer` wrote), `json=`, `data=`, `content=` or `files=` for a body and
-`idempotency_key=` for a write. `stream()` takes the same options without `expect=` and `cache_ttl=`, and `paginate()`
-takes `expect=`, `pages=`, `limit=` and the same options, applied to each page; a walk of POSTs takes `body=` or
-`json=` and no other body option ([Walks of POSTs](pagination.md#walks-of-posts)).
+plus `body=` for a body (a `Body`: what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`, see
+[request bodies](streaming.md#request-bodies)) and `idempotency_key=` for a write. `stream()` takes the same options
+without `expect=`, `cache_ttl=` and `max_response_bytes=`, and `paginate()` takes `expect=`, `pages=`, `max_pages=`,
+`on_limit=` and the same options but the body, applied to each page; a walk of POSTs takes `query=`
+([Walks of POSTs](pagination.md#walks-of-posts)).
 
-The options are typed, so a wrapper can forward them with every key checked: `RequestOptions` is the TypedDict of a
-verb's options (`**options: Unpack[RequestOptions]`), `PageOptions` the ones `paginate()` applies to each page (the
-same, less the body, plus `follow_redirects` and `cache_ttl`), and `ViewOptions` what `with_options()` takes. `Method`
-is the literal type of the six verbs, which `stream(method=...)` takes.
+A `params=` value is a `str`, `int`, `float`, `bool` or `None`, or a list or tuple of them, which repeats the key. Any
+other scalar (a `UUID`, a `Decimal`, an `Enum` member, a `date`) is sent as its `str()`. A value no query parameter can
+carry raises `TypeError` naming the parameter, before anything is sent: a mapping, a set, `bytes`, `bytearray` or
+`memoryview`, and a list or tuple inside a list or tuple. Encode such a value into text first, with `json.dumps` or the
+API's own format.
+
+`cache_ttl=None` removes headgate's lifetime only: the cache is TTL-only and never reads a response's own cache headers,
+so an entry stored with `cache_ttl=None` is served until its storage evicts it, past any `Cache-Control: max-age` and
+even past `no-store`, as an entry of `HttpCache(ttl=None)` is.
+
+The options are typed, so a wrapper can forward them with every key checked. `CallOptions` is the TypedDict of every
+per-call option but the body, which every verb and `paginate()` take; `RequestOptions` is a verb's (`CallOptions` plus
+the body); `headgate.streaming.StreamOptions` is `stream()`'s (`RequestOptions` less `cache_ttl` and
+`max_response_bytes`); and `ViewOptions` is what `with_options()` takes. A wrapper typed on them forwards every option
+at once:
+
+```python
+async def fetch(self, url: LiteralString, **options: Unpack[CallOptions]) -> Series:
+    return await self._http.get(url, expect=SERIES, **options)
+```
+
+Each is closed, so a misspelled keyword is a type error, and the client refuses one at runtime too, with a `TypeError`
+naming it, before anything is sent. `Method` is the literal type of the seven verbs, which `stream(method=...)` takes.
+`query()` sends the QUERY method: safe and idempotent like a GET, with a `body=` like a POST. It is retried and hedged
+as an idempotent request is, and never cached.
 
 ### Views
 
-`client.with_options(headers=..., timeout=..., deadline=..., retry=...)` returns a view: the same client with other
-defaults for its calls. It shares everything that makes calls cooperate: the connection pool and transport stack (so
-the rate budget and the retry budget), the breakers, the auth and its cached token, and the observers. Options left
-out keep the client's; a view of a view layers on the outer view.
+`client.with_options(headers=..., timeout=..., deadline=..., retry=..., follow_redirects=...)` returns a view: the same
+client with other defaults for its calls. A view's `retry=None` sends each of its calls once; a call that should not
+take the view's defaults is made on the client. It shares everything that makes calls cooperate: the connection pool
+and transport stack (so the rate budget and the retry budget), the breakers, the auth and its cached token, and the
+observers. Options left out keep the client's; a view of a view layers on the outer view.
 
 ```python
 patient = client.with_options(timeout=Timeouts(read=120.0), deadline=600.0)

@@ -1,29 +1,29 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The base client: :class:`AsyncBaseClient`, a policy layer over ``httpx2.AsyncClient``.
+"""The client: :class:`Client`, a policy layer over ``httpx2.AsyncClient`` that an SDK holds.
 
 httpx2 does the URL joining, headers, timeouts and connection pooling. This adds retries, rate limiting, a per-origin
 circuit breaker, a deadline, a response-size cap, events, and the mapping of every failure onto the ``ClientError``
 tree. It orchestrates; each policy lives in its own module, and the transport stack under ``httpx2.AsyncClient`` is
 assembled in :mod:`headgate._stack`.
 
-Every call (a verb, :meth:`~AsyncBaseClient.stream`, each page of :meth:`~AsyncBaseClient.paginate`) is packed into a
+Every call (a verb, :meth:`~Client.stream`, each page of :meth:`~Client.paginate`) is packed into a
 :class:`_Call` and runs through the same steps:
 
-1. :meth:`~AsyncBaseClient._prepare` renders the URL, builds the ``httpx2.Request`` once, and stamps the call's
+1. :meth:`~Client._prepare` renders the URL, builds the ``httpx2.Request`` once, and stamps the call's
    :class:`~headgate._core.CallContext` on it: method, sanitized URL, route template, deadline, retry override, body
    replayability, idempotency key and redirect choice;
-2. :meth:`~AsyncBaseClient._reported` emits ``CallStarted`` and ``CallFinished`` around the call and adds its notes to
-   the error it raises; :meth:`~AsyncBaseClient._deadline` bounds it by its deadline;
-3. :meth:`~AsyncBaseClient._exchange` sends the request under the origin's circuit breaker, through the transport
-   stack, and :meth:`~AsyncBaseClient._sent` maps a network failure or a surviving 429/5xx onto a ``ClientError``
+2. :meth:`~Client._reported` emits ``CallStarted`` and ``CallFinished`` around the call and adds its notes to
+   the error it raises; :meth:`~Client._deadline` bounds it by its deadline;
+3. :meth:`~Client._exchange` sends the request under the origin's circuit breaker, through the transport
+   stack, and :meth:`~Client._sent` maps a network failure or a surviving 429/5xx onto a ``ClientError``
    (:mod:`headgate._failures`), charging the breaker with what the exchange showed;
 4. a verb caps the body (:func:`headgate._body.read_capped`) and reads it through the call's declared responses
-   (:meth:`~AsyncBaseClient._dispatch`); ``stream()`` hands the open response to the caller's block instead.
+   (:meth:`~Client._dispatch`); ``stream()`` hands the open response to the caller's block instead.
 
-The six verbs are written out rather than generated so that each keeps an exact signature for type checkers, IDEs
-and subclasses that override one; every body is a single call into :meth:`AsyncBaseClient._request`.
+The six verbs are written out rather than generated so that each keeps an exact signature for type checkers and IDEs;
+every body is a single call into :meth:`Client._request`.
 """
 
 from __future__ import annotations
@@ -32,19 +32,32 @@ import asyncio
 import contextlib
 import copy
 import functools
+import math
+from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Literal, Self, Unpack, overload
+from typing import TYPE_CHECKING, Final, Literal, Self, Unpack, cast, final, overload
 
 import httpx2
 
-# A closed TypedDict (PEP 728) refuses a keyword it does not name, so a stray or misspelled option is a type error.
-from typing_extensions import TypedDict
-
-from headgate._auth import failed_on_auth_hop
+from headgate._auth import MINTING, failed_on_auth_hop, mint_hop_failure
 from headgate._body import read_capped, read_head
+from headgate._call_options import (
+    BODY_HINTS,
+    CALL_KEYS,
+    REQUEST_KEYS,
+    STREAM_KEYS,
+    CallOptions,
+    RequestOptions,
+    StreamOptions,
+    check_options,
+    check_overrides,
+)
 from headgate._core import (
     BREAKER_GATE,
+    EXPLICIT_HEADERS,
     SILENT,
     BreakerChanged,
     BudgetBacklogError,
@@ -53,10 +66,12 @@ from headgate._core import (
     CallInfo,
     CallStarted,
     Emitter,
+    ExplicitHeaders,
     Slot,
     check_kind,
     current_timing,
     policy_is_disabled,
+    url_path,
 )
 from headgate._deprecation import announce_deprecation
 from headgate._failures import (
@@ -77,21 +92,30 @@ from headgate._options import (
     Timeouts,
     TransportPolicy,
     check_deadline,
+    check_hooks,
+    check_middleware,
     check_timeout_fits,
     httpx_timeout,
     match_route,
     reject_upstream_httpx,
 )
-from headgate._request_body import check_one_body, request_content
+from headgate._request_body import Json, lowered
 from headgate._responses import Expect, Reader, accepts, nothing
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
-from headgate._view import KEEP, ROOT_DEFAULTS, ViewOptions
-from headgate.breaker import CircuitBreaker
+from headgate._view import KEEP, ROOT_DEFAULTS, VIEW_KEYS, ViewOptions
+from headgate.breaker import BreakerRegistry, CircuitBreaker
 from headgate.breaker._breaker import BreakerOpenError
 from headgate.breaker._registry import NO_BREAKER
-from headgate.breaker._scope import scoped_registry
-from headgate.cache._transport import host_untested, served_from_cache, stamp_ttl, store_accepted
+from headgate.cache._transport import (
+    MAX_RESPONSE_BYTES,
+    STREAMED,
+    UNCACHED,
+    host_untested,
+    served_from_cache,
+    stamp_ttl,
+    store_accepted,
+)
 from headgate.errors import (
     CircuitOpenError,
     ClientError,
@@ -102,31 +126,34 @@ from headgate.errors import (
     RefusedError,
 )
 from headgate.pagination import PageRequest, WritingPager
-from headgate.pagination._paginated import PageWalk
-from headgate.ratelimit import UNLIMITED, Rate, RateBudget
-from headgate.ratelimit._budget import BudgetPausedError
-from headgate.ratelimit._budgets import PathBudgets
-from headgate.retry import NO_RETRY, RetryPolicy
-from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY
+from headgate.pagination._paginated import PageWalk, check_page_budget
+from headgate.ratelimit._budget import BudgetPausedError, RateBudget
+from headgate.ratelimit._budgets import CALL_BUDGET, Lane, PathBudgets
+from headgate.ratelimit._rate import Rate
+from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE
 from headgate.streaming._stream import OpenStream
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Mapping
+    from collections.abc import AsyncGenerator, Callable, Sequence
     from types import TracebackType
 
-    from headgate._options import Route
-    from headgate._request_body import Body, EncodedBody, UploadFiles, Writer
+    from headgate._core import Observer, Timing
+    from headgate._middleware import Middleware
+    from headgate._options import Route, RouteOptions
+    from headgate._request_body import Lowered
     from headgate._responses import ResponseCheck
     from headgate.breaker._breaker import Transition, Verdict
     from headgate.breaker._registry import Breaker
-    from headgate.cache import HttpCache
-    from headgate.pagination import PageLimit, Pager, Paginated
+    from headgate.cache._policy import HttpCache
+    from headgate.pagination import Pager
+    from headgate.pagination._paginated import Paginated
+    from headgate.retry._policy import RetryPolicy
     from headgate.streaming import Stream
 
-__all__ = ["AsyncBaseClient", "Built", "Method", "RequestOptions", "built_with"]
+__all__ = ["Built", "Client", "Method", "built_with"]
 
-type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]
-"""The HTTP methods a client sends: one verb each, and :meth:`AsyncBaseClient.stream`'s ``method``."""
+type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "QUERY"]
+"""The HTTP methods a client sends: one verb each, and :meth:`Client.stream`'s ``method``."""
 
 #: A query value httpx2 encodes itself.
 type _QueryValue = str | int | float | bool | None
@@ -134,98 +161,44 @@ type _QueryValue = str | int | float | bool | None
 #: How much of a refused or failed streamed response is read, for the ``ClientError``'s body snippet.
 _STREAM_ERROR_HEAD_BYTES = 4096
 
+#: The media type ``events()`` asks for.
+_EVENT_STREAM: Final = "text/event-stream"
+
 #: Network errors that say nothing of the origin's health, so its breaker is not charged with them: a request httpx2
 #: refused to write, a scheme it cannot speak, our own connection pool running out of connections, and a redirect chain
 #: past ``max_redirects`` (the origin answered every hop; the loop is one URL's configuration, as a 4xx is).
 _LOCAL_FAILURES = (httpx2.LocalProtocolError, httpx2.UnsupportedProtocol, httpx2.PoolTimeout, httpx2.TooManyRedirects)
 
-#: The running timer of the call's deadline, put on its context by ``AsyncBaseClient._deadline``: whether it fired is
+#: The running timer of the call's deadline, put on its context by ``Client._deadline``: whether it fired is
 #: what tells the deadline cutting an attempt off from the caller's task being cancelled.
 _DEADLINE_TIMER = Slot[asyncio.Timeout]("deadline_timer")
 
-#: The request options that make a body a walk cannot rewrite page by page, so ``paginate`` refuses them.
-_UNPAGEABLE_BODIES = ("data", "content", "files")
+#: The attribute marking a ``ClientError`` a call has reported, so an enclosing stream leaves it as that call's.
+_REPORTED = "headgate.reported"
+
+#: The origin a walk's first page was sent to, set while ``paginate`` fetches a later page, whose URL the server chose:
+#: the call's own ``headers=`` reach that origin and trusted ones only (see :class:`~headgate._core.ExplicitHeaders`).
+_WALK_ORIGIN = ContextVar[httpx2.Origin | None]("headgate_walk_origin", default=None)
+
+#: What ``paginate`` says of a body keyword: a walk's body is the raw value its pager rewrites, ``query=``.
+_WALK_BODY = "a walk's body is query=, the value its pager rewrites for each page"
+_WALK_HINTS = dict.fromkeys(("body", "json", "data", "content", "files"), _WALK_BODY)
+
+#: Why a walk of POSTs refuses one fixed idempotency key.
+_ONE_KEY_FOR_EVERY_PAGE = "an idempotency key would be sent with every page's body; a walk of POSTs takes none"
 
 #: The option groups a client gets when it passes none: frozen, so one instance serves every client.
 _DEFAULT_POLICY = TransportPolicy()
 _DEFAULT_HTTP = HttpOptions()
 
 
-class _SendOptions(TypedDict, total=False):
-    """The per-call options every request takes, a verb's, a stream's or a page's: all of them but the body."""
-
-    params: Mapping[str, object] | None
-    headers: Mapping[str, str]
-    timeout: Timeouts
-    deadline: float | None
-    idempotency_key: str
-
-
-class RequestOptions(_SendOptions, total=False, closed=True):
-    """The per-call options a verb takes beyond its URL, ``expect=`` and the three explicit overrides.
-
-    * ``params``: the query, ``Mapping[str, object]`` so that a client can pass a TypedDict (a TypedDict is assignable
-      to no narrower mapping). Its values are encoded the way httpx2 encodes a mapping: a list or tuple repeats the key
-      once per item, and any value that is not a ``str``, number, bool or ``None`` is sent as its ``str()``.
-    * ``headers``: added to the client's; a clash is won by the call.
-    * ``body``: an :class:`~headgate.EncodedBody` a flavor's ``writer`` wrote (``body=NEW_ORDER(order)``), sent
-      with its ``Content-Type`` unless ``headers=`` (the call's or its view's, not the client's defaults) sets one. It
-      combines with no other body option.
-    * ``json`` / ``data``: a JSON body of builtins (a codec's ``to_builtins`` builds one) or a form body.
-    * ``content``: a raw body: ``bytes``; an async iterable of ``bytes``, streamed once, so the call is never re-sent
-      and a redirect that asks for the body again is not followed; or a callable returning one, called once for each
-      send, so the call stays retryable. It combines with no other body option.
-    * ``files``: a multipart body, as httpx2 takes it (``{"name": file}``, or ``(filename, file, content_type)``
-      tuples), with ``data=`` as its form fields.
-    * ``timeout``: :class:`~headgate.Timeouts` whose set phases replace the view's or the client's.
-    * ``deadline``: seconds this call may take in all, or ``None`` for no deadline; absent, the view's, the route's or
-      the policy's applies.
-    * ``idempotency_key``: the idempotency key this call carries on every attempt, under the policy's
-      ``IdempotencyKeys`` header (``Idempotency-Key`` by default).
-    """
-
-    body: EncodedBody
-    json: object
-    data: Mapping[str, object]
-    content: Body
-    files: UploadFiles
-
-
-class _PerPage(_SendOptions, total=False):
-    """The options :meth:`AsyncBaseClient.paginate` applies to each page: every request's, plus two a verb names."""
-
-    follow_redirects: bool | None
-    cache_ttl: float | None
-
-
-class PageOptions(_PerPage, total=False, closed=True):
-    """The per-page options :meth:`AsyncBaseClient.paginate` takes: :class:`RequestOptions` but the body, plus two more.
-
-    A walk's body is a keyword of its own, ``body=`` or ``json=``, since its type is the pager's. The two more are the
-    ones a verb names:
-
-    * ``follow_redirects``: ``False`` makes a page's redirect raise as its 3xx, as on a verb.
-    * ``cache_ttl``: each page's cache lifetime, as on a verb.
-    """
-
-
-class _WalkOptions[B](_PerPage, total=False, closed=True):
-    """What :meth:`AsyncBaseClient.paginate`'s implementation takes: the per-page options, and the walk's body."""
-
-    body: B
-    json: B
-
-
 @dataclass(frozen=True, slots=True)
 class _Call:
-    """One call as a verb received it: what to send, and the per-call overrides."""
+    """One call as a verb received it: what to send, and its options."""
 
     method: Method
     url: CallUrl
-    options: RequestOptions
-    retry: bool | RetryPolicy | None = None
-    follow_redirects: bool | None = None
-    cache_ttl: float | None = None
+    options: RequestOptions | StreamOptions
 
 
 class _BlockError(Exception):
@@ -259,35 +232,39 @@ class _Prepared:
 
 @dataclass(frozen=True, slots=True)
 class Built:
-    """What a client was built with, for :mod:`headgate.testing` to read back: its cache, its budgets, its pool."""
+    """What a client was built with, for :mod:`headgate.testing` to read back: its cache, budgets, pool and breakers."""
 
     cache: HttpCache | None
     budgets: PathBudgets
     http: httpx2.AsyncClient
+    breakers: BreakerRegistry | None
 
 
-#: The key a client keeps its :class:`Built` under, in its ``__dict__``. Not an identifier, so no attribute of a
-#: subclass can collide with it, and a view (a shallow copy) shares it.
+#: The key a client keeps its :class:`Built` under, in its ``__dict__``, which a view (a shallow copy) shares.
 _BUILT = "headgate.built"
 
 
-def built_with(client: AsyncBaseClient) -> Built:
+def built_with(client: Client) -> Built:
     """Return what *client* (or the client a view was made from) was built with.
 
-    :raises TypeError: for a client whose ``AsyncBaseClient.__init__`` never ran, so that was built with nothing.
+    :raises TypeError: for anything but a :class:`Client`, such as the SDK that holds one.
     """
-    built = vars(client).get(_BUILT)
-    if not isinstance(built, Built):
-        msg = f"{type(client).__name__} was never built: its __init__ must call super().__init__()"
+    if not isinstance(client, Client):
+        msg = f"{type(client).__name__} is not a Client: pass the Client it holds"
         raise TypeError(msg)
-    return built
+    return cast("Built", vars(client)[_BUILT])
 
 
-class AsyncBaseClient:
-    """Async base for HTTP API clients. Configured through ``__init__``, which builds the transport stack once.
+@final
+class Client:
+    """An HTTP API client, configured through ``__init__``, which builds the transport stack once.
+
+    An SDK holds one rather than inheriting from it (``self._http = Client(...)``), and calls its verbs; subclassing
+    it raises ``TypeError``. Every :class:`~headgate.ClientError` it raises names its ``base_url``'s host as
+    its ``source``.
 
     **Failure policy.** Every verb takes the call's declared responses as ``expect=`` and returns what the matching
-    reader read, or raises a :class:`~headgate.errors.ClientError` subtype:
+    reader read, or raises a :class:`~headgate.ClientError` subtype:
 
     * ``TransportError`` / ``ClientTimeoutError``: a network failure or timeout, or the call's deadline passing;
     * ``CircuitOpenError``: the origin's breaker refused the call without sending it;
@@ -295,21 +272,22 @@ class AsyncBaseClient:
       quota refusal a reader found inside a 2xx;
     * ``UpstreamStatusError``: a 5xx that survived retries, a status the call did not declare, or a refusal carrying
       the status it arrived with (401/403 become ``AuthError``);
-    * ``ForbiddenDestinationError``: a hop the SSRF guard refused (``SecurityOptions(allow_private_hosts=False)``), or
+    * ``ForbiddenDestinationError``: a hop the SSRF guard refused (``SecurityOptions(block_private_hosts=True)``), or
       a token mint's hop redirected off its origin;
     * ``ResponseParseError``: a 2xx body the reader could not read;
-    * ``ResponseTooLargeError``: a body past ``HttpOptions.max_response_bytes``.
+    * ``ResponseTooLargeError``: a body past the call's ``max_response_bytes``, else ``HttpOptions.max_response_bytes``.
 
     There is no ``None`` return except from a reader that returns it (:data:`~headgate._responses.nothing`): every
     undeclared non-2xx raises, a 404 included. A non-2xx the provider documents as an answer is declared with
     :meth:`Expect.on <headgate._responses.Expect.on>` and comes back as its own wire type.
 
-    **Per-call overrides.** ``retry=False`` sends once and never re-sends (a POST or PATCH is already re-sent only
-    when that is safe, see :class:`~headgate.RetryPolicy`); ``retry=RetryPolicy(...)`` replaces the client's policy for
-    the call; ``retry=True`` undoes a view's ``retry=``, leaving the call to its route's policy or the client's. Left
-    out, the call takes the view's. ``follow_redirects=False`` makes a redirect raise as its 3xx. ``cache_ttl=`` sets
-    this request's cache lifetime. ``timeout=``, ``deadline=`` and ``idempotency_key=`` ride :class:`RequestOptions`.
-    :meth:`with_options` makes a view whose calls take other defaults for headers, timeouts, deadline and retry.
+    **Per-call options** are :class:`~headgate.RequestOptions`. An option left out takes the view's, the route's or the
+    client's, and ``None`` is off: ``retry=None`` sends once and never re-sends (a POST or PATCH is already re-sent only
+    when that is safe, see :class:`~headgate.RetryPolicy`), and ``retry=RetryPolicy(...)`` replaces the policy for the
+    call. ``follow_redirects=False`` makes a redirect raise as its 3xx. ``cache_ttl=`` sets this response's cache
+    lifetime, ``None`` for none. A keyword no option names raises ``TypeError`` before anything is sent.
+    :meth:`with_options` makes a view whose calls take other defaults for headers, timeouts, deadline, retry and
+    redirects.
 
     **URLs.** A t-string URL (``t"series/{series_id}"``) is rendered by :func:`headgate._url.render_path`, which
     escapes every interpolation as one path segment and raises ``ValueError`` for a value no segment can hold (as
@@ -320,54 +298,82 @@ class AsyncBaseClient:
     limit, raises the root ``ClientError``, since such a URL often comes from the wire rather than the code. Every
     message names a URL redacted and cut to a few hundred characters.
 
-    **Time.** The client takes its clock and sleep from :func:`headgate._core.current_timing` when it is built.
+    **Time.** The client takes its timing from :func:`headgate.timing.current_timing` when it is built.
     """
 
     def __init__(
         self,
         *,
         base_url: str,
-        rate: Rate | RateBudget = UNLIMITED,
+        rate: Rate | RateBudget | None = None,
         auth: httpx2.Auth | None = None,
         policy: TransportPolicy = _DEFAULT_POLICY,
         http: HttpOptions = _DEFAULT_HTTP,
+        observers: Sequence[Observer] = (),
+        middleware: Sequence[Middleware] = (),
     ) -> None:
         """Build the transport stack for *base_url*, spending from *rate*, signing requests with *auth*.
 
         *rate* is a :class:`~headgate.Rate`, from which the client builds a budget of its own, or a
-        :class:`~headgate.RateBudget` it shares with every other client given the same one. Without one the client
-        paces nothing itself (:data:`~headgate.ratelimit.UNLIMITED`), but still waits out the pauses the server asks
+        :class:`~headgate.RateBudget` it shares with every other client given the same one. Without one (``None``) the
+        client paces nothing itself, but still waits out the pauses the server asks
         for: a 429 or 503 with ``Retry-After``, and a spent ``RateLimit`` quota. Pass a rate when the provider states
         its quota.
 
-        *policy* configures retries, the deadline, the breaker, per-path rates, the cache, idempotency keys and
-        per-route overrides (:class:`~headgate.TransportPolicy`); *http* the network transport, headers, timeouts,
-        redirects, the body cap, cookies, observers and middleware (:class:`~headgate.HttpOptions`).
+        *policy* configures retries, the timeouts and the deadline, the breaker, per-path rates, the cache,
+        idempotency keys and per-route overrides (:class:`~headgate.TransportPolicy`); *http* the network transport,
+        headers, redirects, the body cap and cookies (:class:`~headgate.HttpOptions`).
 
-        :raises TypeError: for an upstream ``httpx`` *auth*, and for a *rate* that is neither a ``Rate`` nor a
-            ``RateBudget``, such as a bare number.
+        *observers* receive the client's events (see :mod:`headgate.events`), and *middleware* runs once per attempt,
+        in order, inside the retry layer (see :class:`~headgate.Middleware`).
+
+        :raises TypeError: for an argument of the wrong kind: an upstream ``httpx`` *auth*, a *rate* that is neither
+            a ``Rate``, a ``RateBudget`` nor ``None``, such as a bare number, *observers* or *middleware* that are not
+            a sequence, a middleware that does not declare its credentials, and a *base_url*, *policy* or *http* that
+            is not the kind it names.
         :raises ClientConfigurationError: for a cache partitioned by credential with an *auth* that does not declare
             its credentials (see :class:`~headgate.cache.Partition`).
         """
+        check_kind("base_url", base_url, str, "the API root, such as 'https://api.example.com/v1'")
+        check_kind("policy", policy, TransportPolicy, "TransportPolicy(...)")
+        check_kind("http", http, HttpOptions, "HttpOptions(...)")
         reject_upstream_httpx(auth, what="auth")
-        check_kind("rate", rate, (Rate, RateBudget), "a Rate, such as Rate.per_second(10), or a RateBudget")
+        check_kind(
+            "rate", rate, (Rate, RateBudget, type(None)), "a Rate, such as Rate.per_second(10), a RateBudget or None"
+        )
+        observers, middleware = _stack_parts("observers", observers), _stack_parts("middleware", middleware)
+        check_middleware(middleware)
         self._policy_off = policy_is_disabled()
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
-        self._source = type(self).__name__
+        self._source = httpx2.URL(base_url).netloc.decode("ascii")  # host, and a port other than the default
         self._timing = current_timing()
+        self._breakers = _registry_of(policy, self._timing)
         self._response_check = http.response_check
         self._max_response_bytes = http.max_response_bytes
         self._request_id_headers = http.request_id_headers
-        check_timeout_fits(http.timeout, policy.deadline)
-        self._timeout = http.timeout
-        self._emitter = Emitter(http.observers) if http.observers else SILENT
+        self._timeout = policy.timeout
+        self._emitter = Emitter(observers) if observers else SILENT
         self._view = ROOT_DEFAULTS
         self._owns_pool = True
-        credentials = Credentials.of(base_url=base_url, auth=auth, http=http)
-        budgets = PathBudgets(default=rate, rules=policy.rate_limits, timing=self._timing)
-        stack = build_transport_stack(budgets, policy, http, self._timing, credentials)
-        self._http_client = build_http_client(base_url=base_url, credentials=credentials, http=http, transport=stack)
-        vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client)
+        credentials = Credentials.of(base_url=base_url, auth=auth, http=http, middleware=middleware)
+        lanes = [Lane(route.fragment, *_route_rate(route)) for route in policy.routes]
+        self._budgets = budgets = PathBudgets(
+            default=rate, lanes=lanes, timing=self._timing, origin=httpx2.URL(base_url).origin
+        )
+        stack = build_transport_stack(budgets, policy, http, self._timing, credentials, observed=bool(observers))
+        self._http_client = build_http_client(
+            base_url=base_url, credentials=credentials, http=http, timeout=policy.timeout, transport=stack
+        )
+        vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client, breakers=self._breakers)
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a subclass: an SDK holds a ``Client`` and calls it."""
+        del kwargs
+        msg = (
+            f"{cls.__name__} cannot subclass Client: hold one instead, as self._http = Client(base_url=...), and call "
+            "self._http.get(...)"
+        )
+        raise TypeError(msg)
 
     async def __aenter__(self) -> Self:
         """Return the client; leaving the block closes it (a view's block closes nothing, see :meth:`with_options`)."""
@@ -390,25 +396,32 @@ class AsyncBaseClient:
     def with_options(self, **options: Unpack[ViewOptions]) -> Self:
         """Return a view of this client whose calls take different defaults; the client itself is unchanged.
 
-        The options are :class:`~headgate.ViewOptions`: ``headers=``, ``timeout=``, ``deadline=`` and ``retry=``. An
-        option left out keeps the client's (or, on a view of a view, the outer view's). A call's own options win
-        over the view's, and the view's over a :class:`~headgate.Route`'s.
+        The options are :class:`~headgate.ViewOptions`: ``headers=``, ``timeout=``, ``deadline=``, ``retry=`` and
+        ``follow_redirects=``. An option left out keeps the client's (or, on a view of a view, the outer view's). A
+        call's own options win over the view's, and the view's over a :class:`~headgate.Route`'s.
 
         The view shares everything that makes calls cooperate: the connection pool and transport stack, so the rate
-        budget and the retry budget; the circuit breakers; the auth and its cached token; the observers. It is a
-        shallow copy, so a subclass's own attributes are shared too. **The client it was made from owns the pool**:
+        budget and the retry budget; the circuit breakers; the auth and its cached token; the observers. **The client it
+        was made from owns the pool**:
         closing a view, or leaving its ``async with`` block, closes nothing, and a view stops working once that client
         is closed.
 
         :raises ValueError: for a deadline that is not positive and finite, and for a timeout longer than the deadline
             the view's calls run under, since it could never take effect. A deadline shorter than the timeouts is
-            accepted: cutting each attempt's timeouts to the time left is what a short deadline is for.
+            accepted: cutting each attempt's timeouts to the time left is what a short deadline is for. Also for
+            ``follow_redirects=True`` on a client with a ``response_check``, which no call may follow under.
+        :raises TypeError: for a keyword :class:`~headgate.ViewOptions` does not name, and for a ``retry`` or
+            ``follow_redirects`` of the wrong kind.
         """
+        check_options("with_options", options, VIEW_KEYS)
         layered = self._view.layered(options)
+        if self._response_check is not None and layered.follow_redirects is True:
+            msg = f"the client of {self._source} has a response_check=, so no view may follow redirects"
+            raise ValueError(msg)
         if (timeout := options.get("timeout")) is not None:
             check_timeout_fits(timeout, self._policy.deadline if layered.deadline is KEEP else layered.deadline)
         view = copy.copy(self)
-        # A shallow copy shares the pool, the stack and any subclass state; only the view's own settings differ.
+        # A shallow copy shares the pool and the stack; only the view's own settings differ.
         vars(view).update(
             _view=layered,
             _owns_pool=False,
@@ -423,13 +436,10 @@ class AsyncBaseClient:
         url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
-        retry: bool | RetryPolicy | None = None,
-        follow_redirects: bool | None = None,
-        cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
     ) -> T:
-        """Send a GET and read the reply through *expect*. See :class:`AsyncBaseClient`."""
-        call = _Call("GET", url, options, retry=retry, follow_redirects=follow_redirects, cache_ttl=cache_ttl)
+        """Send a GET and read the reply through *expect*. See :class:`Client`."""
+        call = _Call("GET", url, options)
         return await self._request(call, expect)
 
     async def delete[T](
@@ -437,13 +447,10 @@ class AsyncBaseClient:
         url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
-        retry: bool | RetryPolicy | None = None,
-        follow_redirects: bool | None = None,
-        cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
     ) -> T:
-        """Send a DELETE and read the reply through *expect*. See :class:`AsyncBaseClient`."""
-        call = _Call("DELETE", url, options, retry=retry, follow_redirects=follow_redirects, cache_ttl=cache_ttl)
+        """Send a DELETE and read the reply through *expect*. See :class:`Client`."""
+        call = _Call("DELETE", url, options)
         return await self._request(call, expect)
 
     async def post[T](
@@ -451,13 +458,25 @@ class AsyncBaseClient:
         url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
-        retry: bool | RetryPolicy | None = None,
-        follow_redirects: bool | None = None,
-        cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
     ) -> T:
-        """Send a POST and read the reply through *expect*. See :class:`AsyncBaseClient`."""
-        call = _Call("POST", url, options, retry=retry, follow_redirects=follow_redirects, cache_ttl=cache_ttl)
+        """Send a POST and read the reply through *expect*. See :class:`Client`."""
+        call = _Call("POST", url, options)
+        return await self._request(call, expect)
+
+    async def query[T](
+        self,
+        url: CallUrl,
+        *,
+        expect: Reader[T] | Expect[T],
+        **options: Unpack[RequestOptions],
+    ) -> T:
+        """Send a QUERY, the safe and idempotent method that carries a body, and read the reply through *expect*.
+
+        It takes a ``body=`` as :meth:`post` does. Being idempotent, it is re-sent after any retryable failure and may
+        be hedged, as a GET is; it is never cached. See :class:`Client`.
+        """
+        call = _Call("QUERY", url, options)
         return await self._request(call, expect)
 
     async def put[T](
@@ -465,13 +484,10 @@ class AsyncBaseClient:
         url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
-        retry: bool | RetryPolicy | None = None,
-        follow_redirects: bool | None = None,
-        cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
     ) -> T:
-        """Send a PUT and read the reply through *expect*. See :class:`AsyncBaseClient`."""
-        call = _Call("PUT", url, options, retry=retry, follow_redirects=follow_redirects, cache_ttl=cache_ttl)
+        """Send a PUT and read the reply through *expect*. See :class:`Client`."""
+        call = _Call("PUT", url, options)
         return await self._request(call, expect)
 
     async def patch[T](
@@ -479,13 +495,10 @@ class AsyncBaseClient:
         url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
-        retry: bool | RetryPolicy | None = None,
-        follow_redirects: bool | None = None,
-        cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
     ) -> T:
-        """Send a PATCH and read the reply through *expect*. See :class:`AsyncBaseClient`."""
-        call = _Call("PATCH", url, options, retry=retry, follow_redirects=follow_redirects, cache_ttl=cache_ttl)
+        """Send a PATCH and read the reply through *expect*. See :class:`Client`."""
+        call = _Call("PATCH", url, options)
         return await self._request(call, expect)
 
     @overload
@@ -494,29 +507,15 @@ class AsyncBaseClient:
         url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
-        retry: bool | RetryPolicy | None = None,
-        follow_redirects: bool | None = None,
-        cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
     ) -> T: ...
     @overload
-    async def head(
-        self,
-        url: CallUrl,
-        *,
-        retry: bool | RetryPolicy | None = None,
-        follow_redirects: bool | None = None,
-        cache_ttl: float | None = None,
-        **options: Unpack[RequestOptions],
-    ) -> None: ...
+    async def head(self, url: CallUrl, **options: Unpack[RequestOptions]) -> None: ...
     async def head(
         self,
         url: CallUrl,
         *,
         expect: Reader[object] | Expect[object] = nothing,
-        retry: bool | RetryPolicy | None = None,
-        follow_redirects: bool | None = None,
-        cache_ttl: float | None = None,
         **options: Unpack[RequestOptions],
     ) -> object:
         """Send a HEAD and read the reply through *expect*: by default :data:`~headgate.nothing`, as a HEAD has no body.
@@ -524,7 +523,7 @@ class AsyncBaseClient:
         A reader still has the status line and headers, ``Content-Length`` and ``Content-Encoding`` included, so
         ``expect=`` reads a header off a HEAD; the size cap is not applied to a body that does not exist.
         """
-        call = _Call("HEAD", url, options, retry=retry, follow_redirects=follow_redirects, cache_ttl=cache_ttl)
+        call = _Call("HEAD", url, options)
         return await self._request(call, expect)
 
     # Streams and pages.
@@ -534,10 +533,8 @@ class AsyncBaseClient:
         url: CallUrl,
         *,
         method: Method = "GET",
-        retry: bool | RetryPolicy | None = None,
-        follow_redirects: bool | None = None,
         last_event_id: str | None = None,
-        **options: Unpack[RequestOptions],
+        **options: Unpack[StreamOptions],
     ) -> contextlib.AbstractAsyncContextManager[Stream]:
         """Send a request, a GET unless *method* says otherwise, and open its 2xx response as a ``Stream``.
 
@@ -548,12 +545,14 @@ class AsyncBaseClient:
         * a 2xx is the only success: there is no ``expect=``, and a 3xx raises unless redirects are followed;
         * the client's ``response_check`` runs on the response head, before the block is entered;
         * the deadline bounds opening the stream (every attempt, backoff and the head checks), not reading it, since
-          the caller's pace of iteration decides how long the body takes. Each read is bounded by the read timeout;
-          to bound the whole body, wrap the block in ``asyncio.timeout``;
+          the caller's pace of iteration decides how long the body takes. Once the head has arrived, only the read
+          timeout bounds each read, so a call's read timeout may be longer than its deadline; to bound the whole
+          stream, wrap the block in ``asyncio.timeout``;
         * a retry covers opening only; a failure while the body arrives raises ``TransportError`` or
           ``ClientTimeoutError`` from the iteration;
-        * the origin's circuit breaker spans the whole block: a network failure mid-body counts against the origin, even
-          when the block catches it, and a clean exit with no such failure as a success;
+        * the origin's circuit breaker is told of the answer at the response head, before the block is entered, so a
+          stream that took the half-open probe closes the breaker then; a network failure mid-body counts against the
+          origin as one more failure, even when the block catches it;
         * an exception the block raises that is not a ``ClientError`` is the caller's own, even an ``OSError`` or an
           httpx2 error: it propagates unchanged, the breaker is charged nothing for it, and ``CallFinished`` reports
           the status the stream opened with and no error.
@@ -564,13 +563,39 @@ class AsyncBaseClient:
 
         The request goes out when the block is entered.
         """
+        check_options("stream", options, STREAM_KEYS, BODY_HINTS)
+        check_overrides(options)
         if bool(last_event_id):
             # Merged case-insensitively, so it replaces a Last-Event-ID however headers= spelled it.
             headers = httpx2.Headers(options.get("headers"))
             headers["Last-Event-ID"] = last_event_id
             options = options.copy()
             options["headers"] = headers
-        return self._streamed(_Call(method, url, options, retry=retry, follow_redirects=follow_redirects))
+        return self._streamed(_Call(method, url, options))
+
+    def events(
+        self, url: CallUrl, *, last_event_id: str | None = None, **options: Unpack[StreamOptions]
+    ) -> contextlib.AbstractAsyncContextManager[Stream]:
+        """Open a server-sent event stream: a :meth:`stream` GET asking for ``text/event-stream``, with no read limit.
+
+        ``async with client.events("feed") as stream:`` then ``async for event in stream.aiter_events():``. It sends
+        ``Accept: text/event-stream`` unless the call's own ``headers=`` name an ``Accept``, and gives each read no
+        timeout (``math.inf``) unless the call's ``timeout=`` sets ``read``, since an event stream may be quiet for
+        minutes. The deadline bounds opening it, as for any stream. ``last_event_id=`` resumes after an event, as on
+        :meth:`stream`.
+        """
+        headers = httpx2.Headers(options.get("headers"))
+        headers.setdefault("Accept", _EVENT_STREAM)
+        timeout = options.get("timeout")
+        options = options.copy()
+        options["headers"] = headers
+        if timeout is None:
+            options["timeout"] = Timeouts(read=math.inf)
+        else:
+            check_kind("timeout", timeout, Timeouts, "a Timeouts, such as Timeouts(read=5.0)")
+            if timeout.read is None:
+                options["timeout"] = replace(timeout, read=math.inf)
+        return self.stream(url, last_event_id=last_event_id, **options)
 
     @overload
     def paginate[P, I](
@@ -579,108 +604,106 @@ class AsyncBaseClient:
         *,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, None],
-        retry: bool | RetryPolicy | None = None,
-        limit: PageLimit | None = None,
-        **options: Unpack[PageOptions],
-    ) -> Paginated[P, I]: ...
+        max_pages: int | None = None,
+        on_limit: Literal["raise", "stop"] = "raise",
+        **options: Unpack[CallOptions],
+    ) -> Paginated[I, P]: ...
     @overload
     def paginate[P, I, B](
         self,
         url: CallUrl,
         *,
-        body: B | None,
+        query: B | None,
         expect: Reader[P] | Expect[P],
-        pages: WritingPager[P, I, B],
-        retry: bool | RetryPolicy | None = None,
-        limit: PageLimit | None = None,
-        **options: Unpack[PageOptions],
-    ) -> Paginated[P, I]: ...
-    @overload
+        pages: Pager[P, I, B],
+        max_pages: int | None = None,
+        on_limit: Literal["raise", "stop"] = "raise",
+        **options: Unpack[CallOptions],
+    ) -> Paginated[I, P]: ...
     def paginate[P, I, B](
         self,
         url: CallUrl,
         *,
-        json: B | None,
+        query: B | None = None,
         expect: Reader[P] | Expect[P],
         pages: Pager[P, I, B],
-        retry: bool | RetryPolicy | None = None,
-        limit: PageLimit | None = None,
-        **options: Unpack[PageOptions],
-    ) -> Paginated[P, I]: ...
-    def paginate[P, I, B](
-        self,
-        url: CallUrl,
-        *,
-        expect: Reader[P] | Expect[P],
-        pages: Pager[P, I, B],
-        retry: bool | RetryPolicy | None = None,
-        limit: PageLimit | None = None,
-        **options: Unpack[_WalkOptions[B]],
-    ) -> Paginated[P, I]:
+        max_pages: int | None = None,
+        on_limit: Literal["raise", "stop"] = "raise",
+        **options: Unpack[CallOptions],
+    ) -> Paginated[I, P]:
         """Return the pages *pages* follows from *url*, each read through *expect*, iterated lazily.
 
         ``async for item in client.paginate(...)`` yields the items of each page in turn; ``.pages()`` yields the
-        pages. Each page is a GET (a POST, given ``body=`` or ``json=``) through the whole stack, fetched only when the
-        iteration reaches it, and a next-page URL taken from a response is sent as an absolute URL, under the same
-        credential and destination rules as any other. Iterating again starts again from the first page. ``retry=``,
-        ``follow_redirects=``, ``cache_ttl=`` and the request options apply to every page, as they do to one
-        :meth:`get` (or :meth:`post`).
+        pages. Each page is a GET (a POST, given ``query=``) through the whole stack, fetched only when the iteration
+        reaches it, and a next-page URL taken from a response is sent as an absolute URL, under the same credential
+        and destination rules as any other. Iterating again starts again from the first page. The call options
+        (:class:`~headgate.CallOptions`) apply to every page, as they do to one :meth:`get` (or :meth:`post`).
 
-        A walk of POSTs passes its body as :meth:`post` does, as ``json=`` or ``body=``, either ``None`` for no body.
-        ``json=`` is builtins, sent as JSON. ``body=`` is the caller's own value, which the pager's ``write`` (a
-        flavor's ``writer``, see :class:`~headgate.pagination.WritingPager`) encodes for each page: the writer belongs
-        to the endpoint, like the reader and the pager, and a pager that rewrites the body
-        (:class:`~headgate.BodyCursor`, :class:`~headgate.BodyOffset`) needs the value, not its bytes. A page with a
-        body is then a :meth:`post` in every respect: in particular it is re-sent only when that is safe, unless
-        ``retry=`` says otherwise.
+        A walk of POSTs passes its body as ``query=``: the raw value the pager rewrites page by page (a
+        :class:`~headgate.pagination.BodyCursor` or :class:`~headgate.pagination.BodyOffset` needs the value, not its
+        bytes), ``None`` for none. The pager's ``write`` (a flavor's ``writer``, see
+        :class:`~headgate.pagination.WritingPager`) encodes it for each page, since the writer belongs to the endpoint,
+        like the reader and the pager; a pager without one sends the value as JSON, so it must be builtins. A page
+        with a body is then a :meth:`post` in every respect: in particular it is re-sent only when that is safe,
+        unless ``retry=`` says otherwise.
 
-        *limit* is a page budget (:class:`~headgate.PageLimit`): at most ``max_pages`` pages are fetched. When more
-        would follow, the walk raises :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or
-        with ``on_limit="stop"`` ends there. A walk that ends within the budget is unaffected.
+        *max_pages* is a page budget: at most that many pages are fetched. When more would follow, the walk raises
+        :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or with ``on_limit="stop"`` ends
+        there. A walk that ends within the budget is unaffected. The walk is a ``Paginated[I, P]``: its items first.
 
-        :raises ValueError: for ``data=``, ``content=`` or ``files=``, a body no pager can rewrite, and for ``json=``
-            and ``body=`` together, both of which the overloads refuse too; for a walk its pager refuses
-            (:meth:`~headgate.pagination.Pager.first` runs here, once); and for a first page with a body that cannot
-            be sent as the walk says: a ``body=`` whose pager has no ``write``, a ``json=`` whose pager has one, or an
-            idempotency key (``idempotency_key=``, or the policy's header in ``headers=``, a view's or the client's),
-            as one key on pages with different bodies would have the server replay the first page's answer. A later
-            page with a body is held to the same rules, and raises from the iteration.
-        :raises TypeError: for an ``expect=`` that is neither a :class:`~headgate.Reader` nor an ``Expect``, before the
-            pager runs.
+        :raises ValueError: for a ``max_pages`` below 1, an ``on_limit`` that is neither ``"raise"`` nor ``"stop"``,
+            ``on_limit="stop"`` without ``max_pages``, a walk its pager refuses
+            (:meth:`~headgate.pagination.Pager.first` runs here, once),
+            and for a first page with a body and an idempotency key (``idempotency_key=``, or the policy's header in
+            ``headers=``, a view's or the client's), as one key on pages with different bodies would have the server
+            replay the first page's answer. A later page with a body is held to the same rule, and raises from the
+            iteration.
+        :raises TypeError: for a keyword no call option names, ``body=``, ``json=`` and ``limit=`` included (a walk's
+            body is ``query=``, its page budget ``max_pages=``), for a ``max_pages`` that is not an ``int``, and for an
+            ``expect=`` that is neither a :class:`~headgate.Reader` nor an ``Expect``, before the pager runs.
         """
+        check_options("paginate", options, CALL_KEYS, _WALK_HINTS)
+        check_overrides(options)
+        check_page_budget(max_pages, on_limit)
         spec: Expect[P] = _expectation(expect)
-        body, as_json, call_options = _walk_body(**options)
+        call_options = options.copy()
         # How a body is sent is the walk's: the pager's writer encodes every page's, whatever request the pager returns.
         write = pages.write if isinstance(pages, WritingPager) else None
-        first = pages.first(PageRequest(url, call_options.pop("params", None), body))
-        # Whether a page's body can be sent is the walk's too: refused for the first page here, and for a later one
-        # (a pager that turns GETs into POSTs) before it is sent.
-        refusal = _post_refusal(write, as_json=as_json, fixed_key=self._one_key_for_every_page(call_options))
-        if first.body is not None and refusal is not None:
-            raise ValueError(refusal)
+        first = pages.first(PageRequest(url, call_options.pop("params", None), query))
+        # A page's body cannot carry one fixed key: refused for the first page here, and for a later one (a pager that
+        # turns GETs into POSTs) before it is sent.
+        fixed_key = self._one_key_for_every_page(call_options)
+        if first.body is not None and fixed_key:
+            raise ValueError(_ONE_KEY_FOR_EVERY_PAGE)
         answers = {status: _paired(read) for status, read in spec.answers.items()}
         paired = Expect(_paired(spec.ok), answers, headers=spec.headers, accept=spec.accept)
 
+        # The origin the first page was sent to, once it was: a later page's call headers go there and nowhere else.
+        addressed: list[httpx2.Origin] = []
+
         async def fetch(request: PageRequest[B]) -> tuple[P, httpx2.Response]:
+            token = _WALK_ORIGIN.set(addressed[0] if addressed and request is not first else None)
+            try:
+                page, response = await fetch_page(request)
+            finally:
+                _WALK_ORIGIN.reset(token)
+            if not addressed:
+                addressed.append((response.history[0] if response.history else response).request.url.origin)
+            return page, response
+
+        async def fetch_page(request: PageRequest[B]) -> tuple[P, httpx2.Response]:
             page_options = call_options.copy()
             page_options["params"] = request.params
-            # A page's follow_redirects and cache_ttl land on the verb's own parameters of those names. The verbs are
-            # the base class's, since a subclass may name an endpoint method get or post.
             if request.body is None:
-                return await AsyncBaseClient.get(self, request.url, expect=paired, retry=retry, **page_options)
-            if refusal is not None:
-                raise ValueError(refusal)
-            if write is None:
-                return await AsyncBaseClient.post(
-                    self, request.url, expect=paired, retry=retry, json=request.body, **page_options
-                )
-            return await AsyncBaseClient.post(
-                self, request.url, expect=paired, retry=retry, body=write(request.body), **page_options
-            )
+                return await self.get(request.url, expect=paired, **page_options)
+            if fixed_key:
+                raise ValueError(_ONE_KEY_FOR_EVERY_PAGE)
+            body = Json(request.body) if write is None else write(request.body)
+            return await self.post(request.url, expect=paired, body=body, **page_options)
 
-        return PageWalk(fetch, pages, first, source=self._source, limit=limit)
+        return PageWalk(fetch, pages, first, source=self._source, max_pages=max_pages, on_limit=on_limit)
 
-    def _one_key_for_every_page(self, options: PageOptions) -> bool:
+    def _one_key_for_every_page(self, options: CallOptions) -> bool:
         """Return whether every call made with *options* sends one fixed idempotency key.
 
         The key is fixed by ``idempotency_key=``, or by the policy's header among those the call sends: its own
@@ -705,8 +728,13 @@ class AsyncBaseClient:
 
         See :meth:`_dispatch` for how the last three read the body.
         """
+        check_options(call.method.lower(), call.options, REQUEST_KEYS, BODY_HINTS)
+        check_overrides(call.options)
         spec: Expect[T] = _expectation(expect)
         prepared = self._prepare(call)
+        cap = call.options.get("max_response_bytes")
+        if cap is not None:
+            prepared.context.put(MAX_RESPONSE_BYTES, cap)
         explicit = self._view.headers_for(call.options.get("headers"))
         _stamp_headers(prepared.request, explicit, spec.headers)
         if spec.accept is not None:
@@ -714,7 +742,10 @@ class AsyncBaseClient:
         async with self._reported(prepared):
             async with self._deadline(prepared), self._exchange(prepared) as (streamed, _):
                 announce_deprecation(prepared.context, streamed)
-                resp = await read_capped(streamed, self._max_response_bytes, self._site(prepared))
+                # The call's cap is for the answers it reads; an undeclared error keeps the client's, so it still
+                # raises as its status, not as a body too large for an answer it never asked for.
+                answer_cap = cap if streamed.is_success or streamed.status_code in spec.answers else None
+                resp = await read_capped(streamed, answer_cap or self._max_response_bytes, self._site(prepared))
             answer = self._dispatch(resp, spec, self._site(prepared))
             # Only now that the reader accepted it may a cached miss be stored.
             await store_accepted(resp)
@@ -733,7 +764,7 @@ class AsyncBaseClient:
         ``ClientError`` is raised inside the report, as the call's error; any other exception after it, so the call
         reports the exchange it was.
         """
-        prepared = self._prepare(call)
+        prepared = self._prepare(call, streamed=True)
         own: Exception | None = None
         async with self._reported(prepared):
             try:
@@ -746,8 +777,9 @@ class AsyncBaseClient:
                         raise _BlockError(exc) from exc
             except _BlockError as blocked:
                 own = blocked.error
-            # Raised outside the except clause, so the error keeps its own __context__ rather than the carrier.
-            if isinstance(own, ClientError):
+            # Raised outside the except clause, so the error keeps its own __context__ rather than the carrier. One
+            # another call already reported is that call's, not this stream's.
+            if isinstance(own, ClientError) and _REPORTED not in vars(own):
                 raise own
         if own is not None:
             raise own
@@ -756,25 +788,39 @@ class AsyncBaseClient:
         """Send *prepared* under its deadline and check the response head, leaving the exchange open on *held*."""
         async with self._deadline(prepared):
             streamed, verdict = await held.enter_async_context(self._exchange(prepared))
+            # The origin answered: settle that now, as a verb would, rather than when the caller's block exits.
+            verdict.mark_answered()
             announce_deprecation(prepared.context, streamed)
             if (refused := _checked(self._response_check, streamed)) is not None:
-                head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
+                head = await self._error_head(prepared, streamed, verdict)
                 raise refusal_error(refused, head, self._site(prepared)) from refused
             if not streamed.is_success:
-                head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
+                head = await self._error_head(prepared, streamed, verdict)
                 raise status_error(head, self._site(prepared))
             # A stream has no reader: passing the head checks is what accepts it.
             await store_accepted(streamed)
         return streamed, verdict
 
+    async def _error_head(self, prepared: _Prepared, streamed: httpx2.Response, verdict: Verdict) -> httpx2.Response:
+        """Read a refused stream's error head, mapping a network failure as the exchange would.
+
+        Mapped here, inside the deadline, so a network ``TimeoutError`` is not taken for the deadline's own.
+        """
+        try:
+            return await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
+        except NETWORK_ERRORS as exc:
+            raise self._network_failure(prepared, verdict, exc) from exc
+
     # Preparing the request.
 
-    def _prepare(self, call: _Call) -> _Prepared:
-        """Build *call*'s request and stamp its context on it.
+    def _prepare(self, call: _Call, *, streamed: bool = False) -> _Prepared:
+        """Build *call*'s request and stamp its context on it; a *streamed* call's context says so (``STREAMED``).
+
+        A stream's own read timeout may be longer than its deadline, which bounds only opening the stream.
 
         Raises ``ValueError`` for a t-string value no path segment can hold, for a call that would follow redirects
-        on a client with a ``response_check``, for a ``deadline=`` that is not positive and finite and for body options
-        that do not combine; ``TypeError`` for a ``content=`` that is no body; and ``ClientError`` for a URL httpx2
+        on a client with a ``response_check``, for a ``deadline=`` that is not positive and finite and for a ``Json``
+        body JSON cannot carry; ``TypeError`` for a ``body=`` that is no ``Body``; and ``ClientError`` for a URL httpx2
         cannot parse.
         """
         if isinstance(call.url, Template):
@@ -782,90 +828,125 @@ class AsyncBaseClient:
         else:
             url, route = str(call.url), None
         log_url = loggable_url(url)
-        follow = self._http_client.follow_redirects if call.follow_redirects is None else call.follow_redirects
+        options = call.options
+        follow = self._follows(options)
         # The per-call half of the constructor's check: the client itself never follows with a response_check.
         if self._response_check is not None and follow:
-            msg = f"{self._source} has a response_check=, so no call may follow redirects"
+            msg = f"the client of {self._source} has a response_check=, so no call may follow redirects"
             raise ValueError(msg)
-        options = call.options
         params = options.get("params")
-        files = options.get("files")
-        body = options.get("body")
-        check_one_body(
-            body=body, content=options.get("content"), json=options.get("json"), data=options.get("data"), files=files
-        )
-        content, replayable = (body.content, True) if body is not None else request_content(options.get("content"))
+        body = lowered(options.get("body"))
         try:
             request = self._http_client.build_request(
                 call.method,
                 url,
                 params=None if params is None else _query_pairs(params),
                 headers=self._view.headers_for(options.get("headers")),
-                json=options.get("json"),
-                data=options.get("data"),
-                content=content,
-                files=files,
+                data=body.data,
+                content=body.content,
+                files=body.files,
                 timeout=httpx_timeout(self._timeout, options.get("timeout")),
             )
         except httpx2.InvalidURL as exc:
             raise _invalid_url(exc, CallSite(self._source, call.method, log_url)) from exc
-        if body is not None:
-            _stamp_headers(request, self._view.headers_for(options.get("headers")), {"Content-Type": body.content_type})
+        content_type = body.content_type if body.content_type is not None else _encoded_type(request, body)
+        if content_type is not None:
+            _stamp_headers(request, self._view.headers_for(options.get("headers")), {"Content-Type": content_type})
+        own = options.get("headers") or {}
+        if self._view.headers or own:
+            request.extensions[EXPLICIT_HEADERS] = ExplicitHeaders(
+                origin=_WALK_ORIGIN.get() or request.url.origin,
+                view=frozenset(name.lower() for name, _ in self._view.headers),
+                call=frozenset(name.lower() for name in own),
+            )
         # The absolute URL is for observers only (an OpenTelemetry span's url.full and server.address).
         full_url = sanitize_url(str(request.url)) if self._emitter.active else None
         info = CallInfo(method=call.method, url=log_url, route=route, full_url=full_url)
-        route_policy = match_route(self._policy.routes, request.url.path)
-        deadline = self._deadline_of(call, route_policy)
+        # The call's route is matched once, here; every layer reads what it set from the call's context.
+        path = url_path(request.url)
+        route_policy = match_route(self._policy.routes, path)
+        route_options = {} if route_policy is None else route_policy.options
+        deadline = self._deadline_of(call, route_options)
         if (timeout := options.get("timeout")) is not None:
-            check_timeout_fits(timeout, deadline)
+            # Its kind was checked building the request (httpx_timeout), so a stream's is a Timeouts here.
+            check_timeout_fits(replace(timeout, read=None) if streamed else timeout, deadline)
         context = CallContext(info, clock=self._timing.clock, deadline_after=deadline, emitter=self._emitter)
+        if streamed:
+            context.put(STREAMED, value=True)
         context.follow_redirects = follow
-        if (retry := self._retry_of(call, route_policy)) is not None:
-            context.put(RETRY_POLICY, retry)
-        if not replayable:
-            context.put(REPLAYABLE_BODY, replayable)
+        self._stamp_route(context, call, route_options, path)
+        if not body.replayable:
+            context.put(REPLAYABLE_BODY, value=False)
         self._stamp_idempotency_key(request, context, options.get("idempotency_key"))
         # The cache transport only setdefaults the client's own TTL, so a per-call TTL stamped here wins.
-        if call.cache_ttl is not None:
-            stamp_ttl(request, call.cache_ttl)
+        if "cache_ttl" in options:
+            stamp_ttl(request, options["cache_ttl"])
         context.attach(request)
         return _Prepared(request, context, follow)
 
-    def _deadline_of(self, call: _Call, route: Route | None) -> float | None:
-        """Return the seconds *call* may take: its own ``deadline=``, else the view's, its route's, the policy's."""
+    def _stamp_route(self, context: CallContext, call: _Call, route: RouteOptions, path: str) -> None:
+        """Put on *context* what *call*'s *route* sets for every layer below: its retry policy, budget and cache."""
+        if (retry := self._retry_of(call, route)) is not None:
+            context.put(RETRY_POLICY, retry)
+        # Every hop of the call, a redirect's included, spends from the budget its route names.
+        context.put(CALL_BUDGET, self._budgets.for_path(path))
+        if "cache" in route:
+            context.put(UNCACHED, value=True)
+
+    def _deadline_of(self, call: _Call, route: RouteOptions) -> float | None:
+        """Return the seconds *call* may take: its own ``deadline=``, else the view's, its *route*'s, the policy's."""
         if "deadline" in call.options:
             deadline = call.options["deadline"]
             check_deadline(deadline)
             return deadline
         if self._view.deadline is not KEEP:
             return self._view.deadline
-        if route is not None and route.deadline is not None:
-            return route.deadline
+        if "deadline" in route:
+            return route["deadline"]
         return self._policy.deadline
 
-    def _retry_of(self, call: _Call, route: Route | None) -> RetryPolicy | None:
-        """Return *call*'s own retry policy when it overrides the client's: per call, view or route; else ``None``.
+    def _retry_of(self, call: _Call, route: RouteOptions) -> RetryPolicy | None:
+        """Return *call*'s own retry policy when it overrides the client's: per call, view or *route*; else ``None``.
 
-        A call's ``retry=True`` skips the view's, so a route's policy, or else the client's, applies.
+        A call's, a view's or a route's ``retry=None`` sends once; the policy's ``None`` is read where the stack is
+        built.
         """
-        if self._policy_off or call.retry is False:
-            return NO_RETRY
-        if isinstance(call.retry, RetryPolicy):
-            return call.retry
-        if call.retry is None and self._view.retry is not None:
+        if self._policy_off:
+            return SEND_ONCE
+        if "retry" in call.options:
+            retry = call.options["retry"]
+            return SEND_ONCE if retry is None else retry
+        if self._view.retry is not KEEP:
             return self._view.retry
-        return None if route is None else route.retry
+        if "retry" in route:
+            retry = route["retry"]
+            return SEND_ONCE if retry is None else retry
+        return None
+
+    def _follows(self, options: RequestOptions | StreamOptions) -> bool:
+        """Return whether a call with *options* follows redirects: its own choice, else the view's, the client's."""
+        if "follow_redirects" in options:
+            return options["follow_redirects"]
+        if self._view.follow_redirects is not KEEP:
+            return self._view.follow_redirects
+        return self._http_client.follow_redirects
 
     def _stamp_idempotency_key(self, request: httpx2.Request, context: CallContext, key: str | None) -> None:
         """Put the call's idempotency key on *request* once, before the retry layer, so every attempt carries it.
 
         The key is the call's ``idempotency_key=``, else a fresh one from the policy's ``IdempotencyKeys`` for a POST
-        or PATCH. A key the caller already set in ``headers=`` is kept.
+        or PATCH. A key the caller already set in ``headers=`` is kept. Raises ``ValueError`` for an empty or blank key.
         """
         keys = self._policy.idempotency
         header = "Idempotency-Key" if keys is None else keys.header
+        if key is not None and not key.strip():
+            msg = f"idempotency_key= takes a key that is not empty or blank (got {key!r})"
+            raise ValueError(msg)
         if key is None and keys is not None and request.method in KEYED_METHODS:
             key = keys.factory()
+            if not key.strip():
+                msg = f"IdempotencyKeys(factory=...) must return a key that is not empty or blank (got {key!r})"
+                raise ValueError(msg)
         if key is not None:
             request.headers.setdefault(header, key)
         context.idempotency_key = request.headers.get(header)
@@ -874,7 +955,11 @@ class AsyncBaseClient:
 
     @contextlib.asynccontextmanager
     async def _reported(self, prepared: _Prepared) -> AsyncGenerator[None]:
-        """Emit ``CallStarted`` and, on the way out, ``CallFinished``; add the call's notes to a ``ClientError``."""
+        """Emit ``CallStarted`` and, on the way out, ``CallFinished``; add the call's notes to a ``ClientError``.
+
+        A ``ClientError`` leaving the call takes the call's :attr:`~headgate.ClientError.sent`, whichever layer
+        raised it, since what a caller needs to know is whether the call's own request can have left.
+        """
         context = prepared.context
         if context.observed:
             context.emit(CallStarted(call=context.info))
@@ -883,9 +968,13 @@ class AsyncBaseClient:
             yield
         except BaseException as exc:
             error = type(exc).__name__
-            if isinstance(exc, ClientError):
+            # Only the first call to report an error notes it: an inner call's error passing through a stream's block.
+            if isinstance(exc, ClientError) and _REPORTED not in vars(exc):
+                vars(exc)[_REPORTED] = True
                 for note in context.notes:
                     exc.add_note(note)
+                # What the call's own request sent, whichever layer raised the error: a token mint, a middleware.
+                vars(exc)["_sent"] = context.sent
             raise
         finally:
             if context.observed:
@@ -951,11 +1040,13 @@ class AsyncBaseClient:
         breaker = self._breaker_for(prepared.request.url)
         try:
             with breaker.track(self._breaker_listener(breaker, context)) as verdict:
-                context.put(BREAKER_GATE, _breaker_gate(breaker, verdict))
+                context.put(BREAKER_GATE, verdict.refused)
                 async with self._sent(prepared, verdict) as streamed:
                     yield streamed, verdict
         except BreakerOpenError as exc:
+            # Refused unsent, so sending again is safe whatever the method, and admitted once the cooldown has passed.
             details = self._site(prepared).details(retry_after=exc.retry_after)
+            details["retryable"] = True
             raise CircuitOpenError(str(exc), **details) from None
         except BudgetBacklogError as exc:
             # Our own pacing, not the provider's: the call was never sent (the retry layer withdrew the attempt), and
@@ -966,10 +1057,11 @@ class AsyncBaseClient:
             msg = f"{site.method} {site.url}: never sent: {exc}"
             raise ClientTimeoutError(msg, **details) from None
         except BudgetPausedError as exc:
-            # Not the retry policy's call: the budget says when sending again will be admitted.
+            # Not the retry policy's call: the budget says when sending again will be admitted. The call got no
+            # response, so it carries no status, rather than the one the response that caused the pause had.
             details = self._site(prepared).details(retry_after=exc.retry_after)
             details["retryable"] = True
-            raise RateLimitError(str(exc), status_code=exc.status_code, **details) from None
+            raise RateLimitError(str(exc), status_code=None, **details) from None
         except httpx2.InvalidURL as exc:
             # A redirect joined past httpx2's length limit. Not an HTTPError, and not an origin failure.
             raise _invalid_url(exc, self._site(prepared)) from exc
@@ -997,14 +1089,15 @@ class AsyncBaseClient:
           another request's attempt produced (a cache hit, a stored 5xx served from the cache, or a download or failure
           the cache shared from an identical GET, :data:`~headgate.cache._transport.HOST_UNTESTED`), since only the
           request that fetched tested the origin. The caller's task being cancelled, and the deadline passing before
-          the attempt reached the network (in a rate-budget wait, a middleware, a token mint), are nothing too.
+          the attempt reached the network (in a rate-budget wait, a middleware, a token mint) or while the auth mints,
+          are nothing too, as is a response a middleware answered without sending the request.
         """
         request = prepared.request
         try:
             streamed = await self._http_client.send(request, stream=True, follow_redirects=prepared.follow_redirects)
             prepared.report.status_code = streamed.status_code
             try:
-                _charge_response(streamed, verdict)
+                _charge_response(streamed, verdict, prepared.context)
                 if is_transient_status(streamed.status_code):
                     head = await read_head(streamed, _STREAM_ERROR_HEAD_BYTES)
                     raise transient_status_error(head, self._site(prepared))
@@ -1026,16 +1119,18 @@ class AsyncBaseClient:
 
     def _network_failure(self, prepared: _Prepared, verdict: Verdict, exc: httpx2.HTTPError | OSError) -> ClientError:
         """Charge the network failure *exc* to the origin on *verdict*, and return the ``ClientError`` it becomes."""
+        if (mint_failure := mint_hop_failure(exc)) is not None:
+            return mint_failure
         if _network_failure_charges_origin(exc):
             verdict.mark_failed()
         return transport_error(exc, self._site(prepared))
 
     def _breaker_for(self, url: httpx2.URL) -> Breaker:
-        """Return *url*'s origin's breaker from the policy's registry, or a no-op one when the client has no breaker."""
+        """Return *url*'s origin's breaker from the client's registry, or a no-op one when the client has no breaker."""
         policy = self._policy.breaker
-        if policy is None:
+        if policy is None or self._breakers is None:
             return NO_BREAKER
-        return policy.registry.breaker_for(
+        return self._breakers.breaker_for(
             url, failure_threshold=policy.failure_threshold, recovery_timeout=policy.recovery_timeout
         )
 
@@ -1099,7 +1194,13 @@ class AsyncBaseClient:
         context = prepared.context
         info = context.info
         return CallSite(
-            self._source, info.method, info.url, context.attempt, self._request_id_headers, context.get(RETRY_OUTCOME)
+            self._source,
+            info.method,
+            info.url,
+            context.attempt,
+            self._request_id_headers,
+            context.get(RETRY_OUTCOME),
+            self._timing.wall_clock,
         )
 
     def _unsent_site(self, prepared: _Prepared) -> CallSite:
@@ -1107,32 +1208,96 @@ class AsyncBaseClient:
         return replace(self._site(prepared), attempts=prepared.context.attempt - 1)
 
 
+def _route_rate(route: Route) -> tuple[Rate | RateBudget | None, bool]:
+    """Return the rate *route* sets, and whether it sets one; ``None`` paces nothing of the route's own."""
+    options = route.options
+    return (options["rate"], True) if "rate" in options else (None, False)
+
+
+def _stack_parts[T](name: str, parts: Sequence[T]) -> tuple[T, ...]:
+    """Return a client's ``observers`` or ``middleware``, *parts*, as a tuple.
+
+    :raises TypeError: for a lone object or a ``str`` where a sequence of them goes, and for an upstream-httpx object.
+    """
+    try:
+        items = None if isinstance(parts, str) else tuple(parts)
+    except TypeError:  # A lone observer or middleware, which an untyped caller may pass.
+        items = None
+    if items is None:
+        msg = f"{name}= takes a sequence, such as a tuple, of them (got {type(parts).__name__})"
+        raise TypeError(msg)
+    check_hooks(name, items)
+    return items
+
+
 def _effective_policy(policy: TransportPolicy, *, off: bool) -> TransportPolicy:
     """Return the policy a client built now runs: *policy*, less retries and the breaker when transport policy is *off*.
 
-    The breaker's registry is the one a :func:`~headgate.testing.isolated_breakers` block substitutes for the default,
-    if any. The rate budget checks for transport policy being off itself, when it is built.
+    The rate budget checks for transport policy being off itself, when it is built.
     """
-    if off:
-        return replace(policy, retry=NO_RETRY, breaker=None)
+    return replace(policy, retry=None, breaker=None) if off else policy
+
+
+def _registry_of(policy: TransportPolicy, timing: Timing) -> BreakerRegistry | None:
+    """Return the registry a client's breakers live in: the policy's shared one, else one of its own on *timing*.
+
+    The registry is bound to the policy's thresholds here, so a client that cannot share it fails when it is built.
+
+    :raises ValueError: for thresholds other than the ones a shared registry is bound to.
+    """
     breaker = policy.breaker
-    if breaker is None or (registry := scoped_registry(breaker.registry)) is breaker.registry:
-        return policy
-    return replace(policy, breaker=replace(breaker, registry=registry))
+    if breaker is None:
+        return None
+    registry = BreakerRegistry(timing=timing) if breaker.registry is None else breaker.registry
+    registry.bind(failure_threshold=breaker.failure_threshold, recovery_timeout=breaker.recovery_timeout)
+    return registry
 
 
 def _query_pairs(params: Mapping[str, object]) -> list[tuple[str, _QueryValue]]:
-    """Flatten *params* into the ``(key, value)`` pairs httpx2 encodes, exactly as httpx2 flattens a mapping."""
+    """Flatten *params* into the ``(key, value)`` pairs httpx2 encodes, exactly as httpx2 flattens a mapping.
+
+    :raises TypeError: for a value no query parameter can carry (see :data:`_NESTED`), before anything is sent.
+    """
     pairs: list[tuple[str, _QueryValue]] = []
     for key, value in params.items():
         items = value if isinstance(value, list | tuple) else (value,)
-        pairs.extend((key, _query_value(item)) for item in items)
+        pairs.extend((key, _query_value(key, item)) for item in items)
     return pairs
 
 
-def _query_value(value: object) -> _QueryValue:
-    """Return *value* if httpx2 encodes it natively, else its ``str()``, which is what httpx2 would send."""
-    return value if isinstance(value, str | int | float | bool | None) else str(value)
+#: The values a query parameter cannot carry: a container, whose ``str()`` is its Python ``repr``, and raw bytes. A
+#: list or tuple of scalars repeats its key; one inside another is refused.
+_NESTED: Final = (Mapping, AbstractSet, bytes, bytearray, memoryview, list, tuple)
+
+
+def _query_value(key: str, value: object) -> _QueryValue:
+    """Return *value* if httpx2 encodes it natively, else its ``str()``, which is what a ``UUID`` or an ``Enum`` means.
+
+    :raises TypeError: for a value in :data:`_NESTED`, naming *key* and the value's type.
+    """
+    if isinstance(value, str | int | float | bool | None):
+        return value
+    # Checked only past the common case, since an ABC's isinstance check costs more than the native ones.
+    if isinstance(value, _NESTED):
+        msg = (
+            "params= takes a str, int, float, bool or None for each value, or a list or tuple of them (got"
+            f" {type(value).__name__} under {key!r}): encode a nested value into text first, such as with json.dumps"
+        )
+        raise TypeError(msg)
+    return str(value)
+
+
+def _encoded_type(request: httpx2.Request, body: Lowered) -> str | None:
+    """Return the ``Content-Type`` httpx2 encoded a ``Form`` or ``Multipart`` body with; ``None`` for others.
+
+    httpx2 sets it only under the client's default, so a client-wide ``Content-Type`` would replace it (and a multipart
+    body would lose its boundary).
+    """
+    if not (bool(body.data) or bool(body.files)):
+        return None
+    # httpx2's multipart stream names its boundary; any other data= body is form-encoded.
+    multipart = getattr(request.stream, "content_type", None)
+    return multipart if isinstance(multipart, str) else "application/x-www-form-urlencoded"
 
 
 def _stamp_headers(request: httpx2.Request, explicit: Mapping[str, str] | None, headers: Mapping[str, str]) -> None:
@@ -1147,20 +1312,23 @@ def _stamp_headers(request: httpx2.Request, explicit: Mapping[str, str] | None, 
             request.headers[name] = value
 
 
-def _charge_response(response: httpx2.Response, verdict: Verdict) -> None:
-    """Mark *verdict* with what *response* says about its origin (see :meth:`AsyncBaseClient._sent`).
+def _charge_response(response: httpx2.Response, verdict: Verdict, context: CallContext) -> None:
+    """Mark *verdict* with what *response* says about its origin (see :meth:`Client._sent`).
 
-    A response another request's attempt produced (a cache hit, a stored response, a shared download) is untested; a
-    5xx this request fetched itself is a failure; a 429 is neither, since the origin is up and asked us to slow down.
+    A response another request's attempt produced (a cache hit, a stored response, a shared download) or that never
+    reached the network (a middleware's own answer) is untested; a 5xx this request fetched itself is a failure; a 429
+    is neither, since the origin is up and asked us to slow down.
     """
-    if host_untested(response) or served_from_cache(response):
+    # shortcut: hedges share one progress record, so a hedge still queued in the rate budget when the first send answers
+    # makes that answer read as unsent (charged nothing); mark sent responses in MiddlewareTransport if that matters.
+    if not context.progress.dispatched or host_untested(response) or served_from_cache(response):
         verdict.mark_untested()
     elif response.status_code >= httpx2.codes.INTERNAL_SERVER_ERROR:
         verdict.mark_failed()
 
 
 def _network_failure_charges_origin(exc: Exception) -> bool:
-    """Return whether a network failure is the origin's, to charge its breaker with (see :meth:`AsyncBaseClient._sent`).
+    """Return whether a network failure is the origin's, to charge its breaker with (see :meth:`Client._sent`).
 
     Not when it is of our own side's making or a redirect loop (:data:`_LOCAL_FAILURES`), happened on a hop an auth
     flow made to mint a credential, or was shared by the cache from another request's attempt.
@@ -1180,23 +1348,10 @@ def _cut_off_on_the_wire(context: CallContext) -> bool:
     """Return whether the call's own deadline fired while its attempt was on the network (see ``_sent``).
 
     The deadline's timer says whether the cancellation is its own rather than the caller's; the attempt was on the
-    network once the rate budget handed it on.
+    network once the rate budget handed it on, unless the auth flow was minting (that is the credential host's time).
     """
     timer = context.get(_DEADLINE_TIMER)
-    return timer is not None and timer.expired() and context.progress.dispatched
-
-
-def _breaker_gate(breaker: Breaker, verdict: Verdict) -> Callable[[], bool]:
-    """Return the call's :data:`~headgate._core.BREAKER_GATE`: whether its origin's breaker refuses now.
-
-    The half-open breaker's probe is never refused by its own probe slot, so the probe keeps its retries and its whole
-    retry sequence is the one recovery test.
-    """
-
-    def refusing() -> bool:
-        return not verdict.probe and breaker.refusing
-
-    return refusing
+    return timer is not None and timer.expired() and context.progress.dispatched and context.get(MINTING) is not True
 
 
 def _checked(check: ResponseCheck | None, resp: httpx2.Response) -> RefusedError | None:
@@ -1207,37 +1362,6 @@ def _checked(check: ResponseCheck | None, resp: httpx2.Response) -> RefusedError
         return check(resp)
     except RefusedError as refused:
         return refused
-
-
-def _walk_body[B](
-    body: B | None = None, json: B | None = None, **page: Unpack[PageOptions]
-) -> tuple[B | None, bool, PageOptions]:
-    """Split a walk's options into its body, whether it is sent as JSON, and the options every page is sent with.
-
-    A keyword given as ``None`` is no body, as on a verb, so only two bodies are refused, as is a body no pager can
-    rewrite (``data=``, ``content=``, ``files=``, which only an untyped call can pass).
-    """
-    if any(name in page for name in _UNPAGEABLE_BODIES):
-        msg = "paginate takes no data=, content= or files=: a walk of POSTs sends body= or json="
-        raise ValueError(msg)
-    if body is not None and json is not None:
-        msg = "paginate takes body= or json=, not both"
-        raise ValueError(msg)
-    return (json if body is None else body), json is not None, page
-
-
-def _post_refusal[B](write: Writer[B] | None, *, as_json: bool, fixed_key: bool) -> str | None:
-    """Return why a walk's pages cannot carry a body, or ``None`` when they can: by ``write``, or as JSON for ``json=``.
-
-    *fixed_key* is whether the call fixes one idempotency key for every page, which a page with a body cannot carry.
-    """
-    if as_json and write is not None:
-        return "json= is sent as JSON, so its pager takes no write="
-    if not as_json and write is None:
-        return "a POSTed body is encoded by its pager's write=, so the pager needs one; send builtins as json="
-    if fixed_key:
-        return "an idempotency key would be sent with every page's body; a walk of POSTs takes none"
-    return None
 
 
 def _expectation[T](expect: Reader[T] | Expect[T]) -> Expect[T]:

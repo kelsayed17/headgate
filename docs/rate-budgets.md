@@ -6,14 +6,14 @@ client side is cheaper than collecting 429s, and a budget that listens to the se
 hammering an API that has said "slow down".
 
 ```python
-from headgate import AsyncBaseClient, Rate, RateBudget, RateRule, TransportPolicy
+from headgate import Client, Rate, RateBudget, Route, TransportPolicy
 
 shared = RateBudget(Rate.per_minute(600), max_in_flight=8)  # one provider quota, two clients
-search = AsyncBaseClient(base_url="https://api.example.com/search", rate=shared)
-reports = AsyncBaseClient(
+search = Client(base_url="https://api.example.com/search", rate=shared)
+reports = Client(
     base_url="https://api.example.com/reports",
     rate=shared,
-    policy=TransportPolicy(rate_limits=(RateRule("/export", Rate.per_minute(6)),)),
+    policy=TransportPolicy(routes=(Route("/export", rate=Rate.per_minute(6)),)),
 )
 ```
 
@@ -26,11 +26,14 @@ or per second for a steadier pace. A client given a `Rate` builds a budget of it
 an object: pass one instance to several clients (or rules) and they spend from it together, across tasks, event loops
 and threads, because its state is plain numbers under a `threading.Lock` and nothing in it is bound to a loop.
 
-`RateBudget(rate, *, max_in_flight=None, adaptive=Adaptive(), timing=..., wall_clock=time.time)`:
+`RateBudget(rate, *, max_in_flight=None, adaptive=Adaptive(), timing=None)`, where `timing` (a
+`headgate.timing.Timing`) is the clock and sleep it paces on and the wall clock it reads epochs against, the current
+timing when it is built by default:
 
 - **Pacing** is GCRA, the virtual-scheduling form of a leaky bucket. Up to `rate.requests` requests (at least one) go
   out back to back; after that they are `period / requests` seconds apart. Waiters are served in arrival order, and a
-  waiter cancelled in the queue gives its turn back when nobody reserved after it. A call whose turn comes at or after
+  waiter cancelled in the queue gives its turn back: at the end of the queue it comes off the schedule, and in the
+  middle the next call to arrive takes it, while its time is still ahead. A call whose turn comes at or after
   its deadline does not queue: it gives the turn back and the attempt is never sent (see [deadlines](deadlines.md)).
 - **`max_in_flight`** caps how many requests are open at once. A request takes its slot before its turn, so the
   requests that slots freed at one instant still go out at the rate, and holds it until its response body is
@@ -45,12 +48,18 @@ and threads, because its state is plain numbers under a `threading.Lock` and not
 
 ## Per-path lanes
 
-`TransportPolicy(rate_limits=(RateRule(fragment, rate), ...))` gives the requests whose URL path holds `fragment` a
-budget of their own: the first matching rule wins, and a matching request spends from the rule's budget **instead
-of** the client's. A rule's `rate` is a `Rate` (a budget per client) or a shared `RateBudget`. The fragment is one or
-more whole path segments, matched anywhere in the path: `"/exports"` matches `/v2/exports` and
-`/v2/exports/orders.csv`, but not `/v2/exports-archive`. The cache's `paths` and the policy's `Route`
-match the same way.
+`TransportPolicy(routes=(Route(fragment, rate=...), ...))` gives the calls whose URL path holds `fragment` a budget of
+their own, spent **instead of** the client's. A route's `rate` is a `Rate` (a budget per client), a shared
+`RateBudget`, or `None`, which paces nothing of the route's own while the server's pauses still apply; a route that
+leaves `rate` out spends from the client's budget. The fragment is one or more whole path segments, matched anywhere
+in the path: `"/exports"` matches `/v2/exports` and `/v2/exports/orders.csv`, but not `/v2/exports-archive`. The path
+is split into segments before they are decoded, so a `/` inside a t-string value, sent as `%2F`, stays in its segment:
+`t"/files/{name}"` with `name="exports/q3"` is not an `/exports` request. The cache's `paths` match the same way.
+
+The first matching route is the call's route, whole: its rate, retry policy, deadline and cache setting come from that
+one route, and what it leaves out from the policy and the client's budget. Two routes never combine, so a path that
+needs a lane of its own and a longer deadline gets one route that sets both. Every hop of a call, a redirect's
+included, spends from the budget of the call's route.
 
 ## Server feedback
 
@@ -59,11 +68,17 @@ Every response is read for what it says about the quota, in this order of preced
 1. `retry-after-ms` or `Retry-After` on a 429 or 503, read exactly as the [retry layer](retries.md#retry-after) reads
    it, so the retry's wait and the budget's pause end together;
 2. `RateLimit` with `RateLimit-Policy` (the IETF draft): an item with `r=0` is an exhausted quota, and its `t` is the
-   seconds until it returns; a policy whose quota unit is not requests is skipped, and a malformed field is ignored;
+   seconds until it returns, or a Unix time told apart by size as the reset below is, since some servers send one; a
+   policy whose quota unit is not requests is skipped, and a malformed field is ignored;
 3. `X-RateLimit-Remaining` with `X-RateLimit-Reset`, the de facto pair, when `RateLimit` is absent. The reset is a
    number of seconds or an absolute Unix time (in seconds or milliseconds), told apart by size. A server with several
    windows lists a value per window in each header: the pause is the latest reset among the windows whose count is
    zero, paired by position, so `Remaining: 0, 4000` with `Reset: 1, 3600` pauses for 1 s.
+
+Only responses from the client's own origin, `base_url`'s, are read. A request to another origin (a redirect target,
+a next page another origin serves, a token host's mint hop, or an absolute URL the call named) still spends a turn and
+is paced, but what its response says cannot pause or throttle a budget that every client on the first origin may
+share. The call itself still waits out its own `Retry-After` in the [retry layer](retries.md#retry-after).
 
 A response that names a pause **pauses the whole budget** until it ends, so every concurrent and later call queues
 behind it instead of spending a request on a certain refusal. The calls already waiting their turn keep their order:
@@ -71,8 +86,8 @@ the first goes when the pause ends and the rest follow at the rate, ahead of any
 pause lasts at most an hour, long enough for an hourly quota's reset, so one hostile or mistaken header, such as a
 `Retry-After` dated in the year 9999, cannot stop every client sharing the budget for good. A call whose deadline
 would pass before the pause ends does not wait: it raises `RateLimitError` at once, with `retry_after` set to the time
-left in the pause, `retryable=True`, and `status_code` the status of the response that asked for it: a 200 whose
-rate-limit headers said the quota was spent gives `RateLimitError(status_code=200)`.
+left in the pause, `retryable=True`, `sent=False` and `status_code=None`: the call it refuses got no response, so it
+carries no status of its own rather than that of the response that asked for the pause.
 
 ## Adaptive throttling
 

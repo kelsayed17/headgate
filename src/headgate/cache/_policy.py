@@ -22,6 +22,7 @@ import enum
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
+from urllib.parse import unquote
 
 import httpx2
 
@@ -49,10 +50,10 @@ class Partition(enum.Enum):
     CREDENTIAL = "credential"
     """Only to requests made with the same credential: the default, and the only safe choice for private data.
 
-    The partition is a keyed hash of the auth's :meth:`~headgate._core.CredentialStamper.credential_identity` and of
+    The partition is a keyed hash of the auth's :meth:`~headgate.security.CredentialStamper.credential_identity` and of
     any other credential the request carries, so two clients with different credentials never see each other's entries,
     even on one storage. It requires an auth that declares its credentials (a
-    :class:`~headgate._core.CredentialStamper`), or no auth.
+    :class:`~headgate.security.CredentialStamper`), or no auth.
     """
 
     SHARED = "shared"
@@ -76,7 +77,7 @@ class HttpCache:
     What is stored: a request whose method is in ``methods`` (``GET`` by default; ``GET`` and ``HEAD`` only, since the
     URL is the key) and whose path matches one of ``paths`` (any path by default), answered with a status in
     ``statuses`` (200 by default). A string in ``paths`` is one or more whole segments, matched as
-    :class:`~headgate.RateRule` matches; a compiled pattern is searched for in the path, for what segments cannot say,
+    :class:`~headgate.Route` matches; a compiled pattern is searched for in the path, for what segments cannot say,
     such as a file name's prefix or extension. An empty collection matches nothing, so stores
     nothing. :meth:`caches_request` and :meth:`stores_status` say what the three decide.
 
@@ -127,6 +128,9 @@ class HttpCache:
     def caches_request(self, method: str, path: str) -> bool:
         """Return whether a request with *method* (in any case) and the URL path *path* goes through the cache.
 
+        *path* is the path as sent, percent-encoded (:func:`~headgate._core.url_path`): a fragment is matched segment by
+        segment, so an escaped ``/`` stays in its segment, and a pattern is searched in the decoded path, as written.
+
         ``methods`` left ``None`` means ``GET``, and ``paths`` left ``None`` any path; an empty collection matches
         nothing. Any other request is sent past the cache: never looked up, never stored.
         """
@@ -156,4 +160,4 @@ def _check_path(path: str | re.Pattern[str]) -> None:
 
 def _matches(path: str, rule: str | re.Pattern[str]) -> bool:
     """Return whether the URL path *path* holds the fragment *rule*, or contains a match of the pattern *rule*."""
-    return path_has_fragment(path, rule) if isinstance(rule, str) else rule.search(path) is not None
+    return path_has_fragment(path, rule) if isinstance(rule, str) else rule.search(unquote(path)) is not None

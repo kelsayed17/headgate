@@ -13,8 +13,9 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate import HttpOptions, NextUrl, SecurityOptions
+from headgate import HttpOptions, SecurityOptions
 from headgate.msgspec import reader
+from headgate.pagination import NextUrl
 from headgate.testing import FakeTransport
 from tests.integration._support import Page, carried, client, items_of, next_of, real_auths
 

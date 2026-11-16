@@ -5,10 +5,9 @@
 
 from __future__ import annotations
 
-import httpx2
 import pytest
 
-from headgate._core import origin_of, origin_text, same_origin
+from headgate._core import origin_of, origin_text
 
 
 @pytest.mark.parametrize(
@@ -23,13 +22,6 @@ from headgate._core import origin_of, origin_text, same_origin
 def test_origin_text_is_normalized_and_drops_the_default_port(url: str, text: str) -> None:
     """Lower-case the host, drop the scheme's default port, and bracket an IPv6 host."""
     assert origin_text(origin_of(url)) == text
-
-
-def test_same_origin_compares_scheme_host_and_effective_port() -> None:
-    """Treat an explicit default port as the same origin, and another scheme or port as a different one."""
-    assert same_origin("https://a.test/x", httpx2.URL("https://a.test:443/y"))
-    assert not same_origin("https://a.test", "http://a.test")
-    assert not same_origin("https://a.test", "https://a.test:8443")
 
 
 def test_a_relative_url_has_no_origin() -> None:

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
+from headgate import RetryPolicy
 from headgate._core import (
     BREAKER_GATE,
     BudgetBacklogError,
@@ -23,10 +24,9 @@ from headgate._core import (
     CallInfo,
     Emitter,
     RetryScheduled,
-    _retry_after,
 )
-from headgate.retry import NO_RETRY, Backoff, Hedge, RetryBudget, RetryPolicy
-from headgate.retry._policy import REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, RetryOutcome
+from headgate.retry import Backoff, Hedge, RetryShare
+from headgate.retry._policy import REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE, RetryOutcome
 from headgate.retry._transport import RetryTransport
 from headgate.testing import (
     ConnectFail,
@@ -38,6 +38,7 @@ from headgate.testing import (
     Slow,
     TestClock,
 )
+from headgate.timing import Timing
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -49,7 +50,14 @@ if TYPE_CHECKING:
 _TIMEOUTS = {"connect": 10.0, "read": 30.0, "write": 10.0, "pool": 15.0}
 
 #: A backoff that always waits its full nominal delay, so waits are predictable.
-_FULL = Backoff(jitter=lambda: 1.0)
+
+
+def _full_draw() -> float:
+    """Draw the top of the jitter range, so each backoff wait is its nominal value."""
+    return 1.0
+
+
+_FULL = Backoff()
 
 #: Three attempts with predictable waits and no budget, the policy most tests run under.
 _POLICY = RetryPolicy(backoff=_FULL, budget=None)
@@ -106,7 +114,11 @@ def _transport(
 ) -> tuple[RetryTransport, FaultyTransport]:
     """Return a retry transport under *policy* over a faulty network playing *schedule*, both on *clock*."""
     network = FaultyTransport(schedule=schedule, sleep=clock.sleep)
-    return RetryTransport(transport=network, policy=policy, sleep=clock.sleep, clock=clock), network
+    return RetryTransport(
+        transport=network,
+        policy=policy,
+        timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock.wall_clock, random=_full_draw),
+    ), network
 
 
 def _attempt_notes(context: CallContext) -> list[str]:
@@ -127,7 +139,7 @@ async def test_an_idempotent_request_is_resent_until_it_succeeds() -> None:
 
     assert response.status_code == httpx2.codes.OK
     assert len(network.calls) == context.attempt == _THREE_SENDS
-    assert clock.sleeps == [_FULL.delay(1), _FULL.delay(2)]
+    assert clock.sleeps == [_FULL.delay(1, 1.0), _FULL.delay(2, 1.0)]
     assert [call.response_closed for call in network.calls] == [True, True, False]
     await response.aclose()
 
@@ -240,7 +252,11 @@ async def test_a_local_mistake_is_never_resent() -> None:
         raise httpx2.LocalProtocolError(msg, request=request)
 
     clock = TestClock()
-    retry = RetryTransport(transport=httpx2.MockTransport(refuse), policy=_POLICY, sleep=clock.sleep, clock=clock)
+    retry = RetryTransport(
+        transport=httpx2.MockTransport(refuse),
+        policy=_POLICY,
+        timing=Timing(clock=clock, sleep=clock.sleep, random=_full_draw),
+    )
     request, context = _request(clock=clock)
 
     with pytest.raises(httpx2.LocalProtocolError):
@@ -256,7 +272,11 @@ async def test_an_exception_outside_the_network_errors_propagates_at_once() -> N
         raise RuntimeError(msg)
 
     clock = TestClock()
-    retry = RetryTransport(transport=httpx2.MockTransport(broken), policy=_POLICY, sleep=clock.sleep, clock=clock)
+    retry = RetryTransport(
+        transport=httpx2.MockTransport(broken),
+        policy=_POLICY,
+        timing=Timing(clock=clock, sleep=clock.sleep, random=_full_draw),
+    )
     request, context = _request(clock=clock)
 
     with pytest.raises(RuntimeError, match="bug"):
@@ -285,7 +305,7 @@ async def test_a_calls_own_policy_wins_over_the_transports() -> None:
     clock = TestClock()
     retry, network = _transport([Respond(503), Respond(200)], clock)
     request, context = _request(clock=clock)
-    context.put(RETRY_POLICY, NO_RETRY)
+    context.put(RETRY_POLICY, SEND_ONCE)
 
     response = await retry.handle_async_request(request)
 
@@ -358,7 +378,7 @@ async def test_a_long_failure_body_is_parked_in_part() -> None:
 async def test_the_default_sleep_is_asyncio_sleep() -> None:
     """Wait through ``asyncio.sleep`` when no sleep is injected."""
     network = FaultyTransport(schedule=[Respond(503, retry_after=0), Respond(200)])
-    retry = RetryTransport(transport=network, policy=RetryPolicy(budget=None))
+    retry = RetryTransport(transport=network, policy=RetryPolicy(budget=None), timing=Timing(random=_full_draw))
     request = httpx2.Request("GET", "https://api.test/x")
 
     response = await retry.handle_async_request(request)
@@ -381,7 +401,11 @@ async def test_each_attempt_is_cut_to_the_deadline() -> None:
         return httpx2.Response(503 if len(seen) == 1 else 200)
 
     policy = RetryPolicy(backoff=Backoff(factor=0.0), budget=None)
-    retry = RetryTransport(transport=httpx2.MockTransport(record), policy=policy, sleep=clock.sleep, clock=clock)
+    retry = RetryTransport(
+        transport=httpx2.MockTransport(record),
+        policy=policy,
+        timing=Timing(clock=clock, sleep=clock.sleep, random=_full_draw),
+    )
     request, _ = _request(clock=clock, deadline=12.0)
 
     response = await retry.handle_async_request(request)
@@ -403,7 +427,11 @@ async def test_a_timeout_left_unset_is_bounded_by_the_deadline() -> None:
         seen.append(dict(request.extensions["timeout"]))
         return httpx2.Response(200)
 
-    retry = RetryTransport(transport=httpx2.MockTransport(record), policy=_POLICY, sleep=clock.sleep, clock=clock)
+    retry = RetryTransport(
+        transport=httpx2.MockTransport(record),
+        policy=_POLICY,
+        timing=Timing(clock=clock, sleep=clock.sleep, random=_full_draw),
+    )
     request, _ = _request(clock=clock, deadline=5.0)
     request.extensions["timeout"] = {"connect": None, "read": 30.0, "write": None, "pool": None}
 
@@ -449,7 +477,9 @@ async def test_a_deadline_reached_during_the_wait_stops_before_the_next_attempt(
         await clock.sleep(seconds + 10.0)
 
     network = FaultyTransport(schedule=[Respond(503, content=b"busy"), Respond(200)], sleep=clock.sleep)
-    retry = RetryTransport(transport=network, policy=_POLICY, sleep=oversleep, clock=clock)
+    retry = RetryTransport(
+        transport=network, policy=_POLICY, timing=Timing(clock=clock, sleep=oversleep, random=_full_draw)
+    )
     request, context = _request(clock=clock, deadline=5.0)
 
     response = await retry.handle_async_request(request)
@@ -489,7 +519,9 @@ async def test_a_breaker_opening_during_the_wait_stops_before_the_next_attempt()
         await clock.sleep(seconds)
 
     network = FaultyTransport(schedule=[Respond(503), Respond(200)], sleep=clock.sleep)
-    retry = RetryTransport(transport=network, policy=_POLICY, sleep=open_breaker, clock=clock)
+    retry = RetryTransport(
+        transport=network, policy=_POLICY, timing=Timing(clock=clock, sleep=open_breaker, random=_full_draw)
+    )
     request, context = _request(clock=clock)
     context.put(BREAKER_GATE, lambda: gate_open)
 
@@ -517,7 +549,7 @@ async def test_a_closed_breaker_lets_the_retries_run() -> None:
 async def test_a_spent_budget_stops_the_sequence_and_the_error_stays_retryable() -> None:
     """Stop when the budget has no room, noting it, with the failure still marked retryable."""
     clock = TestClock()
-    budget = RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0)
+    budget = RetryShare(ratio=0.0, min_per_second=0.1, window=10.0)
     policy = RetryPolicy(backoff=_FULL, budget=budget)
     retry, network = _transport([Respond(503), Respond(503), Respond(200)], clock, policy)
     request, context = _request(clock=clock)
@@ -536,13 +568,13 @@ async def test_a_spent_budget_stops_the_sequence_and_the_error_stays_retryable()
 async def test_one_budget_is_shared_by_every_call_through_the_transport() -> None:
     """Charge every call's retries to the transport's one ledger for an equal budget value."""
     clock = TestClock()
-    policy = RetryPolicy(backoff=_FULL, budget=RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0))
+    policy = RetryPolicy(backoff=_FULL, budget=RetryShare(ratio=0.0, min_per_second=0.1, window=10.0))
     retry, network = _transport([Respond(503), Respond(200), Respond(503)], clock, policy)
 
     first, _ = _request(clock=clock)
     await (await retry.handle_async_request(first)).aclose()
     second, second_context = _request(clock=clock)
-    second_context.put(RETRY_POLICY, RetryPolicy(backoff=_FULL, budget=RetryBudget(ratio=0.0, min_per_second=0.1)))
+    second_context.put(RETRY_POLICY, RetryPolicy(backoff=_FULL, budget=RetryShare(ratio=0.0, min_per_second=0.1)))
     await (await retry.handle_async_request(second)).aclose()
 
     assert len(network.calls) == _THREE_SENDS, "the second call's retry finds the shared budget spent"
@@ -550,7 +582,7 @@ async def test_one_budget_is_shared_by_every_call_through_the_transport() -> Non
 
 
 #: A budget with room for exactly one retry over its window, whatever the traffic.
-_ONE_RETRY = RetryBudget(ratio=0.0, min_per_second=0.1, window=10.0)
+_ONE_RETRY = RetryShare(ratio=0.0, min_per_second=0.1, window=10.0)
 
 
 class _Answers(httpx2.AsyncBaseTransport):
@@ -587,7 +619,11 @@ async def test_a_retry_stopped_after_its_wait_gives_its_budget_back() -> None:
         await clock.sleep(seconds)
 
     network = _Answers(503, 503, 200)
-    retry = RetryTransport(transport=network, policy=RetryPolicy(backoff=_FULL, budget=_ONE_RETRY), sleep=open_breaker)
+    retry = RetryTransport(
+        transport=network,
+        policy=RetryPolicy(backoff=_FULL, budget=_ONE_RETRY),
+        timing=Timing(sleep=open_breaker, random=_full_draw),
+    )
     request, context = _request(clock=clock)
     context.put(BREAKER_GATE, lambda: opened)
     await (await retry.handle_async_request(request)).aclose()
@@ -602,7 +638,11 @@ async def test_a_retry_the_rate_budget_refuses_gives_its_budget_back() -> None:
     clock = TestClock()
     backlog = BudgetBacklogError("the rate budget's turn comes after the call's deadline", retry_after=1.0)
     network = _Answers(503, backlog, 503, 200)
-    retry = RetryTransport(transport=network, policy=RetryPolicy(backoff=_FULL, budget=_ONE_RETRY), sleep=clock.sleep)
+    retry = RetryTransport(
+        transport=network,
+        policy=RetryPolicy(backoff=_FULL, budget=_ONE_RETRY),
+        timing=Timing(sleep=clock.sleep, random=_full_draw),
+    )
     request, context = _request(clock=clock)
     await (await retry.handle_async_request(request)).aclose()
     assert context.notes[-1] == "deadline exhausted"
@@ -621,7 +661,11 @@ async def test_a_retry_whose_call_is_cancelled_in_the_wait_gives_its_budget_back
         await clock.sleep(seconds)
 
     network = _Answers(503, 503, 200)
-    retry = RetryTransport(transport=network, policy=RetryPolicy(backoff=_FULL, budget=_ONE_RETRY), sleep=sleep)
+    retry = RetryTransport(
+        transport=network,
+        policy=RetryPolicy(backoff=_FULL, budget=_ONE_RETRY),
+        timing=Timing(sleep=sleep, random=_full_draw),
+    )
     request, _ = _request(clock=clock)
     with pytest.raises(asyncio.CancelledError):
         await retry.handle_async_request(request)
@@ -644,16 +688,23 @@ async def test_the_backoff_counts_retries_not_the_hedges_beside_them() -> None:
     await (await retry.handle_async_request(request)).aclose()
 
     scheduled = [event for event in observer.events if isinstance(event, RetryScheduled)]
-    assert [(event.reason, event.delay) for event in scheduled] == [("hedge", _HEDGE_AFTER), ("503", _FULL.delay(1))]
+    assert [(event.reason, event.delay) for event in scheduled] == [
+        ("hedge", _HEDGE_AFTER),
+        ("503", _FULL.delay(1, 1.0)),
+    ]
 
 
-async def test_the_wait_is_the_retry_after_the_attempt_was_judged_by(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Wait the HTTP-date ``Retry-After`` as classification read it, not as read again on a later wall clock."""
+async def test_the_wait_is_the_retry_after_the_attempt_was_judged_by() -> None:
+    """Wait the HTTP-date ``Retry-After`` as classification read it, not as read again on a later wall clock.
+
+    The wall clock moves a second on every reading, so a second reading would name a shorter wait.
+    """
     clock = TestClock()
     readings = iter(range(1_700_000_000, 1_700_000_100))
-    monkeypatch.setattr(_retry_after.time, "time", lambda: float(next(readings)))
     date = email.utils.formatdate(1_700_000_010, usegmt=True)
-    retry, _ = _transport([Respond(503, headers={"Retry-After": date}), Respond(200)], clock)
+    network = FaultyTransport(schedule=[Respond(503, headers={"Retry-After": date}), Respond(200)], sleep=clock.sleep)
+    timing = Timing(clock=clock, sleep=clock.sleep, wall_clock=lambda: float(next(readings)), random=_full_draw)
+    retry = RetryTransport(transport=network, policy=_POLICY, timing=timing)
     request, context = _request(clock=clock)
 
     await (await retry.handle_async_request(request)).aclose()
@@ -722,7 +773,7 @@ async def test_every_retry_is_announced_with_its_delay_and_reason() -> None:
     scheduled = [event for event in observer.events if isinstance(event, RetryScheduled)]
     assert [(event.attempt, event.delay, event.reason) for event in scheduled] == [
         (2, _RETRY_AFTER, "503"),
-        (3, _FULL.delay(2), "ConnectError"),
+        (3, _FULL.delay(2, 1.0), "ConnectError"),
     ]
 
 
@@ -793,7 +844,12 @@ def _hedging(policy: RetryPolicy) -> tuple[RetryTransport, _Held, _Gate, _Change
     """Return a retry transport under *policy* over a held network, with the gate its hedge timer waits on."""
     changes = _Changes()
     network, gate = _Held(changes), _Gate(changes)
-    return RetryTransport(transport=network, policy=policy, sleep=gate.sleep), network, gate, changes
+    return (
+        RetryTransport(transport=network, policy=policy, timing=Timing(sleep=gate.sleep, random=_full_draw)),
+        network,
+        gate,
+        changes,
+    )
 
 
 async def _hedge_started(network: _Held, gate: _Gate, changes: _Changes) -> None:
@@ -882,7 +938,11 @@ async def test_an_answer_before_the_hedge_delay_cancels_the_timer() -> None:
     changes = _Changes()
     gate = _Gate(changes)
     network = FaultyTransport(schedule=[Respond(200)])
-    retry = RetryTransport(transport=network, policy=RetryPolicy(hedge=Hedge(), budget=None), sleep=gate.sleep)
+    retry = RetryTransport(
+        transport=network,
+        policy=RetryPolicy(hedge=Hedge(), budget=None),
+        timing=Timing(sleep=gate.sleep, random=_full_draw),
+    )
     request, _ = _request(clock=TestClock())
 
     response = await retry.handle_async_request(request)
@@ -895,7 +955,7 @@ async def test_an_answer_before_the_hedge_delay_cancels_the_timer() -> None:
 async def test_a_hedge_is_not_started_without_budget() -> None:
     """Skip the hedge when the budget has no room, and wait for the first send alone."""
     clock = TestClock()
-    policy = RetryPolicy(hedge=Hedge(after=_HEDGE_AFTER), budget=RetryBudget(ratio=0.0, min_per_second=0.0))
+    policy = RetryPolicy(hedge=Hedge(after=_HEDGE_AFTER), budget=RetryShare(ratio=0.0, min_per_second=0.0))
     retry, network = _transport([Slow(seconds=1), Respond(200)], clock, policy)
     request, _ = _request(clock=clock)
 
@@ -968,6 +1028,6 @@ async def test_retry_transport_closes_the_transport_it_wraps() -> None:
     """Delegate teardown, since httpx2's ``AsyncBaseTransport.aclose()`` is a no-op."""
     inner = _RecordsClose()
 
-    await RetryTransport(transport=inner, policy=RetryPolicy()).aclose()
+    await RetryTransport(transport=inner, policy=RetryPolicy(), timing=Timing(random=_full_draw)).aclose()
 
     assert inner.closed is True

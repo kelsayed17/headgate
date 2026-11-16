@@ -50,6 +50,7 @@ _PUBLIC_MODULES = (
     "headgate.streaming",
     "headgate.testing",
     "headgate.security",
+    "headgate.timing",
 )
 
 #: An object's address in a default value's ``repr``, which differs between runs.

@@ -3,7 +3,7 @@
 
 """The circuit breaker's state machine, driven directly.
 
-The seam it is driven through (one ``with breaker.track()`` block per fetch inside ``AsyncBaseClient._exchange``,
+The seam it is driven through (one ``with breaker.track()`` block per fetch inside ``Client._exchange``,
 spanning the body read) is covered end-to-end in ``test_breaker_integration.py``.
 
 The outcome of a block is decided by the ``Verdict`` it marks, not by what escapes it: only a marked raise is a host
@@ -21,9 +21,11 @@ import contextlib
 
 import pytest
 
-from headgate.breaker import BreakerPolicy, BreakerRegistry, BreakerState, CircuitBreaker
-from headgate.breaker._breaker import BreakerOpenError
-from headgate.breaker._registry import DEFAULT_REGISTRY, NO_BREAKER
+from headgate import BreakerPolicy
+from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
+from headgate.breaker._breaker import BreakerOpenError, Transition
+from headgate.breaker._registry import NO_BREAKER
+from headgate.timing import Timing
 
 #: The half-open tests' cooldown, and a sleep that outlasts it.
 _COOLDOWN = 0.001
@@ -45,7 +47,7 @@ class _BoomError(Exception):
 
 
 def _raise_marked(cb: CircuitBreaker) -> None:
-    """Run one tracked fetch that marks a wire failure and raises, as ``AsyncBaseClient`` does for one."""
+    """Run one tracked fetch that marks a wire failure and raises, as ``Client`` does for one."""
     with cb.track() as verdict:
         verdict.mark_failed()
         msg = "nope"
@@ -305,9 +307,8 @@ async def test_a_stale_failure_does_not_reopen_over_the_probe_in_flight() -> Non
     assert cb.state is BreakerState.CLOSED
 
 
-def test_no_breakers_admits_every_call_and_never_reads_the_shared_registry() -> None:
-    """Record nothing without a breaker, and never read the registry another client's breaker lives in."""
-    DEFAULT_REGISTRY.clear()
+def test_no_breakers_admits_every_call() -> None:
+    """Record nothing without a breaker: ten marked failures later it still admits."""
     breaker = NO_BREAKER
     for _ in range(10):
         with contextlib.suppress(RuntimeError), breaker.track() as verdict:
@@ -315,7 +316,6 @@ def test_no_breakers_admits_every_call_and_never_reads_the_shared_registry() -> 
             raise RuntimeError
     with breaker.track():
         pass  # still admitted after ten marked failures
-    assert len(DEFAULT_REGISTRY) == 0
 
 
 class _Clock:
@@ -333,7 +333,7 @@ class _Clock:
 def test_a_refusal_says_how_long_the_cooldown_has_left() -> None:
     """Carry the seconds until a probe is admitted, and ``None`` while the probe is out."""
     clock = _Clock()
-    cb = CircuitBreaker(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN, name="t", clock=clock)
+    cb = CircuitBreaker(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN, name="t", timing=Timing(clock=clock))
     _fail(cb)
     elapsed = 4.0
     clock.now = elapsed
@@ -353,23 +353,24 @@ def test_a_refusal_says_how_long_the_cooldown_has_left() -> None:
     assert during_probe.value.retry_after is None
 
 
-def test_a_registry_keys_a_breaker_by_origin_and_thresholds() -> None:
-    """Share one breaker per origin and thresholds; give other thresholds their own; never build on a read."""
+def test_a_registry_keys_a_breaker_by_origin() -> None:
+    """Share one breaker per origin, however the URL spells it; refuse other thresholds; never build on a read."""
     registry = BreakerRegistry()
     first = registry.breaker_for("https://a.example/x", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
     again = registry.breaker_for("HTTPS://A.example:443/y?q", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
-    other = registry.breaker_for("https://a.example", failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
-    assert first is again, "the same origin, however the URL spells it, with the same thresholds"
-    assert other is not first, "other thresholds get a breaker of their own, built with them"
-    assert (other.failure_threshold, other.recovery_timeout) == (_THRESHOLD, _COOLDOWN)
-    assert first.name == "https://a.example"
+    other = registry.breaker_for("https://b.example", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
+    assert first is again
+    assert (first.name, first.failure_threshold, first.recovery_timeout) == ("https://a.example", 1, _LONG_COOLDOWN)
+    with pytest.raises(ValueError, match="trip after 1 failures"):
+        registry.breaker_for("https://a.example", failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
     _fail(first)
     assert (first.state, other.state) == (BreakerState.OPEN, BreakerState.CLOSED)
 
     assert registry.breakers("http://a.example") == ()
-    assert registry.breakers("https://a.example") == (first, other)
+    assert registry.breakers("https://a.example") == (first,)
     assert list(registry) == [first, other]
     assert len(registry) == len((first, other))
+    assert repr(registry) == "BreakerRegistry({'https://a.example': 'open', 'https://b.example': 'closed'})"
 
     registry.clear()
     assert len(registry) == 0
@@ -378,7 +379,7 @@ def test_a_registry_keys_a_breaker_by_origin_and_thresholds() -> None:
 def test_a_registry_breakers_read_its_clock() -> None:
     """Hand the registry's clock to every breaker it builds, so a test can drive their cooldowns."""
     clock = _Clock()
-    registry = BreakerRegistry(clock=clock)
+    registry = BreakerRegistry(timing=Timing(clock=clock))
     cb = registry.breaker_for("https://a.example", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
     _fail(cb)
     assert cb.refusing
@@ -401,9 +402,9 @@ def test_a_breaker_policy_refuses_a_nonsense_value(threshold: int, cooldown: flo
         BreakerPolicy(failure_threshold=threshold, recovery_timeout=cooldown)
 
 
-def test_a_breaker_policy_shares_the_default_registry_by_default() -> None:
-    """Use the process-wide registry unless the policy names another."""
-    assert BreakerPolicy().registry is DEFAULT_REGISTRY
+def test_a_breaker_policy_names_no_registry_by_default() -> None:
+    """Leave the registry unnamed, so each client builds one of its own."""
+    assert BreakerPolicy().registry is None
 
 
 def test_a_marked_failure_counts_even_when_the_block_exits_cleanly() -> None:
@@ -421,9 +422,128 @@ def test_a_marked_failure_counts_even_when_the_block_exits_cleanly() -> None:
 def test_a_probe_whose_failure_was_caught_reopens_the_breaker() -> None:
     """Re-open on a probe that marked a failure and exited cleanly, rather than closing on it."""
     clock = _Clock()
-    cb = CircuitBreaker(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN, clock=clock)
+    cb = CircuitBreaker(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN, timing=Timing(clock=clock))
     _fail(cb)
     clock.now = _LONG_COOLDOWN
     with cb.track() as verdict:
         verdict.mark_failed()
     assert cb.state is BreakerState.OPEN
+
+
+def _clocked(threshold: int = 1) -> tuple[CircuitBreaker, _Clock]:
+    """Build a breaker for ``t`` whose cooldown a test elapses by hand."""
+    clock = _Clock()
+    return CircuitBreaker(
+        failure_threshold=threshold, recovery_timeout=_LONG_COOLDOWN, name="t", timing=Timing(clock=clock)
+    ), clock
+
+
+def test_a_call_admitted_before_the_trip_is_ignored_after_the_probe_closes() -> None:
+    """Record nothing for a call from before the trip, even once the probe has closed the breaker again."""
+    cb, clock = _clocked()
+    with contextlib.ExitStack() as stale:
+        verdict = stale.enter_context(cb.track())
+        _fail(cb)
+        clock.now = _LONG_COOLDOWN
+        with cb.track():
+            pass
+        assert cb.state is BreakerState.CLOSED
+        verdict.mark_failed()
+    assert cb.state is BreakerState.CLOSED, "a stale failure must not trip the recovered breaker again"
+    assert cb.failure_count == 0
+
+
+def test_a_call_admitted_before_the_trip_is_refused_its_retries() -> None:
+    """Refuse a re-send from before the trip once the cooldown elapses: it would reach the origin beside the probe."""
+    cb, clock = _clocked()
+    with cb.track() as stale:
+        _fail(cb)
+        clock.now = _LONG_COOLDOWN
+        assert not cb.refusing, "a new call would be admitted as the probe"
+        assert stale.refused()
+        with cb.track() as probe:
+            assert not probe.refused(), "the probe keeps its retries"
+        with cb.track() as fresh:
+            assert not fresh.refused()
+        assert stale.refused(), "the breaker closing again does not make the stale call current"
+
+
+def test_a_listener_raising_on_the_probe_transition_frees_the_probe_slot() -> None:
+    """Free the probe slot when the listener told of taking it raises, so the breaker does not refuse forever."""
+    cb, clock = _clocked()
+    _fail(cb)
+    clock.now = _LONG_COOLDOWN
+
+    def _raise(_: object) -> None:
+        raise _BoomError
+
+    with pytest.raises(_BoomError), cb.track(_raise):
+        pytest.fail("the block must not run when the listener raised")
+    assert not cb.refusing
+    with cb.track():
+        pass
+    assert cb.state is BreakerState.CLOSED
+
+
+def test_an_answered_probe_closes_the_breaker_before_its_block_exits() -> None:
+    """Settle a probe once its origin answered, and count a later failure as a closed breaker's."""
+    cb, clock = _clocked(threshold=2)
+    _fail(cb, 2)
+    clock.now = _LONG_COOLDOWN
+    changes: list[Transition] = []
+    with cb.track(changes.append) as probe:
+        probe.mark_answered()
+        assert cb.state is BreakerState.CLOSED
+        assert [change.state for change in changes] == [BreakerState.HALF_OPEN, BreakerState.CLOSED]
+        with cb.track():
+            pass  # admitted while the probe's body is still being read
+        probe.mark_failed()
+    assert cb.state is BreakerState.CLOSED, "a mid-body failure is one ordinary failure, not a failed probe"
+    assert cb.failure_count == 1
+
+
+def test_an_answered_call_records_its_head_once() -> None:
+    """Record a closed call's answer at its head, and nothing more for a raise the block then makes unmarked."""
+    cb, _ = _clocked(threshold=2)
+    _fail(cb)
+    with contextlib.suppress(_BoomError), cb.track() as verdict:
+        verdict.mark_answered()
+        assert cb.failure_count == 0
+        raise _BoomError
+    assert cb.failure_count == 0
+
+
+def test_an_untested_answered_probe_frees_the_slot_without_closing() -> None:
+    """Free the probe slot at the head of a response the cache served, leaving the breaker for the next call to test."""
+    cb, clock = _clocked()
+    _fail(cb)
+    clock.now = _LONG_COOLDOWN
+    with cb.track() as probe:
+        probe.mark_untested()
+        probe.mark_answered()
+        assert not cb.refusing
+        probe.mark_failed()
+    assert cb.state is BreakerState.HALF_OPEN
+    with cb.track():
+        pass
+    assert cb.state is BreakerState.CLOSED
+
+
+def test_an_answered_probe_that_failed_reopens_and_records_nothing_after() -> None:
+    """Re-open at the head of a failing answer (a 501), and ignore the rest of that block."""
+    cb, clock = _clocked()
+    _fail(cb)
+    clock.now = _LONG_COOLDOWN
+    with cb.track() as probe:
+        probe.mark_failed()
+        probe.mark_answered()
+        assert cb.state is BreakerState.OPEN
+    assert cb.state is BreakerState.OPEN
+    assert cb.refusing
+
+
+def test_no_breaker_takes_an_answer_and_refuses_nothing() -> None:
+    """Accept an answer and never refuse a re-send without a breaker."""
+    with NO_BREAKER.track() as verdict:
+        verdict.mark_answered()
+        assert not verdict.refused()

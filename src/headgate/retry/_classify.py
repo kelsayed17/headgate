@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from headgate._core import SendProgress
     from headgate.retry._policy import RetryPolicy
 
-__all__ = ["Attempted", "Verdict", "classify", "refused_stream"]
+__all__ = ["Attempted", "Verdict", "classify", "nothing_sent", "refused_stream"]
 
 #: The HTTP/2 error code a server resets a stream with when it did no processing on it (RFC 9113 §7).
 _REFUSED_STREAM: Final = 0x7
@@ -90,13 +90,20 @@ class Attempted:
     progress: SendProgress
 
 
-def _nothing_sent(progress: SendProgress, exc: Exception) -> bool:
-    """Return whether no byte of the request was written: from the reported progress, else from the exception type."""
-    if progress.bytes_sent:
+def nothing_sent(progress: SendProgress, result: httpx2.Response | Exception | None) -> bool:
+    """Return whether no byte of an attempt can have been written, given its *progress* and *result*.
+
+    An answer proves the request was written. Otherwise the reported progress decides: a byte written, or a connection
+    that wrote none. A transport that reports nothing is judged by the exception's type (``NEVER_SENT_ERRORS``), and an
+    attempt cut short (*result* ``None``, the send cancelled) by whether it was handed to the network at all.
+    """
+    if isinstance(result, httpx2.Response) or progress.bytes_sent:
         return False
     if progress.connected:
         return True
-    return isinstance(exc, NEVER_SENT_ERRORS)
+    if result is None:
+        return not progress.dispatched
+    return isinstance(result, NEVER_SENT_ERRORS)
 
 
 def _should_retry(response: httpx2.Response, policy: RetryPolicy) -> bool | None:
@@ -107,13 +114,15 @@ def _should_retry(response: httpx2.Response, policy: RetryPolicy) -> bool | None
     return {"true": True, "false": False}.get(header)
 
 
-def _classify_response(response: httpx2.Response, attempted: Attempted, policy: RetryPolicy) -> Verdict:
+def _classify_response(
+    response: httpx2.Response, attempted: Attempted, policy: RetryPolicy, now: float | None
+) -> Verdict:
     """Classify a response by its status, the server's ``x-should-retry``, and the method's safety."""
     status = response.status_code
     should = _should_retry(response, policy)
     if status not in policy.statuses and should is not True:
         return _ANSWER
-    retry_after = retry_after_of(response)
+    retry_after = retry_after_of(response, now=now)
     reason = str(status)
     if should is not None:
         return Verdict(failure=True, retryable=should, reason=reason, retry_after=retry_after)
@@ -128,12 +137,18 @@ def _classify_error(exc: Exception, attempted: Attempted, policy: RetryPolicy) -
         return Verdict(failure=True, retryable=False, reason=reason)
     if refused_stream(exc):
         return Verdict(failure=True, retryable=True, reason="REFUSED_STREAM")
-    safe = attempted.method in policy.methods or attempted.keyed or _nothing_sent(attempted.progress, exc)
+    safe = attempted.method in policy.methods or attempted.keyed or nothing_sent(attempted.progress, exc)
     return Verdict(failure=True, retryable=safe, reason=reason)
 
 
-def classify(result: httpx2.Response | Exception, attempted: Attempted, policy: RetryPolicy) -> Verdict:
-    """Return the verdict on *result*, one attempt of the request *attempted* under *policy*."""
+def classify(
+    result: httpx2.Response | Exception, attempted: Attempted, policy: RetryPolicy, *, now: float | None = None
+) -> Verdict:
+    """Return the verdict on *result*, one attempt of the request *attempted* under *policy*.
+
+    *now* is the Unix time a ``Retry-After`` HTTP-date is read against when the response sends no ``Date``; the
+    system's wall clock without one.
+    """
     if isinstance(result, httpx2.Response):
-        return _classify_response(result, attempted, policy)
+        return _classify_response(result, attempted, policy, now)
     return _classify_error(result, attempted, policy)

@@ -5,7 +5,7 @@
 
 Each builder returns its error rather than raising it, so the caller raises it with the right cause (``from exc`` for
 a transport failure, ``from refused`` for a reader's :class:`~headgate.errors.RefusedError`). Each takes the
-:class:`CallSite` it failed at: the client class's name, the request line and the attempt count, which every
+:class:`CallSite` it failed at: the client's host, the request line and the attempt count, which every
 ``ClientError`` carries with the response's request id, whether a retry could succeed, and any ``Retry-After``.
 
 An ``application/problem+json`` body (RFC 9457) is parsed into a :class:`~headgate.errors.Problem` on the status
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
@@ -44,6 +45,7 @@ from headgate.errors import (
 from headgate.retry._policy import UNRETRYABLE_ERRORS
 
 if TYPE_CHECKING:
+    from headgate._core import Clock
     from headgate.errors import RefusedError
     from headgate.retry._policy import RetryOutcome
 
@@ -131,7 +133,8 @@ class CallSite:
 
     ``url`` is already sanitized and bounded (:func:`loggable_url`). ``retry`` is the retry layer's verdict on the
     call's last attempt, if it made one. It decides whether the error is retryable (see :meth:`details`), and supplies
-    the delay the upstream asked for when the builder has none of its own.
+    the delay the upstream asked for when the builder has none of its own. ``wall_clock`` is the client's, which a
+    ``Retry-After`` HTTP-date is read against.
     """
 
     source: str
@@ -140,6 +143,7 @@ class CallSite:
     attempts: int | None = None
     request_id_headers: tuple[str, ...] = DEFAULT_REQUEST_ID_HEADERS
     retry: RetryOutcome | None = None
+    wall_clock: Clock = time.time
 
     def details(
         self,
@@ -213,13 +217,14 @@ def body_snippet(resp: httpx2.Response) -> str | None:
 
     The upstream's own reason for a 4xx is the diagnosis (a 400 that names the missing field), so it is folded into the
     ``ClientError`` message, bounded and whitespace-collapsed because that message may reach an API response. A
-    ``charset`` that is no text encoding (httpx2 takes ``base64`` or ``rot13``, which ``bytes.decode`` refuses) is read
-    as UTF-8, as no ``charset`` is.
+    ``charset`` that is no text encoding (httpx2 takes ``base64`` or ``rot13``, which ``bytes.decode`` refuses with a
+    ``LookupError``, and ``idna`` or ``undefined``, which refuse with a ``UnicodeError``) is read as UTF-8, as no
+    ``charset`` is.
     """
     scanned = resp.content[:_SNIPPET_SCAN_BYTES]
     try:
         head = scanned.decode(resp.encoding or "utf-8", errors="replace")
-    except LookupError:
+    except LookupError, UnicodeError:
         head = scanned.decode("utf-8", errors="replace")
     text = " ".join(head.split())
     if not text:
@@ -241,7 +246,8 @@ def problem_of(resp: httpx2.Response) -> Problem | None:
     """Return the RFC 9457 problem detail *resp*'s body carries, or ``None`` when it is not one.
 
     Only a body declared ``application/problem+json``, no larger than :data:`_PROBLEM_SCAN_BYTES`, holding a JSON object
-    is read. A standard member of the wrong JSON type is ignored, as the RFC says; every other member is an extension.
+    nested no deeper than the recursion limit allows is read. A standard member of the wrong JSON type is ignored, as
+    the RFC says; every other member is an extension.
     """
     media_type = resp.headers.get("content-type", "").partition(";")[0].strip().lower()
     content = resp.content
@@ -255,14 +261,18 @@ def problem_of(resp: httpx2.Response) -> Problem | None:
         return None
     members = {str(key): value for key, value in document.items()}
     status = members.pop("status", None)
-    return Problem(
-        type=_text_member(members.pop("type", None)) or "about:blank",
-        title=_text_member(members.pop("title", None)),
-        status=status if isinstance(status, int) and not isinstance(status, bool) else None,
-        detail=_text_member(members.pop("detail", None)),
-        instance=_text_member(members.pop("instance", None)),
-        extensions=members,
-    )
+    try:
+        return Problem(
+            type=_text_member(members.pop("type", None)) or "about:blank",
+            title=_text_member(members.pop("title", None)),
+            status=status if isinstance(status, int) and not isinstance(status, bool) else None,
+            detail=_text_member(members.pop("detail", None)),
+            instance=_text_member(members.pop("instance", None)),
+            extensions=members,
+        )
+    except RecursionError:
+        # An extension nested too deep to freeze (about 1 KB of brackets): read the body as no problem detail.
+        return None
 
 
 def _text_member(value: object) -> str | None:
@@ -286,9 +296,9 @@ def _summary(resp: httpx2.Response, problem: Problem | None) -> str | None:
 def status_error(resp: httpx2.Response, site: CallSite) -> UpstreamStatusError:
     """Build the ``ClientError`` for a non-success status the call did not declare: the status ladder.
 
-    401/403 become :class:`~headgate.errors.AuthError`, because a bad credential is this client's configuration
+    401/403 become :class:`~headgate.AuthError`, because a bad credential is this client's configuration
     failing against the upstream, not the caller's request. Any other status becomes
-    :class:`~headgate.errors.UpstreamStatusError`. Both carry the real status, the problem detail if the body is one,
+    :class:`~headgate.UpstreamStatusError`. Both carry the real status, the problem detail if the body is one,
     and a bounded summary of the body.
     """
     kind = AuthError if resp.status_code in _AUTH_STATUSES else UpstreamStatusError
@@ -339,7 +349,7 @@ def transport_error(exc: httpx2.HTTPError | OSError, site: CallSite) -> Transpor
     httpx2 names the URL in most of its own messages but a bare ``OSError`` names nothing, so the request line is
     stated explicitly. Many httpx2 exceptions stringify to ``""`` (a dropped connection, a read timeout), and the type
     name is then the only record of what failed. A timeout, httpx2's or the built-in ``TimeoutError`` a middleware or
-    transport's own ``asyncio.timeout`` raises, becomes :class:`~headgate.errors.ClientTimeoutError`.
+    transport's own ``asyncio.timeout`` raises, becomes :class:`~headgate.ClientTimeoutError`.
 
     An ``httpx2.LocalProtocolError`` gets a fixed message instead (see :func:`_unsendable_detail`): it is the HTTP
     library refusing to encode the request, and its own message quotes the offending header value, which is usually
@@ -377,8 +387,8 @@ def _unsendable_detail(exc: httpx2.LocalProtocolError) -> str:
 def transient_status_error(resp: httpx2.Response, site: CallSite) -> UpstreamStatusError:
     """Build the ``ClientError`` for a 429 or 5xx that reached the client, past whatever retries the policy made.
 
-    A 429 becomes :class:`~headgate.errors.RateLimitError`, anything else
-    :class:`~headgate.errors.UpstreamStatusError`. *resp* carries a bounded head of the body, which becomes the
+    A 429 becomes :class:`~headgate.RateLimitError`, anything else
+    :class:`~headgate.UpstreamStatusError`. *resp* carries a bounded head of the body, which becomes the
     summary, as it does for :func:`status_error`. The message calls the status ``transient`` when the retry policy
     counts it as a failure to re-send (:meth:`CallSite.retries_status`), and ``upstream`` otherwise (a 501, a 505). The
     error is retryable when the retry policy would re-send after *resp* (see :meth:`CallSite.details`): a 5xx outside
@@ -394,7 +404,7 @@ def transient_status_error(resp: httpx2.Response, site: CallSite) -> UpstreamSta
         status_code=code,
         body=_summary(resp, problem),
         problem=problem,
-        **site.details(resp, retry_after=retry_after_of(resp)),
+        **site.details(resp, retry_after=retry_after_of(resp, now=site.wall_clock())),
     )
 
 

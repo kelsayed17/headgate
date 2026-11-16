@@ -26,7 +26,7 @@ from headgate import (
     nothing,
 )
 from headgate.events import CallFinished, Event
-from headgate.testing import FakeTransport, isolated_breakers
+from headgate.testing import FakeTransport
 from tests.cache._helpers import every_get_rules
 from tests.integration._support import client
 from tests.support.events import Recorder
@@ -34,13 +34,13 @@ from tests.support.events import Recorder
 if TYPE_CHECKING:
     from hishel import AsyncSqliteStorage
 
-    from tests.support.clients import StubClient
+    from headgate import Client
 
 _DEPRECATED = {"Deprecation": "@1688169599", "Cache-Control": "max-age=60"}
 _LIMITED = httpx2.Response(429, headers={"Retry-After": "1"})
 
 
-def _every_layer(storage: AsyncSqliteStorage, recorder: Recorder) -> StubClient:
+def _every_layer(storage: AsyncSqliteStorage, recorder: Recorder) -> Client:
     """Build a client with every reporting layer: retries, a cache, a breaker that trips at once, observers."""
     fake = (
         FakeTransport()
@@ -52,8 +52,7 @@ def _every_layer(storage: AsyncSqliteStorage, recorder: Recorder) -> StubClient:
     policy = TransportPolicy(
         cache=HttpCache(**every_get_rules(), storage=storage), breaker=BreakerPolicy(failure_threshold=1)
     )
-    with isolated_breakers():
-        return client(fake, policy=policy, http=HttpOptions(observers=(recorder,)))
+    return client(fake, policy=policy, http=HttpOptions(), observers=(recorder,))
 
 
 async def test_one_clients_calls_emit_every_event_type(storage: AsyncSqliteStorage) -> None:

@@ -68,3 +68,24 @@ def test_retry_after_measures_a_date_from_the_current_time_by_default() -> None:
 
     assert seconds is not None
     assert 0 < seconds <= timedelta(hours=1).total_seconds()
+
+
+def _http_date(unix: float) -> str:
+    """Return *unix* as an HTTP-date."""
+    return datetime.fromtimestamp(unix, UTC).strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+
+@pytest.mark.parametrize("skew", [-3600.0, 3600.0], ids=["server-behind", "server-ahead"])
+def test_a_retry_after_date_is_measured_from_the_servers_date(skew: float) -> None:
+    """Measure an HTTP-date from the response's own ``Date``, so a skewed local clock neither drops nor stretches it."""
+    server_now = _NOW + skew
+    headers = {"Date": _http_date(server_now), "Retry-After": _http_date(server_now + _ASKED)}
+
+    assert retry_after_of(httpx2.Response(503, headers=headers), now=_NOW) == _ASKED
+
+
+def test_a_retry_after_date_is_measured_from_now_when_the_date_does_not_parse() -> None:
+    """Fall back to *now* when the response's ``Date`` is not an HTTP-date."""
+    headers = {"Date": "yesterday", "Retry-After": _http_date(_NOW + _ASKED)}
+
+    assert retry_after_of(httpx2.Response(503, headers=headers), now=_NOW) == _ASKED

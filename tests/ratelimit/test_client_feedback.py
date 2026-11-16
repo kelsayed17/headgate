@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Server rate-limit feedback through ``AsyncBaseClient``: a pause every sharer honors, or raises past a deadline.
+"""Server rate-limit feedback through ``Client``: a pause every sharer honors, or raises past a deadline.
 
 The budgets here run on a fake clock and sleep, so a pause of minutes costs nothing; the module keeps the real
 ``RateBudget.wait`` (``transport_policy``), which is where the pause is enforced.
@@ -14,14 +14,11 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import HttpCache, HttpOptions, RateLimitError, TransportPolicy
+from headgate import Client, HttpCache, HttpOptions, Rate, RateBudget, RateLimitError, TransportPolicy
 from headgate._core import AttemptFinished, CallFinished, RateLimited, Timing
 from headgate.cache._transport import CACHE_DEGRADATIONS
-from headgate.ratelimit import Rate, RateBudget
-from headgate.retry import NO_RETRY
 from headgate.testing import TestClock
 from tests.support.breakers import failures
-from tests.support.clients import StubClient
 from tests.support.events import Recorder
 from tests.support.responses import RESPONSE
 
@@ -54,18 +51,19 @@ class _Server:
 
 def _budget(clock: TestClock) -> RateBudget:
     """Return a generous budget on *clock*."""
-    return RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep), wall_clock=clock)
+    return RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
 
 
 def _client(
     budget: RateBudget, server: _Server, *, cache: HttpCache | None = None, recorder: Recorder | None = None
-) -> StubClient:
+) -> Client:
     """Return a client spending *budget* against *server*, sending each call once."""
-    return StubClient(
+    return Client(
         base_url=f"https://{_HOST}",
         rate=budget,
-        policy=TransportPolicy(retry=NO_RETRY, cache=cache),
-        http=HttpOptions(transport=httpx2.MockTransport(server), observers=() if recorder is None else (recorder,)),
+        policy=TransportPolicy(retry=None, cache=cache),
+        http=HttpOptions(transport=httpx2.MockTransport(server)),
+        observers=() if recorder is None else (recorder,),
     )
 
 
@@ -92,18 +90,19 @@ async def test_a_pause_past_the_deadline_raises_rate_limit_error_without_sending
     budget = _budget(clock)
     server = _Server()
     client = _client(budget, server)
-    with pytest.raises(RateLimitError):
+    with pytest.raises(RateLimitError) as refused:
         await client.get("x", expect=RESPONSE)
 
     with pytest.raises(RateLimitError) as raised:
         await client.get("x", expect=RESPONSE, deadline=_DEADLINE)
 
+    assert refused.value.status_code == httpx2.codes.TOO_MANY_REQUESTS, "the 429 the wire sent for that call"
     error = raised.value
-    assert (error.status_code, error.retryable, error.retry_after) == (429, True, _PAUSE)
+    assert (error.status_code, error.retryable, error.retry_after, error.sent) == (None, True, _PAUSE, False)
     assert (error.attempts, getattr(error, "__notes__", [])) == (0, []), "an attempt never sent is no attempt"
-    assert "past the call's deadline" in str(error)
+    assert str(error).endswith("past the call's deadline"), "no status tag: this call got no status"
     assert server.received == 1, "the refused call never reached the server"
-    assert failures(_HOST) == 0, "neither the 429 nor the local refusal is a host failure"
+    assert failures(client, _HOST) == 0, "neither the 429 nor the local refusal is a host failure"
 
 
 async def test_a_call_the_paused_budget_refuses_reports_no_attempt() -> None:
@@ -138,3 +137,18 @@ async def test_a_pause_past_the_deadline_is_not_mistaken_for_a_cache_fault(stora
         await client.get("x", expect=RESPONSE, deadline=_DEADLINE)
 
     assert CACHE_DEGRADATIONS[_HOST] == before
+
+
+async def test_feedback_from_another_origin_neither_pauses_nor_throttles_the_shared_budget() -> None:
+    """Pace a call to another origin, but heed only the client's own origin's 429: the budget is shared by origin."""
+    clock = TestClock()
+    budget = _budget(clock)
+    client = _client(budget, _Server())
+    with pytest.raises(RateLimitError):
+        await client.get(httpx2.URL("https://elsewhere.example/x"), expect=RESPONSE)
+    assert (budget.pause_remaining, budget.effective_rate) == (0.0, budget.rate)
+
+    own = _client(budget, _Server())
+    with pytest.raises(RateLimitError):
+        await own.get("x", expect=RESPONSE)
+    assert budget.pause_remaining == _PAUSE

@@ -4,8 +4,8 @@
 """``CachedTokenAuth``: the shared token-cache policy, tested without a provider.
 
 A counting fake stands in for the token exchange, so caching, the expiry margin, the single 401 re-mint and the
-fresh-token rule are pinned independently of any provider's request shape. A controlled clock replaces
-``time.monotonic`` wherever a test needs time to pass.
+fresh-token rule are pinned independently of any provider's request shape. Where a test needs time to pass, its auth
+is built under ``TestClock.install()``, so the token's lifetime runs on the test clock.
 """
 
 from __future__ import annotations
@@ -17,16 +17,15 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import HttpOptions, _auth
+from headgate import AuthError, Client, HttpOptions, TransportError, _auth
 from headgate._auth import AUTH_HOP, FRESH_TOKEN_S, CachedTokenAuth, Minted, failed_on_auth_hop
-from headgate.errors import AuthError, ClientConfigurationError
-from headgate.ratelimit import UNLIMITED
-from tests.support.clients import StubClient
+from headgate.errors import ClientConfigurationError
+from headgate.testing import TestClock
 from tests.support.responses import RESPONSE
 from tests.support.tokens import TEST_BEARER, premint
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator
 
 #: The default ``refresh_margin``.
 _MARGIN_S = 120.0
@@ -57,28 +56,11 @@ class _CountingAuth(CachedTokenAuth):
         return f"tok-{self.mints}", self._lifetime
 
 
-class _Clock:
-    """A ``time.monotonic`` stand-in that moves only when a test advances it."""
-
-    def __init__(self) -> None:
-        """Start at an arbitrary positive instant."""
-        self.now = 1000.0
-
-    def monotonic(self) -> float:
-        """Return the current instant."""
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        """Move the clock forward by *seconds*."""
-        self.now += seconds
-
-
 @pytest.fixture
-def clock(monkeypatch: pytest.MonkeyPatch) -> _Clock:
-    """Replace the auth module's clock with one the test controls."""
-    fake = _Clock()
-    monkeypatch.setattr(_auth, "time", fake)
-    return fake
+def clock() -> Iterator[TestClock]:
+    """Build every auth in the test on a clock the test drives, through the public timing seam."""
+    with TestClock(1000.0).install() as test_clock:
+        yield test_clock
 
 
 type _Factory = Callable[[httpx2.Auth, Callable[[httpx2.Request], httpx2.Response]], httpx2.AsyncClient]
@@ -135,7 +117,9 @@ class TestCaching:
 
         assert auth.mints == 1
 
-    async def test_a_token_inside_the_expiry_margin_is_re_minted(self, client_factory: _Factory, clock: _Clock) -> None:
+    async def test_a_token_inside_the_expiry_margin_is_re_minted(
+        self, client_factory: _Factory, clock: TestClock
+    ) -> None:
         """Re-mint before expiry: a token that dies mid-flight fails a request that may be an unrepeatable write."""
         auth = _CountingAuth()
         client = client_factory(auth, _ok)
@@ -150,7 +134,7 @@ class TestCaching:
         await client.get("/x")
         assert auth.mints == _MINT_AND_RE_MINT, "inside the margin and before expiry"
 
-    async def test_a_token_is_due_exactly_at_the_margin(self, client_factory: _Factory, clock: _Clock) -> None:
+    async def test_a_token_is_due_exactly_at_the_margin(self, client_factory: _Factory, clock: TestClock) -> None:
         """Re-mint at the very instant the margin begins, not one tick later."""
         auth = _CountingAuth()
         client = client_factory(auth, _ok)
@@ -162,7 +146,7 @@ class TestCaching:
         assert auth.mints == _MINT_AND_RE_MINT
 
     async def test_a_lifetime_inside_the_refresh_margin_is_reused_until_half_life(
-        self, client_factory: _Factory, clock: _Clock
+        self, client_factory: _Factory, clock: TestClock
     ) -> None:
         """Refresh a lifetime at or below the margin at half-life, not on every request."""
         lifetime = _MARGIN_S * 0.75
@@ -186,6 +170,86 @@ def held_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
     fresh-token window rather than wait it out. ``TestAFreshTokenIsNotReMinted`` covers the window.
     """
     monkeypatch.setattr(_auth, "FRESH_TOKEN_S", 0.0)
+
+
+class _FailsAfterFirst(_CountingAuth):
+    """Mint ``tok-1``, then fail every later exchange after *delay* seconds, as a token host that went down."""
+
+    def __init__(self, *, delay: float = 0.0) -> None:
+        """Fail every exchange after the first, each taking *delay* seconds."""
+        super().__init__(delay=delay)
+        self.attempts = 0
+
+    @override
+    async def mint_token(self) -> tuple[str, float]:
+        self.attempts += 1
+        if self.attempts > 1:
+            if self._delay:
+                await asyncio.sleep(self._delay)
+            msg = "token host unreachable"
+            raise TransportError(msg, source="_FailsAfterFirst")
+        return await super().mint_token()
+
+
+class _FailsEveryTime(_CountingAuth):
+    """Fail every exchange after *delay* seconds, as a token host that is down."""
+
+    @override
+    async def mint_token(self) -> tuple[str, float]:
+        self.mints += 1
+        await asyncio.sleep(self._delay)
+        msg = "token host unreachable"
+        raise TransportError(msg, source="_FailsEveryTime")
+
+
+class TestAFailedMint:
+    """A failed mint is shared by the calls that waited for it, and a token still valid outlives a failed refresh."""
+
+    async def test_a_failed_refresh_inside_the_margin_keeps_using_the_valid_token(
+        self, client_factory: _Factory, clock: TestClock
+    ) -> None:
+        """Send the held token when its early refresh fails, since it has not expired; raise once it has."""
+        auth = _FailsAfterFirst()
+        client = client_factory(auth, _ok)
+        await client.get("/x")
+
+        clock.advance(_LIFETIME_S - 1)
+        resp = await client.get("/x")
+        assert resp.json() == {"seen": "Bearer tok-1"}
+        assert auth.attempts == _MINT_AND_RE_MINT, "the refresh was tried"
+
+        clock.advance(1)
+        with pytest.raises(TransportError):
+            await client.get("/x")
+
+    async def test_the_calls_queued_behind_a_failed_refresh_use_the_valid_token_too(
+        self, client_factory: _Factory, clock: TestClock
+    ) -> None:
+        """Send the held token on every call that waited for a refresh that failed, trying the refresh once."""
+        auth = _FailsAfterFirst(delay=0.01)
+        client = client_factory(auth, _ok)
+        await client.get("/x")
+
+        clock.advance(_LIFETIME_S - 1)
+        responses = await asyncio.gather(*(client.get("/x") for _ in range(3)))
+
+        assert [resp.json() for resp in responses] == [{"seen": "Bearer tok-1"}] * 3
+        assert auth.attempts == _MINT_AND_RE_MINT
+
+    async def test_the_calls_queued_behind_a_failed_mint_share_its_failure(self, client_factory: _Factory) -> None:
+        """Fail every call that waited for a mint with that mint's error, instead of each minting again in turn."""
+        auth = _FailsEveryTime(delay=0.01)
+        client = client_factory(auth, _ok)
+
+        results = await asyncio.gather(*(client.get("/x") for _ in range(4)), return_exceptions=True)
+
+        assert auth.mints == 1
+        assert all(isinstance(result, TransportError) for result in results)
+        assert len({id(result) for result in results}) == len(results), "each call raises its own copy"
+
+        with pytest.raises(TransportError):
+            await client.get("/x")
+        assert auth.mints == _MINT_AND_RE_MINT, "a call that starts after the failure mints again"
 
 
 @pytest.mark.usefixtures("held_tokens")
@@ -270,7 +334,7 @@ class TestAFreshTokenIsNotReMinted:
         assert auth.mints == 1
 
     @pytest.mark.usefixtures("clock")
-    async def test_a_token_held_past_the_window_is_re_minted(self, clock: _Clock) -> None:
+    async def test_a_token_held_past_the_window_is_re_minted(self, clock: TestClock) -> None:
         """Re-mint on a 401 once the token has outlived the window."""
         auth = _CountingAuth()
         flow = auth.async_auth_flow(_get())
@@ -282,7 +346,7 @@ class TestAFreshTokenIsNotReMinted:
         assert second.headers["Authorization"] == "Bearer tok-2"
         assert auth.mints == _MINT_AND_RE_MINT
 
-    async def test_a_token_exactly_as_old_as_the_window_is_re_minted(self, clock: _Clock) -> None:
+    async def test_a_token_exactly_as_old_as_the_window_is_re_minted(self, clock: TestClock) -> None:
         """Count a token minted exactly ``FRESH_TOKEN_S`` ago as stale: the window is open at its end."""
         auth = _CountingAuth()
         flow = auth.async_auth_flow(_get())
@@ -293,7 +357,9 @@ class TestAFreshTokenIsNotReMinted:
 
         assert second.headers["Authorization"] == "Bearer tok-2"
 
-    async def test_a_late_401_for_an_already_replaced_token_retries_with_the_replacement(self, clock: _Clock) -> None:
+    async def test_a_late_401_for_an_already_replaced_token_retries_with_the_replacement(
+        self, clock: TestClock
+    ) -> None:
         """Judge freshness on the token rejected, not on the cache: a replaced one is worth a mint-free retry."""
         auth = _CountingAuth()
         a = auth.async_auth_flow(_get("https://api.example/a"))
@@ -329,9 +395,8 @@ class TestAFreshTokenIsNotReMinted:
             return httpx2.Response(httpx2.codes.UNAUTHORIZED)
 
         auth = premint(_CountingAuth())
-        client = StubClient(
+        client = Client(
             base_url="https://api.example",
-            rate=UNLIMITED,
             auth=auth,
             http=HttpOptions(transport=httpx2.MockTransport(answer)),
         )
@@ -366,7 +431,7 @@ class TestSeed:
         assert second.headers["Authorization"] == "Bearer tok-1"
         assert auth.mints == 1
 
-    async def test_a_seeded_lifetime_is_counted_from_the_seed(self, client_factory: _Factory, clock: _Clock) -> None:
+    async def test_a_seeded_lifetime_is_counted_from_the_seed(self, client_factory: _Factory, clock: TestClock) -> None:
         """Re-mint once the seeded token's remaining lifetime enters the margin."""
         auth = _CountingAuth()
         auth.seed("restored", _LIFETIME_S)

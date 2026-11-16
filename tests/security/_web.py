@@ -10,13 +10,12 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate import HttpOptions, TransportPolicy
-from headgate.ratelimit import Rate
-from headgate.retry import NO_RETRY
-from tests.support.clients import StubClient
+from headgate import Client, HttpOptions, Rate, TransportPolicy
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from headgate import Middleware
 
 #: The client's own origin in these tests.
 BASE = "https://api.example"
@@ -39,13 +38,19 @@ class Web:
         return httpx2.Response(httpx2.codes.OK, text="ok")
 
     def client(
-        self, *, auth: httpx2.Auth | None = None, http: HttpOptions | None = None, base_url: str = BASE
-    ) -> StubClient:
+        self,
+        *,
+        auth: httpx2.Auth | None = None,
+        http: HttpOptions | None = None,
+        base_url: str = BASE,
+        middleware: tuple[Middleware, ...] = (),
+    ) -> Client:
         """Return a client on *base_url* over this web, sending each call once."""
-        return StubClient(
+        return Client(
             base_url=base_url,
             rate=Rate.per_second(1000),
             auth=auth,
-            policy=TransportPolicy(retry=NO_RETRY),
+            policy=TransportPolicy(retry=None),
             http=replace(http or HttpOptions(), transport=httpx2.MockTransport(self)),
+            middleware=middleware,
         )

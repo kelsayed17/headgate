@@ -6,17 +6,17 @@ repeating it is harmless) and **worthwhile** (the failure is transient, the budg
 and the origin's breaker is not refusing).
 
 Configure it once with `TransportPolicy(retry=RetryPolicy(...))`; override it for a call with `retry=RetryPolicy(...)`,
-turn it off with `retry=False`, or set it per route with `Route(fragment, retry=...)`.
+turn it off with `retry=None`, or set it per route with `Route(fragment, retry=...)`.
 
 ```python
 from headgate import RetryPolicy, TransportPolicy
-from headgate.retry import Backoff, Hedge, RetryBudget
+from headgate.retry import Backoff, Hedge, RetryShare
 
 policy = TransportPolicy(
     retry=RetryPolicy(
         attempts=4,
         backoff=Backoff(factor=0.25, max_wait=8.0),
-        budget=RetryBudget(ratio=0.1),
+        budget=RetryShare(ratio=0.1),
         hedge=Hedge(after=0.8),
     )
 )
@@ -25,17 +25,18 @@ policy = TransportPolicy(
 | `RetryPolicy` field | Default | Meaning |
 | --- | --- | --- |
 | `attempts` | `3` | sends per request, the first included (`1` never retries); hedges count |
-| `methods` | `GET HEAD OPTIONS PUT DELETE` | the methods treated as idempotent |
+| `methods` | `GET HEAD OPTIONS PUT DELETE QUERY` | the methods treated as idempotent |
 | `statuses` | `408 425 429 500 502 503 504` | the statuses that are retryable failures |
 | `backoff` | `Backoff(factor=0.5, max_wait=5.0)` | the wait when the response names none |
 | `max_retry_after` | `30.0` | the longest `Retry-After` that is waited |
-| `budget` | `RetryBudget(ratio=0.2, min_per_second=10, window=10)` | the share of traffic retries may add, or `None` |
+| `budget` | `RetryShare(ratio=0.2, min_per_second=10, window=10)` | the share of traffic retries may add; a shared `RetryBudget`; or `None` |
 | `respect_should_retry` | `True` | follow a server's `x-should-retry: true` or `false` |
 | `hedge` | `None` | an opt-in `Hedge` for slow idempotent requests |
 | `min_attempt_time` | `0.05` | the least time left before the deadline that a retry, a hedge or a wait starts with |
 
-`NO_RETRY` is `RetryPolicy(attempts=1)`, what `retry=False` installs. `headgate.retry.RETRY_STATUSES` is the default
-`statuses`, to extend rather than restate: `RetryPolicy(statuses=RETRY_STATUSES | {520})`.
+`retry=None` sends once, on the policy, a route, a view or a call: it is `RetryPolicy(attempts=1)`.
+`headgate.retry.RETRY_STATUSES` is the default `statuses`, to extend rather than restate:
+`RetryPolicy(statuses=RETRY_STATUSES | {520})`.
 
 ## What is re-sent
 
@@ -58,8 +59,11 @@ Each attempt's result is classified, in this order:
    began is safe; a `ReadTimeout` after the body was sent is not. A custom transport that reports no progress is judged
    by the exception's type instead.
 
-A request whose body is a one-shot stream (`content=` an async iterable) is never sent twice; the error notes why. Give
-`content=` a factory instead to keep it retryable (see [streaming](streaming.md#request-bodies)).
+A request whose body is a one-shot stream (`Raw` of an async iterable, or a `Multipart` upload of a file that is neither
+a regular file nor in memory, such as a pipe) is never sent twice; the error notes why. That holds below the retry
+layer too: when an HTTP/2 server's GOAWAY moves the request to a new connection, the body refuses a second read and the
+call raises `TransportError` rather than sending it empty. Give `Raw` a factory instead to keep it retryable (see
+[streaming](streaming.md#request-bodies)).
 
 The retry policy applies to each request the client sends: a followed redirect's hop, and a token-mint hop of a
 [`CachedTokenAuth`](auth.md#cachedtokenauth), each run their own sequence of attempts.
@@ -69,13 +73,14 @@ The retry policy applies to each request the client sends: a followed redirect's
 Between attempts the layer waits `factor · 2^n · jitter` before retry *n* (full jitter: `jitter` is a uniform draw in
 `[0, 1)`), capped at `max_wait`. With the defaults that is up to 1 s before the first retry and up to 2 s before the
 second; *n* counts retries only, so a hedge sent beside an attempt does not lengthen the wait. The draw comes from the
-operating system's generator rather than `random`, so an application that seeds `random` does not synchronize its
-processes' retries. A failed response is read (a bounded head of its body) and closed before the wait, so no
-connection is held through it.
+client's `Timing.random`, by default the operating system's generator rather than `random`, so an application that
+seeds `random` does not synchronize its processes' retries; a test pins it with `TestClock(random=...)`. A failed
+response is read (a bounded head of its body) and closed before the wait, so no connection is held through it.
 
 ## Retry-After
 
-A 429's or 503's `retry-after-ms` or `Retry-After` (whole or fractional seconds, or an HTTP-date) replaces the backoff
+A 429's or 503's `retry-after-ms` or `Retry-After` (whole or fractional seconds, or an HTTP-date, measured from the
+response's own `Date` so a skewed local clock does not change it) replaces the backoff
 and is waited **exactly**, not capped by `max_wait`, when it is at most `max_retry_after`. A longer one is not waited:
 the call stops and raises `RateLimitError` (429) or `UpstreamStatusError` with `retry_after` set (and `retryable` as
 [below](#what-retryable-means)), so the caller can reschedule. The [rate budget](rate-budgets.md#server-feedback) reads
@@ -86,12 +91,26 @@ cap on a pause, which only a `max_retry_after` past an hour can exceed).
 
 Retries may add at most `ratio` of the first attempts made over the last `window` seconds, plus a floor of
 `min_per_second · window` so a quiet client can still retry: with the defaults, 20% plus 10 a second. Hedges spend the
-same budget. A client keeps one account per distinct `RetryBudget` value, shared by every call it makes and by its
-`with_options` views, so once traffic is above the floor a failing upstream sees about 1.2 times its normal load from
-a client, not three times. A call that finds the budget
-spent raises its last failure with the note `retry budget exhausted`. A retry or hedge that is never sent (the breaker
+same budget. A client keeps one budget per distinct `RetryShare`, shared by every call it makes, by its
+`with_options` views and by every route that names an equal share, so once traffic is above the floor a failing
+upstream sees about 1.2 times its normal load from a client, not three times. A call that finds the budget spent raises
+its last failure with the note `retry budget exhausted`. A retry or hedge that is never sent (the breaker
 opened or the deadline came during the wait, the rate budget could not send it in time, or it or the call was
 cancelled before the rate budget let it out) gives its share back. `budget=None` removes the cap.
+
+A `RetryShare` is a value, as a `Rate` is: two clients given equal shares keep a budget each. To cap the retries of
+several clients together, as a `RateBudget` paces them together, build one live `RetryBudget` from the share and give
+each client the same object:
+
+```python
+from headgate import RetryPolicy, TransportPolicy
+from headgate.retry import RetryBudget, RetryShare
+
+shared = RetryBudget(RetryShare(ratio=0.1))  # its window runs on the current timing, as TestClock.install() sets it
+policy = TransportPolicy(retry=RetryPolicy(budget=shared))  # every client built with it spends one budget
+```
+
+Its `repr` shows the share and what the window holds now (`RetryBudget(RetryShare(...), retries=3, firsts=40)`).
 
 ## Deadlines and the breaker
 
@@ -113,20 +132,25 @@ one send leaves the others running, its body read (a bounded head) and its conne
 meanwhile; no hedge starts once an answer is in. Hedges count as attempts, spend the retry budget, respect the deadline and the
 breaker, and appear in events (`RetryScheduled` with reason `hedge`) and in the history (`attempt 2/3 (hedge): ...`).
 
-Only `methods` are hedged, and only with a replayable body. A policy whose `methods` include POST or PATCH refuses a
-hedge when it is constructed.
+Only `methods` are hedged, and only with an in-memory body (an `EncodedBody`, `Json`, `Form` or `Raw` bytes): a hedge
+sends a copy of it, and a streamed or multipart body is sent once, unhedged. A policy whose `methods` include POST or
+PATCH refuses a hedge when it is constructed.
 
 ## Idempotency keys
 
 A POST is safe to retry once the server can recognize a re-send. `TransportPolicy(idempotency=IdempotencyKeys())`
 stamps a fresh key on every POST and PATCH, under `Idempotency-Key` by default (`IdempotencyKeys(header=...,
 factory=...)` changes either). A call can pass its own with `idempotency_key=`, and a key set in `headers=` is kept.
+An empty or blank key is no key: `idempotency_key=` or a factory giving one raises `ValueError`, and one in `headers=`
+does not make the request retryable.
 The key is stamped once per call, before the retry layer, so every attempt carries the same one, and a keyed request is
 retried like an idempotent one.
 
 ## What `retryable` means
 
-`ClientError.retryable` is the retry policy's own verdict on the outcome that ended the call, by the rules above: it is
+`ClientError.retryable` has one meaning on every error: sending the call again later could succeed, and is safe as the
+call stands (its method is idempotent, it carries an idempotency key, or nothing of it was sent). For a status or a
+network failure, that is the retry policy's own verdict on the outcome that ended the call, by the rules above: it is
 `True` exactly when the call's `RetryPolicy` would re-send after it. So a surviving 503 on a GET is retryable, while a
 501 or 505 (outside `statuses`), a 503 the server marked `x-should-retry: false`, a 503 on a POST without an idempotency
 key, and a redirect loop are not. The message follows the same rule for a surviving 429 or 5xx: it calls the status
@@ -135,9 +159,13 @@ does not (`upstream 501 for GET orders`). A network failure while reading the bo
 be: retryable for an idempotent or keyed request, not for a POST that was written in full. The flag ignores what stopped
 the sequence (spent attempts, the budget, the deadline), since it answers whether sending again later could help.
 
-Two errors set it otherwise: a `RateLimitError` from a [rate budget](rate-budgets.md) paused past the deadline is
-retryable after its `retry_after`, and a token mint on a client of its own, which no retry layer judged, is retryable for
-any network failure but those re-sending cannot cure.
+The refusals headgate makes itself, before the request leaves, are retryable after their `retry_after`: a
+`CircuitOpenError` after the breaker's cooldown, a `RateLimitError` from a [rate budget](rate-budgets.md) paused past
+the deadline, and a `ClientTimeoutError` whose budget turn came after it. Errors that sending again cannot cure are not:
+`ForbiddenDestinationError`, `ResponseTooLargeError`, `ResponseParseError`, `ClientConfigurationError` and
+`PageLimitError`. A token mint on a client of its own, which no retry layer judged, is retryable for any network
+failure but those re-sending cannot cure. Whether a call that is not retryable may still have been processed is
+[`sent`](errors.md#what-every-error-carries).
 
 ## Attempt history
 

@@ -7,7 +7,9 @@
 the theoretical arrival time of the next request, and each request reserves its send time against it under a lock,
 then sleeps until then. Up to ``rate.burst`` requests go back to back; after that they are ``rate.interval`` apart.
 Reservations are made in arrival order, so waiters are served FIFO. A caller cancelled while it waits gives its
-reservation back when nobody has reserved after it, so a deadline expiring in the queue does not waste a send slot.
+reservation back, so a deadline expiring in the queue does not waste a send slot: at the end of the queue the turn
+comes off the schedule, and in the middle of it the next caller to arrive takes the turn, while its time is still
+ahead. A pause discards the turns abandoned before it, since the pause moves every waiting turn behind it.
 The schedule is kept on its own timeline, which a server pause shifts later (see below), so a pause postpones a
 reservation without taking it away.
 
@@ -32,13 +34,12 @@ from __future__ import annotations
 
 import math
 import threading
-import time
 import weakref
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, override
 
 import httpx2
 
-from headgate._core import SYSTEM_TIMING, BudgetBacklogError, BudgetPausedError, RateLimited
+from headgate._core import SYSTEM_TIMING, BudgetBacklogError, BudgetPausedError, RateLimited, current_timing
 from headgate.ratelimit._feedback import read_feedback
 from headgate.ratelimit._inflight import InFlightLimit
 from headgate.ratelimit._rate import Adaptive, Rate
@@ -46,7 +47,7 @@ from headgate.ratelimit._rate import Adaptive, Rate
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from headgate._core import CallContext, Clock, Timing
+    from headgate._core import CallContext, Timing
     from headgate.ratelimit._feedback import Feedback
 
 __all__ = [
@@ -116,9 +117,9 @@ class Pacer:
         "_clock",
         "_decreased_at",
         "_factor",
+        "_holes",
         "_in_flight",
         "_lock",
-        "_pause_status",
         "_paused_until",
         "_rate",
         "_shift",
@@ -135,7 +136,6 @@ class Pacer:
         max_in_flight: int | None = None,
         adaptive: Adaptive | None = DEFAULT_ADAPTIVE,
         timing: Timing = SYSTEM_TIMING,
-        wall_clock: Clock = time.time,
     ) -> None:
         """Build a budget; see the class docstring for the parameters.
 
@@ -149,16 +149,17 @@ class Pacer:
         self._in_flight = None if max_in_flight is None else InFlightLimit(max_in_flight)
         self._clock = timing.clock
         self._sleep = timing.sleep
-        self._wall_clock = wall_clock
+        self._wall_clock = timing.wall_clock
         self._lock = threading.Lock()
         self._tat = -math.inf
         self._factor = 1.0
         self._adjusted_at = -math.inf
         self._decreased_at = -math.inf
         self._paused_until = -math.inf
-        self._pause_status = 0
         self._shift = 0.0
         self._turns: set[_Turn] = set()
+        # Turns callers abandoned mid-queue, for the next callers to take (see _reserve).
+        self._holes: list[_Turn] = []
 
     @property
     def rate(self) -> Rate:
@@ -257,7 +258,7 @@ class Pacer:
         with self._lock:
             now = self._clock()
             if pause is not None and now + pause > self._paused_until:
-                self._pause(now + pause, status_code=response.status_code)
+                self._pause(now + pause)
             self._adapt(response, feedback, now=now, sent_at=sent_at)
         return pause
 
@@ -281,7 +282,20 @@ class Pacer:
         return Rate(requests=self._rate.requests * self._factor, period=self._rate.period)
 
     def _reserve(self, now: float) -> _Turn:
-        """Reserve the next send at *now* and return it, counted among the turns waiting."""
+        """Reserve the next send at *now* and return it, counted among the turns waiting.
+
+        The earliest turn a caller abandoned mid-queue is taken first, while its send time is still ahead; one whose
+        time has passed is dropped, since sending in it now would crowd the turns after it.
+        """
+        reason = THROTTLED if self._factor < 1 else PACED
+        if self._holes:
+            self._holes = [hole for hole in self._holes if hole.send + self._shift >= now]
+        if self._holes:
+            hole = min(self._holes, key=_send_time)
+            self._holes.remove(hole)
+            turn = _Turn(before=hole.before, after=hole.after, send=hole.send, shift=self._shift, reason=reason)
+            self._turns.add(turn)
+            return turn
         rate = self._current_rate()
         interval = rate.interval
         # The timeline stands still through a pause: a call arriving during one queues from the pause's end.
@@ -291,7 +305,7 @@ class Pacer:
             after=arrival + interval,
             send=arrival - (rate.burst - 1) * interval,
             shift=self._shift,
-            reason=THROTTLED if self._factor < 1 else PACED,
+            reason=reason,
         )
         self._tat = turn.after
         self._turns.add(turn)
@@ -326,24 +340,35 @@ class Pacer:
         turn.slept = timeline
         return due, PAUSED if turn.shift != self._shift else turn.reason
 
-    def _pause(self, until: float, *, status_code: int) -> None:
+    def _pause(self, until: float) -> None:
         """Pause until *until*, shifting the timeline so the earliest waiting turn falls due no sooner than that."""
         self._paused_until = until
-        self._pause_status = status_code
+        self._holes.clear()
         if self._turns:
             first = min(turn.send for turn in self._turns) + self._shift
             self._shift += max(0.0, until - first)
 
     def _refund(self, turn: _Turn) -> None:
-        """Drop *turn* from the waiting, and give it back when it is still the latest, so the next caller takes it."""
+        """Drop *turn* from the waiting and give it back: off the schedule at its end, else to the next caller."""
         self._turns.discard(turn)
-        if turn.after == self._tat:
-            self._tat = turn.before
+        if turn.after != self._tat:
+            self._holes.append(turn)
+            return
+        self._tat = turn.before
+        # Turns abandoned earlier that now end the schedule come off it too.
+        while (tail := next((hole for hole in self._holes if hole.after == self._tat), None)) is not None:
+            self._holes.remove(tail)
+            self._tat = tail.before
 
     def _paused_error(self, pause: float) -> BudgetPausedError:
         """Build the error for a pause of *pause* seconds that outlasts a call's deadline."""
         msg = f"rate budget paused for {pause:.3g}s at the server's request, past the call's deadline"
-        return BudgetPausedError(msg, retry_after=pause, status_code=self._pause_status)
+        return BudgetPausedError(msg, retry_after=pause)
+
+
+def _send_time(turn: _Turn) -> float:
+    """Return *turn*'s send time on the budget's timeline: what abandoned turns are taken in the order of."""
+    return turn.send
 
 
 class RateBudget:
@@ -352,8 +377,10 @@ class RateBudget:
     See the module docstring for the algorithm and for what sharing means. *rate* is the configured rate;
     *max_in_flight* caps how many requests may be in flight at once, a request counting from before its turn until its
     response body is closed (``None``: no cap); *adaptive* lowers the rate on pushback (``None``: never). *timing*'s
-    clock (monotonic seconds) and sleep pace requests and wait out pauses; *wall_clock* is Unix time, for the absolute
-    times some rate-limit headers carry.
+    clock (monotonic seconds) and sleep pace requests and wait out pauses, and its wall clock (Unix seconds) reads the
+    absolute times some rate-limit headers carry. Without a *timing*, the budget runs on the timing current when it is
+    built (:func:`headgate.timing.current_timing`), so one built inside ``TestClock.install()`` paces on the test
+    clock, whichever clients share it.
 
     Two clients given the same budget pace together. What it reports (its rate, its effective rate after adaptive
     throttling, how many requests are in flight, how long a server pause has left) is read here; what spends from it is
@@ -370,11 +397,11 @@ class RateBudget:
         *,
         max_in_flight: int | None = None,
         adaptive: Adaptive | None = DEFAULT_ADAPTIVE,
-        timing: Timing = SYSTEM_TIMING,
-        wall_clock: Clock = time.time,
+        timing: Timing | None = None,
     ) -> None:
         """Build a budget and the pacer it spends through; see the class docstring for the parameters."""
-        self._pacer = Pacer(rate, max_in_flight=max_in_flight, adaptive=adaptive, timing=timing, wall_clock=wall_clock)
+        timing = current_timing() if timing is None else timing
+        self._pacer = Pacer(rate, max_in_flight=max_in_flight, adaptive=adaptive, timing=timing)
         _PACERS[self] = self._pacer
 
     @property
@@ -406,6 +433,13 @@ class RateBudget:
     def pause_remaining(self) -> float:
         """The seconds left in a pause the server asked for, or 0."""
         return self._pacer.pause_remaining()
+
+    @override
+    def __repr__(self) -> str:
+        return (
+            f"RateBudget({self.rate!r}, effective={self.effective_rate!r}, in_flight={self.in_flight}, "
+            f"pause_remaining={self.pause_remaining:g})"
+        )
 
 
 #: Each live budget's pacer. Weak, so a budget nobody holds any more goes with its pacer.

@@ -8,7 +8,8 @@ Three sources are read, in this order of precedence:
 * ``retry-after-ms`` or ``Retry-After`` on a 429 or 503, read as the retry layer reads them
   (:func:`headgate._core.retry_after_of`), so the pause the budget takes is the wait the retry layer makes;
 * ``RateLimit`` with ``RateLimit-Policy`` (draft-ietf-httpapi-ratelimit-headers-11): Structured Field Lists of policy
-  items. An item with ``r=0`` (no quota left) is exhausted, and its ``t`` is the seconds until quota returns. An item
+  items. An item with ``r=0`` (no quota left) is exhausted, and its ``t`` is the seconds until quota returns (read as
+  an ``X-RateLimit-Reset`` is, below, since some servers send a Unix time there). An item
   naming a policy whose ``qu`` is not ``"requests"`` (``content-bytes``, ``concurrent-requests``) is not about request
   rate and is skipped. When several items are exhausted, the longest wait wins. Per the draft, a malformed field is
   ignored and ``Retry-After`` takes precedence over ``t``;
@@ -65,7 +66,7 @@ def read_feedback(response: httpx2.Response, *, now: float) -> Feedback:
     headers = response.headers
     refused = response.status_code in _PUSHBACK_STATUSES
     retry_after = retry_after_of(response, now=now)
-    exhausted, reset = _ietf_quota(headers)
+    exhausted, reset = _ietf_quota(headers, now=now)
     if exhausted is None:
         exhausted, reset = _de_facto_quota(headers, now=now)
     if not (refused or exhausted):
@@ -75,7 +76,7 @@ def read_feedback(response: httpx2.Response, *, now: float) -> Feedback:
     return Feedback(pushback=True, pause=pause)
 
 
-def _ietf_quota(headers: httpx2.Headers) -> tuple[bool | None, float | None]:
+def _ietf_quota(headers: httpx2.Headers, *, now: float) -> tuple[bool | None, float | None]:
     """Read ``RateLimit``: whether a request policy is exhausted and the longest ``t``; ``None`` when unreadable."""
     items = parse_list(headers.get("RateLimit", "")) or []
     if not items:
@@ -89,7 +90,9 @@ def _ietf_quota(headers: httpx2.Headers) -> tuple[bool | None, float | None]:
         exhausted = True
         window = _count(item.params.get("t"))
         if window is not None:
-            reset = float(window) if reset is None else max(reset, float(window))
+            # A delay by the spec, but some servers send a Unix time, as they do in X-RateLimit-Reset.
+            wait = _seconds_until(window, now=now)
+            reset = wait if reset is None else max(reset, wait)
     return exhausted, reset
 
 
