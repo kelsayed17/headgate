@@ -6,6 +6,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Fixed
+
+- `headgate.health.cache_degradations()` holds at most 1024 hosts, as a `BreakerRegistry` holds at most 1024
+  breakers. It gained a key for every host whose cache degraded, so a client calling many hosts grew it without end.
+  Past the bound the host least recently degraded is dropped, and counts from zero if it degrades again.
 ### Changed
 
 - A redacted query value now reads `***`, as a redacted userinfo and fragment credential already did, instead of the
