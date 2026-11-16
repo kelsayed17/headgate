@@ -73,9 +73,12 @@ def _client(
 async def test_an_exhausted_call_records_its_attempts_and_history() -> None:
     """Raise the last 503 with the attempt count, marked retryable, and one history line per attempt."""
     network = FaultyTransport(schedule=[Respond(503), ConnectFail(), Respond(503)])
+    # A manual clock, so each line's duration is exactly 0s: the real one reads 0.01s on a loaded machine.
+    with TestClock().install():
+        client = _client(network)
 
     with pytest.raises(UpstreamStatusError) as raised:
-        await _client(network).get("series", expect=nothing)
+        await client.get("series", expect=nothing)
 
     error = raised.value
     assert (error.status_code, error.attempts, error.retryable) == (503, _ATTEMPTS, True)
