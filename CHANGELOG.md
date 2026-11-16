@@ -6,6 +6,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Fixed
+
+- `headgate.health.cache_degradations()` holds at most 1024 hosts, as a `BreakerRegistry` holds at most 1024
+  breakers. It gained a key for every host whose cache degraded, so a client calling many hosts grew it without end.
+  Past the bound the host least recently degraded is dropped, and counts from zero if it degrades again.
+
 ## [0.12.0] - 2026-11-15
 
 The API redesign. A call takes its options and one `body=` in a single place, configuration is grouped by what it

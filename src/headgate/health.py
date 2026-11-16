@@ -47,7 +47,11 @@ def breaker_states(registry: BreakerRegistry) -> dict[str, BreakerSnapshot]:
 
 
 def cache_degradations() -> dict[str, int]:
-    """Return, per host, how many requests found the HTTP cache broken and were handed to the live transport."""
+    """Return, per host, how many requests found the HTTP cache broken and were handed to the live transport.
+
+    It holds at most 1024 hosts, the breaker registry's default bound: past that, the host least recently degraded is
+    dropped, and counts from zero if it degrades again.
+    """
     return dict(CACHE_DEGRADATIONS)
 
 

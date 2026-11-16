@@ -60,6 +60,7 @@ from hishel import AsyncBaseStorage, Entry, Request, Response
 from hishel.httpx2 import AsyncCacheTransport
 
 from headgate._core import CacheOutcome, CacheResult, CallContext, Slot, url_path
+from headgate.breaker._registry import DEFAULT_MAX_HOSTS
 from headgate.cache._credentials import CredentialScope
 from headgate.cache._policy import Partition
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
@@ -331,7 +332,7 @@ class _Store:
                 async for _ in _guarded_chunks(stored.response.stream):
                     pass
         except CacheStorageError, TimeoutError:
-            CACHE_DEGRADATIONS[self._host] += 1
+            _count_degradation(self._host)
 
 
 async def _one_chunk(body: bytes) -> AsyncIterator[bytes]:
@@ -384,8 +385,17 @@ CACHE_DEGRADED_EXT = "headgate.cache_degraded"
 HOST_UNTESTED = "headgate.host_untested"
 
 #: How many requests per host found the cache broken and were redone on the live transport, since process start.
-#: Process-global like the breaker registry, read through :func:`headgate.health.cache_degradations`.
+#: Process-global like the breaker registry, read through :func:`headgate.health.cache_degradations`, and bounded as
+#: it is: it holds at most ``DEFAULT_MAX_HOSTS`` hosts, ordered by when each last degraded, and drops the least
+#: recently degraded one to make room.
 CACHE_DEGRADATIONS: Counter[str] = Counter()
+
+
+def _count_degradation(host: str) -> None:
+    """Count one degradation for *host*, now the most recent, and drop the least recent host past the bound."""
+    CACHE_DEGRADATIONS[host] = CACHE_DEGRADATIONS.pop(host, 0) + 1
+    if len(CACHE_DEGRADATIONS) > DEFAULT_MAX_HOSTS:
+        del CACHE_DEGRADATIONS[next(iter(CACHE_DEGRADATIONS))]
 
 
 def host_untested(outcome: httpx2.Response | BaseException) -> bool:
@@ -786,7 +796,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
         # Outside the except block, so a live fetch that fails too does not carry the storage error (whose cause may
         # name a DSN and its password) as its __context__.
         # Counted before the live fetch, so a fallback that then fails on the network too cannot hide the outage.
-        CACHE_DEGRADATIONS[request.url.host] += 1
+        _count_degradation(request.url.host)
         _report(request, CacheOutcome.DEGRADED)
         live = await self._live.handle_async_request(request)
         # The query is dropped, since a key-in-the-URL provider carries its credential there.
