@@ -211,8 +211,7 @@ async def test_a_hedge_can_be_read_by_middleware() -> None:
     clock = TestClock()
 
     async def hangs(_request: httpx2.Request) -> httpx2.Response:
-        await asyncio.Event().wait()
-        raise AssertionError  # pragma: no cover - cancelled once the hedge answers
+        return await asyncio.Future[httpx2.Response]()  # never resolved: cancelled once the hedge answers
 
     middleware = _ReadsContent()
     fake = FakeTransport().reply("GET", "/v1/x", hangs, 200)
