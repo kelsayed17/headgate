@@ -6,6 +6,31 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Changed
+
+- A redacted query value now reads `***`, as a redacted userinfo and fragment credential already did, instead of the
+  percent-encoded `%2A%2A%2A`: `?api_key=s` shows as `?api_key=***` in error messages, `url` on an error, the
+  request event's `full_url`, the OpenTelemetry `url.full`, the redacted httpx2 log line and a recorded cassette's URI.
+  A search for `***` now finds every redacted credential. A sanitized URL is for display only and is never sent. A
+  cassette recorded before still replays under vcrpy's default `query` matcher, which compares decoded values; one
+  matched on the raw `uri` needs re-recording.
+
+### Fixed
+
+- `headgate.health.cache_degradations()` holds at most 1024 hosts, as a `BreakerRegistry` holds at most 1024
+  breakers. It gained a key for every host whose cache degraded, so a client calling many hosts grew it without end.
+  Past the bound the host least recently degraded is dropped, and counts from zero if it degrades again.
+
+## [0.12.0] - 2026-11-15
+
+The API redesign. A call takes its options and one `body=` in a single place, configuration is grouped by what it
+governs, each path's limits are one `Route`, and `Client` is final: an SDK holds one rather than subclassing it. Errors
+are read-only, and `retryable` means the request is safe to send again. The top level is 52 names, each exported from
+one module. It also fixes every finding of a full review of the code, among them one-shot bodies sent twice below the
+retry layer, credentials leaking past redirects and into logs, and the cache answering one caller with another's
+response. This minor release changes the public API: each change is listed under **Changed** and **Removed** with what
+to write instead.
+
 ### Added
 
 - `Client.query(url, *, expect, body=..., ...)` sends the QUERY method, which is safe and idempotent like a GET and
@@ -265,9 +290,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - A reader is a `Reader`, a class: wrap a function of the response as `Reader(fn)`, or put `@Reader` over its `def`.
   `expect=`, `Expect(ok, answers)`, `Expect.on` and `conditional` raise `TypeError` for anything else, such as a model
   class (`expect=Order`, where `expect=reader(Order)` was meant), `str` or a bare function, and a type checker
-  rejects them too. A reader's `repr` names its function. `nothing`, `as_bytes` and `event_stream` are `Reader`
-  values, and `body_reader` and `reader_for` return one, so code built on them is unchanged. `Expect(ok, answers)`
-  whose answers read different types no longer infers their union: chain `.on()`, or spell the union out as
+  rejects them too. A reader's `repr` names its function, and `Reader` itself raises `TypeError` for something that
+  cannot be called. `nothing`, `as_bytes` and `event_stream` are `Reader` values, and `body_reader` and `reader_for`
+  return one, so code built on them is unchanged. `Expect(ok, answers)` whose answers read different types no longer
+  infers their union: chain `.on()`, or spell the union out as
   `Expect[A | B | None]`. A refusal of the wrong kind now says what it got: `the class str`, `the type list[Order]`, or
   the value's type.
 - The reader and writer builders share one vocabulary. Write `reader_for(codec, Type)` for `decoder_for(codec, Type)`,
@@ -1118,7 +1144,8 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/kelsayed17/headgate/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/kelsayed17/headgate/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/kelsayed17/headgate/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/kelsayed17/headgate/compare/v0.8.0...v0.9.0

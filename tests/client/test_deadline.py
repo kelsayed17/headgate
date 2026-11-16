@@ -107,8 +107,7 @@ class _HourLongNetwork(httpx2.AsyncBaseTransport):
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         self._clock.advance(self._spent)
-        await asyncio.sleep(3600)
-        raise AssertionError  # pragma: no cover - the deadline cancels the sleep
+        return await asyncio.Future[httpx2.Response]()  # never resolved: the deadline cancels it
 
 
 @pytest.mark.parametrize(

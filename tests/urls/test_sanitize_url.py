@@ -18,10 +18,19 @@ def test_a_url_without_a_query_is_returned_as_is() -> None:
 
 
 def test_a_secret_parameter_is_redacted_and_the_others_are_kept() -> None:
-    """Replace a secret parameter's value and keep the others."""
+    """Replace a secret parameter's value with a literal ``***``, as userinfo and the fragment are, and keep the others.
+
+    A sanitized URL is for display, never for sending, so the placeholder is not percent-encoded: a search for ``***``
+    finds every redacted part.
+    """
+    assert sanitize_url("https://api.x/obs?series_id=GDP&api_key=abc") == "https://api.x/obs?series_id=GDP&api_key=***"
+
+
+def test_every_part_is_masked_with_the_same_placeholder() -> None:
+    """Show the same ``***`` for userinfo, a query value and a fragment credential."""
     assert (
-        sanitize_url("https://api.x/obs?series_id=GDP&api_key=abc")
-        == "https://api.x/obs?series_id=GDP&api_key=%2A%2A%2A"
+        sanitize_url("https://u:p@x.test/a?api_key=s#access_token=t")
+        == "https://***@x.test/a?api_key=***#access_token=***"
     )
 
 
@@ -36,10 +45,10 @@ def test_a_secret_parameter_is_redacted_and_the_others_are_kept() -> None:
         ),
         (
             "https://bucket.example.test/f?X-Amz-Signature=abc&x=1",
-            "https://bucket.example.test/f?X-Amz-Signature=%2A%2A%2A&x=1",
+            "https://bucket.example.test/f?X-Amz-Signature=***&x=1",
         ),
-        ("https://api.example.test/token?refresh_token=abc", "https://api.example.test/token?refresh_token=%2A%2A%2A"),
-        ("https://api.example.test/x?api%5Fkey=abc", "https://api.example.test/x?api%5Fkey=%2A%2A%2A"),
+        ("https://api.example.test/token?refresh_token=abc", "https://api.example.test/token?refresh_token=***"),
+        ("https://api.example.test/x?api%5Fkey=abc", "https://api.example.test/x?api%5Fkey=***"),
         ("https://ghp_SECRETTOKEN@api.example.test/x", "https://***@api.example.test/x"),
         ("https://user:@api.example.test/x", "https://***@api.example.test/x"),
         ("https://user:pa#ss@api.example.test/x", "https://***@api.example.test/x"),
@@ -77,7 +86,7 @@ def test_a_url_with_no_credential_is_kept_byte_for_byte(url: str) -> None:
 
 def test_only_the_secret_value_changes_among_repeated_names() -> None:
     """Redact the secret in place, leaving the parameters around it where they were."""
-    assert sanitize_url("https://x.test/?a=1&key=k&a=3") == "https://x.test/?a=1&key=%2A%2A%2A&a=3"
+    assert sanitize_url("https://x.test/?a=1&key=k&a=3") == "https://x.test/?a=1&key=***&a=3"
 
 
 def test_redact_secrets_replaces_secret_pairs_in_free_text() -> None:
@@ -121,7 +130,7 @@ def test_a_registered_name_is_secret_whatever_its_spelling() -> None:
     register_secret_params([f"{unique.upper()}_Registered"])
     assert is_secret_param(f"{unique}-registered")
     redacted = sanitize_url(f"https://x.test/?{unique}registered=v")
-    assert redacted == f"https://x.test/?{unique}registered=%2A%2A%2A"
+    assert redacted == f"https://x.test/?{unique}registered=***"
 
 
 @pytest.mark.parametrize(

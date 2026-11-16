@@ -73,7 +73,14 @@ class Reader[T]:
     __slots__ = ("_name", "_read")
 
     def __init__(self, read: Callable[[httpx2.Response], T], /, *, name: str | None = None) -> None:
-        """Wrap *read*, the function that turns a response into a value, under *name* or *read*'s own."""
+        """Wrap *read*, the function that turns a response into a value, under *name* or *read*'s own.
+
+        :raises TypeError: for a *read* that cannot be called, here rather than at the first response.
+        """
+        if not callable(read):
+            # Anything not callable is an instance, so its type's name is what _kinds would print.
+            msg = f"Reader takes a function of the response (got {type(read).__name__})"
+            raise TypeError(msg)
         # Private, so the type parameter stays covariant: a Reader[Order] is a Reader[Order | None].
         self._read = read
         self._name = _name_of(read) if name is None else name

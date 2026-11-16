@@ -260,9 +260,9 @@ class _StallingMiddleware:
     credential_params: ClassVar = frozenset[str]()
 
     async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
-        """Stall, then send."""
-        await asyncio.sleep(3600)
-        return await call_next(request)  # pragma: no cover - the deadline cuts the stall off
+        """Stall until the deadline cuts the call off: the future is never resolved, and nothing is sent."""
+        del request, call_next
+        return await asyncio.Future[httpx2.Response]()
 
 
 @pytest.mark.parametrize(

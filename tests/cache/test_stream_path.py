@@ -161,8 +161,7 @@ class _HungWrites(FaultyStorage):
     async def create_entry(
         self, request: Request, response: Response, key: str, *, ttl: float | None = None, tti: float | None = None
     ) -> Entry:
-        await asyncio.Event().wait()
-        raise AssertionError  # pragma: no cover - never reached
+        return await asyncio.Future["Entry"]()  # never resolved
 
 
 async def test_a_hung_write_ends_with_the_deadline_and_counts_as_degraded(storage: AsyncSqliteStorage) -> None:
