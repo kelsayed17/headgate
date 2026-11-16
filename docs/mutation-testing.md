@@ -8,8 +8,10 @@ missing test or a change no input can tell apart from the original (an *equivale
 ## Running it
 
 The configuration is `[tool.mutmut]` in `pyproject.toml`. Mutation runs leave out the tests of the source's own shape
-(the API-surface snapshot, the import boundary, the no-logging and no-environment contracts), which read the rewritten
-files.
+(the API-surface snapshot, the import boundary, the no-logging and no-environment contracts, and the type tests that
+run ty over the package, which infers a class's variance from its body), which read the rewritten files. A test's
+parameter ids must be ASCII: pytest escapes any other character in a node id, and mutmut's second, in-process
+collection then cannot find the test it names.
 
 ```sh
 uv run mutmut run                       # every mutant, about 20 minutes on 10 workers
@@ -76,6 +78,10 @@ few families:
 | `headgate.health` | `breaker_states #12` | two snapshots of equal rank are equal (state and refusing are all a snapshot holds) |
 | `headgate._responses` | `accepts #12` | header-name case |
 | `headgate._responses` | `accepts #13` | a missing content-type read as `XXXX` is no media type, like `""` |
+| `headgate._responses` | `_refuse_constant #1` | the `ValueError` is caught and replaced by a fixed message |
+| `headgate._responses` | `_finite #5` | the `ValueError` is caught and replaced by a fixed message |
+| `headgate._responses` | `_decode_json #4` | codec names are normalized, so `UTF-8` is `utf-8` |
+| `headgate._core._kinds` | `type_text #3` | the one class that is also a type expression, `Any`, has a `__name__` equal to its stripped `repr` |
 | `headgate._deprecation` | `_link #3` | header-name case |
 | `headgate._deprecation` | `deprecation_of #4` | header-name case |
 | `headgate._deprecation` | `deprecation_of #5` | header-name case |
