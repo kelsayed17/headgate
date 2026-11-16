@@ -898,7 +898,7 @@ async def test_a_status_error_never_carries_a_query_string_secret() -> None:
     with pytest.raises(UpstreamStatusError) as ei:
         await client.get("series?series_id=GDP&api_key=SECRET123", expect=as_bytes)
     assert "SECRET123" not in str(ei.value)
-    assert "api_key=%2A%2A%2A" in str(ei.value)
+    assert "api_key=***" in str(ei.value)
 
 
 async def test_a_refused_reader_never_carries_a_query_string_secret() -> None:
@@ -913,7 +913,7 @@ async def test_a_refused_reader_never_carries_a_query_string_secret() -> None:
     with pytest.raises(UpstreamStatusError) as ei:
         await client.get("series?series_id=GDP&api_key=SECRET123", expect=refusing)
     assert "SECRET123" not in str(ei.value)
-    assert "api_key=%2A%2A%2A" in str(ei.value)
+    assert "api_key=***" in str(ei.value)
 
 
 async def test_a_declared_403_in_an_unrecognized_shape_raises_auth_error() -> None:

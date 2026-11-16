@@ -11,6 +11,14 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `headgate.health.cache_degradations()` holds at most 1024 hosts, as a `BreakerRegistry` holds at most 1024
   breakers. It gained a key for every host whose cache degraded, so a client calling many hosts grew it without end.
   Past the bound the host least recently degraded is dropped, and counts from zero if it degrades again.
+### Changed
+
+- A redacted query value now reads `***`, as a redacted userinfo and fragment credential already did, instead of the
+  percent-encoded `%2A%2A%2A`: `?api_key=s` shows as `?api_key=***` in error messages, `url` on an error, the
+  request event's `full_url`, the OpenTelemetry `url.full`, the redacted httpx2 log line and a recorded cassette's URI.
+  A search for `***` now finds every redacted credential. A sanitized URL is for display only and is never sent. A
+  cassette recorded before still replays under vcrpy's default `query` matcher, which compares decoded values; one
+  matched on the raw `uri` needs re-recording.
 
 ## [0.12.0] - 2026-11-15
 

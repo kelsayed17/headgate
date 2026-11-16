@@ -75,7 +75,7 @@ async def test_a_deprecated_endpoint_reports_its_date_sunset_and_links() -> None
         deprecated=True,
         deprecated_at=_WHEN,
         sunset_at=_SUNSET_WHEN,
-        link="https://docs.example.test/migrate?sig=%2A%2A%2A",
+        link="https://docs.example.test/migrate?sig=***",
         sunset_link="https://api.example.test/v2/policy",
     )
     assert event.call.url == "old"

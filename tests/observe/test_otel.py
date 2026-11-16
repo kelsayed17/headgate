@@ -205,7 +205,7 @@ async def test_no_credential_reaches_a_span(telemetry: Telemetry) -> None:
     await built.get("x", expect=nothing, params={"token": "t0k", "page": "2"})
 
     span = telemetry.span()
-    assert _attributes(span)["url.full"] == f"https://{_HOST}/v1/x?token=%2A%2A%2A&page=2"
+    assert _attributes(span)["url.full"] == f"https://{_HOST}/v1/x?token=***&page=2"
     exported = span.to_json()
     assert "s3cret" not in exported
     assert "t0k" not in exported
