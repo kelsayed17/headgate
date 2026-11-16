@@ -49,6 +49,7 @@
   __all__ = ['AsyncCurlTransport']
   class AsyncCurlTransport(AsyncBaseTransport)(*, impersonate: 'BrowserTypeLiteral', default_headers: 'bool' = False, curl_options: 'Mapping[CurlOpt, Any] | None' = None, max_connections: 'int' = 10) -> 'None'
       def aclose(self) -> 'None'
+      def bind_guard(self, guard: 'AddressGuard | None', /) -> 'None'
       def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
   '''
 # ---

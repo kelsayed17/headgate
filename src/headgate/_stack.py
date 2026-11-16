@@ -25,8 +25,8 @@ signs each send, so a request that waited for its turn is signed when it goes ou
 * request hooks: the credential guard (:class:`~headgate.security.CredentialGuard`, which also runs below the last
   middleware and below the signature, where what they stamp is visible), then, over a custom network
   transport with ``SecurityOptions(block_private_hosts=True)``, the SSRF guard's vetting
-  (:func:`~headgate.security.address_hook`); the default transport pins vetted addresses itself
-  (:class:`~headgate.security.PinnedHTTPTransport`);
+  (:func:`~headgate.security.address_hook`); the default transport (:class:`~headgate.security.PinnedHTTPTransport`)
+  and a transport that takes the guard (``headgate.curl.AsyncCurlTransport``) pin vetted addresses themselves;
 * response hooks: the https-downgrade refusal, the refusal to re-send a one-shot body on a redirect, and the drop of a
   followed redirect's body (:mod:`headgate._redirects`).
 
@@ -61,7 +61,7 @@ from headgate.retry._transport import RetryTransport
 from headgate.security import AddressGuard, PinnedHTTPTransport
 from headgate.security._credentials import CredentialGuard
 from headgate.security._downgrade import refuse_https_downgrade
-from headgate.security._transport import address_hook
+from headgate.security._transport import GuardedTransport, address_hook
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -182,8 +182,10 @@ def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
     """Return the network transport: a test's override, the caller's own, or an HTTP/2 pool reading no environment."""
     if (override := NETWORK_OVERRIDE.get()) is not None:
         return override
-    if http.transport is not None:
-        return http.transport
+    if (transport := http.transport) is not None:
+        if isinstance(transport, GuardedTransport):
+            transport.bind_guard(_address_guard(http))
+        return transport
     guard = _address_guard(http)
     if guard is not None:
         return PinnedHTTPTransport(guard, ssl_context=http.ssl_context, limits=http.limits)
@@ -207,10 +209,11 @@ def _address_guard(http: HttpOptions) -> AddressGuard | None:
 def _request_hooks(
     credentials: CredentialGuard, http: HttpOptions
 ) -> list[Callable[[httpx2.Request], Awaitable[None]]]:
-    """Return the request hooks: the credential guard, then the SSRF guard when a transport not ours cannot pin."""
+    """Return the request hooks: the credential guard, then the SSRF guard when the network transport cannot pin."""
     hooks: list[Callable[[httpx2.Request], Awaitable[None]]] = [credentials]
     addresses = _address_guard(http)
-    unpinned = http.transport is not None or NETWORK_OVERRIDE.get() is not None
+    network = NETWORK_OVERRIDE.get() or http.transport
+    unpinned = network is not None and not isinstance(network, GuardedTransport)
     if addresses is not None and unpinned:
         hooks.append(address_hook(addresses))
     return hooks

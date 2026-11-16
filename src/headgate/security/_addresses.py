@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, override
 
 from headgate.errors import ForbiddenDestinationError
 
@@ -102,6 +102,18 @@ class AddressGuard:
         """Resolve names with *resolver* and judge addresses with *check* (tests widen it to reach loopback servers)."""
         self._resolver = resolver
         self._check = check
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        """Return whether *other* is a guard resolving and judging with the same functions."""
+        if not isinstance(other, AddressGuard):
+            return NotImplemented
+        return (self._resolver, self._check) == (other._resolver, other._check)
+
+    @override
+    def __hash__(self) -> int:
+        """Hash by the resolver and the check, as :meth:`__eq__` compares."""
+        return hash((self._resolver, self._check))
 
     async def vet(self, host: str, port: int) -> tuple[str, ...]:
         """Return the addresses *host* may be connected to on *port*, in the resolver's order.

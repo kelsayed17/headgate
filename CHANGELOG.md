@@ -6,6 +6,16 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Security
+
+- The SSRF guard now pins `headgate.curl.AsyncCurlTransport`'s connections, as it pins the default transport's. With
+  `SecurityOptions(block_private_hosts=True)`, each request's host is vetted and curl is handed the vetted addresses,
+  so a DNS answer that changes between the check and curl's own lookup (DNS rebinding) can no longer reach a private
+  address. Since curl shares its DNS cache and connections across requests, a curl transport serves one guard:
+  building a client on a transport another client already uses with a different guard, or without one, raises
+  `ValueError`. The guard also refuses `curl_options` that choose the address (`CurlOpt.PROXY`, `PRE_PROXY`,
+  `RESOLVE`, `CONNECT_TO`). Over any transport, the guard's lookup now counts against the connect timeout.
+
 ## [0.12.0] - 2026-11-15
 
 The API redesign. A call takes its options and one `body=` in a single place, configuration is grouped by what it

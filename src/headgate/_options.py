@@ -465,9 +465,9 @@ class SecurityOptions:
       every other origin gets the request without them (see :mod:`headgate.security`).
     * ``block_private_hosts``: ``True`` turns on the SSRF guard: a request to a host that is, or resolves to, an
       address that is not globally routable raises :class:`~headgate.errors.ForbiddenDestinationError`, on every hop,
-      and the default transport connects only to the address it checked. It cannot be combined with
-      ``HttpOptions.proxy``, since a proxy resolves the target itself; over a custom ``HttpOptions.transport`` every hop
-      is checked but not pinned.
+      and the default transport and ``headgate.curl.AsyncCurlTransport`` connect only to the addresses they checked. It
+      cannot be combined with ``HttpOptions.proxy``, since a proxy resolves the target itself; over any other custom
+      ``HttpOptions.transport`` every hop is checked but not pinned.
     * ``resolver``: how the SSRF guard resolves names (:data:`~headgate.security.Resolver`), the event loop's
       ``getaddrinfo`` by default; only with ``block_private_hosts=True``.
     """

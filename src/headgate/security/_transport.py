@@ -15,17 +15,20 @@ pin too, but the pool would then key connections by IP: a request to one name co
 authenticated for another name on the same address, which is exactly the substitution a DNS attacker wants. It would
 also put the IP into ``response.url``, relative redirects and the credential origin rule.
 
-**A custom transport** (``HttpOptions(transport=...)``, the curl transport included) resolves names itself, so the
-guard cannot choose its address: :func:`address_hook` vets every hop as a request hook, which refuses a forbidden host
-before anything is sent, but the transport's own lookup could still be answered differently a moment later. Only the
-default transport pins.
+**A transport that takes the guard** (:class:`GuardedTransport`, which ``headgate.curl.AsyncCurlTransport`` is) is
+bound to the client's guard when the client is built, and resolves, vets and pins each request itself through
+:func:`vet_request`, as the default transport does.
+
+**Any other custom transport** (``HttpOptions(transport=...)``) resolves names itself, so the guard cannot choose its
+address: :func:`address_hook` vets every hop as a request hook, which refuses a forbidden host before anything is
+sent, but the transport's own lookup could still be answered differently a moment later.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, Protocol, override, runtime_checkable
 
 import httpcore2
 import httpx2
@@ -39,7 +42,16 @@ if TYPE_CHECKING:
 
     from headgate.security._addresses import AddressGuard
 
-__all__ = ["PinnedHTTPTransport", "address_hook"]
+__all__ = ["GuardedTransport", "PinnedHTTPTransport", "address_hook", "vet_request"]
+
+
+@runtime_checkable
+class GuardedTransport(Protocol):
+    """A network transport that resolves, vets and pins each request itself, through the guard it is bound to."""
+
+    def bind_guard(self, guard: AddressGuard | None, /) -> None:
+        """Serve only requests *guard* vets (``None``: an unguarded client), or raise ``ValueError`` if it cannot."""
+        ...
 
 
 class _VettingBackend(httpcore2.AsyncNetworkBackend):
@@ -113,12 +125,28 @@ def address_hook(guard: AddressGuard) -> Callable[[httpx2.Request], Awaitable[No
     """
 
     async def vet(request: httpx2.Request) -> None:
-        url = request.url
-        host = url.raw_host.decode("ascii")
-        try:
-            await guard.vet(host, url.origin.port or 0)
-        except OSError as exc:
-            msg = f"could not resolve {host}: {exc}"
-            raise httpx2.ConnectError(msg, request=request) from exc
+        await vet_request(guard, request)
 
     return vet
+
+
+async def vet_request(guard: AddressGuard, request: httpx2.Request) -> tuple[str, ...]:
+    """Return the addresses *guard* allows *request*'s host to be connected to, in the resolver's order.
+
+    The lookup counts against the request's connect timeout, as it does for an unguarded connection.
+
+    :raises ForbiddenDestinationError: when any address is refused.
+    :raises httpx2.ConnectError: when the name does not resolve.
+    :raises httpx2.ConnectTimeout: when the lookup outlasts the connect timeout.
+    """
+    url = request.url
+    host = url.raw_host.decode("ascii")
+    try:
+        async with asyncio.timeout(request.extensions.get("timeout", {}).get("connect")):
+            return await guard.vet(host, url.origin.port or 0)
+    except TimeoutError as exc:
+        msg = f"resolving {host} timed out"
+        raise httpx2.ConnectTimeout(msg, request=request) from exc
+    except OSError as exc:
+        msg = f"could not resolve {host}: {exc}"
+        raise httpx2.ConnectError(msg, request=request) from exc
