@@ -294,9 +294,9 @@ class Client:
     :func:`~headgate._url.escape_segment` does): that is a programming error at the call site. Its template is the
     call's route in events. An ``httpx2.URL`` is passed through verbatim, so a paginator can forward an absolute cursor
     URL from a response body; a literal ``str`` is passed through the same way. A computed ``str``, such as an f-string,
-    does not type-check, because it skipped escaping. A URL httpx2 cannot parse, or a redirect joined past its length
-    limit, raises the root ``ClientError``, since such a URL often comes from the wire rather than the code. Every
-    message names a URL redacted and cut to a few hundred characters.
+    does not type-check, because it skipped escaping. A URL httpx2 cannot parse raises the root ``ClientError``, since
+    such a URL often comes from the wire rather than the code; a redirect to one is the host's failure, a
+    ``TransportError``. Every message names a URL redacted and cut to a few hundred characters.
 
     **Time.** The client takes its timing from :func:`headgate.timing.current_timing` when it is built.
     """
@@ -1062,9 +1062,6 @@ class Client:
             details = self._site(prepared).details(retry_after=exc.retry_after)
             details["retryable"] = True
             raise RateLimitError(str(exc), status_code=None, **details) from None
-        except httpx2.InvalidURL as exc:
-            # A redirect joined past httpx2's length limit. Not an HTTPError, and not an origin failure.
-            raise _invalid_url(exc, self._site(prepared)) from exc
         except ForbiddenDestinationError as exc:
             # The SSRF guard refused a hop before it was sent; it names the destination, the site names the call.
             site = self._site(prepared)

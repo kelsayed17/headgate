@@ -21,6 +21,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   A search for `***` now finds every redacted credential. A sanitized URL is for display only and is never sent. A
   cassette recorded before still replays under vcrpy's default `query` matcher, which compares decoded values; one
   matched on the raw `uri` needs re-recording.
+- headgate needs httpx2 2.16.1 or newer. A redirect whose relative `Location` joins past httpx2's 65,536-character URL
+  limit is now a `TransportError` that counts against the host, as an unparsable `Location` already was, instead of a
+  `ClientError`: httpx2 2.16.1 raises `RemoteProtocolError` for both.
 
 ### Fixed
 

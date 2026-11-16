@@ -28,7 +28,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "httpx2[http2]>=2.16.0",
+    "httpx2[http2]>=2.16.1",
     "hishel>=2.0.0",
     # TypeForm (PEP 747) is imported only for type checking; type checkers of client code need it to resolve it.
     "typing-extensions>=4.15",
