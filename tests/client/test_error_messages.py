@@ -162,7 +162,7 @@ async def test_a_surviving_transient_status_names_the_method_the_relative_url_an
             await client.get("series?api_key=SECRET", expect=as_bytes)
 
     assert str(raised.value) == (
-        f'[example.test] transient {status} for GET series?api_key=%2A%2A%2A (status={status}) — {{"error": '
+        f'[example.test] transient {status} for GET series?api_key=*** (status={status}) — {{"error": '
         '"maintenance until 5pm"}'
     )
 

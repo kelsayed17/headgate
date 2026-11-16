@@ -232,14 +232,13 @@ def route_template(template: Template) -> str:
 def _redact_query(query: str) -> str:
     """Return *query* with the value of every credential parameter replaced, and every other byte kept as it was.
 
-    Names are compared decoded, so ``api%5Fkey`` is caught too. The placeholder is written percent-encoded
-    (``%2A%2A%2A``), as a query value is.
+    Names are compared decoded, so ``api%5Fkey`` is caught too. The placeholder is written as a literal ``***``, not
+    percent-encoded: a sanitized URL is for display, never for sending.
     """
-    placeholder = quote(_REDACTED)
     pairs: list[str] = []
     for pair in query.split("&"):
         name = pair.partition("=")[0]
-        pairs.append(f"{name}={placeholder}" if is_secret_param(unquote_plus(name)) else pair)
+        pairs.append(f"{name}={_REDACTED}" if is_secret_param(unquote_plus(name)) else pair)
     return "&".join(pairs)
 
 
@@ -250,13 +249,19 @@ def _redact_userinfo(netloc: str) -> str:
 
 
 def sanitize_url(url: str) -> str:
-    """Return *url* with its credentials replaced by ``***``; it never raises.
+    """Return *url* with its credentials replaced by ``***``, for display; it never raises.
 
-    That covers secret query parameters, the whole userinfo, and secret ``name=value`` pairs in the fragment (an OAuth
-    implicit-flow ``#access_token=``). Everything else in the URL is kept byte for byte, so the URL a message names is
-    the one that was sent. A URL too malformed to split (an unclosed IPv6 bracket), or one whose userinfo holds a raw
-    ``#``, is redacted as free text with :func:`redact_secrets` instead, since its message still has to be safe to
-    show.
+    Each part is masked with the same literal ``***``, never percent-encoded, so a search for ``***`` finds every one:
+
+    * the whole userinfo: ``https://user:pw@host`` becomes ``https://***@host``;
+    * the value of each secret query parameter, its name kept as it was sent: ``?api_key=s`` becomes ``?api_key=***``,
+      and ``?api%5Fkey=s`` (a name compared decoded) becomes ``?api%5Fkey=***``;
+    * the value of each secret ``name=value`` pair in the fragment (an OAuth implicit-flow ``#access_token=``).
+
+    A sanitized URL is for showing, not for sending. Everything else in the URL is kept byte for byte, so the URL a
+    message names is the one that was sent. A URL too malformed to split (an unclosed IPv6 bracket), or one whose
+    userinfo holds a raw ``#``, is redacted as free text with :func:`redact_secrets` instead, since its message still
+    has to be safe to show.
     """
     if not any(marker in url for marker in ("?", "#", "@")):
         return url
