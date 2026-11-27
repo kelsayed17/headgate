@@ -639,6 +639,11 @@ def _sharing_key(request: httpx2.Request) -> _SharingKey:
     return str(request.url), headers, timeouts, retry, ttl
 
 
+def _has_body(request: httpx2.Request) -> bool:
+    """Return whether *request* carries a body: a ``Content-Length`` other than ``0``, or a chunked one."""
+    return request.headers.get("content-length", "0") != "0" or "transfer-encoding" in request.headers
+
+
 def _cut_short(request: httpx2.Request, failure: Exception) -> bool:
     """Return whether *failure* is a timeout of *request*'s own deadline-fitted timeouts, not of the ones it asked for.
 
@@ -696,6 +701,10 @@ class ResilientCacheTransport(AsyncCacheTransport):
     waiting request fetches for the rest. A body past the cap is not held, so each waiting request fetches its own.
     POSTs are never shared, since a POST's body is part of what it asks for, nor streams, nor a later send of the call
     fetching (a hedge), which would only wait on the send it is meant to overtake.
+
+    **A request with a body is never cached**, whatever its method: it goes to the network as it arrives, never looked
+    up, stored or shared, since the key is its URL and two bodies would share one entry. ``get()`` and ``head()`` take
+    no body; a GET stream with one is sent past the cache.
     """
 
     def __init__(
@@ -728,11 +737,13 @@ class ResilientCacheTransport(AsyncCacheTransport):
             stamp_ttl(request, self._ttl, keep=True)
         context = CallContext.find(request)
         uncached = context is not None and bool(context.get(UNCACHED))
-        # A Range asks for part of a body, which no stored whole one answers and whose 206 is never stored.
+        # A Range asks for part of a body, which no stored whole one answers and whose 206 is never stored; a request
+        # body is not part of the key, so two requests with different ones would share an entry.
         if (
             uncached
             or not self._cache.caches_request(request.method, url_path(request.url))
             or "range" in request.headers
+            or _has_body(request)
         ):
             # Neither looked up nor stored, so nothing here needs its body: it goes up as it arrives.
             return await self._live.handle_async_request(request)

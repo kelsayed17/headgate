@@ -69,7 +69,8 @@ class _Bodies(TypedDict, total=False):
 class CallOptions(_Buffered, total=False, closed=True):
     """The per-call options of every verb and of :meth:`~headgate.Client.paginate`, beyond the body.
 
-    An option left out takes the view's, the route's or the policy's; ``None`` is off.
+    They are all ``get()`` and ``head()`` take, since a GET or HEAD has no body. An option left out takes the view's,
+    the route's or the policy's; ``None`` is off.
 
     * ``params``: the query, ``Mapping[str, object]`` so that a client can pass a TypedDict (a TypedDict is assignable
       to no narrower mapping). Its values are encoded the way httpx2 encodes a mapping: a list or tuple repeats the key

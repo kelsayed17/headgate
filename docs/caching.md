@@ -33,7 +33,9 @@ policy = TransportPolicy(cache=cache)
   `paths=[re.compile(r"/fut_fin_txt_\d{4}\.zip$")]`. Neither looks at the query string. A fragment that names no
   segment, or a pattern that matches an empty path, would match every path, and raises `ValueError`.
 - **`methods` names `GET` and `HEAD` only.** An entry is keyed by its URL, so two POSTs with different bodies would
-  share one; any other method raises `ValueError`. A POST is never cached.
+  share one; any other method raises `ValueError`. A POST is never cached, and neither is any request with a body:
+  `get()` and `head()` take no `body=`, and a GET stream opened with one goes straight to the network, never looked up
+  or stored.
 - **`statuses` names 2xx statuses other than 206 only.** hishel stores no other response, and a 206 holds part of a
   body; any other status raises `ValueError`, rather than being accepted and never stored.
 - **`caches_request(method, path)` and `stores_status(status)`** say what the three decide. A request they do not

@@ -262,8 +262,8 @@ so an entry stored with `cache_ttl=None` is served until its storage evicts it, 
 even past `no-store`, as an entry of `HttpCache(ttl=None)` is.
 
 The options are typed, so a wrapper can forward them with every key checked. `CallOptions` is the TypedDict of every
-per-call option but the body, which every verb and `paginate()` take; `RequestOptions` is a verb's (`CallOptions` plus
-the body); `headgate.streaming.StreamOptions` is `stream()`'s (`RequestOptions` less `cache_ttl` and
+per-call option but the body, which every verb and `paginate()` take, and all that `get()` and `head()` take;
+`RequestOptions` is a body verb's (`CallOptions` plus the body); `headgate.streaming.StreamOptions` is `stream()`'s (`RequestOptions` less `cache_ttl` and
 `max_response_bytes`); and `ViewOptions` is what `with_options()` takes. A wrapper typed on them forwards every option
 at once:
 
@@ -274,7 +274,9 @@ async def fetch(self, url: LiteralString, **options: Unpack[CallOptions]) -> Ser
 
 Each is closed, so a misspelled keyword is a type error, and the client refuses one at runtime too, with a `TypeError`
 naming it, before anything is sent. `Method` is the literal type of the seven verbs, which `stream(method=...)` takes.
-`query()` sends the QUERY method: safe and idempotent like a GET, with a `body=` like a POST. It is retried and hedged
+`query()` sends the QUERY method: safe and idempotent like a GET, with a `body=` like a POST. A GET or HEAD takes no
+`body=`, which would have no meaning there and is not part of the cache's key: `get(url, body=...)` raises `TypeError`
+pointing to `query()`. It is retried and hedged
 as an idempotent request is, and never cached.
 
 ### Views

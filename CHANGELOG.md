@@ -19,6 +19,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   raises `TypeError` when the client is built, since it declares nothing the guard could withhold from another origin:
   subclass `headgate.Auth` and declare what it stamps, or write `StaticHeaderAuth({"Authorization": ...})` for a fixed
   header such as basic auth.
+- `get()` and `head()` take no `body=` (their options are `CallOptions`): a GET's body has no meaning, and the cache
+  keyed the entry by its URL alone, so a second GET with another body was served the first one's answer. A body keyword
+  on either raises `TypeError` pointing to `query()`, the safe read with a body: write
+  `query(url, expect=..., body=Json(...))`. `delete()` keeps `body=`.
 
 ### Removed
 
@@ -44,6 +48,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `Auth` subclass's class attribute (`credential_headers`, `signed_headers`, `token_headers` and the `_params`) when the
   class is defined, for a declaration through a property when the client is built, and for
   `CassetteFilter(headers=, params=)` and its auths' declarations when the filter is built.
+- The cache never looks up, stores or shares a request with a body, whatever its method, so a GET stream opened with
+  `body=` is no longer served the entry stored for its URL. It goes to the network as it arrives.
 
 ## [0.12.1] - 2026-11-16
 

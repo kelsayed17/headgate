@@ -180,6 +180,15 @@ _REPORTED = "headgate.reported"
 #: the call's own ``headers=`` reach that origin and trusted ones only (see :class:`~headgate._core.ExplicitHeaders`).
 _WALK_ORIGIN = ContextVar[httpx2.Origin | None]("headgate_walk_origin", default=None)
 
+#: What ``get()`` and ``head()`` say of a body keyword: neither method takes one, and ``query()`` is the read that does.
+_NO_BODY_HINTS: Final = {
+    method: dict.fromkeys(
+        ("body", *BODY_HINTS),
+        f"a {method} has no body, and the cache does not key one: use query(), the safe read with a body",
+    )
+    for method in ("GET", "HEAD")
+}
+
 #: What ``paginate`` says of a body keyword: a walk's body is the raw value its pager rewrites, ``query=``.
 _WALK_BODY = "a walk's body is query=, the value its pager rewrites for each page"
 _WALK_HINTS = dict.fromkeys(("body", "json", "data", "content", "files"), _WALK_BODY)
@@ -198,7 +207,7 @@ class _Call:
 
     method: Method
     url: CallUrl
-    options: RequestOptions | StreamOptions
+    options: CallOptions | RequestOptions | StreamOptions
 
 
 class _BlockError(Exception):
@@ -436,9 +445,13 @@ class Client:
         url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
-        **options: Unpack[RequestOptions],
+        **options: Unpack[CallOptions],
     ) -> T:
-        """Send a GET and read the reply through *expect*. See :class:`Client`."""
+        """Send a GET and read the reply through *expect*. See :class:`Client`.
+
+        A GET takes no ``body=``: it has no meaning there, and the cache keys an entry by its URL alone. A read with a
+        body is :meth:`query`.
+        """
         call = _Call("GET", url, options)
         return await self._request(call, expect)
 
@@ -507,21 +520,22 @@ class Client:
         url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
-        **options: Unpack[RequestOptions],
+        **options: Unpack[CallOptions],
     ) -> T: ...
     @overload
-    async def head(self, url: CallUrl, **options: Unpack[RequestOptions]) -> None: ...
+    async def head(self, url: CallUrl, **options: Unpack[CallOptions]) -> None: ...
     async def head(
         self,
         url: CallUrl,
         *,
         expect: Reader[object] | Expect[object] = nothing,
-        **options: Unpack[RequestOptions],
+        **options: Unpack[CallOptions],
     ) -> object:
         """Send a HEAD and read the reply through *expect*: by default :data:`~headgate.nothing`, as a HEAD has no body.
 
         A reader still has the status line and headers, ``Content-Length`` and ``Content-Encoding`` included, so
-        ``expect=`` reads a header off a HEAD; the size cap is not applied to a body that does not exist.
+        ``expect=`` reads a header off a HEAD; the size cap is not applied to a body that does not exist. It takes no
+        ``body=``, as :meth:`get` takes none.
         """
         call = _Call("HEAD", url, options)
         return await self._request(call, expect)
@@ -728,7 +742,10 @@ class Client:
 
         See :meth:`_dispatch` for how the last three read the body.
         """
-        check_options(call.method.lower(), call.options, REQUEST_KEYS, BODY_HINTS)
+        if call.method in _NO_BODY_HINTS:
+            check_options(call.method.lower(), call.options, CALL_KEYS, _NO_BODY_HINTS[call.method])
+        else:
+            check_options(call.method.lower(), call.options, REQUEST_KEYS, BODY_HINTS)
         check_overrides(call.options)
         spec: Expect[T] = _expectation(expect)
         prepared = self._prepare(call)
@@ -923,7 +940,7 @@ class Client:
             return SEND_ONCE if retry is None else retry
         return None
 
-    def _follows(self, options: RequestOptions | StreamOptions) -> bool:
+    def _follows(self, options: CallOptions | RequestOptions | StreamOptions) -> bool:
         """Return whether a call with *options* follows redirects: its own choice, else the view's, the client's."""
         if "follow_redirects" in options:
             return options["follow_redirects"]

@@ -37,7 +37,8 @@ if TYPE_CHECKING:
 
     from headgate import Body, Method
 
-_VERBS: Final[tuple[Method, ...]] = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD")
+#: The verbs that take a body; ``get()`` and ``head()`` refuse every body keyword (see ``test_safe_reads.py``).
+_VERBS: Final[tuple[Method, ...]] = ("POST", "PUT", "PATCH", "DELETE", "QUERY")
 
 
 def _client(script: Script) -> Client:
