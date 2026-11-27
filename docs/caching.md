@@ -82,9 +82,7 @@ A `CachedTokenAuth` partitions by the long-lived credential, not the short-lived
 By default each instance is its own identity; override `credential_identity()` to return the credential's secret
 material (it is hashed, never stored) so two instances holding it share entries. See [auth](auth.md#cachedtokenauth).
 
-An auth that does not declare its credentials (not a `CredentialStamper`) is refused when the client is built, as
-`ClientConfigurationError`, since nothing could keep its entries apart. `HttpCache(partition=Partition.SHARED)` is the
-opt-in for public data: every client on the storage sees every entry, whatever its credential. One thing still keeps
+`HttpCache(partition=Partition.SHARED)` is the opt-in for public data: every client on the storage sees every entry, whatever its credential. One thing still keeps
 entries apart there: a query parameter with a well-known secret name that the auth does not declare, by its value,
 since `/config?key=theme` and `?key=locale` are different resources.
 
@@ -97,7 +95,7 @@ storage.
 hishel persists the request with each entry, so it is handed a view of the request without `Authorization`,
 `Proxy-Authorization`, `Cookie`, every header and query parameter the auth or a middleware declares, every well-known
 secret query parameter, and the URL's userinfo. Every other header is stored as a keyed digest of its value, so a key
-in a header nothing declares (a client-wide one, a call's own, an undeclared auth's under `Partition.SHARED`) is not
+in a header nothing declares (a client-wide one, a call's own) is not
 stored either, while a response's `Vary` still matches only requests with the same values. The digest key is per
 process too, so an entry that varies on a request header is not found again after a restart. The real request goes to
 the network unchanged. A response's `Set-Cookie` is never stored either; the request that fetched it still receives

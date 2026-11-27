@@ -14,7 +14,7 @@ import uuid
 from contextlib import AbstractAsyncContextManager
 from decimal import Decimal
 from enum import Enum
-from typing import TYPE_CHECKING, Any, TypedDict, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast, override
 
 import httpx2
 import msgspec
@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 import headgate
 from headgate import (
+    Auth,
     AuthError,
     CachedTokenAuth,
     Client,
@@ -613,8 +614,15 @@ async def test_explicit_headers_win_over_auth(httpx2_mock: HTTPXMock) -> None:
     assert req.headers.get("Authorization") == "X"
 
 
-class _StampAuth(httpx2.Auth):
-    """Stamp one header onto every request."""
+class _StampAuth(Auth):
+    """Stamp one header onto every request, and declare it."""
+
+    credential_headers: ClassVar = frozenset({"x-a"})
+    credential_params: ClassVar = frozenset[str]()
+
+    @override
+    def credential_identity(self) -> bytes:
+        return b"1"
 
     @override
     def auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response]:
@@ -623,7 +631,7 @@ class _StampAuth(httpx2.Auth):
 
 
 async def test_auth_param_threaded_to_async_client(httpx2_mock: HTTPXMock) -> None:
-    """Check that an ``httpx2.Auth`` passed as ``auth=`` runs at send time and stamps the request."""
+    """Check that an ``Auth`` passed as ``auth=`` runs at send time and stamps the request."""
     httpx2_mock.add_response(url="https://api.example/x", json={})
     client = Client(rate=_RATE, base_url="https://api.example", auth=_StampAuth())
     await client.get("x", expect=RESPONSE)

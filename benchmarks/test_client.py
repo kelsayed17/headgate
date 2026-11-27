@@ -22,7 +22,7 @@ import httpx2
 import msgspec
 from hishel import AsyncBaseStorage, Entry, Headers, Request, Response
 
-from headgate import Client, HttpCache, HttpOptions, QueryParamAuth, Rate, RetryPolicy, TransportPolicy, as_bytes
+from headgate import Auth, Client, HttpCache, HttpOptions, QueryParamAuth, Rate, RetryPolicy, TransportPolicy, as_bytes
 from headgate import msgspec as msgspec_flavor
 from headgate._core import Timing, timing_override
 from headgate.pagination import LinkHeader
@@ -122,7 +122,7 @@ class _MemoryStorage(AsyncBaseStorage):
 def _client(
     handler: Callable[[httpx2.Request], httpx2.Response] = _ok,
     *,
-    auth: httpx2.Auth | None = None,
+    auth: Auth | None = None,
     cache: HttpCache | None = None,
     breaker: bool = True,
 ) -> Client:

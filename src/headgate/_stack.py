@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Final
 import httpx2
 
 from headgate._attempts import AttemptTransport
-from headgate._auth import SigningAuth
+from headgate._auth import Auth, SigningAuth
 from headgate._middleware import MiddlewareTransport
 from headgate._options import httpx_timeout
 from headgate._redirects import drop_followed_redirect_body, refuse_unreplayable_redirect
@@ -91,14 +91,14 @@ class Credentials:
     ``HttpOptions(cookies=True)``, and the guard sends an untrusted origin only that jar's cookies for it.
     """
 
-    auth: httpx2.Auth | None
+    auth: Auth | None
     guard: CredentialGuard
     cookie_jar: CookieJar
     middleware: tuple[Middleware, ...] = ()
 
     @classmethod
     def of(
-        cls, *, base_url: str, auth: httpx2.Auth | None, http: HttpOptions, middleware: tuple[Middleware, ...]
+        cls, *, base_url: str, auth: Auth | None, http: HttpOptions, middleware: tuple[Middleware, ...]
     ) -> Credentials:
         """Return *auth*, with a guard keeping its, the middleware's and client-wide credentials on trusted origins."""
         # httpx2.Cookies() makes the jar httpx2 would make for itself.

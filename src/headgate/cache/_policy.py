@@ -50,19 +50,17 @@ class Partition(enum.Enum):
     CREDENTIAL = "credential"
     """Only to requests made with the same credential: the default, and the only safe choice for private data.
 
-    The partition is a keyed hash of the auth's :meth:`~headgate.security.CredentialStamper.credential_identity` and of
-    any other credential the request carries, so two clients with different credentials never see each other's entries,
-    even on one storage. It requires an auth that declares its credentials (a
-    :class:`~headgate.security.CredentialStamper`), or no auth.
+    The partition is a keyed hash of the auth's :meth:`~headgate.Auth.credential_identity` and of any other credential
+    the request carries, so two clients with different credentials never see each other's entries, even on one storage.
     """
 
     SHARED = "shared"
     """To every client on the storage, whatever its credential: for public data only.
 
     Credentials are still never stored: what the auth and middleware declare is dropped, and every other request header
-    is stored as a keyed digest, so an undeclared auth's header is not stored either. A query parameter with a secret
+    is stored as a keyed digest, so a header nothing declares is not stored either. A query parameter with a secret
     name that the auth does not declare still keeps entries apart by its value, since it may be an ordinary parameter
-    (``?key=theme``). This is the explicit opt-in for an auth that does not declare its credentials.
+    (``?key=theme``).
     """
 
 

@@ -5,7 +5,7 @@ Client(
     *,
     base_url: str,
     rate: Rate | RateBudget | None = None,
-    auth: httpx2.Auth | None = None,
+    auth: Auth | None = None,
     policy: TransportPolicy = TransportPolicy(),
     http: HttpOptions = HttpOptions(),
     observers: Sequence[Observer] = (),
@@ -41,8 +41,8 @@ is written, and freezes the collections it is given. Change one with `dataclasse
   its origin is the one credentials are sent to.
 - **`rate`**: a `Rate`, from which the client builds a budget of its own, or a `RateBudget` it shares with every client
   given the same instance. See [rate budgets](rate-budgets.md).
-- **`auth`**: an `httpx2.Auth`, usually one of headgate's. See [auth](auth.md). An upstream `httpx` object raises
-  `TypeError`.
+- **`auth`**: a `headgate.Auth`, usually one of headgate's. See [auth](auth.md). A plain `httpx2.Auth`, which declares
+  nothing it stamps, and an upstream `httpx` object raise `TypeError`.
 - **`observers`**: receive the client's [events](observability.md#events).
 - **`middleware`**: per-attempt hooks; see [middleware](#middleware). They are parts of the stack, not settings of how a
   request is sent, so they are the client's own rather than `HttpOptions` fields.
@@ -199,9 +199,9 @@ buffered body; a streamed body is not readable there. A middleware that replaces
 attempt. Even then the signature goes on the replacement, not on the request the client made, so a `SigningAuth`'s one
 re-send on a 401 is lost.
 
-The two declarations are the `headgate.security.CredentialCarrier` protocol, and an auth that also gives a
+The two declarations are the `headgate.security.CredentialCarrier` protocol, and one that also gives a
 `credential_identity()` (so a cache can partition by it) is a `headgate.security.CredentialStamper`; implement either
-from `headgate.security`, never from a private module.
+from `headgate.security`, never from a private module. An auth subclasses [`headgate.Auth`](auth.md#your-own-auth).
 
 A middleware reads its call through `headgate.call_info(request)`, a `headgate.events.CallView` taken when asked: the
 call's `CallInfo` (method, URL and route template, the same record events carry), its `attempt` (1 on the first send,

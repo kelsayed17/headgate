@@ -19,6 +19,7 @@ import httpx2
 import pytest
 
 from headgate import (
+    Auth,
     AuthError,
     CachedTokenAuth,
     Client,
@@ -84,7 +85,7 @@ class _FlowReadsJson(CachedTokenAuth):
         yield Minted(response.json()["access_token"], 3600.0)
 
 
-def _api(auth: httpx2.Auth, handler: Callable[[httpx2.Request], httpx2.Response] | None = None) -> Client:
+def _api(auth: Auth, handler: Callable[[httpx2.Request], httpx2.Response] | None = None) -> Client:
     """Return a client of the API host signing with *auth*, every API call answering 200 unless *handler* says."""
     return Client(
         base_url=f"https://{_API_HOST}",
@@ -94,7 +95,7 @@ def _api(auth: httpx2.Auth, handler: Callable[[httpx2.Request], httpx2.Response]
     )
 
 
-async def _call(auth: httpx2.Auth, handler: Callable[[httpx2.Request], httpx2.Response] | None = None) -> None:
+async def _call(auth: Auth, handler: Callable[[httpx2.Request], httpx2.Response] | None = None) -> None:
     """Make one API call signed by *auth*, closing the client afterwards."""
     async with _api(auth, handler) as client:
         await client.get("series", expect=as_bytes)

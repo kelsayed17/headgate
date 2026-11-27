@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import AuthError, CachedTokenAuth, Client, HttpOptions, Raw, SigningAuth
+from headgate import Auth, AuthError, CachedTokenAuth, Client, HttpOptions, Raw, SigningAuth
 from headgate._responses import nothing
 from tests.support.tokens import premint
 
@@ -102,7 +102,7 @@ def _nothing_produced() -> None:
     _PRODUCED.clear()
 
 
-def _client(auth: httpx2.Auth, network: _Network) -> Client:
+def _client(auth: Auth, network: _Network) -> Client:
     return Client(
         base_url=_BASE,
         auth=auth,
@@ -111,7 +111,7 @@ def _client(auth: httpx2.Auth, network: _Network) -> Client:
 
 
 @pytest.mark.parametrize("auth", [_Signer, lambda: premint(_Minting(), "stale")], ids=["signing", "cached-token"])
-async def test_the_401_an_auth_re_sends_after_is_not_read(auth: Callable[[], httpx2.Auth]) -> None:
+async def test_the_401_an_auth_re_sends_after_is_not_read(auth: Callable[[], Auth]) -> None:
     """Drop the first 401's body unread before the re-send, instead of reading it in full past the cap."""
     network = _Network()
     async with _client(auth(), network) as client:

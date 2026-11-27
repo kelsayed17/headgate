@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, override
 
 import msgspec
 
-from headgate import CachedTokenAuth, Client, HttpOptions, QueryParamAuth, Rate, StaticHeaderAuth, TransportPolicy
+from headgate import Auth, CachedTokenAuth, Client, HttpOptions, QueryParamAuth, Rate, StaticHeaderAuth, TransportPolicy
 from headgate._core import CredentialStamper
 
 if TYPE_CHECKING:
@@ -33,7 +33,7 @@ def client(
     *,
     policy: TransportPolicy | None = None,
     http: HttpOptions | None = None,
-    auth: httpx2.Auth | None = None,
+    auth: Auth | None = None,
     rate: Rate | RateBudget = FAST,
     observers: Sequence[Observer] = (),
     middleware: Sequence[Middleware] = (),
@@ -92,7 +92,7 @@ def seeded() -> Bearer:
     return auth
 
 
-def real_auths() -> dict[str, httpx2.Auth]:
+def real_auths() -> dict[str, Auth]:
     """Return one of each auth headgate ships, by name, each ready to stamp without a network exchange."""
     return {
         "static-header": StaticHeaderAuth({"X-Api-Key": "header-secret"}),
@@ -101,7 +101,7 @@ def real_auths() -> dict[str, httpx2.Auth]:
     }
 
 
-def carried(request: httpx2.Request, auth: httpx2.Auth) -> set[str]:
+def carried(request: httpx2.Request, auth: Auth) -> set[str]:
     """Return the names of the credentials *auth* declares that *request* carries."""
     assert isinstance(auth, CredentialStamper)
     headers = {name for name in auth.credential_headers if name in request.headers}

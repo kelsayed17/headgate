@@ -7,12 +7,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from headgate import Client, HttpOptions, Rate, TransportPolicy
+from headgate import Auth, Client, HttpOptions, Rate, TransportPolicy
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-    import httpx2
 
     from headgate import Middleware, RateBudget
     from headgate.events import Observer
@@ -27,7 +25,7 @@ def client(
     *observers: Observer,
     policy: TransportPolicy | None = None,
     http: HttpOptions | None = None,
-    auth: httpx2.Auth | None = None,
+    auth: Auth | None = None,
     rate: Rate | RateBudget = RATE,
     middleware: Sequence[Middleware] = (),
 ) -> Client:

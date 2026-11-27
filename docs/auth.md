@@ -1,13 +1,44 @@
 # Auth
 
-A client's `auth=` is an `httpx2.Auth`. httpx2 runs its flow once per call, above the transport stack, so a retry
-re-sends the request already signed. headgate ships five (the three static ones below, `SigningAuth` and
-`CachedTokenAuth`), each a
-`CredentialStamper` that declares what it stamps, so the [credential guard](security.md#credentials-stay-on-your-origin)
-keeps it on your origin and the [cache](caching.md#partitions) keeps each credential's entries apart and the credential
-itself out of storage.
+A client's `auth=` is a `headgate.Auth`: an `httpx2.Auth` that declares what it stamps, so the
+[credential guard](security.md#credentials-stay-on-your-origin) keeps it on your origin and the
+[cache](caching.md#partitions) keeps each credential's entries apart and the credential itself out of storage. httpx2
+runs its flow once per call, above the transport stack, so a retry re-sends the request already signed. headgate ships
+five (the three static ones below, `SigningAuth` and `CachedTokenAuth`); a plain `httpx2.Auth`, `httpx2.BasicAuth` and
+`httpx2.DigestAuth` included, declares nothing, and `Client()` refuses it with a `TypeError`.
 
 Every one merges without overriding: a header or parameter the call sets itself wins.
+
+## Your own auth
+
+An auth of your own subclasses `headgate.Auth` and declares the headers and query parameters its flow sets, each a
+`frozenset` of names (empty when it sets none of that kind), and the credential they stand for:
+
+```python
+from typing import ClassVar
+
+import httpx2
+
+from headgate import Auth
+
+
+class KeyAuth(Auth):
+    credential_headers: ClassVar = frozenset({"x-api-key"})
+    credential_params: ClassVar = frozenset[str]()
+
+    def __init__(self, key: str) -> None:
+        self._key = key
+
+    def credential_identity(self) -> bytes:
+        return self._key.encode()
+
+    async def async_auth_flow(self, request):
+        request.headers.setdefault("x-api-key", self._key)
+        yield request
+```
+
+A subclass that leaves a member out cannot be built. A fixed header needs no class: `StaticHeaderAuth`. For basic auth,
+`StaticHeaderAuth({"Authorization": "Basic " + base64.b64encode(b"user:pass").decode()})`.
 
 ## Static credentials
 

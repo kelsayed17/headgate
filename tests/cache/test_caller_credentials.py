@@ -17,6 +17,7 @@ import httpx2
 import pytest
 
 from headgate import (
+    Auth,
     BearerAuth,
     CachedTokenAuth,
     Client,
@@ -63,7 +64,7 @@ class _Echo:
         return httpx2.Response(httpx2.codes.OK, headers={"Vary": "Authorization"}, text=self.sent[-1])
 
 
-def _client(echo: _Echo, storage: AsyncSqliteStorage, auth: httpx2.Auth) -> Client:
+def _client(echo: _Echo, storage: AsyncSqliteStorage, auth: Auth) -> Client:
     """Build a client caching ``/series`` into *storage* with *auth*, over *echo*."""
     return Client(
         base_url="https://x",
@@ -88,7 +89,7 @@ def _own(name: str | None, key: str) -> dict[str, str]:
     ids=["bearer", "cached-token", "query-param"],
 )
 async def test_a_calls_own_credential_gets_entries_of_its_own(
-    auth: httpx2.Auth, header: str | None, param: str | None, stamped: str, storage: AsyncSqliteStorage
+    auth: Auth, header: str | None, param: str | None, stamped: str, storage: AsyncSqliteStorage
 ) -> None:
     """Keep the entries of a call's own ``Authorization`` or ``api_key`` apart per value, and from the auth's."""
     echo = _Echo()
@@ -190,9 +191,6 @@ async def test_the_mark_passes_every_hop_of_the_auths_flow_through() -> None:
     assert call.extensions[CALLER_CREDENTIALS] == CallerCredentials(headers=frozenset(), params=frozenset())
 
 
-def test_only_a_credential_stamper_is_marked() -> None:
-    """Leave no auth, and an auth that declares nothing, as they are: neither has a name to mark."""
-    basic = httpx2.BasicAuth("user", "pass")
-
+def test_no_auth_is_marked() -> None:
+    """Leave no auth as it is: there is no name to mark."""
     assert mark_caller_credentials(None) is None
-    assert mark_caller_credentials(basic) is basic

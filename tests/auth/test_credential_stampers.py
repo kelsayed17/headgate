@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import math
 import uuid
-from typing import TYPE_CHECKING, ClassVar, override
+from typing import TYPE_CHECKING, Any, ClassVar, cast, override
 
 import httpx2
 import pytest
 
-from headgate import BearerAuth, CachedTokenAuth, Client, QueryParamAuth, SigningAuth, StaticHeaderAuth
+from headgate import Auth, BearerAuth, CachedTokenAuth, Client, QueryParamAuth, SigningAuth, StaticHeaderAuth
 from headgate._core import CredentialStamper
 from headgate._url import is_secret_param
 from tests.support.tokens import premint
@@ -336,17 +336,19 @@ def test_a_declaration_that_is_not_a_frozenset_of_names_fails_when_the_class_is_
         define()
 
 
-class _StrStamper(httpx2.Auth):
-    """A third-party auth declaring its header as a bare ``str``, which iterates as single letters."""
-
-    credential_headers = "x-api-key"
-    credential_params = frozenset[str]()
-
-    def credential_identity(self) -> bytes:
-        return b"k"
+#: An auth declaring its header, through a property, as a bare ``str``, which iterates as single letters.
+_StrStamper = type(
+    "_StrStamper",
+    (Auth,),
+    {
+        "credential_headers": property(lambda _self: "x-api-key"),
+        "credential_params": property(lambda _self: frozenset[str]()),
+        "credential_identity": lambda _self: b"k",
+    },
+)
 
 
 def test_a_client_refuses_an_auth_whose_declaration_is_not_a_frozenset_of_names() -> None:
-    """Refuse, when the client is built, a ``CredentialStamper`` whose declarations would withhold the wrong names."""
+    """Refuse, when the client is built, an auth whose declarations would withhold the wrong names."""
     with pytest.raises(TypeError, match="frozenset of names"):
-        Client(base_url="https://api.example", auth=_StrStamper())
+        Client(base_url="https://api.example", auth=cast("Any", _StrStamper)())

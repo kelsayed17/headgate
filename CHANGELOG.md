@@ -6,6 +6,31 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Added
+
+- `headgate.Auth`, the one type `Client(auth=)` takes: an `httpx2.Auth` that declares the headers and query parameters
+  it stamps (`credential_headers`, `credential_params`, each a `frozenset` of names, as class attributes or
+  properties) and names its credential (`credential_identity()`). A subclass that leaves one out cannot be built.
+  `BearerAuth`, `StaticHeaderAuth`, `QueryParamAuth`, `SigningAuth` and `CachedTokenAuth` all derive from it.
+
+### Changed
+
+- `Client(auth=)` takes a `headgate.Auth`. A plain `httpx2.Auth`, `httpx2.BasicAuth` and `httpx2.DigestAuth` included,
+  raises `TypeError` when the client is built, since it declares nothing the guard could withhold from another origin:
+  subclass `headgate.Auth` and declare what it stamps, or write `StaticHeaderAuth({"Authorization": ...})` for a fixed
+  header such as basic auth.
+
+### Removed
+
+- The cache's `ClientConfigurationError` for an auth that does not declare its credentials, which no auth can now
+  reach. `Partition.SHARED` remains the opt-in for public data.
+
+### Security
+
+- An auth's own header or query parameter no longer follows a request to another origin. A plain `httpx2.Auth` that set
+  `X-Api-Key` sent it on a cross-origin redirect and to an absolute URL on another host, since the guard withheld only
+  `Authorization`, `Proxy-Authorization` and `Cookie` for an auth that declared nothing; such an auth is now refused.
+
 ## [0.12.1] - 2026-11-16
 
 The SSRF guard now pins the curl transport's connections to the addresses it vetted, as it already pinned the default

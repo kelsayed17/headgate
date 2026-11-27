@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import HttpCache, QueryParamAuth, StaticHeaderAuth, TransportPolicy, as_bytes
+from headgate import Auth, HttpCache, QueryParamAuth, StaticHeaderAuth, TransportPolicy, as_bytes
 from headgate.testing import CassetteFilter, FakeTransport
 from tests.cache._helpers import every_get_rules
 from tests.integration._support import Bearer, client, seeded
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from hishel import AsyncSqliteStorage
 
 #: Builds an auth holding the credential it is given.
-type _Holding = Callable[[str], httpx2.Auth]
+type _Holding = Callable[[str], Auth]
 
 
 class _KeyedBearer(Bearer):
@@ -42,7 +42,7 @@ class _KeyedBearer(Bearer):
         return self._api_key.encode()
 
 
-def _keyed_bearer(api_key: str) -> httpx2.Auth:
+def _keyed_bearer(api_key: str) -> Auth:
     """Return a :class:`_KeyedBearer` for *api_key* holding a token of its own, as a fresh mint would."""
     auth = _KeyedBearer(api_key)
     auth.seed(f"token-{id(auth)}", math.inf)

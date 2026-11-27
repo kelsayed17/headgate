@@ -15,6 +15,7 @@ import httpx2
 import pytest
 
 from headgate import (
+    Auth,
     Client,
     HttpOptions,
     QueryParamAuth,
@@ -74,7 +75,7 @@ def _client(
     fake: FakeTransport,
     *observers: Recorder | _Broken,
     policy: TransportPolicy | None = None,
-    auth: httpx2.Auth | None = None,
+    auth: Auth | None = None,
 ) -> Client:
     """Build a client over *fake* reporting to *observers*."""
     return Client(

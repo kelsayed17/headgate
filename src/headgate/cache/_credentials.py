@@ -8,10 +8,10 @@ that URL. So the cache layer hands hishel a view of the request, :meth:`Credenti
 below hishel for the network:
 
 * **Nothing credential-bearing is stored.** The view drops ``Authorization``, ``Proxy-Authorization``, ``Cookie``,
-  every header and query parameter the client's auth (:class:`~headgate.security.CredentialStamper`) or middleware
+  every header and query parameter the client's auth (a :class:`~headgate.Auth`) or middleware
   (:class:`~headgate.security.CredentialCarrier`) declares, every query parameter :func:`~headgate._url.is_secret_param`
   names, and the URL's userinfo. Every header it keeps carries a keyed digest in place of its value, so a credential in
-  a header nothing declares (an undeclared auth's, a client-wide or a per-call one) is not stored either, while the
+  a header nothing declares (a client-wide or a per-call one) is not stored either, while the
   cache layer's ``Vary`` matching, which compares a stored value with a new one, still works.
 * **What was dropped decides the partition.** Under :attr:`Partition.CREDENTIAL <headgate.cache.Partition.CREDENTIAL>`
   the view's URL carries a partition label in its fragment: an HMAC-SHA256, under a key drawn at random once per
@@ -54,11 +54,11 @@ import httpx2
 from headgate._core import EXPLICIT_HEADERS, CredentialCarrier, CredentialStamper, ExplicitHeaders
 from headgate._url import is_secret_param
 from headgate.cache._policy import Partition
-from headgate.errors import ClientConfigurationError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Iterable
 
+    from headgate._auth import Auth
     from headgate.cache._policy import HttpCache
 
 __all__ = [
@@ -124,16 +124,16 @@ class _CallerMarking(httpx2.Auth):
             await flow.aclose()
 
 
-def mark_caller_credentials(auth: httpx2.Auth | None) -> httpx2.Auth | None:
+def mark_caller_credentials(auth: Auth | None) -> httpx2.Auth | None:
     """Return *auth*, marking on each request which of its declared credentials the call set itself.
 
     Every auth headgate ships leaves a header or parameter the call set alone, so a call's own ``Authorization`` is
     sent under a name the cache represents by the auth's identity. The mark (:data:`CALLER_CREDENTIALS`) tells the
     view to label by the call's value instead. Its flow runs before the request hooks and the transport stack, so it
-    is the only place that sees the request as the call built it. An auth that declares nothing is returned as it is.
+    is the only place that sees the request as the call built it.
     """
-    if not isinstance(auth, CredentialStamper):
-        return auth
+    if auth is None:
+        return None
     headers = frozenset(name.lower() for name in auth.credential_headers)
     return _CallerMarking(auth, headers=headers, params=auth.credential_params)
 
@@ -253,7 +253,7 @@ def _digest(*parts: bytes) -> str:
 
 def credential_scope(
     cache: HttpCache,
-    auth: httpx2.Auth | None,
+    auth: Auth | None,
     *,
     middleware: Iterable[CredentialCarrier] = (),
     headers: Iterable[str] = (),
@@ -262,21 +262,7 @@ def credential_scope(
     """Return the :class:`CredentialScope` for a client with *cache*, *auth*, *middleware* and client-wide *headers*.
 
     A *guarded* client, one that refuses private hosts, gets entries of its own.
-
-    :raises ClientConfigurationError: for an auth that does not declare its credentials under
-        :attr:`Partition.CREDENTIAL <headgate.cache.Partition.CREDENTIAL>`, since nothing could keep its entries apart
-        from another credential's or its credential out of storage.
     """
-    stamper = auth if isinstance(auth, CredentialStamper) else None
-    if auth is not None and stamper is None and cache.partition is Partition.CREDENTIAL:
-        msg = (
-            f"the HTTP cache partitions entries by credential, but {type(auth).__qualname__} does not declare its "
-            f"credentials (headgate.security.CredentialStamper: credential_headers, credential_params, "
-            f"credential_identity()), so another credential's client on the same storage could be served its entries. "
-            f"Implement CredentialStamper on the auth, or, only if every cached response is public, pass "
-            f"HttpCache(partition=Partition.SHARED)"
-        )
-        raise ClientConfigurationError(msg)
     return CredentialScope(
-        stamper, partition=cache.partition, carriers=middleware, client_headers=headers, guarded=guarded
+        auth, partition=cache.partition, carriers=middleware, client_headers=headers, guarded=guarded
     )

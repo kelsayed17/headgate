@@ -16,6 +16,7 @@ import httpx2
 import pytest
 
 from headgate import (
+    Auth,
     CachedTokenAuth,
     Client,
     HttpOptions,
@@ -78,7 +79,7 @@ class _QueryToken(CachedTokenAuth):
         request.url = request.url.copy_set_param("access_token", token)
 
 
-def _auths() -> list[httpx2.Auth]:
+def _auths() -> list[Auth]:
     """Return one of each auth, ready to stamp without a network exchange."""
     return [
         StaticHeaderAuth({"X-Api-Key": "k"}),
@@ -92,7 +93,7 @@ def _auths() -> list[httpx2.Auth]:
 _AUTH_IDS = ["static-header", "query-param", "bearer", "custom-header-token", "query-token"]
 
 
-def _carries(request: httpx2.Request, auth: httpx2.Auth) -> set[str]:
+def _carries(request: httpx2.Request, auth: Auth) -> set[str]:
     """Return which of the credentials *auth* declares *request* carries."""
     assert isinstance(auth, CredentialStamper)
     headers = {name for name in auth.credential_headers if name in request.headers}
@@ -114,7 +115,7 @@ _ECHOED_KEY = "?api_key=k&access_token=t"
     ids=["other-host", "other-port", "other-scheme"],
 )
 async def test_a_redirect_off_the_origin_is_followed_without_the_credential(
-    auth: httpx2.Auth, base_url: str, target: str
+    auth: Auth, base_url: str, target: str
 ) -> None:
     """Withhold every stamped credential from a hop to another host, port or scheme, and still follow it.
 
@@ -132,7 +133,7 @@ async def test_a_redirect_off_the_origin_is_followed_without_the_credential(
 
 
 @pytest.mark.parametrize("auth", _auths(), ids=_AUTH_IDS)
-async def test_a_same_origin_redirect_keeps_the_credential(auth: httpx2.Auth) -> None:
+async def test_a_same_origin_redirect_keeps_the_credential(auth: Auth) -> None:
     """Keep the credential on a hop that stays on the client's origin, an explicit default port included."""
     web = Web({f"{BASE}/start": "https://api.example:443/other" + _ECHOED_KEY})
     async with web.client(auth=auth) as client:
@@ -142,7 +143,7 @@ async def test_a_same_origin_redirect_keeps_the_credential(auth: httpx2.Auth) ->
 
 
 @pytest.mark.parametrize("auth", _auths(), ids=_AUTH_IDS)
-async def test_a_trusted_origin_keeps_the_credential(auth: httpx2.Auth) -> None:
+async def test_a_trusted_origin_keeps_the_credential(auth: Auth) -> None:
     """Send the credential to an origin listed in ``trusted_origins``, given in any normalisable form."""
     web = Web()
     trusted = HttpOptions(security=SecurityOptions(trusted_origins=frozenset({"HTTPS://FILES.example:443"})))
@@ -163,7 +164,7 @@ async def test_a_trusted_origin_keeps_a_redirected_credential() -> None:
 
 
 @pytest.mark.parametrize("auth", _auths(), ids=_AUTH_IDS)
-async def test_an_absolute_foreign_url_is_sent_unsigned(auth: httpx2.Auth) -> None:
+async def test_an_absolute_foreign_url_is_sent_unsigned(auth: Auth) -> None:
     """Send a call to an absolute URL on another origin (a cursor URL) without the credential."""
     web = Web()
     async with web.client(auth=auth) as client:
@@ -186,9 +187,9 @@ async def test_only_the_stamped_query_parameter_is_removed() -> None:
 
 @pytest.mark.parametrize("name", ["Authorization", "Proxy-Authorization", "Cookie"])
 async def test_a_credential_header_of_any_origin_is_withheld_whatever_the_auth(name: str) -> None:
-    """Withhold the well-known credential headers from a foreign first request, a third-party auth's included."""
+    """Withhold the well-known credential headers from a foreign first request, whatever names the auth declares."""
     web = Web()
-    async with web.client(auth=httpx2.BasicAuth("user", "pass")) as client:
+    async with web.client(auth=StaticHeaderAuth({"X-Api-Key": "k"})) as client:
         await client.get("https://cdn.example/x", expect=RESPONSE, headers={name: "secret"})
         await client.get("x", expect=RESPONSE, headers={name: "secret"})
 

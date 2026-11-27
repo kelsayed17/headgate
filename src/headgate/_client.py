@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Final, Literal, Self, Unpack, cast, final, ove
 
 import httpx2
 
-from headgate._auth import MINTING, failed_on_auth_hop, mint_hop_failure
+from headgate._auth import MINTING, Auth, failed_on_auth_hop, mint_hop_failure
 from headgate._body import read_capped, read_head
 from headgate._call_options import (
     BODY_HINTS,
@@ -306,7 +306,7 @@ class Client:
         *,
         base_url: str,
         rate: Rate | RateBudget | None = None,
-        auth: httpx2.Auth | None = None,
+        auth: Auth | None = None,
         policy: TransportPolicy = _DEFAULT_POLICY,
         http: HttpOptions = _DEFAULT_HTTP,
         observers: Sequence[Observer] = (),
@@ -327,17 +327,17 @@ class Client:
         *observers* receive the client's events (see :mod:`headgate.events`), and *middleware* runs once per attempt,
         in order, inside the retry layer (see :class:`~headgate.Middleware`).
 
-        :raises TypeError: for an argument of the wrong kind: an upstream ``httpx`` *auth*, a *rate* that is neither
+        :raises TypeError: for an argument of the wrong kind: an *auth* that is not a :class:`~headgate.Auth` (a plain
+            ``httpx2.Auth`` declares nothing it stamps) or is an upstream ``httpx`` one, a *rate* that is neither
             a ``Rate``, a ``RateBudget`` nor ``None``, such as a bare number, *observers* or *middleware* that are not
             a sequence, a middleware that does not declare its credentials, and a *base_url*, *policy* or *http* that
             is not the kind it names.
-        :raises ClientConfigurationError: for a cache partitioned by credential with an *auth* that does not declare
-            its credentials (see :class:`~headgate.cache.Partition`).
         """
         check_kind("base_url", base_url, str, "the API root, such as 'https://api.example.com/v1'")
         check_kind("policy", policy, TransportPolicy, "TransportPolicy(...)")
         check_kind("http", http, HttpOptions, "HttpOptions(...)")
         reject_upstream_httpx(auth, what="auth")
+        _check_auth(auth)
         check_kind(
             "rate", rate, (Rate, RateBudget, type(None)), "a Rate, such as Rate.per_second(10), a RateBudget or None"
         )
@@ -1203,6 +1203,20 @@ class Client:
     def _unsent_site(self, prepared: _Prepared) -> CallSite:
         """Return :meth:`_site` for a call whose current attempt never reached the network: it does not count."""
         return replace(self._site(prepared), attempts=prepared.context.attempt - 1)
+
+
+def _check_auth(auth: object) -> None:
+    """Refuse an *auth* that is not a :class:`~headgate.Auth`, whose credentials the guard could not know to withhold.
+
+    :raises TypeError: naming its class and what to write instead.
+    """
+    if auth is not None and not isinstance(auth, Auth):
+        msg = (
+            f"auth= takes a headgate.Auth, which declares what it stamps (got {type(auth).__qualname__}): subclass "
+            "headgate.Auth, or use StaticHeaderAuth, and declare the headers and query parameters it sets in "
+            "credential_headers and credential_params"
+        )
+        raise TypeError(msg)
 
 
 def _route_rate(route: Route) -> tuple[Rate | RateBudget | None, bool]:
