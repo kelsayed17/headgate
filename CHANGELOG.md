@@ -25,6 +25,14 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - The cache's `ClientConfigurationError` for an auth that does not declare its credentials, which no auth can now
   reach. `Partition.SHARED` remains the opt-in for public data.
 
+### Fixed
+
+- A `CachedTokenAuth` whose token type is not `str` no longer sends the token's `repr` as its bearer
+  (`Authorization: Bearer {'access': ..., 'refresh': ...}`, the refresh token included). Its class must override
+  `attach`: a subclass of `CachedTokenAuth[dict[str, str]]` that keeps the default raises `TypeError` when it is
+  defined, and the default `attach` raises `TypeError` for a token that is not a `str`, before anything is sent, where
+  the type is bound further down. Override `attach` to put the token on the request.
+
 ### Security
 
 - An auth's own header or query parameter no longer follows a request to another origin. A plain `httpx2.Auth` that set

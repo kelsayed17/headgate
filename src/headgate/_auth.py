@@ -30,12 +30,12 @@ import math
 import secrets
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Final, override
+from typing import TYPE_CHECKING, ClassVar, Final, get_args, get_origin, override
 
 import httpx2
 
 from headgate._body import read_capped
-from headgate._core import CallContext, Slot, current_timing, origin_text
+from headgate._core import CallContext, Slot, current_timing, origin_text, type_text
 from headgate._failures import CallSite, loggable_url, mint_error, shorten, transport_error
 from headgate._url import redact_secrets, register_secret_params
 from headgate.errors import ClientConfigurationError, ClientError
@@ -497,6 +497,21 @@ class Minted[TokenT]:
     lifetime: float
 
 
+def _token_type(cls: type) -> object | None:
+    """Return the token type *cls* binds in its own ``CachedTokenAuth[...]`` base, when it is a class other than text.
+
+    ``None`` when *cls* binds none there, binds ``str``, or binds what is no class here (a type variable a subclass
+    binds later, a ``Literal``): the default :meth:`~CachedTokenAuth.attach` checks the token itself then.
+    """
+    for base in cls.__dict__.get("__orig_bases__", ()):
+        if get_origin(base) is CachedTokenAuth:
+            (token_type,) = get_args(base)
+            kind = get_origin(token_type) or token_type
+            if isinstance(kind, type) and not issubclass(kind, str):
+                return token_type
+    return None
+
+
 class CachedTokenAuth[TokenT = str](Auth):
     """Bearer auth for providers that mint a short-lived token over the network.
 
@@ -529,7 +544,9 @@ class CachedTokenAuth[TokenT = str](Auth):
     Supplying neither fails when the class is defined; with both, the flow runs :meth:`mint_flow`. Two more hooks let a
     credential that is not an ``Authorization`` bearer ride the same cache: :meth:`attach` (how a token is put on a
     request) and :meth:`skips` (a request that needs none). ``TokenT`` is the credential's type, ``str`` for every
-    bearer. :meth:`seed` caches a token obtained elsewhere.
+    bearer; a subclass whose token is of another type overrides :meth:`attach`, or its definition fails (or, when the
+    type is bound further down, as ``class Mid[T](CachedTokenAuth[T])``, its first call). :meth:`seed` caches a token
+    obtained elsewhere.
 
     **What it stamps is declared.** :attr:`token_headers` names the headers :meth:`attach` sets (``Authorization`` by
     default) and :attr:`token_params` the query parameters (none by default, ``access_token`` for a provider that takes
@@ -627,6 +644,13 @@ class CachedTokenAuth[TokenT = str](Auth):
                 f"token_params (or override credential_headers)"
             )
             raise TypeError(msg)
+        token_type = _token_type(cls)
+        if token_type is not None and attaching is CachedTokenAuth:
+            msg = (
+                f"{cls.__name__} holds a {type_text(token_type)} token, so it must override attach: the default sends "
+                "a str as Authorization: Bearer"
+            )
+            raise TypeError(msg)
 
     # -- What it stamps (CredentialStamper) ----------------------------------
 
@@ -679,8 +703,16 @@ class CachedTokenAuth[TokenT = str](Auth):
     def attach(self, request: httpx2.Request, token: TokenT) -> None:
         """Put *token* on *request*, replacing any earlier one: the re-send after a 401 calls this a second time.
 
-        An override declares the headers it sets in :attr:`token_headers`.
+        An override declares the headers it sets in :attr:`token_headers`. The default sends a ``str`` token as
+        ``Authorization: Bearer <token>``, and raises ``TypeError`` for any other, before setting anything: a token of
+        another type is attached by an override.
         """
+        if not isinstance(token, str):
+            msg = (
+                f"{type(self).__name__} minted a {type(token).__name__} token, which the default attach cannot send "
+                "as Authorization: Bearer: override attach to put it on the request"
+            )
+            raise TypeError(msg)
         request.headers["Authorization"] = f"Bearer {token}"
 
     def skips(self, request: httpx2.Request) -> bool:

@@ -201,7 +201,9 @@ endpoint. The API host's breaker records nothing for it.
   carrying one re-mints, and error messages redact them.
 - `skips(request)` says a request needs no token (by default, one that already carries a token header or parameter).
 - `seed(token, lifetime)` caches a token obtained elsewhere, such as one restored from storage or a test's fixed bearer.
-- `CachedTokenAuth[TokenT]` is generic in the token's type, `str` by default.
+- `CachedTokenAuth[TokenT]` is generic in the token's type, `str` by default. The default `attach` sends only a `str`,
+  so a subclass whose token is another type (`CachedTokenAuth[dict[str, str]]`) overrides `attach`; one that does not
+  fails when it is defined, or, when a generic subclass binds the type further down, at its first call.
 - `credential_identity()` names the long-lived credential for the cache partition. By default each instance is its own
   identity; return the client id and secret (hashed, never stored) to let instances holding the same credential share
   entries. Never return the short-lived token, which changes on every refresh.
