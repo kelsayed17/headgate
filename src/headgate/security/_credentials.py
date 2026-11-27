@@ -52,7 +52,7 @@ from typing import TYPE_CHECKING, Final
 
 import httpx2
 
-from headgate._core import EXPLICIT_HEADERS, ExplicitHeaders, origin_text
+from headgate._core import EXPLICIT_HEADERS, ExplicitHeaders, check_not_letters, origin_text
 from headgate.errors import ForbiddenDestinationError
 
 if TYPE_CHECKING:
@@ -81,12 +81,14 @@ _NEVER_CREDENTIALS: Final = frozenset({"user-agent", "content-type", "accept", "
 def check_names(owner: str, **declared: object) -> None:
     """Raise ``TypeError`` unless every value in *declared* is a frozenset of names (``str``), naming *owner*.
 
-    A bare ``str`` iterates as its letters, so ``credential_headers = "x-api-key"`` would withhold no real header.
+    A bare ``str`` iterates as its letters, so ``credential_headers = "x-api-key"`` would withhold no real header, and
+    so would ``frozenset("x-api-key")``, a set of nothing but letters (:func:`~headgate._core.check_not_letters`).
     """
     for attribute, names in declared.items():
         if not (isinstance(names, frozenset) and all(isinstance(name, str) for name in names)):
             msg = f"{owner}.{attribute} must be a frozenset of names, not {type(names).__name__}"
             raise TypeError(msg)
+        check_not_letters(f"{owner}.{attribute}", names)
 
 
 class CredentialGuard:

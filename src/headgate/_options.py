@@ -38,6 +38,7 @@ from headgate._core import (
     check_int,
     check_kind,
     check_names,
+    check_not_letters,
     origin_of,
     origin_text,
     path_has_fragment,
@@ -445,16 +446,18 @@ def check_hooks(name: str, values: Iterable[object]) -> None:
 
 
 def check_middleware(middleware: Iterable[object]) -> None:
-    """Refuse a middleware that does not declare the credentials it stamps as two frozensets."""
+    """Refuse a middleware that does not declare the credentials it stamps as two frozensets, or splits a name."""
     for item in middleware:
-        declared = (getattr(item, "credential_headers", None), getattr(item, "credential_params", None))
-        if not all(isinstance(names, frozenset) and all(isinstance(n, str) for n in names) for names in declared):
-            name = getattr(item, "__qualname__", type(item).__qualname__)
-            msg = (
-                f"middleware {name} must declare credential_headers and credential_params as frozensets of names, "
-                "empty when it stamps none"
-            )
-            raise TypeError(msg)
+        name = getattr(item, "__qualname__", type(item).__qualname__)
+        for attribute in ("credential_headers", "credential_params"):
+            names = getattr(item, attribute, None)
+            if not (isinstance(names, frozenset) and all(isinstance(n, str) for n in names)):
+                msg = (
+                    f"middleware {name} must declare credential_headers and credential_params as frozensets of "
+                    "names, empty when it stamps none"
+                )
+                raise TypeError(msg)
+            check_not_letters(f"{name}.{attribute}", names)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

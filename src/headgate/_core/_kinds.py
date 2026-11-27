@@ -9,7 +9,15 @@ import re
 from collections.abc import Collection
 from typing import Any, Final, NewType, TypeAliasType, get_origin
 
-__all__ = ["check_callable", "check_collection", "check_int", "check_kind", "check_names", "type_text"]
+__all__ = [
+    "check_callable",
+    "check_collection",
+    "check_int",
+    "check_kind",
+    "check_names",
+    "check_not_letters",
+    "type_text",
+]
 
 #: In a type expression's ``repr``, a quoted string (group 1, kept) or a run of dotted prefixes (dropped): the module
 #: and enclosing names before a class, ``<locals>`` included.
@@ -101,4 +109,20 @@ def check_names(option: str, value: object, wanted: str) -> None:
         or not all(isinstance(name, str) for name in value)
     ):
         msg = f"{option}= takes {wanted} (got {_named(value)})"
+        raise TypeError(msg)
+
+
+def check_not_letters(where: str, names: Collection[str]) -> None:
+    """Refuse credential *names* that are all one character long: one name split into its letters.
+
+    ``frozenset("X-Api-Key")`` is a ``frozenset[str]`` of eight letters, so it type-checks and withholds no real header.
+    No real header or query credential is one character long, so a non-empty set of nothing else is that mistake.
+
+    :raises TypeError: naming *where* the names were declared, the letters, and the spelling to write.
+    """
+    if names and all(len(name) == 1 for name in names):
+        msg = (
+            f"{where} holds only one-character names ({', '.join(sorted(names))}), as frozenset('X-Api-Key') does, "
+            "which splits a name into its letters: write frozenset({'X-Api-Key'})"
+        )
         raise TypeError(msg)

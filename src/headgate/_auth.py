@@ -261,8 +261,17 @@ class Auth(httpx2.Auth, ABC):
     exactly the declared names from any origin it does not trust, and the cache keeps them out of storage and keeps one
     credential's entries from another's. A plain ``httpx2.Auth`` declares nothing, so ``Client()`` refuses it: a
     third-party auth is wrapped in a subclass that declares its names, and a fixed header is a
-    :class:`StaticHeaderAuth`. A subclass that leaves a member out cannot be built.
+    :class:`StaticHeaderAuth`. A subclass that leaves a member out cannot be built, and one whose declaration is a
+    class attribute is checked when it is defined: each must be a ``frozenset`` of names, not all of them one character
+    long, as ``frozenset("X-Api-Key")`` is. A declaration through a property is checked when a client is built.
     """
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a declaration given as a class attribute that is not a frozenset of names, or splits a name."""
+        super().__init_subclass__(**kwargs)
+        declared = {name: getattr(cls, name) for name in ("credential_headers", "credential_params")}
+        # A property (or other descriptor) reads per instance, so the client checks it when it is built.
+        check_names(cls.__name__, **{name: value for name, value in declared.items() if not _is_descriptor(value)})
 
     @property
     @abstractmethod
@@ -277,6 +286,11 @@ class Auth(httpx2.Auth, ABC):
     @abstractmethod
     def credential_identity(self) -> bytes:
         """Return stable bytes naming the credential (its secret material); never stored, only hashed."""
+
+
+def _is_descriptor(value: object) -> bool:
+    """Return whether *value*, read off a class, is a descriptor such as a property, not a declared value."""
+    return hasattr(type(value), "__get__")
 
 
 class StaticHeaderAuth(Auth):

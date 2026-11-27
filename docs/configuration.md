@@ -193,7 +193,8 @@ the client runs as a request hook, so the guard runs again below the last middle
 middleware declares in `credential_headers` and `credential_params` are removed there from any hop not addressed to
 `base_url`'s origin or a trusted one, a cross-origin redirect hop included. Both are required, each a `frozenset` of
 names, empty when the middleware stamps none, as a class attribute or a property; the client raises `TypeError` for a
-middleware that lacks either, and for a plain function. `request.content` is available for a
+middleware that lacks either, for one whose names are all one character long (`frozenset("X-Api-Key")` is eight
+letters: write `frozenset({"X-Api-Key"})`), and for a plain function. `request.content` is available for a
 buffered body; a streamed body is not readable there. A middleware that replaces the request
 (`call_next(httpx2.Request(...))`) keeps `request.extensions` on the new one, or a `SigningAuth` cannot sign that
 attempt. Even then the signature goes on the replacement, not on the request the client made, so a `SigningAuth`'s one

@@ -37,7 +37,9 @@ class KeyAuth(Auth):
         yield request
 ```
 
-A subclass that leaves a member out cannot be built. A fixed header needs no class: `StaticHeaderAuth`. For basic auth,
+A subclass that leaves a member out cannot be built, and a declaration that is not a `frozenset` of names, or whose
+names are all one character long (`frozenset("x-api-key")` is a set of its letters, not one name), fails when the class is
+defined (or, for a property, when the client is built). A fixed header needs no class: `StaticHeaderAuth`. For basic auth,
 `StaticHeaderAuth({"Authorization": "Basic " + base64.b64encode(b"user:pass").decode()})`.
 
 ## Static credentials

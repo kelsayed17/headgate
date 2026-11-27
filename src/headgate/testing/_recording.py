@@ -38,7 +38,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from headgate._auth import AUTH_HOP
-from headgate._core import CredentialStamper
+from headgate._core import CredentialStamper, check_not_letters
 from headgate._url import sanitize_url
 
 if TYPE_CHECKING:
@@ -89,10 +89,16 @@ class CassetteFilter:
         never recorded, so vcrpy would let it reach the network, with the auth's secret.
         """
         self._replaying = replaying
+        headers, params = frozenset(headers), frozenset(params)
+        check_not_letters("CassetteFilter(headers=)", headers)
+        check_not_letters("CassetteFilter(params=)", params)
         header_names = {name.lower() for name in (*_CREDENTIAL_HEADERS, *headers)}
         param_names = set(params)
         for auth in auths:
             if isinstance(auth, CredentialStamper):
+                owner = type(auth).__qualname__
+                check_not_letters(f"{owner}.credential_headers", auth.credential_headers)
+                check_not_letters(f"{owner}.credential_params", auth.credential_params)
                 header_names.update(name.lower() for name in auth.credential_headers)
                 param_names.update(auth.credential_params)
         self.filter_headers = tuple(sorted(header_names))
