@@ -162,7 +162,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `policy_disabled()` still builds a client's budget unpaced.
 - `Expect` declares its answers one way, with `.on()`, which widens the result type with each: `answers` is no longer
   a constructor argument, and stays readable. Write `Expect(reader(Order)).on(404, nothing)` for
-  `Expect(reader(Order), {404: nothing})`.
+  `Expect(reader(Order), {404: nothing})`. `Expect` is no longer a dataclass, so no copy drops the answers `.on()` declared:
+  `copy.replace(expect, accept=...)` and `copy.copy(expect)` keep them, and `dataclasses.replace(expect, ...)`, which
+  built one without them, raises `TypeError`; write `copy.replace` for `dataclasses.replace`. Its `ok`, `answers`,
+  `headers` and `accept` are read-only properties, and two equal `Expect` objects hash alike.
 - `head()` requires `expect=`, as every verb does: write `head(url, expect=nothing)` for `head(url)`.
 - A middleware reads its call with `headgate.call_view(request)`, which returns a `CallView`: write `call_view` for
   `call_info`. `CallView.call` is `CallView.info`, and `CallInfo.route`, the t-string template, is
