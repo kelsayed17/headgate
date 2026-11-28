@@ -373,6 +373,24 @@ def _refuse_async_hooks(cls: type, base: type, *hooks: str) -> None:
             raise TypeError(msg)
 
 
+def _check_mint(cls: type[CachedTokenAuth[Any]]) -> None:
+    """Refuse a ``mint`` *cls* defines that is not an async generator function, which the flow alone can drive."""
+    mint = cls.mint
+    if getattr(mint, "__isabstractmethod__", False) or inspect.isasyncgenfunction(mint):
+        return
+    if inspect.iscoroutinefunction(mint):
+        kind = "coroutine function"
+    elif inspect.isgeneratorfunction(mint):
+        kind = "generator function"
+    else:
+        kind = "plain function"
+    msg = (
+        f"{cls.__name__}.mint is a {kind}: write async def mint(self, request): ... yield Minted(token, lifetime), "
+        "an async generator that yields each request the exchange needs and ends with the Minted"
+    )
+    raise TypeError(msg)
+
+
 def _carries(auth: Auth, request: httpx2.Request) -> bool:
     """Return whether *request* carries any of the headers or query parameters *auth* declares."""
     params = request.url.params
@@ -757,6 +775,7 @@ class CachedTokenAuth[TokenT = str](Auth):
         super().__init_subclass__(**kwargs)
         _refuse_final_overrides(cls, CachedTokenAuth, "mint, attach and skips")
         _refuse_async_hooks(cls, CachedTokenAuth, "attach", "skips")
+        _check_mint(cls)
         declared = _declares_names(cls)
         _check_margin(cls)
         mro = cls.__mro__

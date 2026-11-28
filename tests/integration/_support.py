@@ -87,8 +87,9 @@ class Bearer(CachedTokenAuth):
     """A bearer auth whose exchange never runs: :func:`seeded` caches its token."""
 
     @override
-    def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         raise NotImplementedError
+        yield  # unreachable: the yield makes this the async generator a mint is
 
 
 #: The token :func:`seeded` caches.
