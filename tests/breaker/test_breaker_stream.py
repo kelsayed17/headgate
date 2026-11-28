@@ -37,7 +37,7 @@ from headgate import (
 from headgate._core import BreakerState, CallFinished
 from headgate.breaker import BreakerRegistry, CircuitBreaker
 from headgate.testing import TestClock
-from headgate.timing import Timing
+from headgate.timing import Timing, timing_override
 from tests.support.events import Recorder
 from tests.support.responses import RESPONSE
 from tests.support.timing import built_on
@@ -61,8 +61,9 @@ class _Breakers:
     def __init__(self, threshold: int) -> None:
         """Trip after *threshold* failures; admit a probe a minute later."""
         self.clock = TestClock()
+        self.timing = Timing(clock=self.clock)
         self.policy = registry = built_on(
-            Timing(clock=self.clock),
+            self.timing,
             lambda: BreakerRegistry(BreakerPolicy(failure_threshold=threshold, recovery_timeout=_COOLDOWN)),
         )
         self.breaker: CircuitBreaker = registry.breaker_for(_ORIGIN)
@@ -74,14 +75,15 @@ class _Breakers:
         observers: tuple[Recorder, ...] = (),
         middleware: tuple[Middleware, ...] = (),
     ) -> Client:
-        """Return a client over *transport* that sends each call once, on this registry."""
-        return Client(
-            base_url=_ORIGIN,
-            policy=CallPolicy(rate=_RATE, retry=None, breaker=self.policy),
-            http=HttpOptions(transport=transport),
-            observers=observers,
-            middleware=middleware,
-        )
+        """Return a client over *transport* that sends each call once, on this registry and its clock."""
+        with timing_override(self.timing):
+            return Client(
+                base_url=_ORIGIN,
+                policy=CallPolicy(rate=_RATE, retry=None, breaker=self.policy),
+                http=HttpOptions(transport=transport),
+                observers=observers,
+                middleware=middleware,
+            )
 
     async def trip(self) -> None:
         """Open the breaker with 503s, then let its cooldown elapse."""
@@ -162,11 +164,12 @@ async def test_a_stream_opened_with_a_4xx_is_the_origin_answering() -> None:
 async def test_a_timeout_reading_an_error_head_is_the_networks_not_the_deadline() -> None:
     """Map a network ``TimeoutError`` in a refused stream's error head as the exchange does, not as the deadline."""
     breakers = _Breakers(threshold=2)
-    client = Client(
-        base_url=_ORIGIN,
-        policy=CallPolicy(rate=_RATE, retry=None, breaker=breakers.policy, deadline=60.0),
-        http=HttpOptions(transport=_answering(404, _DiesMidBody(TimeoutError("read timed out")))),
-    )
+    with timing_override(breakers.timing):
+        client = Client(
+            base_url=_ORIGIN,
+            policy=CallPolicy(rate=_RATE, retry=None, breaker=breakers.policy, deadline=60.0),
+            http=HttpOptions(transport=_answering(404, _DiesMidBody(TimeoutError("read timed out")))),
+        )
     with pytest.raises(ClientError) as raised:
         async with client.stream("missing"):
             pytest.fail("a 404 does not open the stream")
@@ -247,12 +250,13 @@ class _ApiThenHangingTokenHost(httpx2.AsyncBaseTransport):
 async def test_a_deadline_passing_during_a_401_re_mint_is_not_charged_to_the_origin(*, hop: bool) -> None:
     """Charge the API origin nothing when the deadline cuts off a re-mint: the token host is what hung."""
     breakers = _Breakers(threshold=1)
-    client = Client(
-        base_url=_ORIGIN,
-        auth=_HangingMint(hop=hop),
-        policy=CallPolicy(rate=_RATE, retry=None, breaker=breakers.policy, deadline=_DEADLINE),
-        http=HttpOptions(transport=_ApiThenHangingTokenHost()),
-    )
+    with timing_override(breakers.timing):
+        client = Client(
+            base_url=_ORIGIN,
+            auth=_HangingMint(hop=hop),
+            policy=CallPolicy(rate=_RATE, retry=None, breaker=breakers.policy, deadline=_DEADLINE),
+            http=HttpOptions(transport=_ApiThenHangingTokenHost()),
+        )
     with pytest.raises(ClientTimeoutError):
         await client.get("x", expect=RESPONSE)
     assert breakers.breaker.state is BreakerState.CLOSED

@@ -219,6 +219,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `headgate.msgspec.reader_for`.
 - `HttpCache(methods=(), paths=(), statuses=())`, an empty rule that made a cache store nothing, raises `ValueError`
   naming `cache=None`: write `CallPolicy(cache=None)` for a client without a cache.
+- A client given a shared `RateBudget` (as its policy's or a route's `rate=`) or `BreakerRegistry` (as `breaker=`)
+  built on another timing than the client raises `TypeError` before it builds anything, as it does for a
+  `CachedTokenAuth` that runs on another: one quota or cooldown cannot run on two clocks. This catches a shared budget
+  built outside `TestClock.install()` and given to a client built inside it, which paced the test on real time. Build
+  the shared object inside the same block as its clients: `with clock.install(): shared = RateBudget(rate);
+  client = Client(..., policy=CallPolicy(rate=shared))`. Under `policy_disabled()` a client ignores a shared budget,
+  and is not refused.
 
 ### Removed
 

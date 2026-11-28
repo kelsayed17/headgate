@@ -45,7 +45,7 @@ from headgate.ratelimit._rate import Adaptive, Rate
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from headgate._core import CallContext, Timing
+    from headgate._core import CallContext, Clock, Timing
     from headgate.ratelimit._feedback import Feedback
 
 __all__ = [
@@ -158,6 +158,11 @@ class Pacer:
         self._turns: set[_Turn] = set()
         # Turns callers abandoned mid-queue, for the next callers to take (see _reserve).
         self._holes: list[_Turn] = []
+
+    @property
+    def clock(self) -> Clock:
+        """The clock the budget paces on, from the timing current when it was built."""
+        return self._clock
 
     @property
     def rate(self) -> Rate:

@@ -266,12 +266,10 @@ async def _deadline_exceeded() -> None:
 
 async def _open_breaker() -> None:
     """Call an origin whose breaker a 503 opened: ``CircuitOpenError`` with the whole cooldown left."""
-    registry = built_on(
-        Timing(clock=lambda: 0.0),
-        lambda: BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN)),
-    )
+    frozen = Timing(clock=lambda: 0.0)
+    registry = built_on(frozen, lambda: BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN)))
     policy = CallPolicy(retry=None, breaker=registry)
-    async with _client(503, policy=policy) as client:
+    async with built_on(frozen, lambda: _client(503, policy=policy)) as client:
         with pytest.raises(ClientError):
             await client.get("orders", expect=nothing)
         await client.get("orders" + _KEYED_QUERY, expect=nothing)

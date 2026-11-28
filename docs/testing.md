@@ -71,7 +71,9 @@ block.
 install a clock the same way: a `Timing(clock=..., sleep=..., wall_clock=..., random=...)`, whose four fields satisfy
 the `Clock`, `Sleep` and `RandomSource` protocols, set for a block with `timing_override`, and read back with
 `current_timing()`. It is the one way in: no budget, registry, breaker or fake network takes a timing of its own, so
-build a shared one inside the block whose clock it should run on.
+build a shared one inside the block whose clock it should run on. A client given a shared `RateBudget` or
+`BreakerRegistry` built on another timing raises `TypeError`, as it does for a `CachedTokenAuth` on another, since one
+quota or cooldown cannot run on two clocks: build the shared object and its clients in one block.
 
 Concurrent sleeps overlap as they would in real time: each sleeper wakes at the reading it began at plus its delay.
 The clock moves to the earliest wake after 16 turns of the event loop in which no sleep begins or ends, room for the
