@@ -66,7 +66,7 @@ from headgate.pagination import LinkHeader
 REPOSITORY = reader(Repository)
 REPOSITORY_OR_NONE = Expect(REPOSITORY).on(HTTPStatus.NOT_FOUND, nothing)  # a missing or hidden repository
 ISSUES = reader(list[Issue])
-ISSUE_PAGES = LinkHeader(items=_issues)
+ISSUE_PAGES = LinkHeader(ISSUES, items=_issues)
 
 
 class GitHub:
@@ -91,7 +91,7 @@ class GitHub:
     def open_issues(self, owner: str, name: str) -> Paginated[Issue]:
         """Return the open issues (and pull requests) of *owner*/*name*, 100 a page, fetched as they are iterated."""
         params = {"state": "open", "per_page": 100}
-        return self._http.paginate(t"repos/{owner}/{name}/issues", expect=ISSUES, pages=ISSUE_PAGES, params=params)
+        return self._http.paginate(t"repos/{owner}/{name}/issues", pager=ISSUE_PAGES, params=params)
 ```
 
 Nothing in those methods mentions retries, pacing, GitHub's `X-RateLimit-*` headers, timeouts or where the token may
@@ -222,7 +222,7 @@ def cursor_after(page: ReleasePage) -> str | None:
 # Readers and pagers are values: build them once, at import, where a bad declaration fails.
 SERIES = reader(Series)
 SERIES_OR_NONE = Expect(SERIES).on(HTTPStatus.NOT_FOUND, nothing)  # the API documents 404 as "no such series"
-RELEASE_PAGES = Cursor(items=releases_on, next=cursor_after, param="cursor")
+RELEASE_PAGES = Cursor(reader(ReleasePage), items=releases_on, next=cursor_after, param="cursor")
 
 
 class CatalogClient:
@@ -258,7 +258,7 @@ class CatalogClient:
 
     def releases(self) -> Paginated[Release]:
         """Return every release, fetched a page at a time as the iteration reaches it."""
-        return self._http.paginate("releases", expect=reader(ReleasePage), pages=RELEASE_PAGES)
+        return self._http.paginate("releases", pager=RELEASE_PAGES)
 ```
 
 Use it with `async with`, which closes the connection pool on the way out:

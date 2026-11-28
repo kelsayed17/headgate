@@ -16,6 +16,7 @@ __all__ = [
     "check_kind",
     "check_names",
     "check_not_letters",
+    "named",
     "type_text",
 ]
 
@@ -41,7 +42,7 @@ def type_text(value: object) -> str:
     return _QUALIFIERS.sub(lambda match: match[1] or "", repr(value))
 
 
-def _named(value: object) -> str:
+def named(value: object) -> str:
     """Return what *value* is, for a refusal: ``the type list[Order]``, ``the class Order``, or its type's name."""
     if _is_type_expression(value):
         return f"the type {type_text(value)}"
@@ -60,7 +61,7 @@ def check_kind(option: str, value: object, kind: type | tuple[type, ...], wanted
         <name>`` for a class, and its type's name for anything else.
     """
     if not isinstance(value, kind):
-        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        msg = f"{option}= takes {wanted} (got {named(value)})"
         raise TypeError(msg)
 
 
@@ -70,7 +71,7 @@ def check_int(option: str, value: object, wanted: str) -> None:
     :raises TypeError: naming the option, what it takes (*wanted*) and what it got.
     """
     if isinstance(value, bool) or not isinstance(value, int):
-        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        msg = f"{option}= takes {wanted} (got {named(value)})"
         raise TypeError(msg)
 
 
@@ -80,7 +81,7 @@ def check_callable(option: str, value: object, wanted: str) -> None:
     :raises TypeError: naming the option, what it takes (*wanted*) and what it got.
     """
     if not callable(value):
-        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        msg = f"{option}= takes {wanted} (got {named(value)})"
         raise TypeError(msg)
 
 
@@ -92,7 +93,7 @@ def check_collection(option: str, value: object, wanted: str) -> None:
     :raises TypeError: naming the option, what it takes (*wanted*) and what it got.
     """
     if isinstance(value, str | bytes) or not isinstance(value, Collection):
-        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        msg = f"{option}= takes {wanted} (got {named(value)})"
         raise TypeError(msg)
 
 
@@ -108,7 +109,7 @@ def check_names(option: str, value: object, wanted: str) -> None:
         or not isinstance(value, Collection)
         or not all(isinstance(name, str) for name in value)
     ):
-        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        msg = f"{option}= takes {wanted} (got {named(value)})"
         raise TypeError(msg)
 
 

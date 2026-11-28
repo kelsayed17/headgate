@@ -1,6 +1,6 @@
 # Pagination
 
-`client.paginate(url, *, expect, pages, payload=None, max_pages=None, on_limit="raise", **options)` follows a paginated
+`client.paginate(url, *, pager, payload=None, max_pages=None, on_limit="raise", **options)` follows a paginated
 endpoint and returns a `Paginated[I, P]`: `async for` yields the items `I`, and `.pages()` yields the pages `P`. The
 item type comes first, and the page type defaults to `object`, so a method that returns a walk of issues is annotated
 `-> Paginated[Issue]`, or `-> Paginated[Issue, IssuePage]` when its callers read the pages too. Each page is a GET through the
@@ -8,22 +8,16 @@ whole stack (rate budget, retries, breaker, cache, credential rules), fetched on
 endpoint that takes its search as a request body is walked with POSTs instead, given that body as `payload=`: see
 [Walks of POSTs](#walks-of-posts).
 
+A pager's first argument is the reader of its pages, a `Reader` or an `Expect`, so the type checker knows the page type
+before it reads the functions after it: a lambda is checked against `Page`, and the walk's item type is inferred.
+
 ```python
 from headgate.pagination import Cursor
 from headgate.msgspec import reader
 
+ITEM_PAGES = Cursor(reader(Page), items=lambda page: page.data, next=lambda page: page.next_cursor, param="after")
 
-def items_of(page: Page) -> list[Item]:
-    return page.data
-
-
-def cursor_of(page: Page) -> str | None:
-    return page.next_cursor
-
-
-ITEM_PAGES = Cursor(items=items_of, next=cursor_of, param="after")
-
-async for item in client.paginate("items", expect=reader(Page), pages=ITEM_PAGES, params={"limit": 100}):
+async for item in client.paginate("items", pager=ITEM_PAGES, params={"limit": 100}):
     ...
 ```
 
@@ -41,8 +35,8 @@ page's raises `ClientError` too. A walk remembers a fixed-size digest of each, f
 soon as it has them: the page after the one that filled the list is never requested.
 
 ```python
-everything = await client.paginate("items", expect=reader(Page), pages=ITEM_PAGES).collect()
-first_250 = await client.paginate("items", expect=reader(Page), pages=ITEM_PAGES).collect(max_items=250)
+everything = await client.paginate("items", pager=ITEM_PAGES).collect()
+first_250 = await client.paginate("items", pager=ITEM_PAGES).collect(max_items=250)
 ```
 
 `max_items=0` returns `[]` without a request, and a negative count raises `ValueError`. Use `max_items` to bound how
@@ -56,9 +50,8 @@ for as long as you keep asking. `max_pages=` bounds the walk:
 
 ```python
 from headgate.errors import PageLimitError
-from headgate.msgspec import reader
 
-orders = client.paginate("orders", expect=reader(Page), pages=ORDER_PAGES, max_pages=50)
+orders = client.paginate("orders", pager=ORDER_PAGES, max_pages=50)
 try:
     async for order in orders:
         ...
@@ -77,23 +70,23 @@ except PageLimitError as exc:
 
 Set the budget where the client calls `paginate`, so every caller of that endpoint gets it.
 
-A walk of POSTs takes its body as `payload=` (see [Walks of POSTs](#walks-of-posts)), and no `body=`: a walk's body is the
-value its pager rewrites, not one encoded body. Its `params=` are the first page's query parameters, and a pager's parameter is
-added to them. `expect=` may be an `Expect`: a page can be a declared answer like any other. Every other option applies
-to each page as it does to one `get` (or one `post`, in a walk of POSTs): `follow_redirects=False` makes a page's
-redirect raise as its 3xx, and `cache_ttl=` is each page's cache lifetime.
+A walk of POSTs takes its body as `payload=` (see [Walks of POSTs](#walks-of-posts)), and no `body=`: a walk's body is
+the value its pager rewrites, not one encoded body. Its `params=` are the first page's query parameters, and a pager's
+parameter is added to them. A pager's reader may be an `Expect`: a page can be a declared answer like any other. Every
+other option applies to each page as it does to one `get` (or one `post`, in a walk of POSTs): `follow_redirects=False`
+makes a page's redirect raise as its 3xx, and `cache_ttl=` is each page's cache lifetime.
 
 ## Strategies
 
 | Strategy | The next page is | Last page |
 | --- | --- | --- |
-| `Cursor(items=, next=, param=)` | the same request with `param` set to the cursor `next(page)` returns | `next` returns `None` or `""`, or a page with no items |
-| `Offset(items=, page_size=, param="offset", size_param=None, start=0, total=None)` | the same request with `param` advanced by the items this page held | a page with fewer items than the page size, or one that reaches `total` |
-| `PageNumber(items=, more=, param="page", start=1)` | the same request with `param` one higher | `more` returns `False`, or a page with no items |
-| `LinkHeader(items=)` | the target of the response's `Link: <...>; rel="next"` (RFC 8288), unless its `anchor` names another resource | no `rel="next"` link, or a page with no items |
-| `NextUrl(items=, next=)` | the URL `next(page)` returns, absolute or relative | `next` returns `None` or `""`, or a page with no items |
-| `BodyCursor(items=, next=, put=)` | the same POST with its body `put(body, cursor)` | as `Cursor` |
-| `BodyOffset(items=, page_size=, offset=, put=, total=None)` | the same POST with its body `put(body, offset(body) + items)` | as `Offset` |
+| `Cursor(read, items=, next=, param=)` | the same request with `param` set to the cursor `next(page)` returns | `next` returns `None` or `""`, or a page with no items |
+| `Offset(read, items=, page_size=, param="offset", size_param=None, start=0, total=None)` | the same request with `param` advanced by the items this page held | a page with fewer items than the page size, or one that reaches `total` |
+| `PageNumber(read, items=, more=, param="page", start=1)` | the same request with `param` one higher | `more` returns `False`, or a page with no items |
+| `LinkHeader(read, items=)` | the target of the response's `Link: <...>; rel="next"` (RFC 8288), unless its `anchor` names another resource | no `rel="next"` link, or a page with no items |
+| `NextUrl(read, items=, next=)` | the URL `next(page)` returns, absolute or relative | `next` returns `None` or `""`, or a page with no items |
+| `BodyCursor(read, items=, next=, put=)` | the same POST with its body `put(body, cursor)` | as `Cursor` |
+| `BodyOffset(read, items=, page_size=, offset=, put=, total=None)` | the same POST with its body `put(body, offset(body) + items)` | as `Offset` |
 
 A page with no items ends a `Cursor`, `PageNumber`, `LinkHeader` or `NextUrl` walk even when it links to another: a link that
 advances while returning nothing makes no progress, and following it spends the rate budget for nothing. For an
@@ -112,7 +105,7 @@ def exact_total(page: SearchPage) -> int | None:
     return page.total.value if page.total.relation == "eq" else None
 
 
-SEARCH_PAGES = Offset(items=hits_of, page_size=100, param="from", total=exact_total)
+SEARCH_PAGES = Offset(reader(SearchPage), items=hits_of, page_size=100, param="from", total=exact_total)
 ```
 
 `PageNumber` asks for page 1, 2, 3 and so on, starting at the page the caller's `params=` name (an int, or a string of
@@ -124,7 +117,7 @@ def more(page: FilingsPage) -> bool:
     return page.next is not None
 
 
-FILING_PAGES = PageNumber(items=results_of, more=more)
+FILING_PAGES = PageNumber(reader(FilingsPage), items=results_of, more=more)
 ```
 
 Asking for the next number on your own request, rather than following the link, keeps every page on your URL with your
@@ -133,7 +126,7 @@ whole query, where a link the server built may drop a filter, or name another ho
 `https` walk to plain `http`, and sent as an absolute URL, under the usual rules: credentials go only to [trusted
 origins](security.md), and the SSRF guard vets it when it is on.
 
-Each strategy is a frozen value: build it once, next to the client, as with readers.
+Each strategy is a frozen value holding its reader: build it once, next to the client, as with readers.
 
 ## Walks of POSTs
 
@@ -156,10 +149,12 @@ def with_cursor(query: Query, cursor: str) -> Query:
     return msgspec.structs.replace(query, cursor=cursor)
 
 
-SEARCH_PAGES = BodyCursor[Page, Item, Query](items=items_of, next=cursor_of, put=with_cursor, write=QUERY)
+SEARCH_PAGES = BodyCursor(
+    reader(Page), items=lambda page: page.data, next=lambda page: page.next_cursor, put=with_cursor, write=QUERY
+)
 
 query = Query(kind="open", limit=100)
-async for item in client.paginate("search", payload=query, expect=reader(Page), pages=SEARCH_PAGES):
+async for item in client.paginate("search", payload=query, pager=SEARCH_PAGES):
     ...
 ```
 
@@ -183,40 +178,44 @@ def at_offset(query: Query, offset: int) -> Query:
     return msgspec.structs.replace(query, offset=offset)
 
 
-ROW_PAGES = BodyOffset[list[Row], Row, Query](
-    items=rows_of, page_size=5000, offset=offset_of, put=at_offset, write=QUERY
-)
+ROW_PAGES = BodyOffset(reader(list[Row]), items=rows_of, page_size=5000, offset=offset_of, put=at_offset, write=QUERY)
 ```
 
 `put` returns a new body and leaves the one it was given alone, so the caller's body is never changed under it.
 `Cursor` and `Offset` page a POST as well, by query parameter, sending the same body with each page: give them the
-body's type and writer, as in `Cursor[Page, Item, Query](..., write=QUERY)`, and pass `payload=`, or leave the writer out
+body's writer, as in `Cursor(reader(Page), ..., write=QUERY)`, and pass `payload=`, or leave the writer out
 for builtins sent as JSON. `LinkHeader` and `NextUrl` refuse a body, since the URL a response names is fetched with a GET;
 `BodyCursor` and `BodyOffset` refuse a walk with no body, since there is nothing for them to rewrite.
 
-Each page is then a `post` in every respect: the same stack, `expect=` (with its declared answers), breaker and page
-budget. That includes the [retry rule](retries.md) for a method that is not idempotent: a POST page that fails after it
-was sent is not re-sent unless something makes that safe. Opt in with `TransportPolicy(idempotency=IdempotencyKeys())`,
-which stamps a fresh key on each page (and the same key on that page's re-sends), or, for a read that merely travels
-as a POST, with `retry=RetryPolicy(methods=IDEMPOTENT_METHODS | {"POST"})`. A fixed key, `idempotency_key=` or the
-key's header in `headers=`, is refused on a walk of POSTs: every page would carry it, and a server that honors it
-would answer each page with the first.
+Each page is then a `post` in every respect: the same stack, the pager's reader (with its declared answers), breaker and
+page budget. That includes the [retry rule](retries.md) for a method that is not idempotent: a POST page that fails
+after it was sent is not re-sent unless something makes that safe. Opt in with
+`TransportPolicy(idempotency=IdempotencyKeys())`, which stamps a fresh key on each page (and the same key on that page's
+re-sends), or, for a read that merely travels as a POST, with `retry=RetryPolicy(methods=IDEMPOTENT_METHODS |
+{"POST"})`. A fixed key, `idempotency_key=` or the key's header in `headers=`, is refused on a walk of POSTs: every page
+would carry it, and a server that honors it would answer each page with the first.
 
 ## A pager of your own
 
-A scheme the strategies do not cover implements the `Pager[P, I]` protocol (`Pager[P, I, B]` for a walk of POSTs whose
-bodies are of type `B`). One that encodes its walk's bodies subclasses `WritingPager[P, I, B]` and gives it a `write`
-property:
+A scheme the strategies do not cover implements the `Pager[I, P]` protocol (`Pager[I, P, B]` for a walk of POSTs whose
+bodies are of type `B`), items first as in `Paginated[I, P]`, with a `read` that reads its pages. One that encodes its
+walk's bodies subclasses `WritingPager[I, P, B]` and gives it a `write` property:
 a pager writes bodies because it says so, not because it has an attribute of that name.
 
 ```python
+from dataclasses import dataclass
+
 import httpx2
 
+from headgate import Reader
 from headgate.pagination import PageRequest
 
 
+@dataclass(frozen=True, slots=True)
 class HeaderTokens:
     """Pages linked by a token the response sends in a header, sent back as the query parameter ``token``."""
+
+    read: Reader[list[Item]]
 
     def first(self, request: PageRequest) -> PageRequest:
         return request
@@ -230,9 +229,9 @@ class HeaderTokens:
 ```
 
 A pager that encodes its walk's bodies subclasses `WritingPager` instead, which makes every member abstract, so leaving
-one out is an error when the pager is built rather than a `None` mid-walk. A frozen dataclass field named `write` gives
-the writer, as the strategies do. Here it has no default, since this endpoint's bodies are not builtins
-(`SearchPages(write=writer(Query))`):
+one out is an error when the pager is built rather than a `None` mid-walk. Frozen dataclass fields named `read` and
+`write` give the reader and the writer, as the strategies do. Here the writer has no default, since this endpoint's
+bodies are not builtins (`SearchPages(read=reader(SearchPage), write=writer(Query))`):
 
 ```python
 from dataclasses import dataclass
@@ -241,14 +240,15 @@ from typing import override
 import httpx2
 import msgspec
 
-from headgate import Writer
+from headgate import Reader, Writer
 from headgate.pagination import PageRequest, WritingPager
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class SearchPages(WritingPager[SearchPage, Item, Query]):
+class SearchPages(WritingPager[Item, SearchPage, Query]):
     """Pages of a search whose body carries the page number."""
 
+    read: Reader[SearchPage]
     write: Writer[Query]
 
     @override
@@ -268,14 +268,14 @@ class SearchPages(WritingPager[SearchPage, Item, Query]):
         return request.with_payload(msgspec.structs.replace(request.payload, page=page.number + 1))
 ```
 
-A pager speaks `PageRequest`: `paginate` builds the first from its URL, `params=` and `payload=`, `first` prepares it once
-(so its refusals raise from `paginate`, and it depends on the request alone), and the pager returns each next.
-`PageRequest(url, params)` is the GET for one page, and `PageRequest(url, params, payload=)` the POST. A pager that
-returns a next URL it read from the wire wraps it in `httpx2.URL`, absolute or relative, and returns it as it is: the
-walk resolves it against the URL that answered the page and refuses a step from `https` to `http`, for every pager.
-A literal or a t-string is as valid as in a verb.
-How a body is sent is the walk's, not the request's: a writing pager's `write` encodes every page's body, whatever
-request the pager returns. Every page with a body is held to the same rules as the first, so a pager that turns a walk
-of GETs into POSTs halfway raises `ValueError` from the iteration if its body cannot be sent.
-`with_param(name, value)` returns a request with one query parameter set, and `with_payload(payload)` with another payload.
-`next_page` sees the page, the request that fetched it and the response (for its headers).
+A pager reads every page with its `read` and speaks `PageRequest`: `paginate` builds the first from its URL, `params=`
+and `payload=`, `first` prepares it once (so its refusals raise from `paginate`, and it depends on the request alone),
+and the pager returns each next. `PageRequest(url, params)` is the GET for one page, and `PageRequest(url, params,
+payload=)` the POST. A pager that returns a next URL it read from the wire wraps it in `httpx2.URL`, absolute or
+relative, and returns it as it is: the walk resolves it against the URL that answered the page and refuses a step from
+`https` to `http`, for every pager. A literal or a t-string is as valid as in a verb. How a body is sent is the walk's,
+not the request's: a writing pager's `write` encodes every page's body, whatever request the pager returns. Every page
+with a body is held to the same rules as the first, so a pager that turns a walk of GETs into POSTs halfway raises
+`ValueError` from the iteration if its body cannot be sent. `with_param(name, value)` returns a request with one query
+parameter set, and `with_payload(payload)` with another payload. `next_page` sees the page, the request that fetched it
+and the response (for its headers).

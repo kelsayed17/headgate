@@ -250,8 +250,8 @@ await client.get(
 
 plus `body=` for a body (a `Body`: what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`, see
 [request bodies](streaming.md#request-bodies)) and `idempotency_key=` for a write. `stream()` takes the same options
-without `expect=`, `cache_ttl=` and `max_response_bytes=`, and `paginate()` takes `expect=`, `pages=`, `max_pages=`,
-`on_limit=` and the same options but the body, applied to each page; a walk of POSTs takes `payload=`
+without `expect=`, `cache_ttl=` and `max_response_bytes=`, and `paginate()` takes `pager=` (which reads its pages),
+`max_pages=`, `on_limit=` and the same options but the body, applied to each page; a walk of POSTs takes `payload=`
 ([Walks of POSTs](pagination.md#walks-of-posts)).
 
 A `params=` value is a `str`, `int`, `float`, `bool` or `None`; an `Enum` member, sent as its value (a `str` or an

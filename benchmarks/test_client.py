@@ -269,10 +269,10 @@ def _linked_page(request: httpx2.Request) -> httpx2.Response:
 def test_paginate_link_header(benchmark: BenchmarkFixture, runner: asyncio.Runner) -> None:
     """Measure walking ``_PAGES`` pages linked by the ``Link`` header, each a GET through the full stack."""
     client = _client(_linked_page)
-    pages = LinkHeader(items=_items_of)
+    pages = LinkHeader(_PAGE, items=_items_of)
 
     async def walk() -> int:
-        return sum([item async for item in client.paginate("items", expect=_PAGE, pages=pages)])
+        return sum([item async for item in client.paginate("items", pager=pages)])
 
     runner.run(walk())
     benchmark(lambda: runner.run(walk()))

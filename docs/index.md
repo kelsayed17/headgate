@@ -151,7 +151,7 @@ from typing import Self
 
 import msgspec
 
-from headgate import BearerAuth, Client, Expect, HttpOptions, Rate, RateBudget, nothing
+from headgate import BearerAuth, Client, Expect, HttpOptions, Paginated, Rate, RateBudget, nothing
 from headgate.msgspec import reader
 from headgate.pagination import LinkHeader
 
@@ -167,7 +167,7 @@ class Issue(msgspec.Struct, frozen=True):
 
 
 REPOSITORY_OR_NONE = Expect(reader(Repository)).on(HTTPStatus.NOT_FOUND, nothing)
-ISSUE_PAGES = LinkHeader(items=lambda page: page)  # each page is a JSON list of issues
+ISSUE_PAGES = LinkHeader(reader(list[Issue]), items=lambda page: page)  # each page is a JSON list of issues
 
 
 class GitHub:
@@ -188,8 +188,8 @@ class GitHub:
     async def repository(self, owner: str, name: str) -> Repository | None:
         return await self._http.get(t"repos/{owner}/{name}", expect=REPOSITORY_OR_NONE)
 
-    def open_issues(self, owner: str, name: str):
-        return self._http.paginate(t"repos/{owner}/{name}/issues", expect=reader(list[Issue]), pages=ISSUE_PAGES)
+    def open_issues(self, owner: str, name: str) -> Paginated[Issue]:
+        return self._http.paginate(t"repos/{owner}/{name}/issues", pager=ISSUE_PAGES)
 ```
 
 ```python

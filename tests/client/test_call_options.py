@@ -42,7 +42,7 @@ def _no_next(_page: None) -> None:
     """Name no next page."""
 
 
-_ONE_PAGE: Final = NextUrl[None, object](items=_no_items, next=_no_next)
+_ONE_PAGE: Final = NextUrl[object, None](nothing, items=_no_items, next=_no_next)
 
 
 def _client(script: Script) -> Client:
@@ -172,13 +172,13 @@ async def test_paginate_refuses_a_request_body_with_its_reason() -> None:
     message = r"^paginate\(\) got an unexpected keyword argument 'data': a walk's body is payload=, the value its pager"
     form: dict[str, Any] = {"data": {"a": 1}}
     with pytest.raises(TypeError, match=message):
-        _client(Script()).paginate("orders", expect=nothing, pages=_ONE_PAGE, **form)
+        _client(Script()).paginate("orders", pager=_ONE_PAGE, **form)
 
 
 async def test_paginate_sends_each_page_once_with_retry_none() -> None:
     """Fetch a page with one send under ``retry=None``, raising the 503."""
     script = Script(*_FLAKY)
-    pages = _client(script).paginate("orders", expect=nothing, pages=_ONE_PAGE, retry=None)
+    pages = _client(script).paginate("orders", pager=_ONE_PAGE, retry=None)
 
     with pytest.raises(UpstreamStatusError):
         await anext(aiter(pages.pages()))
@@ -270,7 +270,7 @@ def test_a_stream_a_walk_and_a_view_refuse_an_old_override_value(options: dict[s
     with pytest.raises(TypeError, match=message):
         client.stream(_PATH, **options)
     with pytest.raises(TypeError, match=message):
-        client.paginate(_PATH, expect=nothing, pages=_ONE_PAGE, **options)
+        client.paginate(_PATH, pager=_ONE_PAGE, **options)
     with pytest.raises(TypeError, match=message):
         client.with_options(**options)
 
@@ -307,7 +307,7 @@ async def test_an_unknown_keyword_is_refused() -> None:
     with pytest.raises(TypeError, match=r"^stream\(\) got an unexpected keyword argument 'retires'$"):
         client.stream(_PATH, **typo)
     with pytest.raises(TypeError, match=r"^paginate\(\) got an unexpected keyword argument 'retires'$"):
-        client.paginate(_PATH, expect=nothing, pages=_ONE_PAGE, **typo)
+        client.paginate(_PATH, pager=_ONE_PAGE, **typo)
     with pytest.raises(TypeError, match=r"^with_options\(\) got an unexpected keyword argument 'retires'$"):
         client.with_options(**typo)
     with pytest.raises(TypeError, match=r"^stream\(\) got an unexpected keyword argument 'cache_ttl'$"):

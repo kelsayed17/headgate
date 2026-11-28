@@ -194,7 +194,8 @@
   '''
   module headgate.pagination
   __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageNumber', 'PageRequest', 'Pager', 'WritingPager', 'parse_link_header']
-  class BodyCursor(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+  class BodyCursor(WritingPager, Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+      field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field put: Callable[[B, str], B]
@@ -203,7 +204,8 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class BodyOffset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]', total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
+  class BodyOffset(WritingPager, Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]', total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
+      field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field offset: Callable[[B], int]
@@ -213,7 +215,8 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Cursor(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+  class Cursor(WritingPager, Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+      field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field param: str
@@ -226,20 +229,23 @@
       field target: str
       field params: Mapping[str, str]
       property rels
-  class LinkHeader(Generic)(*, items: 'Callable[[P], Sequence[I]]', stop_on_empty: 'bool' = True) -> 'None'
+  class LinkHeader(Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', stop_on_empty: 'bool' = True) -> 'None'
+      field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
       field stop_on_empty: bool = True
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class NextUrl(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', stop_on_empty: 'bool' = True) -> 'None'
+  class NextUrl(Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', stop_on_empty: 'bool' = True) -> 'None'
+      field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field stop_on_empty: bool = True
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Offset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', size_param: 'str | None' = None, start: 'int' = 0, total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
+  class Offset(WritingPager, Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', size_param: 'str | None' = None, start: 'int' = 0, total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
+      field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field param: str = 'offset'
@@ -250,7 +256,8 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class PageNumber(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', more: 'Callable[[P], bool]', param: 'str' = 'page', start: 'int' = 1, write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+  class PageNumber(WritingPager, Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', more: 'Callable[[P], bool]', param: 'str' = 'page', start: 'int' = 1, write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+      field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
       field more: Callable[[P], bool]
       field param: str = 'page'
@@ -270,10 +277,12 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Iterable[I]'
+      property read
   class WritingPager(Pager, ABC, Generic)(*args, **kwargs)
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Iterable[I]'
+      property read
       property write
   def parse_link_header(value: 'str') -> 'list[Link]'
   '''
@@ -503,8 +512,8 @@
       def get(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[CallOptions]') -> 'T'
       def head(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[CallOptions]') -> 'T'
       def head(self, url: 'CallUrl', **options: 'Unpack[CallOptions]') -> 'None'
-      def paginate(self, url: 'CallUrl', *, expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, None]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
-      def paginate(self, url: 'CallUrl', *, payload: 'B | None', expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, B]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
+      def paginate(self, url: 'CallUrl', *, pager: 'Pager[I, P, None]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
+      def paginate(self, url: 'CallUrl', *, payload: 'B | None', pager: 'Pager[I, P, B]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
       def patch(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def post(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def put(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'

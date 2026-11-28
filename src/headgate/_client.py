@@ -68,6 +68,7 @@ from headgate._core import (
     Slot,
     check_kind,
     current_timing,
+    named,
     policy_is_disabled,
     url_path,
 )
@@ -622,45 +623,43 @@ class Client:
         return self.stream(url, last_event_id=last_event_id, **options)
 
     @overload
-    def paginate[P, I](
+    def paginate[I, P](
         self,
         url: CallUrl,
         *,
-        expect: Reader[P] | Expect[P],
-        pages: Pager[P, I, None],
+        pager: Pager[I, P, None],
         max_pages: int | None = None,
         on_limit: Literal["raise", "stop"] = "raise",
         **options: Unpack[CallOptions],
     ) -> Paginated[I, P]: ...
     @overload
-    def paginate[P, I, B](
+    def paginate[I, P, B](
         self,
         url: CallUrl,
         *,
         payload: B | None,
-        expect: Reader[P] | Expect[P],
-        pages: Pager[P, I, B],
+        pager: Pager[I, P, B],
         max_pages: int | None = None,
         on_limit: Literal["raise", "stop"] = "raise",
         **options: Unpack[CallOptions],
     ) -> Paginated[I, P]: ...
-    def paginate[P, I, B](
+    def paginate[I, P, B](
         self,
         url: CallUrl,
         *,
         payload: B | None = None,
-        expect: Reader[P] | Expect[P],
-        pages: Pager[P, I, B],
+        pager: Pager[I, P, B],
         max_pages: int | None = None,
         on_limit: Literal["raise", "stop"] = "raise",
         **options: Unpack[CallOptions],
     ) -> Paginated[I, P]:
-        """Return the pages *pages* follows from *url*, each read through *expect*, iterated lazily.
+        """Return the pages *pager* follows from *url*, each read through the pager's ``read``, iterated lazily.
 
         ``async for item in client.paginate(...)`` yields the items of each page in turn; ``.pages()`` yields the
         pages. Each page is a GET (a POST, given ``payload=``) through the whole stack, fetched only when the iteration
         reaches it, and a next-page URL taken from a response is sent as an absolute URL, under the same credential
-        and destination rules as any other. Iterating again starts again from the first page. The call options
+        and destination rules as any other. The pager carries the reader every page is read with, its ``read`` (a
+        :class:`~headgate.Reader` or an ``Expect``). Iterating again starts again from the first page. The call options
         (:class:`~headgate.CallOptions`) apply to every page, as they do to one :meth:`get` (or :meth:`post`).
 
         A walk of POSTs passes its body as ``payload=``: the raw value the pager rewrites page by page (a
@@ -684,16 +683,16 @@ class Client:
             iteration.
         :raises TypeError: for a keyword no call option names, ``body=``, ``json=`` and ``limit=`` included (a walk's
             body is ``payload=``, its page budget ``max_pages=``), for a ``max_pages`` that is not an ``int``, and for
-            an ``expect=`` that is neither a :class:`~headgate.Reader` nor an ``Expect``, before the pager runs.
+            a pager whose ``read`` is not a :class:`~headgate.Reader` or an ``Expect``, before the pager runs.
         """
         check_options("paginate", options, CALL_KEYS, _WALK_HINTS)
         check_overrides(options)
         check_page_budget(max_pages, on_limit)
-        spec: Expect[P] = _expectation(expect)
+        spec: Expect[P] = _expectation(_page_reader(pager))
         call_options = options.copy()
         # How a body is sent is the walk's: the pager's writer encodes every page's, whatever request the pager returns.
-        write = pages.write if isinstance(pages, WritingPager) else None
-        first = pages.first(PageRequest(url, call_options.pop("params", None), payload))
+        write = pager.write if isinstance(pager, WritingPager) else None
+        first = pager.first(PageRequest(url, call_options.pop("params", None), payload))
         # A page's body cannot carry one fixed key: refused for the first page here, and for a later one (a pager that
         # turns GETs into POSTs) before it is sent.
         fixed_key = self._one_key_for_every_page(call_options)
@@ -725,7 +724,7 @@ class Client:
             body = Json(request.payload) if write is None else write(request.payload)
             return await self.post(request.url, expect=paired, body=body, **page_options)
 
-        return PageWalk(fetch, pages, first, source=self._source, max_pages=max_pages, on_limit=on_limit)
+        return PageWalk(fetch, pager, first, source=self._source, max_pages=max_pages, on_limit=on_limit)
 
     def _one_key_for_every_page(self, options: CallOptions) -> bool:
         """Return whether every call made with *options* sends one fixed idempotency key.
@@ -1424,6 +1423,23 @@ def _expectation[T](expect: Reader[T] | Expect[T]) -> Expect[T]:
     """
     check_kind("expect", expect, (Reader, Expect), "a Reader or an Expect")
     return expect if isinstance(expect, Expect) else Expect(expect)
+
+
+def _page_reader[I, P, B](pager: Pager[I, P, B]) -> Reader[P] | Expect[P]:
+    """Return the reader *pager* reads its pages with, its ``read``.
+
+    :raises TypeError: for a pager with no ``read``, or a ``read`` that is neither a :class:`~headgate.Reader` nor an
+        ``Expect``, naming what it got.
+    """
+    read: object = getattr(pager, "read", None)
+    if not isinstance(read, Reader | Expect):
+        got = "no read" if read is None else f"a read of {named(read)}"
+        msg = (
+            f"paginate()'s pager reads each page with its read, a Reader or an Expect (the {type(pager).__name__} has "
+            f"{got}): pass the page reader first, as in Cursor(reader(Page), items=..., next=..., param=...)"
+        )
+        raise TypeError(msg)
+    return cast("Reader[P] | Expect[P]", read)
 
 
 def _paired[T](read: Reader[T]) -> Reader[tuple[T, httpx2.Response]]:

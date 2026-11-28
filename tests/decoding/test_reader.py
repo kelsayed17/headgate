@@ -25,8 +25,6 @@ from headgate.testing import FakeTransport
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from headgate.pagination import PageRequest
-
 
 class Order(msgspec.Struct, frozen=True):
     """A decoded body."""
@@ -144,21 +142,6 @@ def test_expect_refuses_a_callable_that_is_not_a_reader(
     assert str(caught.value) == f"{option} (got {named})"
 
 
-class _FirstRaises:
-    """Just enough of a pager to fail when asked for its first page, so a walk that asks it fails."""
-
-    def first(self, request: PageRequest[None]) -> PageRequest[None]:
-        """Fail: ``paginate`` must check its ``expect=`` before it runs the pager."""
-        del request
-        msg = "the pager ran before expect= was checked"
-        raise AssertionError(msg)
-
-
-async def _paginate(client: Client, expect: Reader[object]) -> object:
-    """Start a walk read through *expect*, whose pager fails if it is asked for a page."""
-    return client.paginate("x", expect=expect, pages=cast("Any", _FirstRaises()))
-
-
 #: Each call that takes ``expect=``, given one.
 _CALLS: dict[str, Callable[[Client, Any], Awaitable[object]]] = {
     "get": lambda c, e: c.get("x", expect=e),
@@ -167,14 +150,13 @@ _CALLS: dict[str, Callable[[Client, Any], Awaitable[object]]] = {
     "patch": lambda c, e: c.patch("x", expect=e),
     "delete": lambda c, e: c.delete("x", expect=e),
     "head": lambda c, e: c.head("x", expect=e),
-    "paginate": _paginate,
 }
 
 
 @_NOT_READERS
 @pytest.mark.parametrize("verb", list(_CALLS))
 async def test_every_call_refuses_a_non_reader_expect(verb: str, value: object, named: str) -> None:
-    """Refuse a non-reader ``expect=`` where the call is made, before the pager runs or anything is sent."""
+    """Refuse a non-reader ``expect=`` where the call is made, before anything is sent."""
     fake = FakeTransport()
     async with Client(base_url="https://api.test", http=HttpOptions(transport=fake)) as client:
         with pytest.raises(TypeError) as caught:
