@@ -126,7 +126,16 @@ from headgate.pagination._paginated import PageWalk, Paginated, check_page_budge
 from headgate.ratelimit._budget import BudgetPausedError, RateBudget, pacer_of
 from headgate.ratelimit._budgets import CALL_BUDGET, Lane, PathBudgets
 from headgate.ratelimit._rate import Rate
-from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE, RetryPolicy
+from headgate.retry._policy import (
+    NETWORK_ERRORS,
+    REPLAYABLE_BODY,
+    RETRY_OUTCOME,
+    RETRY_POLICY,
+    SEND_ONCE,
+    RetryBudget,
+    RetryPolicy,
+)
+from headgate.retry._policy import clock_of as retry_clock_of
 from headgate.streaming import Stream
 from headgate.streaming._stream import OpenStream
 from headgate.timing import Clock, current_timing, timing_override
@@ -1253,6 +1262,10 @@ def _shared_clocks(policy: CallPolicy) -> Iterator[tuple[str, Clock]]:
             yield "RateBudget given as rate=", pacer_of(rate).clock
     if isinstance(policy.breaker, BreakerRegistry):
         yield "BreakerRegistry given as breaker=", clock_of(policy.breaker)
+    retries = [policy.retry, *(route.options.get("retry") for route in policy.routes)]
+    for retry in retries:
+        if retry is not None and isinstance(retry.budget, RetryBudget):
+            yield "RetryBudget given as a RetryPolicy's budget=", retry_clock_of(retry.budget)
 
 
 def _layered_timeout(over: Timeouts | None, under: Timeouts | None) -> Timeouts | None:

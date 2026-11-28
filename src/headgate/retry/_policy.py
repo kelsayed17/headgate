@@ -17,6 +17,7 @@ layer concluded about the call's last attempt, which the client folds into the e
 import math
 import sys
 import threading
+import weakref
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, final, override
 
@@ -28,7 +29,7 @@ from headgate.retry._budget import RetryLedger
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from headgate._core import CallContext
+    from headgate._core import CallContext, Clock
 
 __all__ = [
     "IDEMPOTENCY_HEADER",
@@ -47,6 +48,7 @@ __all__ = [
     "RetryOutcome",
     "RetryPolicy",
     "RetryShare",
+    "clock_of",
     "is_keyed",
 ]
 
@@ -172,13 +174,15 @@ class RetryBudget:
         (``RetryBudget(ratio=0.1)`` is now ``RetryBudget(RetryShare(ratio=0.1))``).
     """
 
-    __slots__ = ("_ledger", "_lock", "_share")
+    __slots__ = ("__weakref__", "_ledger", "_lock", "_share")
 
     def __init__(self, share: RetryShare = _DEFAULT_SHARE) -> None:
         """Spend *share* over its window, on the current timing's clock."""
         check_kind("share", share, RetryShare, "a RetryShare, such as RetryShare(ratio=0.1)")
         self._share = share
-        self._ledger = RetryLedger(share, current_timing().clock)
+        clock = current_timing().clock
+        self._ledger = RetryLedger(share, clock)
+        _CLOCKS[self] = clock
         self._lock = threading.Lock()
 
     @property
@@ -336,3 +340,12 @@ REPLAYABLE_BODY = Slot[bool]("replayable_body")
 
 #: The retry layer's verdict on the call's last attempt, read by the client into the error it raises.
 RETRY_OUTCOME = Slot[RetryOutcome]("retry_outcome")
+
+
+#: The clock each retry budget measures its window on, read without reaching into the budget.
+_CLOCKS: Final[weakref.WeakKeyDictionary[RetryBudget, Clock]] = weakref.WeakKeyDictionary()
+
+
+def clock_of(budget: RetryBudget) -> Clock:
+    """Return the clock *budget* measures its window on: the timing's current when it was built."""
+    return _CLOCKS[budget]

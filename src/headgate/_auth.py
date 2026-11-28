@@ -705,8 +705,8 @@ def check_timing(auth: Auth | None, timing: Timing, shared: Iterable[tuple[str, 
     ``Client()`` calls it before it builds anything, so a refused client leaves no ``httpx2.AsyncClient`` behind, and
     :func:`hold_timing` last, once nothing else can fail. An auth with no state yet, or whose state holds no token,
     started no mint and was given to no client, may move to *timing*. A *shared* object, named by what it was given as,
-    with the clock it was built on, cannot move: a shared rate budget or breaker registry measures one quota or
-    cooldown for every client, so its clients run on the timing it was built on.
+    with the clock it was built on, cannot move: a shared rate budget, breaker registry or retry budget measures
+    one quota, cooldown or retry window for every client, so its clients run on the timing it was built on.
 
     :raises TypeError: when the auth already runs on another clock: a client was built with it on another timing, or
         it holds a token or minted on another, whose lifetime that clock measures; and when a shared object does.
