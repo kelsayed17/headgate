@@ -127,11 +127,10 @@ def test_stock_readers_are_readers() -> None:
     ("build", "option"),
     [
         (Expect, "ok= takes a Reader"),
-        (lambda value: Expect(nothing, {404: value}), "answers= takes a Reader for each status"),
         (lambda value: Expect(nothing).on(404, value), "read= takes a Reader"),
         (conditional, "reader= takes a Reader"),
     ],
-    ids=["ok", "answers", "on", "conditional"],
+    ids=["ok", "on", "conditional"],
 )
 def test_expect_refuses_a_callable_that_is_not_a_reader(
     build: Callable[[Any], object], option: str, value: object, named: str

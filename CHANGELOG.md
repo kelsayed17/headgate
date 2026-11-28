@@ -153,6 +153,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `Client(rate=)` is removed, so write `Client(base_url=..., policy=CallPolicy(rate=Rate.per_second(10)))` for
   `Client(base_url=..., rate=Rate.per_second(10))`. A rate of the wrong kind raises `TypeError` from `CallPolicy`, and
   `policy_disabled()` still builds a client's budget unpaced.
+- `Expect` declares its answers one way, with `.on()`, which widens the result type with each: `answers` is no longer
+  a constructor argument, and stays readable. Write `Expect(reader(Order)).on(404, nothing)` for
+  `Expect(reader(Order), {404: nothing})`.
+- `head()` requires `expect=`, as every verb does: write `head(url, expect=nothing)` for `head(url)`.
 
 ### Removed
 

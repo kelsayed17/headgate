@@ -100,7 +100,7 @@ from headgate._options import (
     reject_upstream_httpx,
 )
 from headgate._request_body import Json, WireValue, lowered, wire_value
-from headgate._responses import Expect, Reader, accepts, nothing
+from headgate._responses import Expect, Reader, accepts, with_answers
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
 from headgate._view import KEEP, ROOT_DEFAULTS, VIEW_KEYS, ViewOptions
@@ -508,24 +508,14 @@ class Client:
         call = _Call("PATCH", url, options)
         return await self._request(call, expect)
 
-    @overload
     async def head[T](
         self,
         url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
         **options: Unpack[CallOptions],
-    ) -> T: ...
-    @overload
-    async def head(self, url: CallUrl, **options: Unpack[CallOptions]) -> None: ...
-    async def head(
-        self,
-        url: CallUrl,
-        *,
-        expect: Reader[object] | Expect[object] = nothing,
-        **options: Unpack[CallOptions],
-    ) -> object:
-        """Send a HEAD and read the reply through *expect*: by default :data:`~headgate.nothing`, as a HEAD has no body.
+    ) -> T:
+        """Send a HEAD and read the reply through *expect*: :data:`~headgate.nothing` for a HEAD read for its status.
 
         A reader still has the status line and headers, ``Content-Length`` and ``Content-Encoding`` included, so
         ``expect=`` reads a header off a HEAD; the size cap is not applied to a body that does not exist. It takes no
@@ -690,7 +680,7 @@ class Client:
         if first.payload is not None and fixed_key:
             raise ValueError(_ONE_KEY_FOR_EVERY_PAGE)
         answers = {status: _paired(read) for status, read in spec.answers.items()}
-        paired = Expect(_paired(spec.ok), answers, headers=spec.headers, accept=spec.accept)
+        paired = with_answers(Expect(_paired(spec.ok), headers=spec.headers, accept=spec.accept), answers)
 
         # The origin the first page was sent to, once it was: a later page's call headers go there and nowhere else.
         addressed: list[httpx2.Origin] = []

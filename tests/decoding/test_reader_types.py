@@ -106,3 +106,17 @@ async def test_the_old_reader_keyword_does_not_type_check(tmp_path: Path) -> Non
 
     assert code != 0, out
     assert out.count("unknown-argument") == len(("reader_for", "reader")), out
+
+
+async def test_one_spelling_of_an_answer_and_of_a_head(tmp_path: Path) -> None:
+    """Refuse ``Expect``'s answers outside ``on()``, and a HEAD without ``expect=``."""
+    code, out = await _check(
+        tmp_path,
+        """
+        Expect(ORDER, {404: nothing})
+        await c.head("x")
+        """,
+    )
+
+    assert code != 0, out
+    assert out.count("too-many-positional-arguments") + out.count("missing-argument") == len(("answers", "head")), out
