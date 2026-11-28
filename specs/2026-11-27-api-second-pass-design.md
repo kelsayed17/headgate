@@ -236,7 +236,8 @@ pinning protocol for third-party transports, was not taken: the one transport th
 the call: `params=` and `headers=` given pairs, non-`str` header values, `idempotency_key`, `last_event_id`,
 `Timeouts` fields, `Expect.on`'s status, `RateBudget`'s rate, `QueryParamAuth`'s mapping, `paginate`'s pager, an
 unknown `stream(method=)` (and lowercase methods), a `bool` where a number is wanted, retry statuses outside 100–599,
-and observers without a callable `notify`.
+and observers without a callable `notify`. A pager's own `read` and hooks are checked when the pager is built, so
+`Cursor(5, items=...)` fails there, not at the first walk. (Amended with the phase 5 plan.)
 
 **5.2 Bodies fail at construction (F6, T17).** `Json` encodes its value when built and refuses a value of non-builtins
 with a message pointing to a flavor's `writer(Type)` or `to_builtins`.
@@ -247,7 +248,8 @@ with a message pointing to a flavor's `writer(Type)` or `to_builtins`.
 `check_codec` asserts that a codec refuses an unsupported type when the decoder is built. A `refuse=` that returns
 neither a `RefusedError` nor `None` is a `TypeError` naming `refuse=`, outside the shape errors; `RefusedError(kind=)`
 must be an `UpstreamStatusError` subclass, checked when built. (`TypeError` stays a shape error: a decode function's
-`Model(**data)` raises it for a body of the wrong shape.)
+`Model(**data)` raises it for a body of the wrong shape.) A `response_check` that returns neither a `RefusedError`
+nor `None` is the same misuse, a `TypeError` naming `response_check=`. (Amended with the phase 5 plan.)
 
 **5.4 Declarations that cannot happen (T10, T18).** An `Expect` that declares a redirect status on a call that follows
 redirects raises `ValueError` saying to pass `follow_redirects=False`. Refused at construction: an empty or blank
@@ -261,11 +263,15 @@ not only for the three built-in offset strategies, and the `isinstance` on concr
 
 **6.1 `fake_network` reports what it built (F3, E4).** `with fake_network(fake) as net:` yields a handle whose
 `.transport` is the fake and whose `.clients` are the `Client`s built in the block, so `budget_for`, `cache_of` and
-`breakers_of` are called without touching an SDK's private attribute.
+`breakers_of` are called without touching an SDK's private attribute. The handle is a `headgate.testing.FakeNetwork`,
+and `.clients` holds the clients whose construction finished in the block; a view is not one. (Amended with the phase 5
+plan.)
 
 **6.2 `fake_network` resolves names (E3).** Under `fake_network`, the SSRF guard's resolver answers every name with one
 fixed, globally routable address; `FakeTransport.resolve(host, *addresses)` sets a host's answer, so a test can
-exercise a refusal. The guard's checks keep running; a private IP literal is still refused.
+exercise a refusal. The guard's checks keep running; a private IP literal is still refused. The fake resolver
+replaces an SDK's own `resolver=` too, as the fake transport replaces its own transport, and `resolve(host)` with no
+addresses is a name that does not resolve. (Amended with the phase 5 plan.)
 
 ### 7. Docs that run
 
@@ -276,6 +282,9 @@ exercise a refusal. The guard's checks keep running; a private IP literal is sti
 - A docs test extracts and runs (or type-checks) every fenced Python block in `README.md` and `docs/` that is marked
   runnable, so a removed spelling cannot survive in the docs. Left to the builder: the marker and which blocks need a
   fake network.
+  The README's blocks are each an excerpt of a module in `examples/` or `tests/examples/`, which the suite runs and
+  type-checks, checked statement by statement, so they are covered by that test and not marked. (Amended with the
+  phase 5 plan.)
 
 ## Dropped findings
 
