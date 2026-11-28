@@ -72,6 +72,7 @@ __all__ = [
     "SigningAuth",
     "StaticHeaderAuth",
     "check_timing",
+    "derives_from",
     "failed_on_auth_hop",
     "hold_timing",
     "mint_hop_failure",
@@ -80,6 +81,18 @@ __all__ = [
     "stamped_names",
     "was_checked",
 ]
+
+
+def derives_from(value: object, base: type) -> bool:
+    """Return whether *value*, a class or an instance, derives from *base* by its own bases.
+
+    ``isinstance`` and ``issubclass`` against an ABC also read its caches, which a class refused while it was being
+    defined (one of two auth bases, say) poisons until it is collected: it lingers among its bases' subclasses with no
+    ABC data of its own, so a check reads its first base's, and a ``SigningAuth`` subclass reads as a
+    ``CachedTokenAuth``. The class's own MRO holds what it derives from, whatever was refused beside it.
+    """
+    return base in (value if isinstance(value, type) else type(value)).__mro__
+
 
 #: The request extension marking a request an auth flow yields to acquire a credential, as opposed to the call's own
 #: request. :class:`CachedTokenAuth` sets it on every request its :meth:`~CachedTokenAuth.mint` yields. A fixture
@@ -372,7 +385,7 @@ def _refuse_final_overrides(cls: type, base: type, hooks: str) -> None:
     failed deep inside the call. A class of both ``SigningAuth`` and ``CachedTokenAuth`` is refused first, in its own
     words: it inherits one base's flow, which the other's check would take for an override it never wrote.
     """
-    if issubclass(cls, SigningAuth) and issubclass(cls, CachedTokenAuth):
+    if derives_from(cls, SigningAuth) and derives_from(cls, CachedTokenAuth):
         msg = (
             f"{cls.__name__} subclasses CachedTokenAuth and SigningAuth, which cannot be combined in one auth: each "
             "runs a flow of its own. Subclass CachedTokenAuth for the token, and sign each attempt in a middleware, "
@@ -883,7 +896,7 @@ def check_timing(auth: Auth | None, timing: Timing, shared: Iterable[tuple[str, 
                 "as its clients"
             )
             raise TypeError(msg)
-    state = _existing_state(auth) if isinstance(auth, CachedTokenAuth) else None
+    state = _existing_state(cast("CachedTokenAuth[object]", auth)) if derives_from(auth, CachedTokenAuth) else None
     if state is None or state.clock == timing.clock:
         return
     if state.held_by_client or state.held is not None or state.minted():
@@ -902,8 +915,8 @@ def hold_timing(auth: Auth | None, timing: Timing) -> None:
     when the client is built. :func:`check_timing` refused, before the client was built, an auth this would move off
     another clock it already runs on.
     """
-    if isinstance(auth, CachedTokenAuth):
-        state = _state_of(auth, timing)
+    if derives_from(auth, CachedTokenAuth):
+        state = _state_of(cast("CachedTokenAuth[object]", auth), timing)
         state.clock = timing.clock
         state.held_by_client = True
 

@@ -161,7 +161,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   in a middleware. A class of both bases, `class Both(CachedTokenAuth, SigningAuth)`, raises `TypeError` saying the
   two cannot be combined in one auth, since each runs a flow of its own, where it blamed an override of the flow the
   class never wrote: subclass `CachedTokenAuth` for the token, and sign each attempt in a middleware, which sees the
-  token on the request.
+  token on the request. headgate tells the two bases apart by a class's own bases, not `isinstance`, so the refused
+  class, which lingers among its bases' subclasses until it is collected, cannot make a later signer read as a token
+  auth, or the reverse.
 - `SigningAuth.sign(request, now)` is handed the attempt's wall-clock time in Unix seconds, from the client's timing, so
   a signer whose client is built under `TestClock.install()` runs on the test clock like the rest of the client. Write
   `def sign(self, request, now)` and sign with `now` where you called `time.time()`.

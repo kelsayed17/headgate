@@ -48,7 +48,7 @@ from typing import TYPE_CHECKING, Final, cast, final
 import httpx2
 
 from headgate._attempts import AttemptTransport
-from headgate._auth import Auth, SigningAuth
+from headgate._auth import Auth, SigningAuth, derives_from
 from headgate._core import sealed
 from headgate._middleware import MiddlewareTransport
 from headgate._options import httpx_timeout
@@ -203,7 +203,8 @@ def build_transport_stack(
     reported (``AttemptFinished``).
     """
     layer = SendTrackingTransport(transport=_network(http))
-    if isinstance(signer := credentials.auth, SigningAuth):
+    if derives_from(credentials.auth, SigningAuth):
+        signer = cast("SigningAuth", credentials.auth)
         layer = MiddlewareTransport(
             transport=layer, middleware=(), guards=(credentials.guard,), signer=(signer, timing.wall_clock)
         )

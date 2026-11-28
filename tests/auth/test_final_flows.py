@@ -11,6 +11,7 @@ refuses it.
 from __future__ import annotations
 
 import asyncio
+import gc
 import sys
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any, cast
@@ -18,6 +19,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from headgate import Auth, BearerAuth, CachedTokenAuth, QueryParamAuth, SigningAuth, StaticHeaderAuth
+from headgate._auth import derives_from
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -33,6 +35,11 @@ def _flow(_self: object, request: object) -> object:
 
 #: A declaration, so the class statement reaches the check of its final members.
 _DECLARED = {"credential_headers": frozenset({"x-sig"})}
+
+
+async def _mint(_self: object, _request: object) -> AsyncGenerator[object, object]:
+    """Stand in for a token mint; never called."""
+    yield None
 
 
 def _identity(_self: object) -> bytes:
@@ -118,6 +125,30 @@ def test_one_auth_cannot_be_both_a_token_and_a_signer(bases: tuple[type, ...]) -
     )
     with pytest.raises(TypeError, match=message):
         type("_Both", bases, {"credential_headers": frozenset({"authorization", "x-sig"})})
+
+
+@pytest.mark.parametrize(
+    "bases", [(CachedTokenAuth, SigningAuth), (SigningAuth, CachedTokenAuth)], ids=["token-first", "signing-first"]
+)
+def test_a_refused_class_of_both_bases_does_not_confuse_the_next(bases: tuple[type, ...]) -> None:
+    """Tell a signer from a token auth by its bases while a refused class of both lingers, uncollected.
+
+    The refused class stays among its bases' subclasses until it is collected, with no ABC data of its own, so an
+    ``issubclass`` against either base reads the other's cache through it: a plain signer read as a token auth, and was
+    refused as both.
+    """
+    gc.disable()
+    try:
+        with pytest.raises(TypeError, match="cannot be combined in one auth"):
+            type("_Both", bases, {"credential_headers": frozenset({"authorization", "x-sig"})})
+        signer = type("_Signer", (SigningAuth,), {"sign": _flow, "credential_identity": _identity, **_DECLARED})
+        token = type("_Token", (CachedTokenAuth,), {"mint": _mint, "credential_identity": _identity})
+
+        assert derives_from(signer, SigningAuth)
+        assert not derives_from(signer, CachedTokenAuth)
+        assert not derives_from(token, SigningAuth)
+    finally:
+        gc.enable()
 
 
 async def test_the_type_checker_reports_an_overridden_flow(tmp_path: Path) -> None:
