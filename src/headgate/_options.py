@@ -518,13 +518,17 @@ _MALFORMED = "malformed"
 
 
 def _check_proxy(proxy: str) -> None:
-    """Raise ``ValueError`` for a proxy URL httpx2 cannot use."""
+    """Raise ``ValueError`` for a proxy URL httpx2 cannot use: another scheme, or no host to connect to."""
     try:
-        scheme = httpx2.URL(proxy).scheme or _MALFORMED
+        url = httpx2.URL(proxy)
     except httpx2.InvalidURL:
-        scheme = _MALFORMED
+        url = None
+    scheme = _MALFORMED if url is None else url.scheme or _MALFORMED
     if scheme not in _PROXY_SCHEMES:
         msg = f"proxy must be an http, https or socks5 URL (got a {scheme} URL)"
+        raise ValueError(msg)
+    if url is not None and not url.host:
+        msg = "proxy must name the host to connect to, such as 'http://proxy.example:3128' (got a URL with no host)"
         raise ValueError(msg)
 
 

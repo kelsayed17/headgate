@@ -41,7 +41,6 @@ The key is per process, so credential-partitioned entries in a persistent storag
 nor is an entry whose response varies on a request header (``Vary``); they expire by their TTL like any other.
 """
 
-import contextlib
 import hashlib
 import hmac
 import itertools
@@ -271,8 +270,12 @@ def credential_scope(
 #: What decides which hosts a guarded client reaches: its SSRF guard's address check and its resolver.
 type Guard = tuple[object, object]
 
-#: Each live guard's label, by the identities of its check and resolver: an entry goes when either is collected.
-_GUARD_LABELS: Final[dict[tuple[int, int], bytes]] = {}
+#: What drops a guard's entry when one of its parts is collected; ``weakref.finalize`` is generic to the checker only.
+type _Finalizer = weakref.finalize[[tuple[int, int]], object]
+
+#: Each live guard's entry, by the identities of its check and resolver: its label, the finalizers that drop the entry
+#: when a part is collected, and the parts that take no weak reference, held so no later object takes their identity.
+_GUARD_LABELS: Final[dict[tuple[int, int], tuple[bytes, tuple[_Finalizer, ...], tuple[object, ...]]]] = {}
 #: Reentrant: a collection run while the table is locked may finalize a check or a resolver, whose entry then goes.
 _GUARD_LABELS_LOCK: Final = threading.RLock()
 #: Where the next label is drawn from: a count, so a label is never handed out twice, even after its entry went.
@@ -284,22 +287,28 @@ def _guard_label(guard: Guard) -> bytes:
 
     Labels are per process, as the partition key is. They are keyed by identity, since a check or a resolver need not
     be hashable (a bound method of a mutable object), and two of them that compare equal may still decide differently.
-    An entry holds neither object: it is dropped when either is collected, so a guard's closure is not kept alive, and
-    an identity reused by a later object finds no entry and draws a new label.
+    An identity is only ever a live object's: a part that takes a weak reference is not held, and its entry goes when
+    it is collected, so a guard's closure is not kept alive; one that takes none (``None``, a slotted object) is held
+    by the entry, so no other object can take its identity, and with it the label, while the entry lives.
     """
     key = (id(guard[0]), id(guard[1]))
     with _GUARD_LABELS_LOCK:
-        label = _GUARD_LABELS.get(key)
-        if label is None:
-            label = _GUARD_LABELS[key] = str(next(_GUARD_SERIAL)).encode()
+        entry = _GUARD_LABELS.get(key)
+        if entry is None:
+            finalizers: list[_Finalizer] = []
+            held: list[object] = []
             for part in guard:
-                # None and a builtin take no weak reference, and are never collected: their entry stays.
-                with contextlib.suppress(TypeError):
-                    weakref.finalize(part, _forget_guard, key)
-    return label
+                try:
+                    finalizers.append(weakref.finalize(part, _forget_guard, key))
+                except TypeError:
+                    held.append(part)
+            entry = _GUARD_LABELS[key] = (str(next(_GUARD_SERIAL)).encode(), tuple(finalizers), tuple(held))
+    return entry[0]
 
 
 def _forget_guard(key: tuple[int, int]) -> None:
-    """Drop the label of a guard whose check or resolver was collected."""
+    """Drop the entry of a guard whose check or resolver was collected, and the finalizer its other part still has."""
     with _GUARD_LABELS_LOCK:
-        _GUARD_LABELS.pop(key, None)
+        _, finalizers, _ = _GUARD_LABELS.pop(key, (b"", (), ()))
+    for finalizer in finalizers:
+        finalizer.detach()

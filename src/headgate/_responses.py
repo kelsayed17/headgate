@@ -22,6 +22,7 @@ from code over ``response.json()``, or nesting too deep to parse) become ``Respo
 """
 
 import codecs
+import enum
 import functools
 import json
 import math
@@ -135,14 +136,21 @@ def reader_hint(value: object) -> str | None:
     return f"write reader({type_text(value)}) with a flavor's reader, from headgate.msgspec or headgate.pydantic"
 
 
+#: Builtins that take bytes but misread every body: ``bool`` reads any as ``True``, the others hold its byte values.
+_MISREADING: Final = frozenset({bool, tuple, set, frozenset})
+
+
 def _is_trap(decode: object) -> bool:
     """Return whether *decode*, a class or a type given as a function of a body's bytes, would misread every body.
 
-    A builtin with a reader of its own (``str`` returned the bytes' ``repr``), a model class (which takes its fields,
-    not bytes) and a type expression (``list[Row]``) are; a class built from bytes (``io.BytesIO``, ``bytearray``)
-    decodes the body as it is written to.
+    A builtin with a reader of its own (``str`` returned the bytes' ``repr``), a builtin that misreads every body
+    (``bool``, ``tuple``, ``set``, ``frozenset``), a model class (which takes its fields, not bytes), an enum and a type
+    expression (``list[Row]``) are; a class built from bytes (``io.BytesIO``, ``bytearray``) decodes the body as it is
+    written to.
     """
-    return decode in _READERS_FOR or is_model_class(decode) or not isinstance(decode, type)
+    if not isinstance(decode, type):
+        return True
+    return decode in _READERS_FOR or decode in _MISREADING or is_model_class(decode) or issubclass(decode, enum.Enum)
 
 
 def _name_of(read: object) -> str:

@@ -10,8 +10,9 @@ caller's bug, not a body of the wrong shape.
 
 from __future__ import annotations
 
+import enum
 import io
-from typing import TYPE_CHECKING, Any, Final, cast, override
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypedDict, cast, override
 
 import httpx2
 import msgspec
@@ -50,6 +51,24 @@ class _Row(msgspec.Struct, frozen=True):
     value: int
 
 
+class _Order(TypedDict):
+    """A record typed as a dict, which a codec builds from its fields."""
+
+    id: int
+
+
+class _Point(NamedTuple):
+    """A record typed as a tuple: called on a body's bytes, it holds them as its one field."""
+
+    x: bytes
+
+
+class _Side(enum.Enum):
+    """A choice a codec reads from its value, which no body's bytes are."""
+
+    BUY = "buy"
+
+
 @pytest.mark.parametrize(
     ("cls", "advice"),
     [
@@ -78,11 +97,35 @@ def test_a_reader_refuses_a_class(cls: type, advice: str) -> None:
         (dict, "the class dict", r"for the body as JSON, use as_json"),
         (_Row, "the class _Row", r"write reader\(_Row\) with a flavor's reader, from headgate.msgspec or headgate"),
         (list[_Row], r"the type list\[_Row\]", r"write reader\(list\[_Row\]\) with a flavor's reader, from headgate"),
+        (_Order, "the class _Order", r"write reader\(_Order\) with a flavor's reader"),
+        (_Point, "the class _Point", r"write reader\(_Point\) with a flavor's reader"),
+        (_Side, "the class _Side", r"write reader\(_Side\) with a flavor's reader"),
+        (bool, "the class bool", r"write reader\(bool\) with a flavor's reader"),
+        (tuple, "the class tuple", r"write reader\(tuple\) with a flavor's reader"),
+        (set, "the class set", r"write reader\(set\) with a flavor's reader"),
+        (frozenset, "the class frozenset", r"write reader\(frozenset\) with a flavor's reader"),
     ],
-    ids=["str", "bytes", "dict", "model", "type"],
+    ids=[
+        "str",
+        "bytes",
+        "dict",
+        "model",
+        "type",
+        "typed-dict",
+        "named-tuple",
+        "enum",
+        "bool",
+        "tuple",
+        "set",
+        "frozenset",
+    ],
 )
 def test_a_body_reader_refuses_a_class(decode: object, got: str, advice: str) -> None:
-    """Refuse a class or a type to decode the bytes with: ``str`` returned their ``repr``, a model held them."""
+    """Refuse a class or a type to decode the bytes with: ``str`` returned their ``repr``, a model held them.
+
+    ``bool`` read every body as ``True``, ``tuple``, ``set`` and ``frozenset`` held its byte values, and an enum
+    refused every body as no value of it.
+    """
     with pytest.raises(
         TypeError, match=rf"^body_reader\(decode\) takes a function of the body's bytes \(got {got}\): {advice}"
     ):
@@ -92,7 +135,8 @@ def test_a_body_reader_refuses_a_class(decode: object, got: str, advice: str) ->
 def test_a_body_reader_takes_a_class_built_from_bytes() -> None:
     """Accept a class a body's bytes build, such as ``io.BytesIO`` for a zip reader, as 0.12.1 did.
 
-    Only a class that misreads every body is refused: a builtin with a reader of its own, a model, a type expression.
+    Only a class that misreads every body is refused: a builtin with a reader of its own or one that misreads every
+    body, a model, an enum, a type expression.
     """
     read = body_reader(io.BytesIO)
 

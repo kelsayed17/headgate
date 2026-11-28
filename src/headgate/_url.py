@@ -140,9 +140,9 @@ def redact_secrets(text: str) -> str:
     return _PAIR.sub(lambda m: f"{m[1]}{m[2]}={_REDACTED}" if is_secret_param(m[2]) else m[0], text)
 
 
-#: Everything from a URL's ``//`` to its last ``@``: the userinfo of a URL nothing parsed, a password with a ``/``, a
-#: quote or a space in it included.
-_ANY_USERINFO: Final = re.compile(r"//.*@", re.DOTALL)
+#: Everything after a URL's scheme up to its last ``@``: the userinfo of a URL nothing parsed, a password with a ``/``,
+#: a quote or a space in it included, and one written with no ``//`` or no scheme at all (``user:pw@host``).
+_ANY_USERINFO: Final = re.compile(r"^((?:[A-Za-z][A-Za-z0-9+.-]*:)?/*).*@", re.DOTALL)
 
 
 def hide_userinfo(url: str) -> str:
@@ -152,7 +152,7 @@ def hide_userinfo(url: str) -> str:
     URL given as a setting is the whole string, so everything up to its last ``@`` is hidden, a ``@`` in its path
     included, which a message can spare.
     """
-    return redact_secrets(_ANY_USERINFO.sub(f"//{_REDACTED}@", url, count=1))
+    return redact_secrets(_ANY_USERINFO.sub(rf"\g<1>{_REDACTED}@", url, count=1))
 
 
 def escape_segment(value: object) -> str:

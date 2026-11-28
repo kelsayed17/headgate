@@ -9,6 +9,7 @@ import asyncio
 import itertools
 import re
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, assert_type, cast, override
 
 import httpx2
@@ -37,7 +38,7 @@ from headgate.pagination import BodyCursor, BodyOffset, Cursor, LinkHeader, Next
 from headgate.testing import FakeTransport
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+    from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 
     from hishel import AsyncSqliteStorage
 
@@ -1298,7 +1299,20 @@ async def test_a_strategys_items_that_returns_text_is_refused() -> None:
     """Refuse ``items=`` returning a ``str``, a sequence of characters the walk would yield one by one as items."""
     api = _Api(_three_pages)
     pager = Offset(reader(Page), items=cast("Any", lambda _page: "abc"), page_size=2)
-    with pytest.raises(TypeError, match=r"^items= returns the items on a page, a collection, such as a list, not text"):
+    with pytest.raises(TypeError, match=r"^items= returns the items on a page, a sequence, such as a list, not text"):
+        await api.client().paginate("items", pager=pager).collect()
+
+
+@pytest.mark.parametrize("mapping", [{"a": 1}, MappingProxyType({"a": 1})], ids=["dict", "mappingproxy"])
+async def test_a_strategys_items_that_returns_a_mapping_is_refused(mapping: Mapping[str, int]) -> None:
+    """Refuse ``items=`` returning a mapping, whose keys the walk would yield as items, saying to return its values."""
+    api = _Api(_three_pages)
+    pager = Offset(reader(Page), items=cast("Any", lambda _page: mapping), page_size=2)
+    with pytest.raises(
+        TypeError,
+        match=r"^items= returns the items on a page, a sequence, such as a list, not a mapping, whose keys would be "
+        rf"walked as items \(got {type(mapping).__name__}\): return the list inside it, or its \.values\(\)$",
+    ):
         await api.client().paginate("items", pager=pager).collect()
 
 
@@ -1431,12 +1445,12 @@ _WRONG_RETURNS: Final[list[tuple[Pager[Any, Page, Any], dict[str, object] | None
     (
         Cursor(reader(Page), items=_returning(None), next=cursor_of, param="after"),
         None,
-        r"^items= returns the items on a page, a collection, such as a list \(got NoneType\)$",
+        r"^items= returns the items on a page, a sequence, such as a list \(got NoneType\)$",
     ),
     (
         Offset(reader(Page), items=_returning(item for item in ()), page_size=2),
         None,
-        r"^items= returns the items on a page, a collection, such as a list \(got generator\)$",
+        r"^items= returns the items on a page, a sequence, such as a list \(got generator\)$",
     ),
     (
         Offset(reader(Page), items=items_of, page_size=2, total=_returning("10")),

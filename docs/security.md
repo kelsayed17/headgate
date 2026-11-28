@@ -78,6 +78,12 @@ middleware's credentials: the middleware did not choose it. A [`SigningAuth`](au
 below the rate budget, and the guard runs once more after it, so its signature is withheld from an untrusted hop the
 same way.
 
+A credential set below every hop's guard would go wherever a hop goes, so the curl transport refuses one where it is
+built: a `CurlOpt.HTTPHEADER`, `HTTP3_HTTPHEADER`, `COOKIE`, `USERPWD`, `USERNAME`, `PASSWORD` or `XOAUTH2_BEARER` in
+`AsyncCurlTransport(curl_options=...)` raises `ValueError`, since curl would add it to every request, whatever its
+origin. Set a header with `HttpOptions(headers=...)` and a credential with an auth. A proxy's own credential
+(`CurlOpt.PROXYUSERPWD`) goes to the one proxy, and is taken.
+
 ## Redirects
 
 - **No downgrade.** A redirect from `https` to `http` is never followed: the 3xx becomes the call's final response and
@@ -113,8 +119,8 @@ name, so TLS still sends it as SNI and verifies the certificate against it, and 
   the same guard may share it: closing one leaves it open for the others, and its curl session closes with the last
   client built on it, or when `transport.aclose()` is called; a client built on it after that raises `ValueError`,
   since it could send nothing, so build a new transport for it. A `CurlOpt.PROXY`, `PRE_PROXY`, `RESOLVE`,
-  `CONNECT_TO`, `UNIX_SOCKET_PATH` or `ABSTRACT_UNIX_SOCKET` in its `curl_options` chooses the address itself, so the
-  guard refuses them.
+  `CONNECT_TO`, `UNIX_SOCKET_PATH` or `ABSTRACT_UNIX_SOCKET` in its `curl_options` chooses the address itself, and a
+  `PORT` there one curl looks up for itself, so the guard refuses them.
 - Any other custom transport (`HttpOptions(transport=...)`) resolves names itself: every hop is still vetted before
   it is sent, but the transport's own lookup is not pinned. An attempt a [middleware](configuration.md#middleware)
   sends to an origin the guard has not admitted is vetted again below the last middleware, a retry or a hedge of it

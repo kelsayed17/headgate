@@ -220,7 +220,7 @@ class PageWalk[I, P, B]:
         An iterator gives up its first item to be seen, so it is put back in front of the rest.
         """
         items = self._pager.page_items(page)
-        # A built-in strategy's own page_items has refused an items= that returns no sequence, naming it.
+        # A built-in strategy's page_items has already refused an items= whose return it cannot count, naming items=.
         returned(f"{type(self._pager).__name__}.page_items()", items, Iterable, ITEMS, optional=False)
         if not isinstance(items, Iterator):
             return items, next(iter(items), _NO_ITEM) is not _NO_ITEM

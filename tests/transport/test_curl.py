@@ -196,6 +196,41 @@ def test_curl_sending_every_request_to_one_url_is_refused(sessions: list[_Sessio
     assert sessions == []
 
 
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        (CurlOpt.HTTPHEADER, [b"Authorization: Bearer s3cret"]),
+        (CurlOpt.HTTP3_HTTPHEADER, [b"Authorization: Bearer s3cret"]),
+        (CurlOpt.COOKIE, "session=s3cret"),
+        (CurlOpt.USERPWD, "user:s3cret"),
+        (CurlOpt.USERNAME, "user"),
+        (CurlOpt.PASSWORD, "s3cret"),
+        (CurlOpt.XOAUTH2_BEARER, "s3cret"),
+    ],
+    ids=lambda case: case.name if isinstance(case, CurlOpt) else "",
+)
+def test_curl_sending_a_header_or_credential_with_every_request_is_refused(
+    sessions: list[_Session], option: CurlOpt, value: object
+) -> None:
+    """Refuse a header list or a credential in ``curl_options``: curl adds it to every request below every hook.
+
+    It reached every origin a redirect led to, past the credential guard that drops a credential there, and the
+    redaction of secrets; a header list also replaced each request's own headers, the auth's among them.
+    """
+    with pytest.raises(
+        ValueError, match=rf"must not set CurlOpt\.{option.name}: .* HttpOptions\(headers=\.\.\.\)"
+    ) as caught:
+        _transport(sessions, curl_options={option: value})
+    assert "s3cret" not in str(caught.value)
+    assert sessions == []
+
+
+def test_a_proxy_credential_is_taken(sessions: list[_Session]) -> None:
+    """Take a proxy's user and password in ``curl_options``: they go to the one proxy, never to an origin."""
+    _, session = _transport(sessions, curl_options={CurlOpt.PROXY: _PROXY, CurlOpt.PROXYUSERPWD: "user:pass"})
+    assert session.init["curl_options"][CurlOpt.PROXYUSERPWD] == "user:pass"
+
+
 @pytest.mark.parametrize("count", [0, -1])
 def test_fewer_than_one_connection_is_refused(sessions: list[_Session], count: int) -> None:
     """Refuse a connection count below 1, on which curl_cffi never finishes building its session, before building it."""

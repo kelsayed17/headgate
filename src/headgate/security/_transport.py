@@ -117,10 +117,12 @@ def address_hook(guard: AddressGuard) -> Callable[[httpx2.Request], Awaitable[No
     """
 
     async def vet(request: httpx2.Request) -> None:
+        # The origin vet_request checks, read before its lookup awaits, so a move meanwhile is never marked as vetted.
+        origin = httpx2.Origin(request.url)
         await vet_request(guard, request)
         # Marked once admitted, never before: a retry or a hedge of a request moved since carries the mark of where it
         # was, and is vetted again where it is now.
-        request.extensions[VETTED_ORIGIN] = httpx2.Origin(request.url)
+        request.extensions[VETTED_ORIGIN] = origin
 
     return vet
 

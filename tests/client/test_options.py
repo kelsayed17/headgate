@@ -153,6 +153,14 @@ def _ok(request: httpx2.Request) -> httpx2.Response:
             lambda: HttpOptions(proxy="//p.test:8080"),
             "proxy must be an http, https or socks5 URL (got a malformed URL)",
         ),
+        (
+            lambda: HttpOptions(proxy="http:user:s3cret@proxy.example.test:8080"),
+            "proxy must name the host to connect to, such as 'http://proxy.example:3128' (got a URL with no host)",
+        ),
+        (
+            lambda: HttpOptions(proxy="socks5://:1080"),
+            "proxy must name the host to connect to, such as 'http://proxy.example:3128' (got a URL with no host)",
+        ),
         (lambda: Route("/"), "fragment must name at least one path segment (got '/')"),
         (lambda: Route("/x", deadline=0.0), "deadline must be > 0 and finite, or None (got 0.0)"),
         (
@@ -160,7 +168,16 @@ def _ok(request: httpx2.Request) -> httpx2.Response:
             "header= takes header names that are HTTP tokens, of letters, digits and !#$%&'*+-.^_`|~ (got '')",
         ),
     ],
-    ids=["other-scheme", "unparsable", "no-scheme", "empty-route", "route-deadline", "empty-header"],
+    ids=[
+        "other-scheme",
+        "unparsable",
+        "no-scheme",
+        "no-slashes-no-host",
+        "no-host",
+        "empty-route",
+        "route-deadline",
+        "empty-header",
+    ],
 )
 def test_a_bad_option_says_exactly_what_is_wrong(build: Callable[[], object], message: str) -> None:
     """Refuse a bad option with a message naming the option and what it got."""
@@ -789,6 +806,9 @@ _BAD_BASE_URLS: Final = [
     ("https://user:s3cret@api.example/v1", _NO_USER + r"\(got 'https://\*\*\*@api\.example/v1'\)" + _USE_AUTH),
     # A token as the user, holding a raw "#": redacted whole before the URL is cut at its first "#".
     ("https://s3cret#x@api.example/v1", _NO_QUERY + r"\(got 'https://\*\*\*@api\.example/v1'\)" + _USE_PARAMS),
+    # A password in a URL written without its scheme, or without the "//" after it, is hidden as well.
+    ("api_user:s3cret@api.example.com/v1", _ABSOLUTE + r"\(got '\*\*\*@api\.example\.com/v1'\)" + _ADD_SCHEME),
+    ("http:u:s3cret@api.example:8080", _ABSOLUTE + r"\(got 'http:\*\*\*@api\.example:8080'\)" + _ADD_SCHEME),
 ]
 
 

@@ -17,7 +17,8 @@ import dataclasses
 import gc
 import math
 import weakref
-from typing import TYPE_CHECKING, Final, override
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Final, cast, override
 
 import httpx2
 import pytest
@@ -28,6 +29,7 @@ from headgate.cache import Partition
 from headgate.cache._credentials import _GUARD_LABELS
 from headgate.errors import ForbiddenDestinationError
 from headgate.events import CacheOutcome
+from headgate.security import forbidden_reason
 from tests.cache._helpers import (
     NETWORK_BODY,
     FaultyStorage,
@@ -384,18 +386,64 @@ async def test_a_guards_cache_label_keeps_its_resolver_no_longer_than_its_client
     tenant = _Tenant()
     alive = weakref.ref(tenant)
     labels = len(_GUARD_LABELS)
+    resolver = tenant.resolve
     client = stub_client(
         transport=Network(),
         cache=HttpCache(storage=storage, ttl=None),
-        http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=tenant.resolve)),
+        http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=resolver)),
     )
     async with client:
         assert await client.get("series", expect=as_bytes) == NETWORK_BODY
-    del client, tenant
+    (_, finalizers, _) = next(entry for key, entry in _GUARD_LABELS.items() if key[1] == id(resolver))
+    del client, tenant, resolver
     gc.collect()
 
     assert alive() is None
     assert len(_GUARD_LABELS) == labels, "the guard's label went with its resolver"
+    assert not any(finalizer.alive for finalizer in finalizers), "the default check's finalizer went with the entry"
+
+
+@dataclass(frozen=True, slots=True)
+class _Check:
+    """An address check that takes no weak reference, as a slotted dataclass does: lax, or as strict as the default."""
+
+    lax: bool
+
+    def __call__(self, address: object) -> str | None:
+        """Admit every address when lax, else judge it as the default check does."""
+        return None if self.lax else forbidden_reason(cast("Any", address))
+
+
+async def test_a_check_that_takes_no_weak_reference_never_lends_its_label(storage: AsyncSqliteStorage) -> None:
+    """Refuse every strict client, though each lax client before it, now gone, fetched the body on the same storage.
+
+    A check that takes no weak reference is held by its label's entry, so a later check never takes its identity, and
+    with it the label: one that did was served what the lax one fetched from a host it refuses.
+    """
+    cache = HttpCache(storage=storage, ttl=None)
+    names = _Names(x="10.0.0.5")
+    for _ in range(40):
+        lax = stub_client(
+            transport=Network(),
+            cache=cache,
+            http=HttpOptions(
+                security=SecurityOptions(block_private_hosts=True, resolver=names, check=_Check(lax=True))
+            ),
+        )
+        async with lax:
+            assert await lax.get("series", expect=as_bytes) == NETWORK_BODY
+        del lax
+        gc.collect()
+        strict = Client(
+            base_url="https://x",
+            policy=CallPolicy(cache=cache),
+            http=HttpOptions(
+                security=SecurityOptions(block_private_hosts=True, resolver=names, check=_Check(lax=False))
+            ),
+        )
+        async with strict:
+            with pytest.raises(ForbiddenDestinationError):
+                await strict.get("series", expect=as_bytes)
 
 
 # L31: a per-call cache_ttl is checked before anything is sent.

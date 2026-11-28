@@ -72,7 +72,8 @@ the name up itself; the URL keeps its name, so TLS still sends it as SNI and ver
 libcurl keeps a resolve entry in the session's DNS cache after the transfer, and its connection pool is shared by every
 request, so one transport serves one guard: a client built on it with another guard, or none, is refused. A
 ``CurlOpt.PROXY``, ``PRE_PROXY``, ``RESOLVE``, ``CONNECT_TO``, ``UNIX_SOCKET_PATH`` or ``ABSTRACT_UNIX_SOCKET`` in
-``curl_options`` would choose the address itself, so the guard refuses those too.
+``curl_options`` would choose the address itself, and a ``PORT`` there one curl looks up for itself, so the guard
+refuses those too.
 
 **Clients that share a transport share its session**, so a client's close does not close it while another client
 built on it is open: each sends through a hold on the transport, and the last hold let go closes it. The transport's
@@ -170,6 +171,19 @@ _ADDRESS_OPTIONS = (
     CurlOpt.ABSTRACT_UNIX_SOCKET,
     # The pin covers a host on the URL's port: another port is one curl resolves for itself.
     CurlOpt.PORT,
+)
+
+#: The curl options that put a header or a credential on every request below every hook, where it would reach any
+#: origin a redirect leads to, past the credential guard and the redaction of secrets; a header list would also replace
+#: each request's own headers. A proxy's credential goes to the one proxy, and is taken.
+_HEADER_OPTIONS = (
+    CurlOpt.HTTPHEADER,
+    CurlOpt.HTTP3_HTTPHEADER,
+    CurlOpt.COOKIE,
+    CurlOpt.USERPWD,
+    CurlOpt.USERNAME,
+    CurlOpt.PASSWORD,
+    CurlOpt.XOAUTH2_BEARER,
 )
 
 
@@ -377,13 +391,16 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
     :param default_headers: let the profile supply the browser's headers (and drop httpx2's) instead of sending none.
     :param curl_options: extra libcurl options, e.g. ``{CurlOpt.FRESH_CONNECT: True}`` to open a new connection per
         request for hosts that fingerprint a reused one. Values are whatever libcurl takes for the option (``curl_cffi``
-        annotates them as ``str``, which is narrower than what it accepts). ``CurlOpt.FOLLOWLOCATION`` is refused with a
-        ``ValueError``: curl would follow a redirect below every hook, so headgate follows them itself.
+        annotates them as ``str``, which is narrower than what it accepts). ``CurlOpt.FOLLOWLOCATION``, ``URL`` and
+        ``CURLU`` are refused, since curl would follow a redirect or send every request to one URL below every hook,
+        and so are a header list and a credential (``HTTPHEADER``, ``HTTP3_HTTPHEADER``, ``COOKIE``, ``USERPWD``,
+        ``USERNAME``, ``PASSWORD``, ``XOAUTH2_BEARER``), which curl would add to every request, whatever its origin:
+        headgate follows redirects itself, and sets each request's URL and headers.
     :param max_connections: concurrent curl handles; a request beyond them waits for one, with no pool timeout.
     :raises TypeError: for an option of the wrong kind: an *impersonate* that is not a ``str``, a *default_headers*
         that is not a ``bool``, *curl_options* that are not a mapping or have a key that is not a ``CurlOpt`` (its name
         or its number included), and a *max_connections* that is not an ``int``.
-    :raises ValueError: for a *max_connections* below 1.
+    :raises ValueError: for a *max_connections* below 1, and for the *curl_options* refused above.
     """
 
     def __init__(
@@ -421,6 +438,13 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
             msg = (
                 "curl_options must not set CurlOpt.URL or CurlOpt.CURLU: curl would send every request to that URL, "
                 "past every hook and the SSRF guard; headgate sets each request's URL"
+            )
+            raise ValueError(msg)
+        if refused := [f"CurlOpt.{option.name}" for option in _HEADER_OPTIONS if option in given]:
+            msg = (
+                f"curl_options must not set {', '.join(refused)}: curl would add it to every request below every hook, "
+                "past the credential guard and the redaction of secrets, so it would reach any origin a redirect leads "
+                "to; set a header with HttpOptions(headers=...) and a credential with an auth, such as BearerAuth"
             )
             raise ValueError(msg)
         options: dict[CurlOpt, Any] = {

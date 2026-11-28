@@ -213,7 +213,7 @@ _CURSOR: Final = "the next page's cursor, a str, or None"
 _NEXT_URL: Final = "the next page's URL, a str or an httpx2.URL, or None"
 _TOTAL: Final = "the collection's exact size, an int, or None"
 ITEMS: Final = "the items on a page, an iterable"
-_SEQUENCE: Final = "the items on a page, a collection, such as a list"
+_SEQUENCE: Final = "the items on a page, a sequence, such as a list"
 _OFFSET: Final = "a body's offset, an int"
 
 
@@ -232,16 +232,22 @@ def returned(hook: str, value: object, kind: type | tuple[type, ...], wanted: st
 
 
 def _items_of[I, P](items: Callable[[P], Sequence[I]], page: P) -> Sequence[I]:
-    """Return the items a built-in strategy's *items* reads from *page*, refusing what is no collection: it counts them.
+    """Return the items a built-in strategy's *items* reads from *page*, refusing what it cannot count them in.
 
-    A list, a tuple, a set or a dict's view is one; a generator or an iterator has no length, and a ``str`` or
-    ``bytes`` is a collection of characters, not of items.
+    Its type is a sequence; any collection is taken, as before, a set or a dict's view included. A generator or an
+    iterator has no length; a ``str`` or ``bytes`` is a collection of characters, and a mapping of keys, not of items.
 
     :raises TypeError: naming ``items=``, for anything that is not a collection of items.
     """
     found = items(page)
     if isinstance(found, str | bytes):
         msg = f"items= returns {_SEQUENCE}, not text, whose characters would be walked as items (got {named(found)})"
+        raise TypeError(msg)
+    if isinstance(found, Mapping):
+        msg = (
+            f"items= returns {_SEQUENCE}, not a mapping, whose keys would be walked as items (got {named(found)}): "
+            "return the list inside it, or its .values()"
+        )
         raise TypeError(msg)
     returned("items=", found, Collection, _SEQUENCE, optional=False)
     return cast("Sequence[I]", found)

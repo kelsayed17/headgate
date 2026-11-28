@@ -107,8 +107,9 @@ advances while returning nothing makes no progress, and following it spends the 
 endpoint that sends empty pages mid-walk, pass `stop_on_empty=False`.
 
 Each hook is checked twice: that it can be called, when the pager is built (a class as `write=` is refused there too,
-as `Reader` refuses one), and what it returns, where the walk takes it. An `items` that returns no collection (a
-generator included: the strategy counts the items and tests for none), a pager's own `page_items` that returns no
+as `Reader` refuses one), and what it returns, where the walk takes it. An `items` that returns no sequence (a
+generator included: the strategy counts the items and tests for none; a set or a dict's view is taken), or returns
+text or a mapping, whose characters or keys the walk would yield as items, a pager's own `page_items` that returns no
 iterable, a `total` that returns neither an `int` nor `None`, a `next` that returns neither a `str` (or, for
 `NextUrl`, an `httpx2.URL`) nor `None`, an `offset` that returns no `int`, and a `write` that returns no
 `EncodedBody` raise `TypeError` naming the hook, as a reader's `refuse=` does, rather than fail inside the walk or

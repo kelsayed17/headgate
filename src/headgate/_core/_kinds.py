@@ -6,7 +6,7 @@
 import re
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import is_dataclass
-from typing import Any, Final, NewType, NoReturn, TypeAliasType, cast, get_origin
+from typing import Any, Final, NewType, NoReturn, TypeAliasType, cast, get_origin, is_typeddict
 
 import httpx2
 
@@ -78,11 +78,17 @@ _MODEL_MARKS: Final = ("__struct_fields__", "__pydantic_fields__", "__attrs_attr
 
 
 def is_model_class(value: object) -> bool:
-    """Return whether *value* is a model class: a dataclass, a msgspec ``Struct``, a pydantic model or an attrs class.
+    """Return whether *value* is a model class: one that takes its fields, not a body's bytes.
 
-    Such a class takes its fields, not a body's bytes, so where a function of the body goes it is a codec's reader.
+    A dataclass, a ``NamedTuple``, a ``TypedDict``, a msgspec ``Struct``, a pydantic model and an attrs class are; where
+    a function of the body goes, such a class is a codec's reader.
     """
-    return isinstance(value, type) and (is_dataclass(value) or any(hasattr(value, mark) for mark in _MODEL_MARKS))
+    return isinstance(value, type) and (
+        is_dataclass(value)
+        or any(hasattr(value, mark) for mark in _MODEL_MARKS)
+        or (issubclass(value, tuple) and hasattr(value, "_fields"))  # a NamedTuple
+        or is_typeddict(value)
+    )
 
 
 def option_text(option: str) -> str:

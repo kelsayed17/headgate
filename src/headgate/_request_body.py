@@ -524,12 +524,11 @@ def lowered(body: Body | None) -> Lowered:
             return Lowered()
 
 
-#: The class attributes that mark a model's class: a msgspec ``Struct``, a pydantic model, an attrs class.
 def _body_hint(body: object) -> str | None:
     """Return the body to write *body* as, a value that is no :data:`Body`, or ``None`` when no body holds it.
 
     ``Raw`` for bytes, an async stream or a file's bytes, ``Json`` for a mapping, and a writer of its type for a model's
-    instance (a dataclass's, a msgspec ``Struct``'s, a pydantic model's, an attrs class's).
+    instance (a dataclass's, a ``NamedTuple``'s, a msgspec ``Struct``'s, a pydantic model's, an attrs class's).
     """
     if isinstance(body, bytes | AsyncIterable):
         return "write body=Raw(value)"
