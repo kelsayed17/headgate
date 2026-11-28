@@ -155,6 +155,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `PageRequest(httpx2.URL(target))`, as before, and need not resolve it. An absolute URL a pager forwards as a `str`
   (read from a JSON body, say) is checked the same way; a relative `str` is still joined onto `base_url`, as a call's
   own URL is.
+- An auth whose class escaped the class-definition checks is refused by `Client()` with a `TypeError`. A base class
+  whose `__init_subclass__` did not call `super().__init_subclass__()` let every subclass below it skip them all: an
+  undeclared or misdeclared credential, an `async def sign`, an overridden flow. Call
+  `super().__init_subclass__(**kwargs)` in every `__init_subclass__` of an auth class.
 
 ## [0.12.1] - 2026-11-16
 

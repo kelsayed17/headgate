@@ -39,7 +39,9 @@ class KeyAuth(Auth):
 
 A subclass that leaves a member out cannot be built, and a declaration that is not a `frozenset` of names, or whose
 names are all one character long (`frozenset("x-api-key")` is a set of its letters, not one name), fails when the
-class is defined (or, for a property, when the client is built). A fixed header needs no class: `StaticHeaderAuth`.
+class is defined (or, for a property, when the client is built). A base class of your own whose `__init_subclass__`
+skips `super().__init_subclass__()` cuts its subclasses off from those checks, so `Client()` refuses them. A fixed
+header needs no class: `StaticHeaderAuth`.
 For basic auth, `StaticHeaderAuth({"Authorization": "Basic " + base64.b64encode(b"user:pass").decode()})`.
 
 Digest auth is httpx2's own flow with the declarations added, since `httpx2.DigestAuth` declares nothing:

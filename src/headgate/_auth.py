@@ -63,6 +63,7 @@ __all__ = [
     "failed_on_auth_hop",
     "hold_timing",
     "mint_hop_failure",
+    "was_checked",
 ]
 
 #: The request extension marking a request an auth flow yields to acquire a credential, as opposed to the call's own
@@ -273,13 +274,19 @@ class Auth(httpx2.Auth, ABC):
     """
 
     def __init_subclass__(cls, **kwargs: object) -> None:
-        """Refuse a declaration given as a class attribute that is not a frozenset of names, or splits a name."""
+        """Refuse a declaration given as a class attribute that is not a frozenset of names, or splits a name.
+
+        It marks *cls* as checked (:func:`was_checked`), so a class below a base whose ``__init_subclass__`` skips
+        ``super()``, and so escapes every check here and in ``SigningAuth`` and ``CachedTokenAuth``, is refused by
+        ``Client()``.
+        """
         super().__init_subclass__(**kwargs)
         declared = {name: getattr(cls, name) for name in ("credential_headers", "credential_params")}
         # A property (or other descriptor) reads per instance, so the client checks it when it is built.
         check_declarations(
             cls.__name__, **{name: value for name, value in declared.items() if not _is_descriptor(value)}
         )
+        setattr(cls, _CHECKED, True)
 
     @property
     @abstractmethod
@@ -294,6 +301,15 @@ class Auth(httpx2.Auth, ABC):
     @abstractmethod
     def credential_identity(self) -> bytes:
         """Return stable bytes naming the credential (its secret material); never stored, only hashed."""
+
+
+#: The class attribute :meth:`Auth.__init_subclass__` sets on each class it checks, read from the class's own namespace.
+_CHECKED: Final = "_headgate_checked"
+
+
+def was_checked(auth: Auth) -> bool:
+    """Return whether *auth*'s own class went through :meth:`Auth.__init_subclass__` when it was defined."""
+    return vars(type(auth)).get(_CHECKED) is True
 
 
 def _is_descriptor(value: object) -> bool:

@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Final, Literal, Self, Unpack, cast, final, ove
 
 import httpx2
 
-from headgate._auth import MINTING, Auth, failed_on_auth_hop, hold_timing, mint_hop_failure
+from headgate._auth import MINTING, Auth, failed_on_auth_hop, hold_timing, mint_hop_failure, was_checked
 from headgate._body import read_capped, read_head
 from headgate._call_options import (
     BODY_HINTS,
@@ -1258,7 +1258,8 @@ def _check_url(url: object) -> None:
 def _check_auth(auth: object) -> None:
     """Refuse an *auth* that is not a :class:`~headgate.Auth`, whose credentials the guard could not know to withhold.
 
-    A subclass is required, not ``isinstance``: ``Auth.register`` makes a virtual subclass that declares nothing.
+    A subclass is required, not ``isinstance``: ``Auth.register`` makes a virtual subclass that declares nothing. So
+    is a class that went through ``Auth.__init_subclass__``, which a base that skips ``super()`` cuts off.
 
     :raises TypeError: naming its class and what to write instead.
     """
@@ -1267,6 +1268,14 @@ def _check_auth(auth: object) -> None:
             f"auth= takes a headgate.Auth, which declares what it stamps (got {type(auth).__qualname__}): subclass "
             "headgate.Auth, or use StaticHeaderAuth, and declare the headers and query parameters it sets in "
             "credential_headers and credential_params"
+        )
+        raise TypeError(msg)
+    if isinstance(auth, Auth) and not was_checked(auth):
+        msg = (
+            f"auth= takes a headgate.Auth whose class was checked when it was defined, and {type(auth).__qualname__} "
+            "was not checked when it was defined: a base class's __init_subclass__ skips super().__init_subclass__(), "
+            "so its subclasses escape the checks of what they stamp and how their hooks are written. Call "
+            "super().__init_subclass__(**kwargs) there"
         )
         raise TypeError(msg)
 
