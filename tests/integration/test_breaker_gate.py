@@ -12,7 +12,7 @@ from __future__ import annotations
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, HttpOptions, TransportPolicy, UpstreamStatusError, nothing
+from headgate import BreakerPolicy, CallPolicy, HttpOptions, UpstreamStatusError, nothing
 from headgate.breaker import BreakerState, CircuitBreaker
 from headgate.events import BreakerChanged
 from headgate.testing import FakeTransport, TestClock
@@ -22,7 +22,7 @@ from tests.support.events import Recorder
 
 _PATH = "/v1/x"
 _COOLDOWN = 60.0
-_POLICY = TransportPolicy(breaker=BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN))
+_POLICY = CallPolicy(breaker=BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN))
 
 
 def _fail_once(breaker: CircuitBreaker) -> None:

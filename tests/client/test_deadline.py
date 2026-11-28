@@ -11,12 +11,13 @@ network is a host that did not answer in time, so the breaker counts it as a tim
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from typing import override
 
 import httpx2
 import pytest
 
-from headgate import Client, ClientTimeoutError, HttpOptions, Rate, Route, TransportPolicy, nothing
+from headgate import CallPolicy, Client, ClientTimeoutError, HttpOptions, Rate, Route, nothing
 from headgate.testing import TestClock
 from tests.support.breakers import failures
 
@@ -39,19 +40,18 @@ class _Network(httpx2.AsyncBaseTransport):
         return httpx2.Response(200)
 
 
-def _client(policy: TransportPolicy, delay: float = 3600.0) -> Client:
+def _client(policy: CallPolicy, delay: float = 3600.0) -> Client:
     """Build a client over a network that answers after *delay* seconds."""
     return Client(
         base_url=f"https://{_HOST}",
-        rate=Rate.per_second(1000),
-        policy=policy,
+        policy=dataclasses.replace(policy, rate=Rate.per_second(1000)),
         http=HttpOptions(transport=_Network(delay)),
     )
 
 
 async def test_the_policy_deadline_bounds_a_call_that_hangs() -> None:
     """Raise ``ClientTimeoutError`` naming the request once the policy's deadline passes, and charge the host."""
-    client = _client(TransportPolicy(deadline=_SHORT, retry=None))
+    client = _client(CallPolicy(deadline=_SHORT, retry=None))
 
     with pytest.raises(ClientTimeoutError, match="deadline exceeded") as raised:
         await client.get("series", expect=nothing)
@@ -64,7 +64,7 @@ async def test_the_policy_deadline_bounds_a_call_that_hangs() -> None:
 
 async def test_a_route_deadline_applies_to_its_paths() -> None:
     """Bound a matching path by its route's deadline, though the policy allows longer."""
-    client = _client(TransportPolicy(routes=(Route("/reports", deadline=_SHORT),)))
+    client = _client(CallPolicy(routes=(Route("/reports", deadline=_SHORT),)))
 
     with pytest.raises(ClientTimeoutError, match="deadline exceeded"):
         await client.get("reports/daily", expect=nothing)
@@ -72,7 +72,7 @@ async def test_a_route_deadline_applies_to_its_paths() -> None:
 
 async def test_a_calls_own_deadline_wins() -> None:
     """Bound a call by its own ``deadline=``, over its route's and the policy's."""
-    client = _client(TransportPolicy(routes=(Route("/reports", deadline=60.0),)))
+    client = _client(CallPolicy(routes=(Route("/reports", deadline=60.0),)))
 
     with pytest.raises(ClientTimeoutError, match="deadline exceeded"):
         await client.get("reports/daily", expect=nothing, deadline=_SHORT)
@@ -80,7 +80,7 @@ async def test_a_calls_own_deadline_wins() -> None:
 
 async def test_deadline_none_lifts_the_policy_deadline_for_one_call() -> None:
     """Let a call with ``deadline=None`` run past the policy's deadline."""
-    client = _client(TransportPolicy(deadline=_SHORT), delay=_SLOW)
+    client = _client(CallPolicy(deadline=_SHORT), delay=_SLOW)
 
     await client.get("series", expect=nothing, deadline=None)
 
@@ -91,7 +91,7 @@ async def test_deadline_none_lifts_the_policy_deadline_for_one_call() -> None:
 @pytest.mark.parametrize("deadline", [0.0, -1.0, float("nan")])
 async def test_a_calls_deadline_must_be_positive(deadline: float) -> None:
     """Refuse a call's deadline that is not positive, before anything is sent."""
-    client = _client(TransportPolicy())
+    client = _client(CallPolicy())
     with pytest.raises(ValueError, match="deadline"):
         await client.get("series", expect=nothing, deadline=deadline)
 
@@ -124,8 +124,7 @@ async def test_the_deadline_message_writes_the_elapsed_time_plainly(spent: float
     with TestClock().install() as clock:
         client = Client(
             base_url=f"https://{_HOST}",
-            rate=Rate.per_second(1000),
-            policy=TransportPolicy(deadline=_SHORT, retry=None),
+            policy=CallPolicy(rate=Rate.per_second(1000), deadline=_SHORT, retry=None),
             http=HttpOptions(transport=_HourLongNetwork(clock, spent)),
         )
         with pytest.raises(ClientTimeoutError) as raised:

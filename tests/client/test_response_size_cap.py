@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import ClientError, Expect, HttpOptions, Rate
+from headgate import CallPolicy, ClientError, Expect, HttpOptions, Rate
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
 from headgate._client import Client
 from headgate.errors import ResponseTooLargeError
@@ -47,7 +47,7 @@ def _client(*, max_response_bytes: int, transport: httpx2.AsyncBaseTransport | N
     """Build with *max_response_bytes*, over *transport* or the mocked network."""
     return Client(
         base_url="https://example.test",
-        rate=Rate.per_second(1000),
+        policy=CallPolicy(rate=Rate.per_second(1000)),
         http=HttpOptions(max_response_bytes=max_response_bytes, transport=transport),
     )
 

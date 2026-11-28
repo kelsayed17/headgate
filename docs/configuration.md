@@ -4,9 +4,8 @@
 Client(
     *,
     base_url: str,
-    rate: Rate | RateBudget | None = None,
     auth: Auth | None = None,
-    policy: TransportPolicy = TransportPolicy(),
+    policy: CallPolicy = CallPolicy(),
     http: HttpOptions = HttpOptions(),
     observers: Sequence[Observer] = (),
     middleware: Sequence[Middleware] = (),
@@ -20,7 +19,9 @@ observers). It holds the client rather than inheriting from it (`Client` is fina
 ```python
 class GitHub:
     def __init__(self, token: str) -> None:
-        self._http = Client(base_url="https://api.github.com", rate=Rate.per_second(10), auth=BearerAuth(token))
+        self._http = Client(
+            base_url="https://api.github.com", policy=CallPolicy(rate=Rate.per_second(10)), auth=BearerAuth(token)
+        )
 
     async def __aenter__(self) -> Self:
         return self
@@ -39,46 +40,47 @@ is written, and freezes the collections it is given. Change one with `dataclasse
 
 - **`base_url`**: the API root. A relative path in a call is joined onto it (a trailing `/` is added if missing), and
   its origin is the one credentials are sent to.
-- **`rate`**: a `Rate`, from which the client builds a budget of its own, or a `RateBudget` it shares with every client
-  given the same instance. See [rate budgets](rate-budgets.md).
 - **`auth`**: a `headgate.Auth`, usually one of headgate's. See [auth](auth.md). A plain `httpx2.Auth`, which declares
   nothing it stamps, and an upstream `httpx` object raise `TypeError`.
 - **`observers`**: receive the client's [events](observability.md#events).
 - **`middleware`**: per-attempt hooks; see [middleware](#middleware). They are parts of the stack, not settings of how a
   request is sent, so they are the client's own rather than `HttpOptions` fields.
 
-## TransportPolicy
+## CallPolicy
 
-What the stack does to every request.
+What the stack does with every call; `CallOptions` override it per call, a view's per view, a `Route` per path.
 
 | Field | Default | |
 | --- | --- | --- |
+| `rate` | `None` | a `Rate`, from which the client builds a budget of its own, or a `RateBudget` it shares with every client given the same instance; `None` paces nothing but the server's pauses. See [rate budgets](rate-budgets.md) |
 | `retry` | `RetryPolicy()` | how a call is re-sent, or `None` to send every call once; see [retries](retries.md) |
 | `timeout` | `Timeouts()` | per-phase timeouts; a phase left unset takes its default from `Timeouts.DEFAULT`, `math.inf` is no limit, and a phase set longer than `deadline` is refused |
 | `deadline` | `60.0` | seconds the whole call may take, or `None`; see [deadlines](deadlines.md) |
 | `breaker` | `BreakerPolicy()` | the per-origin breaker, or `None`; see [breaker](breaker.md) |
 | `cache` | `None` | an `HttpCache`; see [caching](caching.md) |
 | `idempotency` | `None` | `IdempotencyKeys()` stamps a key on every POST and PATCH; see [retries](retries.md#idempotency-keys) |
-| `routes` | `()` | `Route(fragment, retry=..., deadline=..., rate=..., cache=...)`: the per-path rules, first match wins |
+| `routes` | `()` | `Route(fragment, retry=..., timeout=..., deadline=..., rate=..., cache=...)`: the per-path rules, first match wins |
 
-A `Route` changes an endpoint's retry policy, deadline, rate or caching in configuration, so the endpoint method stays
+A `Route` changes an endpoint's retry policy, timeouts, deadline, rate or caching in configuration, so the endpoint method stays
 one line:
 
 ```python
-from headgate import Rate, Route, TransportPolicy
+from headgate import CallPolicy, Rate, Route, Timeouts
 
-policy = TransportPolicy(
+policy = CallPolicy(
     routes=(
         Route("/charges", retry=None),  # sent once
         Route("/reports", deadline=300.0, rate=Rate.per_minute(6)),  # a long deadline and a lane of its own
+        Route("/exports", timeout=Timeouts(read=120.0), deadline=600.0),  # a slow read
         Route("/live", cache=None),  # never cached
     )
 )
 ```
 
-`Route(fragment, /, **options)` takes `RouteOptions`. An option left out takes the policy's (or, for `rate`, the
-client's budget), and `None` turns it off: `retry=None` sends once, `deadline=None` sets no deadline, `rate=None`
-paces nothing of the route's own, and `cache=None` keeps the paths out of the cache. The first route whose fragment a
+`Route(fragment, /, **options)` takes `RouteOptions`. An option left out takes the policy's (for `rate`, the client's
+budget), and `None` turns it off: `retry=None` sends once, `deadline=None` sets no deadline, `rate=None` paces nothing
+of the route's own, and `cache=None` keeps the paths out of the cache. A route's `timeout=` sets the phases it names,
+under a view's and a call's own, and may be no longer than the deadline its paths run under. The first route whose fragment a
 call's path holds is the call's route, whole; two routes never combine. A call's own options, and its view's, win
 over its route's. An unknown option, or a value of the wrong kind (`retry=False`), raises `TypeError`.
 
@@ -305,5 +307,5 @@ stops working once that client is closed.
 For the deadline and the retry policy, the most specific setting wins: the call's own, then the view's, then the first
 matching `Route`'s, then the policy's. Headers merge the same way: the call's `headers=` over the view's, then the
 headers the call's declarations imply (its body's `Content-Type`, its `Expect`'s `accept=` and `headers=`), then the
-client's `HttpOptions.headers`. A transport policy switched off with `policy_disabled()` overrides them all (see
+client's `HttpOptions.headers`. A call policy switched off with `policy_disabled()` overrides them all (see
 [testing](testing.md#switching-the-policy-off)).

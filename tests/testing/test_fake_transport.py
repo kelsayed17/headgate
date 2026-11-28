@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import gzip
 from typing import TYPE_CHECKING
 
@@ -12,12 +13,12 @@ import httpx2
 import pytest
 
 from headgate import (
+    CallPolicy,
     Client,
     Form,
     HttpOptions,
     Rate,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
     as_bytes,
     nothing,
@@ -32,9 +33,11 @@ _BASE = "https://api.example.test/v1"
 _RATE = Rate.per_second(1000)
 
 
-def _client(fake: FakeTransport, *, policy: TransportPolicy | None = None) -> Client:
+def _client(fake: FakeTransport, *, policy: CallPolicy | None = None) -> Client:
     """Build a client over *fake*."""
-    return Client(base_url=_BASE, rate=_RATE, policy=policy or TransportPolicy(), http=HttpOptions(transport=fake))
+    return Client(
+        base_url=_BASE, policy=dataclasses.replace(policy or CallPolicy(), rate=_RATE), http=HttpOptions(transport=fake)
+    )
 
 
 async def test_a_route_serves_its_replies_in_order_and_repeats_the_last() -> None:
@@ -50,7 +53,7 @@ async def test_a_route_serves_its_replies_in_order_and_repeats_the_last() -> Non
 async def test_a_route_serves_a_respond_step_as_faulty_transport_does() -> None:
     """Answer with a ``Respond``: its status, its ``Retry-After``, and its JSON body with a JSON content type."""
     fake = FakeTransport().reply("GET", "/v1/series", Respond(503, retry_after=2.0), Respond(json={"id": "GDP"}))
-    client = _client(fake, policy=TransportPolicy(retry=None))
+    client = _client(fake, policy=CallPolicy(retry=None))
 
     with pytest.raises(UpstreamStatusError) as raised:
         await client.get("series", expect=nothing)
@@ -92,7 +95,7 @@ async def test_a_reply_function_can_fail_the_network() -> None:
 
     fake = FakeTransport().reply("GET", "/v1/x", refuse)
     with pytest.raises(TransportError):
-        await _client(fake, policy=TransportPolicy(retry=None)).get("x", expect=nothing)
+        await _client(fake, policy=CallPolicy(retry=None)).get("x", expect=nothing)
 
 
 async def test_a_compressed_reply_is_served_again_and_again() -> None:

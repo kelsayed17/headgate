@@ -18,6 +18,7 @@ from headgate import (
     Auth,
     AuthError,
     CachedTokenAuth,
+    CallPolicy,
     Client,
     HttpCache,
     HttpOptions,
@@ -27,7 +28,6 @@ from headgate import (
     RateBudget,
     RetryPolicy,
     SigningAuth,
-    TransportPolicy,
 )
 from headgate._core import CredentialStamper, Timing
 from headgate._url import is_secret_param
@@ -453,7 +453,7 @@ async def test_a_request_waiting_in_the_rate_queue_is_signed_when_it_leaves_it()
     with clock.install():
         client = Client(
             base_url=_BASE,
-            rate=budget,
+            policy=CallPolicy(rate=budget),
             auth=_ClockSigner(),
             http=HttpOptions(transport=httpx2.MockTransport(handle)),
         )
@@ -475,7 +475,7 @@ async def test_a_cached_clients_401_is_signed_again_once(auth: type[SigningAuth]
     client = Client(
         base_url=_BASE,
         auth=auth(),
-        policy=TransportPolicy(cache=HttpCache(storage=storage)),
+        policy=CallPolicy(cache=HttpCache(storage=storage)),
         http=HttpOptions(transport=httpx2.MockTransport(handle)),
     )
     async with client:

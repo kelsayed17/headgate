@@ -17,11 +17,11 @@ import pytest
 
 from headgate import (
     BreakerPolicy,
+    CallPolicy,
     ClientError,
     HttpCache,
     HttpOptions,
     RateLimitError,
-    TransportPolicy,
     UpstreamStatusError,
     nothing,
 )
@@ -49,7 +49,7 @@ def _every_layer(storage: AsyncSqliteStorage, recorder: Recorder) -> Client:
         .reply("GET", "/v1/limited", _LIMITED)
         .reply("GET", "/v1/down", 503)
     )
-    policy = TransportPolicy(
+    policy = CallPolicy(
         cache=HttpCache(**every_get_rules(), storage=storage), breaker=BreakerPolicy(failure_threshold=1)
     )
     return client(fake, policy=policy, http=HttpOptions(), observers=(recorder,))

@@ -4,12 +4,12 @@
 """headgate: an async HTTP client with retry, rate limiting, circuit breaking and declared responses.
 
 Built on ``httpx2``; Python 3.14 or newer. An SDK holds a :class:`Client`, configures it with a :class:`Rate` (or a
-shared :class:`RateBudget`) and optionally :class:`TransportPolicy` and :class:`HttpOptions`, and picks a codec:
+shared :class:`RateBudget`) and optionally :class:`CallPolicy` and :class:`HttpOptions`, and picks a codec:
 ``headgate.msgspec``, ``headgate.pydantic``, or any library as a :class:`Codec` of its own. Exported here is what a
 client is written with, and each name only here:
 
 * the client: :class:`Client`, :data:`Method`, :class:`RequestOptions`, :class:`CallOptions`, :class:`ViewOptions`;
-* configuration: :class:`TransportPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`, :class:`Timeouts` (with
+* configuration: :class:`CallPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`, :class:`Timeouts` (with
   :attr:`Timeouts.DEFAULT`), :class:`Route`, :class:`RouteOptions`, :class:`IdempotencyKeys`, :data:`ResponseCheck`;
 * middleware: :class:`Middleware`, :data:`Next` (what a middleware calls to continue) and :func:`call_info` (what it
   reads of its call);
@@ -50,13 +50,13 @@ from headgate._codec import Codec, decode_with, reader_for, writer_for
 from headgate._core import call_info
 from headgate._middleware import Middleware, Next
 from headgate._options import (
+    CallPolicy,
     HttpOptions,
     IdempotencyKeys,
     Route,
     RouteOptions,
     SecurityOptions,
     Timeouts,
-    TransportPolicy,
 )
 from headgate._request_body import Body, EncodedBody, Form, Json, Multipart, Raw, Writer
 from headgate._responses import (
@@ -93,6 +93,7 @@ __all__ = [
     "BreakerPolicy",
     "CachedTokenAuth",
     "CallOptions",
+    "CallPolicy",
     "Client",
     "ClientError",
     "ClientTimeoutError",
@@ -126,7 +127,6 @@ __all__ = [
     "StaticHeaderAuth",
     "Timeouts",
     "TransportError",
-    "TransportPolicy",
     "UpstreamStatusError",
     "ViewOptions",
     "Writer",

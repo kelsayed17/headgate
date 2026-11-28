@@ -20,6 +20,7 @@ they are driven end-to-end rather than against the breaker object:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from typing import TYPE_CHECKING, ClassVar, override
 
 import httpx2
@@ -28,6 +29,7 @@ import pytest
 from headgate import (
     Auth,
     BreakerPolicy,
+    CallPolicy,
     Client,
     ClientError,
     ClientTimeoutError,
@@ -35,7 +37,6 @@ from headgate import (
     Rate,
     RetryPolicy,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
 )
 from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
@@ -140,18 +141,16 @@ async def _fail(client: Client, times: int) -> None:
 async def test_a_cancelled_request_neither_counts_nor_resets(breaker: CircuitBreaker) -> None:
     """Leave the record alone when the caller's own timeout cancels a request: it says nothing about the host."""
     client = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=_ScriptedTransport(503)),
     )
     await _fail(client, _BELOW_THRESHOLD)
     assert breaker.failure_count == _BELOW_THRESHOLD
 
     hanging = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=_ScriptedTransport(hang=True)),
     )
     with pytest.raises(TimeoutError):
@@ -168,9 +167,8 @@ async def test_only_one_request_probes_a_recovered_host(breaker: CircuitBreaker)
     """Admit a single probe once half-open, not every caller that happened to be waiting."""
     transport = _ScriptedTransport(503)
     client = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=transport),
     )
     await _fail(client, _THRESHOLD)
@@ -187,18 +185,16 @@ async def test_only_one_request_probes_a_recovered_host(breaker: CircuitBreaker)
 async def test_a_cancelled_probe_frees_the_slot(breaker: CircuitBreaker) -> None:
     """Free the slot when the probe is cancelled, or the breaker waits forever on a probe that never reports."""
     failing = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=_ScriptedTransport(503)),
     )
     await _fail(failing, _THRESHOLD)
     await asyncio.sleep(_PAST_COOLDOWN)
 
     hanging = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=_ScriptedTransport(hang=True)),
     )
     with pytest.raises(TimeoutError):
@@ -206,9 +202,8 @@ async def test_a_cancelled_probe_frees_the_slot(breaker: CircuitBreaker) -> None
 
     healthy = _ScriptedTransport(200)
     recovered = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=healthy),
     )
     resp = await recovered.get("x", expect=RESPONSE)
@@ -225,9 +220,8 @@ async def test_a_body_read_failure_counts_as_a_failure(breaker: CircuitBreaker) 
     layer wrapped around the transport has already seen a 200.
     """
     client = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=_TruncatedBodyTransport()),
     )
 
@@ -278,9 +272,10 @@ async def test_a_call_its_deadline_cuts_off_on_the_wire_counts_as_a_failure(
 ) -> None:
     """Count an origin that hangs, as a timeout: the call's deadline, not httpx2's own timeout, is what ends it."""
     client = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER, deadline=_DEADLINE),
+        policy=CallPolicy(
+            rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER, deadline=_DEADLINE
+        ),
         http=HttpOptions(transport=transport),
     )
 
@@ -294,9 +289,10 @@ async def test_a_deadline_passing_before_the_send_counts_nothing(breaker: Circui
     """Leave the breaker alone when the deadline passes before the send: the origin was never asked."""
     transport = _ScriptedTransport(200)
     client = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER, deadline=_DEADLINE),
+        policy=CallPolicy(
+            rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER, deadline=_DEADLINE
+        ),
         http=HttpOptions(transport=transport),
         middleware=(_StallingMiddleware(),),
     )
@@ -312,9 +308,8 @@ async def test_a_retried_request_counts_one_failure(breaker: CircuitBreaker) -> 
     """Record one verdict per fetch, however many times the retry layer re-sent it."""
     transport = _ScriptedTransport(503)
     client = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=_ATTEMPTS), breaker=_FAST_BREAKER),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=_ATTEMPTS), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=transport),
     )
 
@@ -360,10 +355,9 @@ class _CachedHitTransport(httpx2.AsyncBaseTransport):
 async def test_an_auth_flow_failure_does_not_open_the_breaker_for_the_host(breaker: CircuitBreaker) -> None:
     """Leave the breaker alone on a refused token mint: counting it would open the breaker for every client."""
     refusing = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
         auth=_RefusingAuth(),
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=_ScriptedTransport(200)),
     )
     for _ in range(_MORE_THAN_THRESHOLD):
@@ -372,9 +366,8 @@ async def test_an_auth_flow_failure_does_not_open_the_breaker_for_the_host(break
 
     assert breaker.failure_count == 0
     healthy = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=_ScriptedTransport(200)),
     )
     assert (await healthy.get("x", expect=RESPONSE)).status_code == httpx2.codes.OK, (
@@ -385,9 +378,8 @@ async def test_an_auth_flow_failure_does_not_open_the_breaker_for_the_host(break
 async def test_an_oversized_body_does_not_count_against_the_host(breaker: CircuitBreaker) -> None:
     """Leave the breaker alone on a body over the size cap: the cap is the client's own limit."""
     client = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=_ScriptedTransport(200), max_response_bytes=1),
     )
     for _ in range(_MORE_THAN_THRESHOLD):
@@ -401,15 +393,13 @@ async def test_an_oversized_body_does_not_count_against_the_host(breaker: Circui
 async def test_a_cache_hit_neither_resets_failures_nor_closes_a_probe(breaker: CircuitBreaker) -> None:
     """Treat a cache hit as untested: it neither wipes the failure count nor closes a probe the host never saw."""
     failing = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=_ScriptedTransport(503)),
     )
     cached = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=_CachedHitTransport()),
     )
 
@@ -426,9 +416,8 @@ async def test_a_cache_hit_neither_resets_failures_nor_closes_a_probe(breaker: C
 
     healthy = _ScriptedTransport(200)
     recovered = Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=_FAST_BREAKER),
         http=HttpOptions(transport=healthy),
     )
     await recovered.get("x", expect=RESPONSE)
@@ -444,12 +433,11 @@ async def test_an_opted_out_client_is_not_refused_by_a_breaker_another_client_op
     fixture: a 50ms cooldown could elapse mid-test and admit the control below as a probe.
     """
     shared = BreakerRegistry()
-    policy = TransportPolicy(retry=RetryPolicy(attempts=1), breaker=shared)
+    policy = CallPolicy(retry=RetryPolicy(attempts=1), breaker=shared)
     await _fail(
         Client(
-            rate=Rate.per_second(2),
             base_url=_URL,
-            policy=policy,
+            policy=dataclasses.replace(policy, rate=Rate.per_second(2)),
             http=HttpOptions(transport=_ScriptedTransport(503)),
         ),
         _THRESHOLD,
@@ -459,26 +447,23 @@ async def test_an_opted_out_client_is_not_refused_by_a_breaker_another_client_op
     refused = _ScriptedTransport(200)
     with pytest.raises(CircuitOpenError):
         await Client(
-            rate=Rate.per_second(2),
             base_url=_URL,
-            policy=policy,
+            policy=dataclasses.replace(policy, rate=Rate.per_second(2)),
             http=HttpOptions(transport=refused),
         ).get("x", expect=RESPONSE)
     assert refused.calls == 0, "control: a client that consults the breaker is refused"
 
     no_breaker = _ScriptedTransport(200)
     await Client(
-        rate=Rate.per_second(2),
         base_url=_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), breaker=None),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1), breaker=None),
         http=HttpOptions(transport=no_breaker),
     ).get("x", expect=RESPONSE)
     policy_off = _ScriptedTransport(200)
     with policy_disabled():
         policy_off_client = Client(
-            rate=Rate.per_second(2),
             base_url=_URL,
-            policy=policy,
+            policy=dataclasses.replace(policy, rate=Rate.per_second(2)),
             http=HttpOptions(transport=policy_off),
         )
     await policy_off_client.get("x", expect=RESPONSE)

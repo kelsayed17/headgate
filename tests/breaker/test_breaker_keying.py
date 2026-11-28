@@ -12,6 +12,7 @@ import pytest
 
 from headgate import (
     BreakerPolicy,
+    CallPolicy,
     Client,
     ClientError,
     HttpOptions,
@@ -19,7 +20,6 @@ from headgate import (
     Rate,
     RetryPolicy,
     TransportError,
-    TransportPolicy,
 )
 from headgate._responses import nothing
 from headgate.breaker import BreakerState
@@ -57,9 +57,8 @@ def _open_breaker(client: Client) -> None:
 async def test_an_absolute_url_keys_the_breaker_on_its_own_host() -> None:
     """Key an absolute URL's failure on that URL's host, not the client's base URL."""
     client = Client(
-        rate=Rate.per_second(2),
         base_url=f"https://{_HOST}",
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1)),
         http=HttpOptions(transport=httpx2.MockTransport(lambda _request: httpx2.Response(503))),
     )
     with pytest.raises(ClientError):
@@ -83,9 +82,8 @@ async def test_a_protocol_relative_path_keys_the_breaker_on_the_host_it_reaches(
         return httpx2.Response(503)
 
     client = Client(
-        rate=Rate.per_second(2),
         base_url=f"https://{_HOST}",
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1)),
         http=HttpOptions(transport=httpx2.MockTransport(handler)),
     )
     with pytest.raises(ClientError):
@@ -107,9 +105,8 @@ async def test_a_protocol_relative_path_keys_the_breaker_on_the_host_it_reaches(
 async def test_a_bad_redirect_location_is_a_transport_failure_of_the_host(location: str) -> None:
     """Count a bad ``Location`` against the host: httpx2 raises ``RemoteProtocolError``, an ``HTTPError``."""
     client = Client(
-        rate=Rate.per_second(2),
         base_url=f"https://{_HOST}",
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1)),
         http=HttpOptions(transport=_redirecting_to(location)),
     )
     with pytest.raises(TransportError, match="Invalid URL in location header"):
@@ -124,7 +121,7 @@ async def test_with_the_breaker_open_a_url_the_join_rejects_is_still_an_invalid_
     """Name a URL the base-URL join rejects as what it is, not hide it behind ``circuit breaker open``."""
     httpx2.URL("b" * 65_536)  # precondition: parses alone, so only the base-URL join can reject it
     client = Client(
-        rate=Rate.per_second(2), base_url=f"https://{_HOST}", policy=TransportPolicy(retry=RetryPolicy(attempts=1))
+        base_url=f"https://{_HOST}", policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1))
     )
     _open_breaker(client)
     with pytest.raises(ClientError, match="invalid URL") as caught:
@@ -135,7 +132,7 @@ async def test_with_the_breaker_open_a_url_the_join_rejects_is_still_an_invalid_
 async def test_with_the_breaker_open_an_unencodable_body_raises_as_itself() -> None:
     """Fail to encode a body the same way with the breaker open: encoding is part of building the request."""
     client = Client(
-        rate=Rate.per_second(2), base_url=f"https://{_HOST}", policy=TransportPolicy(retry=RetryPolicy(attempts=1))
+        base_url=f"https://{_HOST}", policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1))
     )
     _open_breaker(client)
     with pytest.raises(TypeError, match="JSON serializable"):

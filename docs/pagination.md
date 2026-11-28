@@ -194,7 +194,7 @@ for builtins sent as JSON. `LinkHeader` and `NextUrl` refuse a body, since the U
 Each page is then a `post` in every respect: the same stack, the pager's reader (with its declared answers), breaker and
 page budget. That includes the [retry rule](retries.md) for a method that is not idempotent: a POST page that fails
 after it was sent is not re-sent unless something makes that safe. Opt in with
-`TransportPolicy(idempotency=IdempotencyKeys())`, which stamps a fresh key on each page (and the same key on that page's
+`CallPolicy(idempotency=IdempotencyKeys())`, which stamps a fresh key on each page (and the same key on that page's
 re-sends), or, for a read that merely travels as a POST, with `retry=RetryPolicy(methods=IDEMPOTENT_METHODS |
 {"POST"})`. A fixed key, `idempotency_key=` or the key's header in `headers=`, is refused on a walk of POSTs: every page
 would carry it, and a server that honors it would answer each page with the first.

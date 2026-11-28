@@ -26,7 +26,7 @@ src/headgate/
   __init__.py        the public API, re-exported
   _client.py         Client: a call end to end
   _stack.py          the transport stack, assembled in one place
-  _options.py        TransportPolicy, HttpOptions, Timeouts, IdempotencyKeys, Route
+  _options.py        CallPolicy, HttpOptions, Timeouts, IdempotencyKeys, Route
   _responses.py      Reader, Expect and the built-in readers
   _failures.py       the ClientError a failed exchange becomes
   _auth.py           StaticHeaderAuth, QueryParamAuth, CachedTokenAuth
@@ -124,7 +124,7 @@ context: the client emits `CallStarted`, `CallFinished`, `BreakerChanged` and `D
    (`httpx2.AsyncBaseTransport.aclose` is a no-op, so a missing override leaks the pool).
 2. Decide where it sits: above the retry layer it runs once per call; below it, once per attempt; above the cache, for
    hits too; below the rate budget, only for what reaches the network.
-3. Configure it with a frozen option value on `TransportPolicy` or `HttpOptions`, validated in `__post_init__`.
+3. Configure it with a frozen option value on `CallPolicy` or `HttpOptions`, validated in `__post_init__`.
 4. Keep its per-call state in a `Slot` on the `CallContext`, never in a request extension of its own, and its waits on
    the injected `Timing`.
 5. Emit a typed event for what an operator would want to see, with sanitized data only, after checking

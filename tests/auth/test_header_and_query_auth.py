@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Unpack
 
-from headgate import Auth, Client, Rate
+from headgate import Auth, CallPolicy, Client, Rate
 from headgate._auth import QueryParamAuth, StaticHeaderAuth
 from headgate._url import is_secret_param
 from tests.support.responses import RESPONSE
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 async def _sent(httpx2_mock: HTTPXMock, auth: Auth, **options: Unpack[CallOptions]) -> httpx2.Request:
     """Send one GET through a client using *auth*, with the call *options*, and return the request that went out."""
     httpx2_mock.add_response(json={})
-    client = Client(rate=Rate.per_second(100), base_url="https://api.example", auth=auth)
+    client = Client(policy=CallPolicy(rate=Rate.per_second(100)), base_url="https://api.example", auth=auth)
     await client.get("x", expect=RESPONSE, **options)
     return httpx2_mock.get_requests()[0]
 

@@ -18,12 +18,12 @@ import pytest
 import headgate.timing
 from headgate import (
     BreakerPolicy,
+    CallPolicy,
     Client,
     HttpOptions,
     Rate,
     RateBudget,
     RetryPolicy,
-    TransportPolicy,
     UpstreamStatusError,
     nothing,
 )
@@ -165,8 +165,9 @@ async def test_concurrent_calls_back_off_together() -> None:
     with clock.install():
         client = Client(
             base_url="https://h.test",
-            rate=Rate.per_second(1000),
-            policy=TransportPolicy(retry=RetryPolicy(attempts=2, backoff=Backoff(factor=15.0, max_wait=60.0))),
+            policy=CallPolicy(
+                rate=Rate.per_second(1000), retry=RetryPolicy(attempts=2, backoff=Backoff(factor=15.0, max_wait=60.0))
+            ),
             http=HttpOptions(transport=fake),
         )
 
@@ -184,8 +185,7 @@ async def test_a_client_built_under_install_waits_on_the_test_clock() -> None:
         assert installed is clock
         client = Client(
             base_url="https://h.test",
-            rate=Rate.per_second(1000),
-            policy=TransportPolicy(retry=RetryPolicy(attempts=3, backoff=_EXACT_BACKOFF)),
+            policy=CallPolicy(rate=Rate.per_second(1000), retry=RetryPolicy(attempts=3, backoff=_EXACT_BACKOFF)),
             http=HttpOptions(transport=fake),
         )
     await client.get("x", expect=nothing)
@@ -208,7 +208,9 @@ async def test_instant_retries_retries_without_waiting() -> None:
     """Retry a mocked failure as production does, sending every attempt."""
     fake = FakeTransport().reply("GET", "/x", httpx2.codes.SERVICE_UNAVAILABLE, httpx2.codes.OK)
     with instant_retries():
-        client = Client(base_url="https://h.test", rate=Rate.per_second(1000), http=HttpOptions(transport=fake))
+        client = Client(
+            base_url="https://h.test", policy=CallPolicy(rate=Rate.per_second(1000)), http=HttpOptions(transport=fake)
+        )
     await client.get("x", expect=nothing)
     assert len(fake.calls) == len(("503", "200"))
 
@@ -221,7 +223,9 @@ async def test_install_reaches_a_rate_budget_two_clients_share() -> None:
         shared = RateBudget(Rate.per_second(1))
         clients = [
             Client(
-                base_url="https://h.test", rate=shared, http=HttpOptions(transport=FakeTransport().reply("GET", "/x"))
+                base_url="https://h.test",
+                policy=CallPolicy(rate=shared),
+                http=HttpOptions(transport=FakeTransport().reply("GET", "/x")),
             )
             for _ in range(2)
         ]
@@ -312,8 +316,7 @@ async def test_an_errors_retry_after_date_is_read_against_the_clients_wall_clock
     with clock.install():
         client = Client(
             base_url="https://h.test",
-            rate=Rate.per_second(1000),
-            policy=TransportPolicy(retry=RetryPolicy(max_retry_after=30.0), breaker=None),
+            policy=CallPolicy(rate=Rate.per_second(1000), retry=RetryPolicy(max_retry_after=30.0), breaker=None),
             http=HttpOptions(transport=fake),
         )
 
@@ -335,8 +338,9 @@ async def test_a_wait_the_server_asks_for_draws_no_random_number() -> None:
     with clock.install():
         client = Client(
             base_url="https://h.test",
-            rate=Rate.per_second(1000),
-            policy=TransportPolicy(retry=RetryPolicy(attempts=3, backoff=_EXACT_BACKOFF), breaker=None),
+            policy=CallPolicy(
+                rate=Rate.per_second(1000), retry=RetryPolicy(attempts=3, backoff=_EXACT_BACKOFF), breaker=None
+            ),
             http=HttpOptions(transport=fake),
         )
 

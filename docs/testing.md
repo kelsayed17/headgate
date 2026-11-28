@@ -95,7 +95,7 @@ A client fixes its options in its `__init__`, so a test of its configuration rea
 the `HttpCache` it was built with (or `None`), whose `caches_request(method, path)` and `stores_status(status)` say
 what it stores, from its `methods`, `paths` and `statuses`. `budget_for(client, url)` returns the `RateBudget` a
 request to `url` spends from: that of the first `Route` that matches it, when that route sets `rate=`, or the default;
-without a `url`, the default budget, built from `rate=`.
+without a `url`, the default budget, built from the policy's `rate=`.
 
 ```python
 from headgate.testing import budget_for, cache_of

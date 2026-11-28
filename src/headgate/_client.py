@@ -87,9 +87,9 @@ from headgate._failures import (
 )
 from headgate._options import (
     KEYED_METHODS,
+    CallPolicy,
     HttpOptions,
     Timeouts,
-    TransportPolicy,
     check_deadline,
     check_hooks,
     check_middleware,
@@ -128,9 +128,8 @@ from headgate.errors import (
 )
 from headgate.pagination import PageRequest, WritingPager
 from headgate.pagination._paginated import PageWalk, Paginated, check_page_budget
-from headgate.ratelimit._budget import BudgetPausedError, RateBudget
+from headgate.ratelimit._budget import BudgetPausedError
 from headgate.ratelimit._budgets import CALL_BUDGET, Lane, PathBudgets
-from headgate.ratelimit._rate import Rate
 from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE
 from headgate.streaming._stream import OpenStream
 
@@ -147,6 +146,8 @@ if TYPE_CHECKING:
     from headgate.breaker._registry import Breaker
     from headgate.cache._policy import HttpCache
     from headgate.pagination import Pager
+    from headgate.ratelimit._budget import RateBudget
+    from headgate.ratelimit._rate import Rate
     from headgate.retry._policy import RetryPolicy
     from headgate.streaming import Stream
 
@@ -194,7 +195,7 @@ _WALK_HINTS = dict.fromkeys(("body", "json", "data", "content", "files", "query"
 _ONE_KEY_FOR_EVERY_PAGE = "an idempotency key would be sent with every page's body; a walk of POSTs takes none"
 
 #: The option groups a client gets when it passes none: frozen, so one instance serves every client.
-_DEFAULT_POLICY = TransportPolicy()
+_DEFAULT_POLICY = CallPolicy()
 _DEFAULT_HTTP = HttpOptions()
 
 
@@ -312,42 +313,31 @@ class Client:
         self,
         *,
         base_url: str,
-        rate: Rate | RateBudget | None = None,
         auth: Auth | None = None,
-        policy: TransportPolicy = _DEFAULT_POLICY,
+        policy: CallPolicy = _DEFAULT_POLICY,
         http: HttpOptions = _DEFAULT_HTTP,
         observers: Sequence[Observer] = (),
         middleware: Sequence[Middleware] = (),
     ) -> None:
-        """Build the transport stack for *base_url*, spending from *rate*, signing requests with *auth*.
+        """Build the transport stack for *base_url*, signing requests with *auth*.
 
-        *rate* is a :class:`~headgate.Rate`, from which the client builds a budget of its own, or a
-        :class:`~headgate.RateBudget` it shares with every other client given the same one. Without one (``None``) the
-        client paces nothing itself, but still waits out the pauses the server asks
-        for: a 429 or 503 with ``Retry-After``, and a spent ``RateLimit`` quota. Pass a rate when the provider states
-        its quota.
-
-        *policy* configures retries, the timeouts and the deadline, the breaker, per-path rates, the cache,
-        idempotency keys and per-route overrides (:class:`~headgate.TransportPolicy`); *http* the network transport,
+        *policy* configures the rate, retries, the timeouts and the deadline, the breaker, the cache, idempotency keys
+        and per-route overrides (:class:`~headgate.CallPolicy`); *http* the network transport,
         headers, redirects, the body cap and cookies (:class:`~headgate.HttpOptions`).
 
         *observers* receive the client's events (see :mod:`headgate.events`), and *middleware* runs once per attempt,
         in order, inside the retry layer (see :class:`~headgate.Middleware`).
 
         :raises TypeError: for an argument of the wrong kind: an *auth* that is not a :class:`~headgate.Auth` (a plain
-            ``httpx2.Auth`` declares nothing it stamps) or is an upstream ``httpx`` one, a *rate* that is neither
-            a ``Rate``, a ``RateBudget`` nor ``None``, such as a bare number, *observers* or *middleware* that are not
-            a sequence, a middleware that does not declare its credentials or is not async, an observer whose
-            ``notify`` is, and a *base_url*, *policy* or *http* that is not the kind it names.
+            ``httpx2.Auth`` declares nothing it stamps) or is an upstream ``httpx`` one, *observers* or *middleware*
+            that are not a sequence, a middleware that does not declare its credentials or is not async, an observer
+            whose ``notify`` is, and a *base_url*, *policy* or *http* that is not the kind it names.
         """
         check_kind("base_url", base_url, str, "the API root, such as 'https://api.example.com/v1'")
-        check_kind("policy", policy, TransportPolicy, "TransportPolicy(...)")
+        check_kind("policy", policy, CallPolicy, "CallPolicy(...)")
         check_kind("http", http, HttpOptions, "HttpOptions(...)")
         reject_upstream_httpx(auth, what="auth")
         _check_auth(auth)
-        check_kind(
-            "rate", rate, (Rate, RateBudget, type(None)), "a Rate, such as Rate.per_second(10), a RateBudget or None"
-        )
         observers, middleware = _stack_parts("observers", observers), _stack_parts("middleware", middleware)
         check_middleware(middleware)
         check_observers(observers)
@@ -361,13 +351,14 @@ class Client:
         self._max_response_bytes = http.max_response_bytes
         self._request_id_headers = http.request_id_headers
         self._timeout = policy.timeout
+        self._view_timeout: Timeouts | None = None
         self._emitter = Emitter(observers) if observers else SILENT
         self._view = ROOT_DEFAULTS
         self._owns_pool = True
         credentials = Credentials.of(base_url=base_url, auth=auth, http=http, middleware=middleware)
         lanes = [Lane(route.fragment, *_route_rate(route)) for route in policy.routes]
         self._budgets = budgets = PathBudgets(
-            default=rate, lanes=lanes, timing=self._timing, origin=httpx2.URL(base_url).origin
+            default=policy.rate, lanes=lanes, timing=self._timing, origin=httpx2.URL(base_url).origin
         )
         stack = build_transport_stack(budgets, policy, http, self._timing, credentials, observed=bool(observers))
         self._http_client = build_http_client(
@@ -437,6 +428,7 @@ class Client:
             _view=layered,
             _owns_pool=False,
             _timeout=self._timeout if timeout is None else timeout.over(self._timeout),
+            _view_timeout=_layered_timeout(timeout, self._view_timeout),
         )
         return view
 
@@ -893,6 +885,7 @@ class Client:
         path = url_path(request.url)
         route_policy = match_route(self._policy.routes, path)
         route_options = {} if route_policy is None else route_policy.options
+        self._stamp_route_timeout(request, route_options, options.get("timeout"))
         deadline = self._deadline_of(call, route_options)
         if (timeout := options.get("timeout")) is not None:
             # Its kind was checked building the request (httpx_timeout), so a stream's is a Timeouts here.
@@ -909,6 +902,15 @@ class Client:
             stamp_ttl(request, options["cache_ttl"])
         context.attach(request)
         return _Prepared(request, context, follow)
+
+    def _stamp_route_timeout(self, request: httpx2.Request, route: RouteOptions, call: Timeouts | None) -> None:
+        """Send *request* with its *route*'s timeout, under the view's and the *call*'s own, over the policy's."""
+        if "timeout" not in route:
+            return
+        under = route["timeout"].over(self._policy.timeout)
+        if self._view_timeout is not None:
+            under = self._view_timeout.over(under)
+        request.extensions["timeout"] = httpx_timeout(under, call).as_dict()
 
     def _stamp_route(self, context: CallContext, call: _Call, route: RouteOptions, path: str) -> None:
         """Put on *context* what *call*'s *route* sets for every layer below: its retry policy, budget and cache."""
@@ -1276,6 +1278,13 @@ def _check_auth(auth: object) -> None:
         raise TypeError(msg)
 
 
+def _layered_timeout(over: Timeouts | None, under: Timeouts | None) -> Timeouts | None:
+    """Return the phases *over* sets laid over *under*'s, either of which may be ``None`` for none."""
+    if over is None or under is None:
+        return under if over is None else over
+    return over.over(under)
+
+
 def _route_rate(route: Route) -> tuple[Rate | RateBudget | None, bool]:
     """Return the rate *route* sets, and whether it sets one; ``None`` paces nothing of the route's own."""
     options = route.options
@@ -1298,15 +1307,15 @@ def _stack_parts[T](name: str, parts: Sequence[T]) -> tuple[T, ...]:
     return items
 
 
-def _effective_policy(policy: TransportPolicy, *, off: bool) -> TransportPolicy:
-    """Return the policy a client built now runs: *policy*, less retries and the breaker when transport policy is *off*.
+def _effective_policy(policy: CallPolicy, *, off: bool) -> CallPolicy:
+    """Return the policy a client built now runs: *policy*, less retries and the breaker when call policy is *off*.
 
-    The rate budget checks for transport policy being off itself, when it is built.
+    The rate budget checks for call policy being off itself, when it is built.
     """
     return replace(policy, retry=None, breaker=None) if off else policy
 
 
-def _registry_of(policy: TransportPolicy, timing: Timing) -> BreakerRegistry | None:
+def _registry_of(policy: CallPolicy, timing: Timing) -> BreakerRegistry | None:
     """Return the registry a client's breakers live in: the shared one it is given, else one of its own on *timing*."""
     breaker = policy.breaker
     if breaker is None or isinstance(breaker, BreakerRegistry):

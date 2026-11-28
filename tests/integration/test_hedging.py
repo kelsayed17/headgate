@@ -15,7 +15,7 @@ import itertools
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, ClientError, HttpOptions, RetryPolicy, TransportPolicy, nothing
+from headgate import BreakerPolicy, CallPolicy, ClientError, HttpOptions, RetryPolicy, nothing
 from headgate.breaker import BreakerState
 from headgate.events import RetryScheduled
 from headgate.retry import Hedge, RetryShare
@@ -48,7 +48,7 @@ async def test_a_hedge_spends_the_retry_budget() -> None:
         return httpx2.Response(200)
 
     fake = FakeTransport().reply("GET", "/v1/x", first_hangs_then_slow)
-    policy = TransportPolicy(retry=RetryPolicy(hedge=_HEDGE, budget=_ONE_RETRY))
+    policy = CallPolicy(retry=RetryPolicy(hedge=_HEDGE, budget=_ONE_RETRY))
     with clock.install():
         built = client(fake, policy=policy, http=HttpOptions(), observers=(recorder,))
 
@@ -74,7 +74,7 @@ async def test_a_hedged_call_is_charged_to_the_breaker_once() -> None:
 
     clock = TestClock()
     fake = FakeTransport().reply("GET", "/v1/x", first_fails_after_the_hedge, hedge_unavailable)
-    policy = TransportPolicy(
+    policy = CallPolicy(
         retry=RetryPolicy(attempts=2, hedge=_HEDGE), breaker=BreakerPolicy(failure_threshold=len(("a", "b")))
     )
     with clock.install():
@@ -104,7 +104,7 @@ async def test_a_hedge_losers_failure_is_not_charged_when_the_call_succeeds() ->
 
     clock = TestClock()
     fake = FakeTransport().reply("GET", "/v1/x", first_fails_after_the_hedge, hedge_answers)
-    policy = TransportPolicy(retry=RetryPolicy(hedge=_HEDGE), breaker=BreakerPolicy(failure_threshold=1))
+    policy = CallPolicy(retry=RetryPolicy(hedge=_HEDGE), breaker=BreakerPolicy(failure_threshold=1))
     with clock.install():
         built = client(fake, policy=policy)
     registry = registry_of(built)

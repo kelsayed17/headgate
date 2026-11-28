@@ -18,6 +18,7 @@ import msgspec
 
 from headgate import (
     CachedTokenAuth,
+    CallPolicy,
     Client,
     Expect,
     HttpOptions,
@@ -27,7 +28,6 @@ from headgate import (
     RetryPolicy,
     Route,
     Timeouts,
-    TransportPolicy,
     nothing,
 )
 from headgate.msgspec import decode, reader, writer
@@ -119,9 +119,9 @@ class OrdersClient:
         """Mint tokens with *client_id* and *client_secret*; report to *observers*."""
         self._http = Client(
             base_url="https://api.shop.example/v2",
-            rate=Rate.per_second(20),
             auth=ShopTokenAuth(client_id, client_secret),
-            policy=TransportPolicy(
+            policy=CallPolicy(
+                rate=Rate.per_second(20),
                 retry=RetryPolicy(attempts=4),  # four sends at most, the first included
                 timeout=Timeouts(read=20.0),
                 deadline=30.0,  # each call, every attempt and wait included

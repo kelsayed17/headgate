@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Rate, UpstreamStatusError
+from headgate import CallPolicy, Rate, UpstreamStatusError
 from headgate._client import Client
 from headgate._core import CallContext
 from headgate.retry._policy import RETRY_POLICY, SEND_ONCE
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 def _probe() -> Client:
     """Build with the defaults: three attempts per request."""
-    return Client(base_url="https://example.invalid", rate=Rate.per_second(2))
+    return Client(base_url="https://example.invalid", policy=CallPolicy(rate=Rate.per_second(2)))
 
 
 async def test_retry_none_sends_exactly_one_request(httpx2_mock: HTTPXMock) -> None:

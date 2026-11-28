@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, override
 
 import httpx2
 
-from headgate import Client, HttpCache, HttpOptions, TransportError, TransportPolicy
+from headgate import CallPolicy, Client, HttpCache, HttpOptions, TransportError
 from headgate.cache._transport import served_from_cache
 from headgate.events import CacheOutcome, CacheResult, Event
 from tests.cache._helpers import FaultyStorage, Network, every_get_rules
@@ -60,7 +60,7 @@ def _client(network: httpx2.AsyncBaseTransport, storage: AsyncBaseStorage, recor
     """Build a client caching every GET into *storage*, reporting to *recorder*, retrying nothing."""
     return Client(
         base_url="https://x",
-        policy=TransportPolicy(retry=None, cache=HttpCache(**every_get_rules(), storage=storage)),
+        policy=CallPolicy(retry=None, cache=HttpCache(**every_get_rules(), storage=storage)),
         http=HttpOptions(transport=network),
         observers=(recorder,),
     )
@@ -129,7 +129,7 @@ async def test_a_client_without_observers_emits_nothing(storage: AsyncSqliteStor
     network = Network()
     client = Client(
         base_url="https://x",
-        policy=TransportPolicy(cache=HttpCache(**every_get_rules(), storage=storage)),
+        policy=CallPolicy(cache=HttpCache(**every_get_rules(), storage=storage)),
         http=HttpOptions(transport=network),
     )
 

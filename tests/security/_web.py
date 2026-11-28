@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate import Auth, Client, HttpOptions, Rate, TransportPolicy
+from headgate import Auth, CallPolicy, Client, HttpOptions, Rate
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -48,9 +48,8 @@ class Web:
         """Return a client on *base_url* over this web, sending each call once."""
         return Client(
             base_url=base_url,
-            rate=Rate.per_second(1000),
             auth=auth,
-            policy=TransportPolicy(retry=None),
+            policy=CallPolicy(rate=Rate.per_second(1000), retry=None),
             http=replace(http or HttpOptions(), transport=httpx2.MockTransport(self)),
             middleware=middleware,
         )

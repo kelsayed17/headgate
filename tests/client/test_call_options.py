@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, Rate, RetryPolicy, TransportPolicy, UpstreamStatusError, nothing
+from headgate import CallPolicy, Client, HttpOptions, Rate, RetryPolicy, UpstreamStatusError, nothing
 from headgate.pagination import NextUrl
 from tests.support.wire import Script
 
@@ -49,8 +49,7 @@ def _client(script: Script) -> Client:
     """Return a client over *script* under the default retry policy and no breaker."""
     return Client(
         base_url=_BASE,
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(breaker=None),
+        policy=CallPolicy(rate=Rate.per_second(1000), breaker=None),
         http=HttpOptions(transport=script.transport()),
     )
 
@@ -224,7 +223,7 @@ def test_a_view_cannot_follow_redirects_under_a_response_check() -> None:
     """Refuse a following view on a client with a ``response_check``, as every call of it would be refused."""
     client = Client(
         base_url=_BASE,
-        rate=Rate.per_second(1000),
+        policy=CallPolicy(rate=Rate.per_second(1000)),
         http=HttpOptions(transport=Script().transport(), response_check=_accept_all, follow_redirects=False),
     )
     with pytest.raises(

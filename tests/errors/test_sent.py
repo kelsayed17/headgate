@@ -23,6 +23,7 @@ from headgate import (
     Auth,
     BreakerPolicy,
     CachedTokenAuth,
+    CallPolicy,
     Client,
     ClientError,
     ClientTimeoutError,
@@ -32,7 +33,6 @@ from headgate import (
     RetryPolicy,
     Timeouts,
     TransportError,
-    TransportPolicy,
     as_bytes,
     body_reader,
     nothing,
@@ -60,7 +60,7 @@ def _client(
     return Client(
         base_url=_BASE,
         auth=auth,
-        policy=TransportPolicy(retry=retry, breaker=breaker),
+        policy=CallPolicy(retry=retry, breaker=breaker),
         http=HttpOptions(transport=httpx2.MockTransport(handler), follow_redirects=True),
     )
 
@@ -131,7 +131,7 @@ def _closed_port() -> int:
 
 async def test_a_refused_connection_on_the_network_sent_nothing() -> None:
     """Record nothing sent for a connection the network refused."""
-    async with Client(base_url=f"http://127.0.0.1:{_closed_port()}", policy=TransportPolicy(retry=None)) as client:
+    async with Client(base_url=f"http://127.0.0.1:{_closed_port()}", policy=CallPolicy(retry=None)) as client:
         error = await _raised(client, method="POST")
 
     assert isinstance(error, TransportError)
@@ -141,7 +141,7 @@ async def test_a_refused_connection_on_the_network_sent_nothing() -> None:
 async def test_a_read_timeout_after_the_body_was_written_may_have_been_sent() -> None:
     """Record a POST the server read and never answered as maybe sent: it may have been processed."""
     async with _silent_server() as url:
-        policy = TransportPolicy(retry=None, timeout=Timeouts(read=0.05))
+        policy = CallPolicy(retry=None, timeout=Timeouts(read=0.05))
         async with Client(base_url=url, policy=policy) as client:
             error = await _raised(client, method="POST")
 

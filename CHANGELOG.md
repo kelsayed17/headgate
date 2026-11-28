@@ -17,6 +17,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   not derive from the protocol, so `Auth()`, `SigningAuth()` and `CachedTokenAuth()` read as taking nothing
   (`inspect.signature`, `help()`), and a base listed after `Auth`, such as `httpx2.DigestAuth` or a cooperative
   mixin, keeps its own constructor.
+- `RouteOptions` takes `timeout=`, as every other layer of overrides does: `Route("/exports",
+  timeout=Timeouts(read=120.0))` sets the phases it names on its paths, under a view's and a call's own timeouts and
+  over the policy's. A route timeout longer than the deadline its paths run under (its own, else the policy's) raises
+  `ValueError` where it is given.
 
 ### Changed
 
@@ -143,6 +147,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `breaker=BreakerRegistry(BreakerPolicy(failure_threshold=3))` for
   `breaker=BreakerPolicy(failure_threshold=3, registry=BreakerRegistry())`, and `registry.breaker_for(origin)` for
   `registry.breaker_for(origin, failure_threshold=..., recovery_timeout=...)`.
+- `TransportPolicy` is `CallPolicy`, the pair of `CallOptions`, which override it per call, leaving "transport" to
+  the network layer (`HttpOptions(transport=)`, `TransportError`): write `Client(policy=CallPolicy(...))` for
+  `Client(policy=TransportPolicy(...))`. It holds the client's rate, beside the routes that override it per path:
+  `Client(rate=)` is removed, so write `Client(base_url=..., policy=CallPolicy(rate=Rate.per_second(10)))` for
+  `Client(base_url=..., rate=Rate.per_second(10))`. A rate of the wrong kind raises `TypeError` from `CallPolicy`, and
+  `policy_disabled()` still builds a client's budget unpaced.
 
 ### Removed
 

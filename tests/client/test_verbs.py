@@ -25,6 +25,7 @@ import pytest
 
 from headgate import (
     AuthError,
+    CallPolicy,
     EncodedBody,
     Expect,
     Form,
@@ -34,7 +35,6 @@ from headgate import (
     Rate,
     Raw,
     RetryPolicy,
-    TransportPolicy,
     UpstreamStatusError,
     Writer,
 )
@@ -85,8 +85,7 @@ def _client(wire: _Wire) -> Client:
     """Return an ``Client`` whose network is *wire*, sending each request once."""
     return Client(
         base_url="https://example.test",
-        rate=Rate.per_second(2),
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1)),
         http=HttpOptions(transport=httpx2.MockTransport(wire)),
     )
 

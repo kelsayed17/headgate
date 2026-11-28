@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Client, HttpCache, HttpOptions, Rate, RateBudget, RateLimitError, TransportPolicy
+from headgate import CallPolicy, Client, HttpCache, HttpOptions, Rate, RateBudget, RateLimitError
 from headgate._core import AttemptFinished, CallFinished, RateLimited, Timing
 from headgate.cache._transport import CACHE_DEGRADATIONS
 from headgate.testing import TestClock
@@ -60,8 +60,7 @@ def _client(
     """Return a client spending *budget* against *server*, sending each call once."""
     return Client(
         base_url=f"https://{_HOST}",
-        rate=budget,
-        policy=TransportPolicy(retry=None, cache=cache),
+        policy=CallPolicy(rate=budget, retry=None, cache=cache),
         http=HttpOptions(transport=httpx2.MockTransport(server)),
         observers=() if recorder is None else (recorder,),
     )

@@ -14,7 +14,7 @@ from typing import Any, cast
 import httpx2
 import pytest
 
-from headgate import Auth, BearerAuth, Client, HttpOptions, Rate, TransportPolicy, nothing
+from headgate import Auth, BearerAuth, CallPolicy, Client, HttpOptions, Rate, nothing
 from headgate.events import CallFinished
 from tests.support.events import Recorder
 
@@ -30,9 +30,8 @@ def _client(sent: list[httpx2.Request], recorder: Recorder, *, auth: Auth | None
 
     return Client(
         base_url=_BASE,
-        rate=Rate.per_second(1000),
         auth=auth,
-        policy=TransportPolicy(retry=None),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=None),
         http=HttpOptions(transport=httpx2.MockTransport(handle)),
         observers=(recorder,),
     )

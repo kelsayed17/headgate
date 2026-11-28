@@ -58,7 +58,7 @@ part of [`examples/github_client.py`](https://github.com/kelsayed17/headgate/blo
 tested client for the GitHub REST API:
 
 ```python
-from headgate import BearerAuth, Client, Expect, HttpOptions, Rate, RateBudget, nothing
+from headgate import BearerAuth, CallPolicy, Client, Expect, HttpOptions, Rate, RateBudget, nothing
 from headgate.msgspec import reader
 from headgate.pagination import LinkHeader
 
@@ -77,7 +77,7 @@ class GitHub:
         self._http = Client(
             base_url=API,
             # Well under the 5,000 requests an hour a token gets, and never more than 50 at once.
-            rate=RateBudget(Rate.per_second(10), max_in_flight=50),
+            policy=CallPolicy(rate=RateBudget(Rate.per_second(10), max_in_flight=50)),
             auth=BearerAuth(token),
             http=HttpOptions(
                 headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
@@ -179,7 +179,7 @@ from typing import TYPE_CHECKING, Self
 
 import msgspec
 
-from headgate import BearerAuth, Client, Expect, Rate, nothing
+from headgate import BearerAuth, CallPolicy, Client, Expect, Rate, nothing
 from headgate.msgspec import reader
 from headgate.pagination import Cursor
 
@@ -232,7 +232,7 @@ class CatalogClient:
         """Authenticate with *api_key*."""
         self._http = Client(
             base_url="https://api.catalog.example/v1",
-            rate=Rate.per_second(10),
+            policy=CallPolicy(rate=Rate.per_second(10)),
             auth=BearerAuth(api_key),
         )
 
@@ -324,10 +324,10 @@ How the pieces fit together, for contributors and the curious: [design](https://
 
 ## Configuration
 
-`Client(*, base_url, rate=None, auth=None, policy=TransportPolicy(), http=HttpOptions(), observers=(),
-middleware=())`. `rate` is a `Rate` (a budget of the client's own) or a `RateBudget` shared with other clients; without
-one the client paces nothing itself but still waits out the pauses the server asks for. `TransportPolicy` says what the
-stack does to every request, `HttpOptions` how requests are sent and read. Both are frozen and validate on
+`Client(*, base_url, auth=None, policy=CallPolicy(), http=HttpOptions(), observers=(), middleware=())`. `CallPolicy`
+says what the stack does with every call, its rate first: `CallPolicy(rate=...)` is a `Rate` (a budget of the client's
+own) or a `RateBudget` shared with other clients; without one the client paces nothing itself but still waits out the
+pauses the server asks for. `HttpOptions` says how requests are sent and read. Both are frozen and validate on
 construction.
 
 <details>
@@ -347,9 +347,9 @@ class OrdersClient:
         """Mint tokens with *client_id* and *client_secret*; report to *observers*."""
         self._http = Client(
             base_url="https://api.shop.example/v2",
-            rate=Rate.per_second(20),
             auth=ShopTokenAuth(client_id, client_secret),
-            policy=TransportPolicy(
+            policy=CallPolicy(
+                rate=Rate.per_second(20),
                 retry=RetryPolicy(attempts=4),  # four sends at most, the first included
                 timeout=Timeouts(read=20.0),
                 deadline=30.0,  # each call, every attempt and wait included
@@ -364,15 +364,16 @@ class OrdersClient:
 
 </details>
 
-| `TransportPolicy` | Default |
+| `CallPolicy` | Default |
 | --- | --- |
+| `rate` | none: only the server's pauses are kept |
 | `retry` | `RetryPolicy()`: 3 attempts |
 | `deadline` | `60.0` seconds per call |
 | `breaker` | `BreakerPolicy()`: 5 failures, 60 s |
 | `timeout` | `Timeouts()`: connect 10 s, read 30 s, write 10 s, pool 15 s |
 | `cache` | none |
 | `idempotency` | none |
-| `routes` | none: `Route(fragment, retry=, deadline=, rate=, cache=)` per path, first match wins |
+| `routes` | none: `Route(fragment, retry=, timeout=, deadline=, rate=, cache=)` per path, first match wins |
 
 | `HttpOptions` | Default |
 | --- | --- |

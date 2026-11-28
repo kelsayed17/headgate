@@ -13,13 +13,13 @@ import pytest
 
 from headgate import (
     BreakerPolicy,
+    CallPolicy,
     Client,
     ClientError,
     ClientTimeoutError,
     HttpOptions,
     Rate,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
 )
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
@@ -65,7 +65,7 @@ def _client(
         response_check=response_check,
         follow_redirects=response_check is None,
     )
-    return Client(base_url=_BASE, rate=_RATE, http=http)
+    return Client(base_url=_BASE, policy=CallPolicy(rate=_RATE), http=http)
 
 
 async def _drain(client: Client, on_chunk: Callable[[bytes], object] = len) -> None:
@@ -289,8 +289,7 @@ async def test_a_network_like_error_of_the_callers_own_is_not_the_streams(error:
     """Let an ``OSError`` or httpx2 error the block raises itself propagate unchanged, charging the host nothing."""
     client = Client(
         base_url=_BASE,
-        rate=_RATE,
-        policy=TransportPolicy(breaker=BreakerPolicy(failure_threshold=1)),
+        policy=CallPolicy(rate=_RATE, breaker=BreakerPolicy(failure_threshold=1)),
         http=HttpOptions(transport=httpx2.MockTransport(_answer(httpx2.Response(200, content=b"ok")))),
     )
     with pytest.raises(type(error)) as raised:
@@ -453,8 +452,7 @@ async def test_a_stream_honors_the_policy_breaker() -> None:
     """Refuse to open a stream to a host whose breaker is open."""
     client = Client(
         base_url=_BASE,
-        rate=_RATE,
-        policy=TransportPolicy(),
+        policy=CallPolicy(rate=_RATE),
         http=HttpOptions(transport=httpx2.MockTransport(_answer(httpx2.Response(503)))),
     )
     for _ in range(BreakerPolicy().failure_threshold):

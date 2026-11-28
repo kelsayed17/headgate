@@ -25,6 +25,7 @@ from headgate import (
     AuthError,
     BreakerPolicy,
     CachedTokenAuth,
+    CallPolicy,
     Client,
     ClientError,
     HttpOptions,
@@ -34,7 +35,6 @@ from headgate import (
     Reader,
     RetryPolicy,
     SecurityOptions,
-    TransportPolicy,
     body_reader,
     nothing,
 )
@@ -88,7 +88,7 @@ def test_clock() -> Iterator[TestClock]:
 
 def _client(
     *responses: httpx2.Response | int,
-    policy: TransportPolicy | None = None,
+    policy: CallPolicy | None = None,
     http: HttpOptions | None = None,
     auth: Auth | None = None,
 ) -> Client:
@@ -98,7 +98,7 @@ def _client(
     return Client(
         base_url=_BASE,
         auth=auth,
-        policy=policy or TransportPolicy(retry=None, breaker=None),
+        policy=policy or CallPolicy(retry=None, breaker=None),
         http=HttpOptions(
             transport=options.transport or transport,
             max_response_bytes=options.max_response_bytes,
@@ -166,7 +166,7 @@ async def _surviving_429() -> None:
 
 async def _surviving_503() -> None:
     """Answer 503 on every attempt of three, under a policy with a fixed backoff: the history is in the notes."""
-    policy = TransportPolicy(retry=RetryPolicy(attempts=3, budget=None), breaker=None)
+    policy = CallPolicy(retry=RetryPolicy(attempts=3, budget=None), breaker=None)
     with timing_override(replace(current_timing(), random=lambda: 0.0)):
         built = _client(httpx2.Response(503, text="maintenance", headers={"request-id": "req-503"}), policy=policy)
     await _get(built)
@@ -174,7 +174,7 @@ async def _surviving_503() -> None:
 
 async def _surviving_429_past_max_retry_after() -> None:
     """Answer 429 asking for longer than ``max_retry_after``: the retry layer stops and the note says why."""
-    policy = TransportPolicy(retry=RetryPolicy(attempts=3, max_retry_after=1.0, budget=None), breaker=None)
+    policy = CallPolicy(retry=RetryPolicy(attempts=3, max_retry_after=1.0, budget=None), breaker=None)
     await _get(_client(httpx2.Response(429, headers={"retry-after": _RETRY_AFTER}), policy=policy))
 
 
@@ -257,7 +257,7 @@ async def _deadline_exceeded() -> None:
     """Hang past the call's deadline: ``ClientTimeoutError`` naming the request line."""
     async with Client(
         base_url=_BASE,
-        policy=TransportPolicy(retry=None, breaker=None),
+        policy=CallPolicy(retry=None, breaker=None),
         http=HttpOptions(transport=_Hanging()),
     ) as client:
         await client.get("orders" + _KEYED_QUERY, expect=nothing, deadline=_DEADLINE)
@@ -268,7 +268,7 @@ async def _open_breaker() -> None:
     registry = BreakerRegistry(
         BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN), timing=Timing(clock=lambda: 0.0)
     )
-    policy = TransportPolicy(retry=None, breaker=registry)
+    policy = CallPolicy(retry=None, breaker=registry)
     async with _client(503, policy=policy) as client:
         with pytest.raises(ClientError):
             await client.get("orders", expect=nothing)
@@ -279,7 +279,7 @@ async def _forbidden_destination() -> None:
     """Call a loopback address with the SSRF guard on: ``ForbiddenDestinationError`` before anything is sent."""
     async with Client(
         base_url="https://127.0.0.1:8443",
-        policy=TransportPolicy(retry=None, breaker=None),
+        policy=CallPolicy(retry=None, breaker=None),
         http=HttpOptions(transport=Script().transport(), security=SecurityOptions(block_private_hosts=True)),
     ) as client:
         await client.get("admin" + _KEYED_QUERY, expect=nothing)

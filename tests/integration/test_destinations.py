@@ -16,7 +16,7 @@ import httpx2
 import msgspec
 import pytest
 
-from headgate import Client, HttpOptions, SecurityOptions, StaticHeaderAuth, nothing
+from headgate import CallPolicy, Client, HttpOptions, SecurityOptions, StaticHeaderAuth, nothing
 from headgate.errors import ForbiddenDestinationError
 from headgate.msgspec import reader
 from headgate.pagination import NextUrl
@@ -54,7 +54,7 @@ async def test_a_stream_to_a_private_address_is_refused() -> None:
 
 async def test_a_stream_through_the_pinning_transport_is_refused() -> None:
     """Refuse a stream on the default network transport, which vets the address it connects to."""
-    async with Client(base_url=BASE, rate=FAST, http=_GUARDED) as built:
+    async with Client(base_url=BASE, policy=CallPolicy(rate=FAST), http=_GUARDED) as built:
         with pytest.raises(ForbiddenDestinationError, match=r"10\.0\.0\.7.*private"):
             async with built.stream(_INTERNAL):
                 pass
