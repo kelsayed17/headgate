@@ -66,13 +66,13 @@ The transport behaves like a native httpx2 one wherever the layers above it can 
   waits for the whole body to arrive into an unbounded queue, which would defeat headgate's response size cap.
 
 **The SSRF guard** (``SecurityOptions(block_private_hosts=True)``) is bound to the transport when a client is built on
-it (:meth:`AsyncCurlTransport.bind_guard`). Each request's host is then resolved and vetted through the guard, and
-curl is handed every vetted address as a ``CURLOPT_RESOLVE`` entry, so curl connects to them and never looks the name
-up itself; the URL keeps its name, so TLS still sends it as SNI and verifies the certificate against it. libcurl keeps
-a resolve entry in the session's DNS cache after the transfer, and its connection pool is shared by every request, so
-one transport serves one guard: a client built on it with another guard, or none, is refused. A ``CurlOpt.PROXY``,
-``PRE_PROXY``, ``RESOLVE`` or ``CONNECT_TO`` in ``curl_options`` would choose the address itself, so the guard refuses
-those too.
+it (:class:`~headgate.security._transport.GuardBinding`). Each request's host is then resolved and vetted through the
+guard, and curl is handed every vetted address as a ``CURLOPT_RESOLVE`` entry, so curl connects to them and never looks
+the name up itself; the URL keeps its name, so TLS still sends it as SNI and verifies the certificate against it.
+libcurl keeps a resolve entry in the session's DNS cache after the transfer, and its connection pool is shared by every
+request, so one transport serves one guard: a client built on it with another guard, or none, is refused. A
+``CurlOpt.PROXY``, ``PRE_PROXY``, ``RESOLVE`` or ``CONNECT_TO`` in ``curl_options`` would choose the address itself, so
+the guard refuses those too.
 """
 
 import asyncio
@@ -86,7 +86,7 @@ import httpx2
 from headgate._core import CallContext
 from headgate._user_agent import DEFAULT_USER_AGENT
 from headgate.retry._policy import IDEMPOTENT_METHODS, RETRY_POLICY, is_keyed
-from headgate.security._transport import vet_request
+from headgate.security._transport import GuardBinding, pins_itself, vet_request
 
 try:
     import certifi
@@ -103,8 +103,6 @@ from io import BytesIO
 
 from curl_cffi.requests import Response as _Response
 from curl_cffi.requests.impersonate import BrowserTypeLiteral
-
-from headgate.security import AddressGuard
 
 __all__ = ["AsyncCurlTransport"]
 
@@ -254,9 +252,8 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
             **given,
         }
         self._default_headers = default_headers
-        self._address_options = [option.name for option in _ADDRESS_OPTIONS if option in given]
-        self._bound = False
-        self._guard: AddressGuard | None = None
+        self._guard = GuardBinding([option.name for option in _ADDRESS_OPTIONS if option in given])
+        pins_itself(self, self._guard)
         self._closed = False
         self._session = _Session(
             max_clients=max_connections,
@@ -268,33 +265,6 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
             allow_redirects=False,
         )
 
-    def bind_guard(self, guard: AddressGuard | None, /) -> None:
-        """Serve only requests the SSRF *guard* vets (``None``: an unguarded client), pinning each to its addresses.
-
-        A ``Client`` calls this when it is built on this transport. curl keeps one DNS cache and one connection pool for
-        every request it sends, so the transport serves one guard: clients with the same guard may share it.
-
-        :raises ValueError: when the transport already serves another guard (or none, or one where *guard* is none),
-            or when *guard* is given and ``curl_options`` choose the connection's address (a proxy, a resolve or a
-            connect-to entry).
-        """
-        if self._bound and guard != self._guard:
-            msg = (
-                "this AsyncCurlTransport already serves a client with a different SSRF guard "
-                "(SecurityOptions(block_private_hosts=..., resolver=...)): curl shares its DNS cache and connections "
-                "across requests, so give each client its own transport"
-            )
-            raise ValueError(msg)
-        if guard is not None and self._address_options:
-            names = ", ".join(self._address_options)
-            msg = (
-                f"block_private_hosts=True cannot be combined with curl_options {names}: "
-                "they choose the address curl connects to, which the SSRF guard must choose"
-            )
-            raise ValueError(msg)
-        self._bound = True
-        self._guard = guard
-
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         method = _METHODS.get(request.method)
@@ -302,7 +272,8 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
             msg = f"curl cannot send an HTTP {request.method} request"
             raise httpx2.UnsupportedProtocol(msg, request=request)
         # Vetted before the body is read, so a lookup that fails leaves a one-shot body unread, and the call retryable.
-        resolve = None if self._guard is None else _resolve_entry(request, await vet_request(self._guard, request))
+        guard = self._guard.guard
+        resolve = None if guard is None else _resolve_entry(request, await vet_request(guard, request))
         # Read from the stream on every send, as a native transport does: `aread()` would keep the first read and send
         # it again, hiding a one-shot body sent twice.
         # shortcut: the body counts as written before curl connects, so an unkeyed POST that never connected is not

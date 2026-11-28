@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import dataclasses
 import socket
-from typing import TYPE_CHECKING, Final, override
+from typing import TYPE_CHECKING, Any, Final, cast, override
 
 import httpx2
 import pytest
 
+import headgate.security
 from headgate import (
     BreakerPolicy,
     CallPolicy,
@@ -30,12 +31,15 @@ from headgate import (
 from headgate.breaker import BreakerRegistry
 from headgate.curl import AsyncCurlTransport
 from headgate.errors import ForbiddenDestinationError
+from headgate.security import forbidden_reason
 from tests.security._servers import serving
 from tests.security._web import BASE, Web
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from headgate.security import AddressCheck
 
 #: An address standing in for any public one; the custom-transport tests never connect to it.
 _PUBLIC: Final = "93.184.216.34"
@@ -187,6 +191,79 @@ def test_a_guard_setting_that_cannot_work_is_refused(options: object, message: s
     assert callable(options)
     with pytest.raises(ValueError, match=message):
         options()
+
+
+def _admitting(*allowed: str) -> AddressCheck:
+    """Return a check that admits *allowed* and defers every other address to the default check."""
+
+    def check(address: str) -> str | None:
+        return None if address in allowed else forbidden_reason(address)
+
+    return check
+
+
+def _checked(base_url: str, check: AddressCheck, transport: httpx2.AsyncBaseTransport | None = None) -> Client:
+    """Build a client on *base_url* whose SSRF guard judges addresses with *check*, over *transport* if given."""
+    security = SecurityOptions(block_private_hosts=True, check=check)
+    return Client(
+        base_url=base_url,
+        policy=CallPolicy(rate=Rate.per_second(1000)),
+        http=HttpOptions(transport=transport, security=security),
+    )
+
+
+async def test_a_check_widens_the_guard_over_the_default_transport() -> None:
+    """Reach a loopback server the default check refuses, once ``check=`` admits its address."""
+    async with serving() as server, _checked(server.url(), _admitting("127.0.0.1")) as client:
+        resp = await client.get("x", expect=RESPONSE)
+
+    assert resp.text == "ok"
+    assert server.connections == 1
+
+
+async def test_a_check_widens_the_guard_over_the_curl_transport() -> None:
+    """Vet the curl transport's own lookups with the client's ``check=`` too."""
+    curl = AsyncCurlTransport(impersonate="chrome")
+    async with serving() as server, _checked(server.url(), _admitting("127.0.0.1"), curl) as client:
+        resp = await client.get("x", expect=RESPONSE)
+
+    assert resp.text == "ok"
+
+
+async def test_a_check_judges_every_hop() -> None:
+    """Judge a redirect's next hop with ``check=`` as well: one private address is admitted, another refused."""
+    web = Web(
+        {f"{BASE}/start": "https://internal.example/next", "https://internal.example/next": "https://db.example/"}
+    )
+    names = _Names(api_example=_PUBLIC, internal_example="10.1.2.3", db_example="10.9.9.9")
+    security = SecurityOptions(block_private_hosts=True, resolver=names, check=_admitting("10.1.2.3"))
+    async with web.client(http=HttpOptions(security=security), base_url=BASE) as client:
+        with pytest.raises(ForbiddenDestinationError, match=r"db\.example: it resolves to 10\.9\.9\.9"):
+            await client.get("start", expect=RESPONSE)
+
+    assert [str(request.url) for request in web.sent] == [f"{BASE}/start", "https://internal.example/next"]
+
+
+def test_a_check_needs_the_guard() -> None:
+    """Refuse a check nothing would use, and one that is not a function, as ``resolver=`` is refused."""
+    with pytest.raises(
+        ValueError, match=r"^check= is used only by the SSRF guard, so it needs block_private_hosts=True$"
+    ):
+        SecurityOptions(check=forbidden_reason)
+    with pytest.raises(TypeError, match=r"^check= takes an address check"):
+        SecurityOptions(block_private_hosts=True, check=cast("Any", "loopback"))
+
+
+def test_the_guard_is_configured_only_through_security_options() -> None:
+    """Keep the guard's machinery private: a check and a resolver are what a client of it writes."""
+    assert set(headgate.security.__all__) == {
+        "AddressCheck",
+        "CredentialCarrier",
+        "CredentialStamper",
+        "Resolver",
+        "forbidden_reason",
+    }
+    assert not hasattr(AsyncCurlTransport, "bind_guard")
 
 
 class _Recording(_Names):

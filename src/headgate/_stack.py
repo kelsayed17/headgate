@@ -56,10 +56,10 @@ from headgate.ratelimit._transport import RateLimitTransport
 from headgate.retry._policy import SEND_ONCE
 from headgate.retry._tracking import SendTrackingTransport
 from headgate.retry._transport import RetryTransport
-from headgate.security import AddressGuard, PinnedHTTPTransport
+from headgate.security._addresses import AddressGuard, forbidden_reason, resolve_with_loop
 from headgate.security._credentials import CredentialGuard
 from headgate.security._downgrade import refuse_https_downgrade
-from headgate.security._transport import GuardedTransport, address_hook
+from headgate.security._transport import PinnedHTTPTransport, address_hook, guard_binding
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -183,8 +183,8 @@ def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
     if (override := NETWORK_OVERRIDE.get()) is not None:
         return override
     if (transport := http.transport) is not None:
-        if isinstance(transport, GuardedTransport):
-            transport.bind_guard(_address_guard(http))
+        if (binding := guard_binding(transport)) is not None:
+            binding.bind(_address_guard(http))
         return transport
     guard = _address_guard(http)
     if guard is not None:
@@ -203,7 +203,7 @@ def _address_guard(http: HttpOptions) -> AddressGuard | None:
     security = http.security
     if not security.block_private_hosts:
         return None
-    return AddressGuard() if security.resolver is None else AddressGuard(security.resolver)
+    return AddressGuard(security.resolver or resolve_with_loop, check=security.check or forbidden_reason)
 
 
 def _request_hooks(
@@ -213,7 +213,7 @@ def _request_hooks(
     hooks: list[Callable[[httpx2.Request], Awaitable[None]]] = [credentials]
     addresses = _address_guard(http)
     network = NETWORK_OVERRIDE.get() or http.transport
-    unpinned = network is not None and not isinstance(network, GuardedTransport)
+    unpinned = network is not None and guard_binding(network) is None
     if addresses is not None and unpinned:
         hooks.append(address_hook(addresses))
     return hooks

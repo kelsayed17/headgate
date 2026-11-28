@@ -3,7 +3,7 @@
 
 """``AsyncCurlTransport`` under the SSRF guard: curl connects only to the addresses the guard vetted.
 
-The guard's real check refuses loopback, so the real-curl tests widen it with ``AddressGuard(check=...)`` to admit
+The guard's real check refuses loopback, so the real-curl tests widen it with a check (``check=``) to admit
 exactly the loopback addresses a test stands in for "public", and resolve names with a scripted resolver. The names
 (``api.example``) do not resolve in real DNS, so a request that reaches the server proves curl connected to the pinned
 address rather than looking the name up itself.
@@ -12,25 +12,26 @@ address rather than looking the name up itself.
 from __future__ import annotations
 
 import asyncio
+import gc
 import socket
+import weakref
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx2
 import pytest
 from curl_cffi import CurlOpt
 
-from headgate import Client, HttpOptions, Rate, SecurityOptions, _stack
+from headgate import Client, HttpOptions, Rate, SecurityOptions
 from headgate._options import CallPolicy
 from headgate.curl import AsyncCurlTransport
 from headgate.errors import ForbiddenDestinationError
-from headgate.security import AddressGuard
+from headgate.security._addresses import AddressGuard
+from headgate.security._transport import guard_binding
 from tests.security._servers import CERTS, serving
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Sequence
-
-    from headgate._options import HttpOptions as _HttpOptions
 
 #: The address a test's server listens on, standing in for a public address.
 _PUBLIC: Final = "127.0.0.1"
@@ -76,7 +77,9 @@ class _Resolver:
 def _pinned(guard: AddressGuard, curl_options: dict[CurlOpt, Any] | None = None) -> AsyncCurlTransport:
     """Return a curl transport bound to *guard*, as a guarded client's construction binds it."""
     transport = AsyncCurlTransport(impersonate="chrome", curl_options=curl_options)
-    transport.bind_guard(guard)
+    binding = guard_binding(transport)
+    assert binding is not None, "a curl transport pins its requests itself"
+    binding.bind(guard)
     return transport
 
 
@@ -168,19 +171,12 @@ class TestRealCurl:
         assert sorted(seen.path for seen in server.requests) == ["/0", "/1"]
         assert resolver.lookups == ["api.example"] * 2
 
-    async def test_a_guarded_client_looks_each_hop_up_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_a_guarded_client_looks_each_hop_up_once(self) -> None:
         """Skip the request hook's lookup over a curl transport, which vets and pins in the same step."""
         resolver = _Resolver(_PUBLIC)
-        guard = AddressGuard(resolver, check=_admitting(_PUBLIC))
-
-        def address_guard(http: _HttpOptions) -> AddressGuard | None:
-            return guard if http.security.block_private_hosts else None
-
-        monkeypatch.setattr(_stack, "_address_guard", address_guard)
+        security = SecurityOptions(block_private_hosts=True, resolver=resolver, check=_admitting(_PUBLIC))
         async with serving() as server:
-            options = HttpOptions(
-                transport=AsyncCurlTransport(impersonate="chrome"), security=SecurityOptions(block_private_hosts=True)
-            )
+            options = HttpOptions(transport=AsyncCurlTransport(impersonate="chrome"), security=security)
             client = Client(
                 base_url=f"http://api.example:{server.port}",
                 policy=CallPolicy(rate=Rate.per_second(1000), retry=None),
@@ -253,6 +249,11 @@ async def _resolve_otherwise(_host: str, _port: int) -> Sequence[str]:
 _GUARDED: Final = SecurityOptions(block_private_hosts=True)
 
 
+def _admit_all(_address: str) -> str | None:
+    """Admit every address."""
+    return None
+
+
 @pytest.mark.parametrize(
     ("first", "second"),
     [
@@ -263,6 +264,7 @@ _GUARDED: Final = SecurityOptions(block_private_hosts=True)
             SecurityOptions(block_private_hosts=True, resolver=_resolve_otherwise),
             id="another-resolver",
         ),
+        pytest.param(_GUARDED, SecurityOptions(block_private_hosts=True, check=_admit_all), id="another-check"),
     ],
 )
 async def test_a_transport_serving_one_guard_refuses_a_client_with_another(
@@ -273,6 +275,16 @@ async def test_a_transport_serving_one_guard_refuses_a_client_with_another(
     async with _client(transport, first):
         with pytest.raises(ValueError, match="already serves a client with a different SSRF guard"):
             _client(transport, second)
+
+
+def test_a_binding_does_not_keep_its_transport_alive() -> None:
+    """Free a curl transport nobody holds, though the stack found it by its binding."""
+    transport = AsyncCurlTransport(impersonate="chrome")
+    gone = weakref.ref(transport)
+    del transport
+    gc.collect()
+
+    assert gone() is None
 
 
 @pytest.mark.parametrize(

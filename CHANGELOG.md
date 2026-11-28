@@ -26,6 +26,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `response.text` raises). A leading UTF-8 byte order mark is dropped, and the rest read as UTF-8. A body its
   `charset` cannot decode at all (UTF-16 without a byte order mark) raises `ResponseParseError`. Write
   `expect=as_text` for a plain-text body.
+- `SecurityOptions(check=)`, beside `resolver=`: the function that judges each address the SSRF guard resolves,
+  returning why it refuses one or `None` to admit it, on every hop and over every transport. It defaults to
+  `headgate.security.forbidden_reason`, which a check of your own can defer to for the addresses it does not decide,
+  and is accepted only with `block_private_hosts=True` (`ValueError` otherwise, as for `resolver=`).
 
 ### Changed
 
@@ -264,6 +268,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `CacheChecked` event already reported, without the call: count `CacheChecked(outcome=CacheOutcome.DEGRADED)` events
   in an observer (per `event.call.url`'s host, for the old shape). `observer_failures()` stays, since an observer that
   raises cannot be reported through observers.
+- `AddressGuard`, `PinnedHTTPTransport` and `resolve_with_loop` from `headgate.security`, and
+  `AsyncCurlTransport.bind_guard()`, the SSRF guard's machinery, which a client builds and binds from its
+  `SecurityOptions`: configure the guard there. Write
+  `HttpOptions(security=SecurityOptions(block_private_hosts=True, check=...))` where a test built
+  `PinnedHTTPTransport(AddressGuard(check=...), ...)` to reach a loopback server, and pass an `AsyncCurlTransport` as
+  `HttpOptions(transport=)` where it called `bind_guard()` itself.
 
 ### Fixed
 

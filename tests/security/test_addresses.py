@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from headgate.errors import ForbiddenDestinationError
-from headgate.security import AddressGuard, forbidden_reason, resolve_with_loop
+from headgate.security import forbidden_reason
+from headgate.security._addresses import AddressGuard, resolve_with_loop
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
