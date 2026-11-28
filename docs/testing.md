@@ -96,8 +96,7 @@ returns that registry (or `None` for a client without a breaker); assert on it w
 ## What a client was built with
 
 A client fixes its options in its `__init__`, so a test of its configuration reads them back. `cache_of(client)` returns
-the `HttpCache` it was built with (or `None`), whose `caches_request(method, path)` and `stores_status(status)` say
-what it stores, from its `methods`, `paths` and `statuses`. `budget_for(client, url)` returns the `RateBudget` a
+the `HttpCache` it was built with (or `None`), whose `methods`, `paths` and `statuses` say what it stores. `budget_for(client, url)` returns the `RateBudget` a
 request to `url` spends from: that of the first `Route` that matches it, when that route sets `rate=`, or the default;
 without a `url`, the default budget, built from the policy's `rate=`.
 

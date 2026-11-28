@@ -78,16 +78,6 @@ class Respond:
             msg = f"retry_after must be a finite, non-negative number of seconds, got {self.retry_after!r}"
             raise ValueError(msg)
 
-    def response(self) -> tuple[list[tuple[str, str]], bytes]:
-        """Return the headers and the body this step answers with."""
-        headers = list(self.headers.items())
-        if self.retry_after is not None:
-            headers.append(("Retry-After", _seconds(self.retry_after)))
-        if self.json is None:
-            return headers, self.content
-        headers.append(("Content-Type", "application/json"))
-        return headers, jsonlib.dumps(self.json).encode()
-
 
 @dataclass(frozen=True, slots=True)
 class DropMidBody:
@@ -290,9 +280,20 @@ async def _write(request: httpx2.Request, call: FaultCall, *, limit: int | None 
     return write
 
 
+def response_parts(step: Respond) -> tuple[list[tuple[str, str]], bytes]:
+    """Return the headers and the body *step* answers with, in :class:`FaultyTransport` and ``FakeTransport`` alike."""
+    headers = list(step.headers.items())
+    if step.retry_after is not None:
+        headers.append(("Retry-After", _seconds(step.retry_after)))
+    if step.json is None:
+        return headers, step.content
+    headers.append(("Content-Type", "application/json"))
+    return headers, jsonlib.dumps(step.json).encode()
+
+
 def _respond(step: Respond, request: httpx2.Request, call: FaultCall) -> httpx2.Response:
     """Return the response *step* describes, with a body that records its close in *call*."""
-    headers, content = step.response()
+    headers, content = response_parts(step)
     response = httpx2.Response(step.status_code, headers=headers, stream=_TrackedBody(content, call), request=request)
     call.response = response
     return response

@@ -30,6 +30,7 @@ import pytest
 from hishel import AsyncBaseStorage, AsyncSqliteStorage, Entry, Headers, Request, Response
 
 from headgate import HttpCache, HttpOptions, TransportError, as_bytes
+from headgate.cache import _transport
 from headgate.cache._transport import (
     CACHE_DEGRADED_EXT,
     HOST_UNTESTED,
@@ -257,30 +258,21 @@ async def test_a_failed_degraded_fetch_does_not_carry_the_storage_error(storage:
     assert "hunter2" not in "".join(traceback.format_exception(raised.value))
 
 
-class _RequestRuleBug(HttpCache):
-    """A cache whose request rule raises: a bug, not an outage."""
-
-    @override
-    def caches_request(self, method: str, path: str) -> bool:
-        msg = "a bug in a cache rule"
-        raise RuntimeError(msg)
+def _buggy_rule(*_args: object) -> bool:
+    """Stand in for a cache rule with a bug: raise, as a bug does, rather than fail as an outage does."""
+    msg = "a bug in a cache rule"
+    raise RuntimeError(msg)
 
 
-class _StatusRuleBug(HttpCache):
-    """A cache whose status rule raises, which hishel reaches only after the network answered."""
-
-    @override
-    def stores_status(self, status: int) -> bool:
-        msg = "a bug in a cache rule"
-        raise RuntimeError(msg)
-
-
-async def test_a_bug_in_a_cache_rule_propagates_rather_than_degrading(storage: AsyncSqliteStorage) -> None:
+async def test_a_bug_in_a_cache_rule_propagates_rather_than_degrading(
+    storage: AsyncSqliteStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Only a storage fault falls back: an error from a rule is a bug to see, not an outage to hide."""
+    monkeypatch.setattr(_transport, "caches_request", _buggy_rule)
     network = Network()
     request = httpx2.Request("GET", _URL)
     recorder = observed(request)
-    transport = ResilientCacheTransport(network, _RequestRuleBug(storage=storage), max_body_bytes=GENEROUS_CAP)
+    transport = ResilientCacheTransport(network, HttpCache(storage=storage), max_body_bytes=GENEROUS_CAP)
 
     with pytest.raises(RuntimeError, match="a bug in a cache rule"):
         await transport.handle_async_request(request)
@@ -289,10 +281,13 @@ async def test_a_bug_in_a_cache_rule_propagates_rather_than_degrading(storage: A
     assert CacheOutcome.DEGRADED not in outcomes(recorder)
 
 
-async def test_a_bug_inside_hishel_after_the_send_closes_the_network_response(storage: AsyncSqliteStorage) -> None:
+async def test_a_bug_inside_hishel_after_the_send_closes_the_network_response(
+    storage: AsyncSqliteStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A bug while hishel stores surfaces as itself, and the network response hishel abandoned with it is closed."""
+    monkeypatch.setattr(_transport, "stores_status", _buggy_rule)
     network = TrackingNetwork()
-    transport = ResilientCacheTransport(network, _StatusRuleBug(storage=storage), max_body_bytes=GENEROUS_CAP)
+    transport = ResilientCacheTransport(network, HttpCache(storage=storage), max_body_bytes=GENEROUS_CAP)
 
     with pytest.raises(RuntimeError, match="a bug in a cache rule"):
         await transport.handle_async_request(httpx2.Request("GET", _URL))

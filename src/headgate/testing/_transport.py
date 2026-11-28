@@ -11,7 +11,7 @@ import httpx2
 
 from headgate._stack import NETWORK_OVERRIDE
 from headgate._url import sanitize_url
-from headgate.testing._faults import Respond
+from headgate.testing._faults import Respond, response_parts
 
 __all__ = ["FakeTransport", "Reply", "UnmatchedRequestError", "fake_network"]
 
@@ -114,7 +114,7 @@ class FakeTransport(httpx2.AsyncBaseTransport):
             raise UnmatchedRequestError(msg)
         reply = route.next_reply()
         if isinstance(reply, Respond):
-            headers, body = reply.response()
+            headers, body = response_parts(reply)
             return httpx2.Response(reply.status_code, headers=headers, content=body, request=request)
         if isinstance(reply, int):
             return httpx2.Response(reply, request=request)

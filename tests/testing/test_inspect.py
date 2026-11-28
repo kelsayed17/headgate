@@ -20,14 +20,13 @@ _CANDLES = Route("candles", rate=Rate.per_second(1))
 
 
 def test_the_cache_a_client_was_built_with_is_read_back(storage: AsyncSqliteStorage) -> None:
-    """Return the client's ``HttpCache``, whose rules say what it stores; ``None`` without one."""
+    """Return the client's ``HttpCache``, whose fields say what it stores; ``None`` without one."""
     cache = HttpCache(storage=storage, ttl=60.0, paths=["series"])
     client = Client(base_url=_BASE, policy=CallPolicy(cache=cache))
 
     assert cache_of(client) is cache
     assert cache_of(client.with_options(timeout=Timeouts(read=5.0))) is cache
-    assert cache.caches_request("GET", "/v1/series/GDP")
-    assert not cache.caches_request("GET", "/v1/other")
+    assert cache.paths == ("series",)
     assert cache_of(Client(base_url=_BASE)) is None
 
 
