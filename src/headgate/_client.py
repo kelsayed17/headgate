@@ -827,8 +827,8 @@ class Client:
         A stream's own read timeout may be longer than its deadline, which bounds only opening the stream.
 
         Raises ``ValueError`` for a t-string value no path segment can hold, for a call that would follow redirects
-        on a client with a ``response_check``, for a ``deadline=`` that is not positive and finite and for a ``Json``
-        body JSON cannot carry; ``TypeError`` for a URL that is neither a ``str``, a t-string nor an absolute
+        on a client with a ``response_check`` and for a ``deadline=`` that is not positive and finite; ``TypeError``
+        for a URL that is neither a ``str``, a t-string nor an absolute
         ``httpx2.URL``, and for a ``body=`` that is no ``Body``; and ``ClientError`` for a URL httpx2 cannot parse.
         """
         _check_url(call.url)
