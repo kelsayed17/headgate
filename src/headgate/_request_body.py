@@ -44,6 +44,7 @@ __all__ = [
     "UploadFiles",
     "WireValue",
     "Writer",
+    "encoded_json",
     "files_replayable",
     "lowered",
     "wire_fields",
@@ -197,7 +198,7 @@ class Json:
     def __init__(self, value: object) -> None:
         """Encode *value*, refusing one that is not builtins or holds what JSON cannot carry."""
         object.__setattr__(self, "value", value)
-        object.__setattr__(self, "_encoded", _encoded_json(value))
+        object.__setattr__(self, "_encoded", encoded_json(value))
 
     @override
     def __setattr__(self, name: str, value: object) -> None:
@@ -233,8 +234,13 @@ class Json:
         refuse_subclass(cls, Json, "build a Json of the value, or write a body with a flavor's writer")
 
 
-def _encoded_json(value: object) -> bytes:
+def encoded_json(
+    value: object, *, subject: str = "Json", takes: str = _JSON_TAKES, instead: str = _JSON_INSTEAD
+) -> bytes:
     """Return *value* encoded as httpx2 encodes ``json=``, so a body reads the same whichever spelling built it.
+
+    A refusal is worded for where the value was given: *subject* is what takes it, *takes* what it takes and
+    *instead* what to write instead, a ``Json``'s by default.
 
     :raises TypeError: for a value that is not builtins, naming its type, or a key JSON cannot write.
     :raises ValueError: for ``NaN`` or an infinity, or a value that holds itself.
@@ -250,12 +256,12 @@ def _encoded_json(value: object) -> bytes:
     except TypeError as exc:
         # A plain TypeError at the boundary: neither the encoder's error nor not_builtins' adds anything to it.
         got = f"got {type(refused[0]).__name__}" if refused else str(exc)
-        msg = f"{_JSON_TAKES} ({got}): {_JSON_INSTEAD}"
+        msg = f"{takes} ({got}): {instead}"
         raise TypeError(msg) from None
     except ValueError as exc:
         msg = (
-            f"Json takes a value JSON can carry ({exc}): write None or a string in place of NaN and the infinities, "
-            "and break a value that holds itself"
+            f"{subject} takes a value JSON can carry ({exc}): write None or a string in place of NaN and the "
+            "infinities, and break a value that holds itself"
         )
         raise ValueError(msg) from None
     return encoded.encode()

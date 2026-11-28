@@ -355,6 +355,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   one public address, and `localhost` and the names under it to loopback, which the guard refuses as in production,
   unless `FakeTransport.resolve` says otherwise. A guarded SDK's test made real DNS queries, and failed offline or on a host
   that does not exist; it now makes none. The guard's checks still run, so a private IP literal is still refused.
+- A walk's `payload=`, when its pager has no `write`, is encoded as JSON in `paginate()`, which raises `TypeError`
+  there for one that is not builtins, in a walk's words: it raised at the first iteration, and advised `body=`, which
+  a walk does not take. Write `payload=to_builtins(query)`, or give the pager `write=writer(Query)`.
 
 ### Removed
 
