@@ -262,6 +262,15 @@ change the public API; such changes are listed under **Changed** and **Removed**
   the shared object inside the same block as its clients: `with clock.install(): shared = RateBudget(rate);
   client = Client(..., policy=CallPolicy(rate=shared))`. Under `policy_disabled()` a client ignores a shared budget,
   and is not refused.
+- A call's options are checked for their kind before anything is sent, each a `TypeError` naming the option:
+  `params=` must be a mapping with `str` keys (a list of pairs, httpx's habit, raised an `AttributeError`);
+  `headers=`, on a call, a view (`with_options`, which now raises where the view is made), `HttpOptions` and an
+  `Expect`, must map names to `str` values (pairs raised an `AttributeError`, and `{"X-N": 1}` httpx2's own error at
+  the call); `idempotency_key=` must be a `str` (an `int` raised an `AttributeError`, and `None` is refused: leave the
+  option out for no key); `events(last_event_id=)` must be a `str` or `None`; and `stream(method=)` must be one of
+  `"GET"`, `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`, `"HEAD"` and `"QUERY"`, where any other value, a lower-case
+  `"get"` included, was sent as given. Write `params={"a": 1}`, `headers={"X-N": "1"}`, `idempotency_key=str(key)`
+  and `method="GET"`.
 
 ### Removed
 

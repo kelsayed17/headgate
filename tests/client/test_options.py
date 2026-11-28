@@ -620,7 +620,7 @@ _WRONG_KINDS: Final[list[tuple[Callable[[], object], str]]] = [
     (lambda: CallPolicy(cache=cast("Any", "memory")), r"^cache= takes an HttpCache, or None"),
     (lambda: CallPolicy(deadline=cast("Any", "60")), r"^deadline= takes seconds, or None for no deadline"),
     (lambda: CallPolicy(deadline=_TRUE), r"^deadline= takes seconds, or None for no deadline"),
-    (lambda: HttpOptions(headers=cast("Any", [("a", "b")])), r"^headers= takes a mapping of header names to values"),
+    (lambda: HttpOptions(headers=cast("Any", [("a", "b")])), r"^headers= takes a mapping of header names to str "),
     (lambda: HttpOptions(follow_redirects=cast("Any", "no")), r"^follow_redirects= takes a bool"),
     (lambda: HttpOptions(max_redirects=_TRUE), r"^max_redirects= takes a number of hops, an int"),
     (lambda: HttpOptions(max_response_bytes=cast("Any", 1.5)), r"^max_response_bytes= takes a number of bytes, an int"),
