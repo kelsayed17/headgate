@@ -71,22 +71,23 @@ class Stream(Protocol):
         """The event id the server last set, as of what :meth:`aiter_events` has read; ``None`` before it sets one.
 
         It is ``""`` once the server reset it with an empty ``id``, and a block without data (an ``id:`` alone) sets
-        it too, as a browser's ``EventSource`` keeps it. Pass it as ``last_event_id=`` when re-opening the stream, so
-        the server resumes after it.
+        it too, as a browser's ``EventSource`` keeps it. Pass it as ``events(last_event_id=)`` when re-opening the
+        stream, so the server resumes after it.
         """
         ...
 
     @property
-    def retry(self) -> int | None:
-        """The reconnection time in milliseconds the server last set, as of what :meth:`aiter_events` has read.
+    def reconnect_after(self) -> float | None:
+        """The seconds to wait before re-opening the stream, as the server's last ``retry:`` set them.
 
-        ``None`` before a ``retry:`` sets one. A ``retry:`` alone, in a block without data, sets it too, and it holds
-        until another replaces it, as a browser's ``EventSource`` keeps it; an event's own ``retry`` is only the field
-        its block named. Wait this long before re-opening the stream.
+        It is the reconnection time the server sends in milliseconds, in seconds like every other duration, as of what
+        :meth:`aiter_events` has read, and ``None`` before a ``retry:`` sets one. A ``retry:`` alone, in a block
+        without data, sets it too, and it holds until another replaces it, as a browser's ``EventSource`` keeps it;
+        an event's own ``retry`` is only the field its block named, in milliseconds.
         """
         ...
 
-    def aiter_bytes(self, chunk_size: int | None = None) -> AsyncIterator[bytes]:
+    def aiter_bytes(self, *, chunk_size: int | None = None) -> AsyncIterator[bytes]:
         """Iterate the body as bytes, in chunks as they arrive or of *chunk_size* bytes."""
         ...
 
@@ -149,22 +150,24 @@ class OpenStream:
         """The event id the server last set, as of what :meth:`aiter_events` has read; ``None`` before it sets one.
 
         It is ``""`` once the server reset it with an empty ``id``, and a block without data (an ``id:`` alone) sets
-        it too, as a browser's ``EventSource`` keeps it. Pass it as ``last_event_id=`` when re-opening the stream, so
-        the server resumes after it.
+        it too, as a browser's ``EventSource`` keeps it. Pass it as ``events(last_event_id=)`` when re-opening the
+        stream, so the server resumes after it.
         """
         return None if self._events is None else self._events.last_event_id
 
     @property
-    def retry(self) -> int | None:
-        """The reconnection time in milliseconds the server last set, as of what :meth:`aiter_events` has read.
+    def reconnect_after(self) -> float | None:
+        """The seconds to wait before re-opening the stream, as the server's last ``retry:`` set them.
 
-        ``None`` before a ``retry:`` sets one. A ``retry:`` alone, in a block without data, sets it too, and it holds
-        until another replaces it, as a browser's ``EventSource`` keeps it; an event's own ``retry`` is only the field
-        its block named. Wait this long before re-opening the stream.
+        It is the reconnection time the server sends in milliseconds, in seconds like every other duration, as of what
+        :meth:`aiter_events` has read, and ``None`` before a ``retry:`` sets one. A ``retry:`` alone, in a block
+        without data, sets it too, and it holds until another replaces it, as a browser's ``EventSource`` keeps it;
+        an event's own ``retry`` is only the field its block named, in milliseconds.
         """
-        return None if self._events is None else self._events.retry
+        retry = None if self._events is None else self._events.retry
+        return None if retry is None else retry / 1000
 
-    def aiter_bytes(self, chunk_size: int | None = None) -> AsyncIterator[bytes]:
+    def aiter_bytes(self, *, chunk_size: int | None = None) -> AsyncIterator[bytes]:
         """Iterate the body as bytes, in chunks as they arrive or of *chunk_size* bytes."""
         return _Guarded(self._response.aiter_bytes(chunk_size), self._fail)
 

@@ -531,7 +531,6 @@ class Client:
         url: CallUrl,
         *,
         method: Method = "GET",
-        last_event_id: str | None = None,
         **options: Unpack[StreamOptions],
     ) -> contextlib.AbstractAsyncContextManager[Stream]:
         """Send a request, a GET unless *method* says otherwise, and open its 2xx response as a ``Stream``.
@@ -557,9 +556,7 @@ class Client:
 
         A GET or HEAD stream takes no ``body=``, as :meth:`get` takes none: ``method="QUERY"`` is the read with a body.
 
-        ``last_event_id=`` sends ``Last-Event-ID`` (when not empty, and in place of one in ``headers=``), to resume a
-        server-sent event stream after the last event a previous :class:`~headgate.streaming.Stream` saw (its
-        ``last_event_id``).
+        A server-sent event stream is :meth:`events`, which also resumes one after an event.
 
         The request goes out when the block is entered.
         """
@@ -571,12 +568,6 @@ class Client:
                 "method='QUERY', the safe read with a body"
             )
             raise TypeError(msg)
-        if bool(last_event_id):
-            # Merged case-insensitively, so it replaces a Last-Event-ID however headers= spelled it.
-            headers = httpx2.Headers(options.get("headers"))
-            headers["Last-Event-ID"] = last_event_id
-            options = options.copy()
-            options["headers"] = headers
         return self._streamed(_Call(method, url, options))
 
     def events(
@@ -587,11 +578,17 @@ class Client:
         ``async with client.events("feed") as stream:`` then ``async for event in stream.aiter_events():``. It sends
         ``Accept: text/event-stream`` unless the call's own ``headers=`` name an ``Accept``, and gives each read no
         timeout (``math.inf``) unless the call's ``timeout=`` sets ``read``, since an event stream may be quiet for
-        minutes. The deadline bounds opening it, as for any stream. ``last_event_id=`` resumes after an event, as on
-        :meth:`stream`.
+        minutes. The deadline bounds opening it, as for any stream.
+
+        ``last_event_id=`` sends ``Last-Event-ID`` (when not empty, and in place of one in ``headers=``), to resume the
+        stream after the last event a previous :class:`~headgate.streaming.Stream` saw (its ``last_event_id``); wait
+        its ``reconnect_after`` first.
         """
+        # Merged case-insensitively, so Last-Event-ID replaces one however headers= spelled it.
         headers = httpx2.Headers(options.get("headers"))
         headers.setdefault("Accept", _EVENT_STREAM)
+        if bool(last_event_id):
+            headers["Last-Event-ID"] = last_event_id
         timeout = options.get("timeout")
         options = options.copy()
         options["headers"] = headers
@@ -601,7 +598,7 @@ class Client:
             check_kind("timeout", timeout, Timeouts, "a Timeouts, such as Timeouts(read=5.0)")
             if timeout.read is None:
                 options["timeout"] = replace(timeout, read=math.inf)
-        return self.stream(url, last_event_id=last_event_id, **options)
+        return self.stream(url, **options)
 
     @overload
     def paginate[I, P](

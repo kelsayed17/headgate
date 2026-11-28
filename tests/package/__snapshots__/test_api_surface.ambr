@@ -370,13 +370,13 @@
   __all__ = ['DEFAULT_MAX_EVENT_SIZE', 'Stream', 'StreamOptions']
   DEFAULT_MAX_EVENT_SIZE = 1048576
   class Stream(Protocol)(*args, **kwargs)
-      def aiter_bytes(self, chunk_size: 'int | None' = None) -> 'AsyncIterator[bytes]'
+      def aiter_bytes(self, *, chunk_size: 'int | None' = None) -> 'AsyncIterator[bytes]'
       def aiter_events(self, *, max_event_size: 'int | None' = 1048576) -> 'AsyncIterator[httpx2.ServerSentEvent]'
       def aiter_lines(self, *, max_line_size: 'int | None' = 1048576) -> 'AsyncIterator[str]'
       property headers
       property last_event_id
+      property reconnect_after
       property request_id
-      property retry
       property status_code
   class StreamOptions(dict)(no signature)
       closed
@@ -525,7 +525,7 @@
       def post(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def put(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def query(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
-      def stream(self, url: 'CallUrl', *, method: 'Method' = 'GET', last_event_id: 'str | None' = None, **options: 'Unpack[StreamOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
+      def stream(self, url: 'CallUrl', *, method: 'Method' = 'GET', **options: 'Unpack[StreamOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
       def with_options(self, **options: 'Unpack[ViewOptions]') -> 'Self'
   class ClientError(Exception)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
       property attempts

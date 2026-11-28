@@ -162,6 +162,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `CallInfo.template`, OpenTelemetry's `url.template`, since a `Route` is the per-path rule: write
   `call_view(request).info.template` for `call_info(request).call.route`, and `event.call.template` for
   `event.call.route`.
+- `stream()` takes no `last_event_id=`, which `events()` keeps as the one way to resume a server-sent event stream:
+  write `events(url, last_event_id=...)` for `stream(url, last_event_id=...)`, or send `Last-Event-ID` in a raw
+  stream's `headers=`. `Stream.retry`, the reconnection time in milliseconds, is `Stream.reconnect_after`, in seconds
+  like every other duration: write `await asyncio.sleep(stream.reconnect_after)` for
+  `await asyncio.sleep(stream.retry / 1000)`. `Stream.aiter_bytes()` takes `chunk_size=` by keyword only, as the
+  other sizes are: write `aiter_bytes(chunk_size=1024)` for `aiter_bytes(1024)`.
 
 ### Removed
 
