@@ -203,3 +203,10 @@ async def test_paginate_refuses_what_is_no_pager() -> None:
             TypeError, match=rf"^pager= takes a Pager, such as Cursor\(reader\(Page\), .*has no {missing}"
         ):
             client.paginate("x", pager=cast("Any", pager))
+
+
+@pytest.mark.parametrize("status", [100, 103])
+def test_a_retry_policy_refuses_an_informational_status(status: int) -> None:
+    """Refuse a 1xx, which httpx2 never hands back as a response's status, so it would never match."""
+    with pytest.raises(ValueError, match=rf"^statuses= may not name a 1xx \(got {status}\): httpx2 never answers with"):
+        RetryPolicy(statuses=frozenset({status, 503}))

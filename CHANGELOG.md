@@ -290,7 +290,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `RateBudget(Rate.per_second(5))`), and `adaptive=` an `Adaptive` or `None`.
 - `RetryPolicy(statuses=)` and `HttpCache(statuses=)` hold `int` statuses from 100 to 599: a `bool` or a numeric
   string, which no response's status equals, is a `TypeError`, and `999` a `ValueError`, where
-  `RetryPolicy(statuses=frozenset({"500"}))` was accepted and never matched. Write `frozenset({500})`.
+  `RetryPolicy(statuses=frozenset({"500"}))` was accepted and never matched. Write `frozenset({500})`. A
+  `RetryPolicy` also refuses a 1xx with `ValueError`, since httpx2 never answers with one; a 2xx stays allowed, for an
+  API that answers 202 while a job runs.
 - `Expect.on(status, ...)` takes an `int`: `on("404", ...)` raised a comparison error and `on(True, ...)` a
   `ValueError` about status 1; both are a `TypeError` naming `status=`. Write `on(HTTPStatus.NOT_FOUND, ...)`.
 - `Client(observers=)` refuses an entry with no callable `notify`, such as `print` or an observer whose method is
