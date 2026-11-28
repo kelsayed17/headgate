@@ -159,7 +159,7 @@ async def test_a_streams_last_event_id_joins_the_calls_own_headers() -> None:
     """Send ``Last-Event-ID`` beside the headers the call passed, not instead of them."""
     script = Script()
 
-    async with _client(script).stream("events", headers={"X-Trace": "t-1"}, last_event_id="41"):
+    async with _client(script).events("events", headers={"X-Trace": "t-1"}, last_event_id="41"):
         pass
 
     sent = script.sent[0].headers

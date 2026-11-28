@@ -120,3 +120,18 @@ async def test_one_spelling_of_an_answer_and_of_a_head(tmp_path: Path) -> None:
 
     assert code != 0, out
     assert out.count("too-many-positional-arguments") + out.count("missing-argument") == len(("answers", "head")), out
+
+
+async def test_a_streams_chunk_size_is_keyword_only(tmp_path: Path) -> None:
+    """Refuse a positional chunk size, as every other size a stream takes is keyword-only."""
+    code, out = await _check(
+        tmp_path,
+        """
+        async with c.stream("x") as stream:
+            stream.aiter_bytes(1024)
+            stream.aiter_bytes(chunk_size=1024)
+        """,
+    )
+
+    assert code != 0, out
+    assert out.count("too-many-positional-arguments") == 1, out
