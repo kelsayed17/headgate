@@ -96,12 +96,14 @@ returns that registry (or `None` for a client without a breaker); assert on it w
 ## What a client was built with
 
 A client fixes its options in its `__init__`, so a test of its configuration reads them back. `cache_of(client)` returns
-the `HttpCache` it was built with (or `None`), whose `methods`, `paths` and `statuses` say what it stores. `budget_for(client, url)` returns the `RateBudget` a
-request to `url` spends from: that of the first `Route` that matches it, when that route sets `rate=`, or the default;
-without a `url`, the default budget, built from the policy's `rate=`.
+the `HttpCache` it was built with (or `None`), whose `methods`, `paths` and `statuses` say what it stores.
+`budget_for(client, url)` returns the `RateBudget` a request to `url` spends from: that of the first `Route` that
+matches it, when that route sets `rate=`, or the default; without a `url`, the default budget, built from the policy's
+`rate=`. Neither sends anything. Whether a response is served from the cache shows through the front door too: a
+second call that a fake network never sees.
 
 ```python
-from headgate.testing import budget_for, cache_of
+from headgate.testing import FakeTransport, budget_for, cache_of, fake_network
 
 
 def test_candles_have_a_budget_of_their_own() -> None:
@@ -110,12 +112,22 @@ def test_candles_have_a_budget_of_their_own() -> None:
     assert budget_for(client).rate == Rate.per_second(10)
 
 
-def test_only_the_archives_are_cached(storage) -> None:
-    cache = cache_of(ArchiveClient(cache_storage=storage))
+async def test_only_the_archives_are_cached(storage) -> None:
+    fake = FakeTransport().reply("GET", "/archives/2025.zip", 200).reply("GET", "/status", 200)
+    with fake_network(fake):
+        client = ArchiveClient(cache_storage=storage)
+    async with client:
+        for _ in range(2):
+            await client.archive("2025.zip")
+            await client.status()
+
+    assert len(fake.calls_to("GET", "/archives/2025.zip")) == 1, "the second came from the cache"
+    assert len(fake.calls_to("GET", "/status")) == 2, "the status is never cached"
+    cache = cache_of(client)
     assert cache is not None and cache.ttl == 86_400.0
 ```
 
-Neither sends anything. A view made with `with_options()` reads back as the client it was made from.
+A view made with `with_options()` reads back as the client it was made from.
 
 ## A fake walk
 
@@ -202,7 +214,7 @@ it first.
 
 ## Switching the policy off
 
-Some tests, and connectivity probes, want the first failure as it is: no retries, no breaker, no pacing.
+A test that asserts on the first failure, as the fake network sends it, wants no retries, no breaker and no pacing.
 `headgate.testing.policy_disabled()` builds the clients constructed in its block with retries off (whatever a call or
 route asks for), no breaker (the client never reads a registry, so it cannot be refused by one another client opened),
 and a budget that paces nothing, also for its routes' `rate=` and a shared `RateBudget` passed in.

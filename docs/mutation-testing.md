@@ -76,6 +76,9 @@ few families:
 - **type arguments only the type checker reads**: `typing.cast`'s first argument, and the type expression msgspec's
   encoder is handed.
 
+The table is the 0.9.0 run's, as recorded. Some entries describe code since changed: a `BreakerSnapshot` now holds
+`failures` beside `state` and `refusing`, so the `breaker_states #12` reasoning is historical.
+
 | Module | Mutant | Why it is equivalent |
 | --- | --- | --- |
 | `headgate.health` | `breaker_states #12` | two snapshots of equal rank are equal (state and refusing are all a snapshot holds) |
