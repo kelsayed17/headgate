@@ -215,6 +215,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   each from its own home: `from headgate.breaker import BreakerState` for `from headgate.health import BreakerState`,
   `import msgspec` for `headgate.msgspec.msgspec`, and `from headgate import reader_for` for
   `headgate.msgspec.reader_for`.
+- `HttpCache(methods=(), paths=(), statuses=())`, an empty rule that made a cache store nothing, raises `ValueError`
+  naming `cache=None`: write `CallPolicy(cache=None)` for a client without a cache.
 
 ### Removed
 

@@ -71,14 +71,15 @@ class HttpCache:
     URL is the key) and whose path matches one of ``paths`` (any path by default), answered with a status in
     ``statuses`` (200 by default). A string in ``paths`` is one or more whole segments, matched as
     :class:`~headgate.Route` matches; a compiled pattern is searched for in the path, for what segments cannot say,
-    such as a file name's prefix or extension. An empty collection matches nothing, so stores
-    nothing. :meth:`caches_request` and :meth:`stores_status` say what the three decide.
+    such as a file name's prefix or extension. An empty collection, which would store nothing, is refused:
+    ``cache=None`` is a client without a cache. :meth:`caches_request` and :meth:`stores_status` say what the three
+    decide.
 
     :raises TypeError: for a ``methods``, ``paths`` or ``statuses`` that is not a collection: a bare ``str`` (read one
         letter at a time), a number or a one-shot iterator.
     :raises ValueError: for a ``ttl`` that is not a positive finite number, a method in ``methods`` other than ``GET``
-        and ``HEAD``, a status in ``statuses`` outside 2xx or a 206, or a fragment in ``paths`` that names no segment or
-        a pattern that matches an empty path.
+        and ``HEAD``, a status in ``statuses`` outside 2xx or a 206, a fragment in ``paths`` that names no segment or
+        a pattern that matches an empty path, and an empty ``methods``, ``paths`` or ``statuses``.
     """
 
     storage: AsyncBaseStorage
@@ -99,6 +100,7 @@ class HttpCache:
         _refuse_none("methods", self.methods, "('GET',)", "GET")
         check_names("methods", self.methods, "a collection of methods, such as ('GET',)")
         methods = frozenset(method.upper() for method in self.methods)
+        _refuse_empty("methods", methods)
         if bodied := sorted(methods - _URL_KEYED_METHODS):
             msg = (
                 f"methods= may name only GET and HEAD (got {', '.join(bodied)}): the cache keys an entry by its "
@@ -109,12 +111,14 @@ class HttpCache:
         if self.paths is not None:
             check_collection("paths", self.paths, "a collection of path fragments or patterns, such as ('/items',)")
             paths = tuple(self.paths)
+            _refuse_empty("paths", paths)
             for path in paths:
                 _check_path(path)
             object.__setattr__(self, "paths", paths)
         _refuse_none("statuses", self.statuses, "(200,)", "200")
         check_collection("statuses", self.statuses, "a collection of statuses, such as (200,)")
         statuses = frozenset(self.statuses)
+        _refuse_empty("statuses", statuses)
         if unstorable := sorted(status for status in statuses if not _storable(status)):
             msg = (
                 f"statuses= may name only 2xx statuses other than 206 (got {', '.join(map(str, unstorable))}): "
@@ -129,7 +133,7 @@ class HttpCache:
         *path* is the path as sent, percent-encoded (:func:`~headgate._core.url_path`): a fragment is matched segment by
         segment, so an escaped ``/`` stays in its segment, and a pattern is searched in the decoded path, as written.
 
-        ``paths`` left ``None`` matches any path; an empty collection matches nothing. Any other request is sent past
+        ``paths`` left ``None`` matches any path. Any other request is sent past
         the cache: never looked up, never stored.
         """
         if method.upper() not in self.methods:
@@ -152,6 +156,16 @@ def _refuse_none(option: str, value: object, example: str, default: str) -> None
             "off with cache=None"
         )
         raise TypeError(msg)
+
+
+def _refuse_empty(option: str, values: Collection[object]) -> None:
+    """Refuse an empty *option*, which would make a cache that stores nothing, a client's ``cache=None`` spelled twice.
+
+    :raises ValueError: naming the option and ``cache=None``.
+    """
+    if not values:
+        msg = f"{option}= is empty, so the cache would store nothing: write cache=None for a client without a cache"
+        raise ValueError(msg)
 
 
 def _storable(status: int) -> bool:
