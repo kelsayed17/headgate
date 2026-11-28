@@ -1,11 +1,11 @@
 # Pagination
 
-`client.paginate(url, *, expect, pages, query=None, max_pages=None, on_limit="raise", **options)` follows a paginated
+`client.paginate(url, *, expect, pages, payload=None, max_pages=None, on_limit="raise", **options)` follows a paginated
 endpoint and returns a `Paginated[I, P]`: `async for` yields the items `I`, and `.pages()` yields the pages `P`. The
 item type comes first, and the page type defaults to `object`, so a method that returns a walk of issues is annotated
 `-> Paginated[Issue]`, or `-> Paginated[Issue, IssuePage]` when its callers read the pages too. Each page is a GET through the
 whole stack (rate budget, retries, breaker, cache, credential rules), fetched only when the iteration reaches it. An
-endpoint whose query is a request body is walked with POSTs instead, given that body as `query=`: see
+endpoint that takes its search as a request body is walked with POSTs instead, given that body as `payload=`: see
 [Walks of POSTs](#walks-of-posts).
 
 ```python
@@ -30,7 +30,7 @@ async for item in client.paginate("items", expect=reader(Page), pages=ITEM_PAGES
 Nothing is fetched until iteration starts, no page is kept once the iteration moves past it, stopping early fetches
 nothing more, and iterating again starts again from the first page. A page that leads back to a request already made
 (a cursor or next URL that repeats) raises `ClientError` instead of looping forever. A request is remembered by its URL,
-as written and as sent, its query and, for a POST, the bytes its body is sent as, so two bodies are one page exactly
+as written and as sent, its params and, for a POST, the bytes its body is sent as, so two bodies are one page exactly
 when they are sent alike. `Offset`, `PageNumber` and `BodyOffset` build each request from the last, so a server that
 ignores the paging parameter would answer the same page forever: a page with items whose body repeats an earlier
 page's raises `ClientError` too. A walk remembers a fixed-size digest of each, for its last 4096 pages.
@@ -77,8 +77,8 @@ except PageLimitError as exc:
 
 Set the budget where the client calls `paginate`, so every caller of that endpoint gets it.
 
-A walk of POSTs takes its body as `query=` (see [Walks of POSTs](#walks-of-posts)), and no `body=`: a walk's body is the
-value its pager rewrites, not one encoded body. Its `params=` are the first page's query, and a pager's parameter is
+A walk of POSTs takes its body as `payload=` (see [Walks of POSTs](#walks-of-posts)), and no `body=`: a walk's body is the
+value its pager rewrites, not one encoded body. Its `params=` are the first page's query parameters, and a pager's parameter is
 added to them. `expect=` may be an `Expect`: a page can be a declared answer like any other. Every other option applies
 to each page as it does to one `get` (or one `post`, in a walk of POSTs): `follow_redirects=False` makes a page's
 redirect raise as its 3xx, and `cache_ttl=` is each page's cache lifetime.
@@ -137,9 +137,9 @@ Each strategy is a frozen value: build it once, next to the client, as with read
 
 ## Walks of POSTs
 
-Some endpoints take their query as a request body, so the page token or offset travels in the body too: a search API
+Some endpoints take their search as a request body, so the page token or offset travels in the body too: a search API
 that is a POST, or a JSON-RPC call whose arguments carry a cursor. `paginate` walks one when it is given a body as
-`query=`: your own value, which the pager rewrites page by page, so it needs the value, not its bytes. Each page's body
+`payload=`: your own value, which the pager rewrites page by page, so it needs the value, not its bytes. Each page's body
 is encoded by the pager's `write=` (a flavor's `writer`): the writer belongs to the endpoint, like the reader and the
 pager, so it is built once beside them.
 
@@ -159,12 +159,12 @@ def with_cursor(query: Query, cursor: str) -> Query:
 SEARCH_PAGES = BodyCursor[Page, Item, Query](items=items_of, next=cursor_of, put=with_cursor, write=QUERY)
 
 query = Query(kind="open", limit=100)
-async for item in client.paginate("search", query=query, expect=reader(Page), pages=SEARCH_PAGES):
+async for item in client.paginate("search", payload=query, expect=reader(Page), pages=SEARCH_PAGES):
     ...
 ```
 
 A body of builtins needs no writer: leave out `write=` and have `put` return a new dict, and each page's body is sent as
-JSON. `query=None` is no body, so a method with an optional body makes one call: under a `Cursor` or `Offset` the walk
+JSON. `payload=None` is no body, so a method with an optional body makes one call: under a `Cursor` or `Offset` the walk
 is then GETs, and the writer goes unused. A body of another type than the pager's, and a body on a GET-only pager
 (`LinkHeader`, `NextUrl`), are type errors. A body pager given no body raises `ValueError` from the `paginate` call
 itself, before anything is fetched, and so does `body=` or `json=`, which a walk does not take, with a `TypeError`.
@@ -190,7 +190,7 @@ ROW_PAGES = BodyOffset[list[Row], Row, Query](
 
 `put` returns a new body and leaves the one it was given alone, so the caller's body is never changed under it.
 `Cursor` and `Offset` page a POST as well, by query parameter, sending the same body with each page: give them the
-body's type and writer, as in `Cursor[Page, Item, Query](..., write=QUERY)`, and pass `query=`, or leave the writer out
+body's type and writer, as in `Cursor[Page, Item, Query](..., write=QUERY)`, and pass `payload=`, or leave the writer out
 for builtins sent as JSON. `LinkHeader` and `NextUrl` refuse a body, since the URL a response names is fetched with a GET;
 `BodyCursor` and `BodyOffset` refuse a walk with no body, since there is nothing for them to rewrite.
 
@@ -263,19 +263,19 @@ class SearchPages(WritingPager[SearchPage, Item, Query]):
     def next_page(
         self, page: SearchPage, request: PageRequest[Query], response: httpx2.Response
     ) -> PageRequest[Query] | None:
-        if request.body is None or page.number >= page.total_pages:
+        if request.payload is None or page.number >= page.total_pages:
             return None
-        return request.with_body(msgspec.structs.replace(request.body, page=page.number + 1))
+        return request.with_payload(msgspec.structs.replace(request.payload, page=page.number + 1))
 ```
 
-A pager speaks `PageRequest`: `paginate` builds the first from its URL, `params=` and body, `first` prepares it once
+A pager speaks `PageRequest`: `paginate` builds the first from its URL, `params=` and `payload=`, `first` prepares it once
 (so its refusals raise from `paginate`, and it depends on the request alone), and the pager returns each next.
-`PageRequest(url, params)` is the GET for one page, and `PageRequest(url, params, body=)` the POST. A pager that
+`PageRequest(url, params)` is the GET for one page, and `PageRequest(url, params, payload=)` the POST. A pager that
 returns a next URL it read from the wire wraps it in `httpx2.URL`, absolute or relative, and returns it as it is: the
 walk resolves it against the URL that answered the page and refuses a step from `https` to `http`, for every pager.
 A literal or a t-string is as valid as in a verb.
 How a body is sent is the walk's, not the request's: a writing pager's `write` encodes every page's body, whatever
 request the pager returns. Every page with a body is held to the same rules as the first, so a pager that turns a walk
 of GETs into POSTs halfway raises `ValueError` from the iteration if its body cannot be sent.
-`with_param(name, value)` returns a request with one query parameter set, and `with_body(body)` with another body.
+`with_param(name, value)` returns a request with one query parameter set, and `with_payload(payload)` with another payload.
 `next_page` sees the page, the request that fetched it and the response (for its headers).

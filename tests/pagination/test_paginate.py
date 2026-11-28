@@ -502,7 +502,7 @@ def test_a_body_no_pager_can_rewrite_is_refused(body: dict[str, Any]) -> None:
     client = _Api(_by_cursor).client()
     name = next(iter(body))
     with pytest.raises(
-        TypeError, match=rf"argument '{name}': a walk's body is query=, the value its pager rewrites for each page$"
+        TypeError, match=rf"argument '{name}': a walk's body is payload=, the value its pager rewrites for each page$"
     ):
         client.paginate("items", expect=reader(Page), pages=LinkHeader(items=items_of), **body)
 
