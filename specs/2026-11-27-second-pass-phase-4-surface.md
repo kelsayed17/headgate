@@ -79,8 +79,10 @@ member (ruff `SLF001`, which applies to `tests/` too).
     `stores_status(cache, status)` in `cache/_policy.py`, `response_parts(step)` in `testing/_faults.py` (both fakes
     use it). `Link` and `parse_link_header` stay in `pagination/_link.py`. The testing guide reads a cache's
     `methods`, `paths` and `statuses` instead.
-11. **`CallUrl` becomes a `type` alias, as `Method` is**, and is exported beside it; `RawContent` and `UploadFiles`
-    are exported beside `Raw` and `Multipart`. `RawContent`'s value names `Callable[[], AsyncIterable[bytes]]` where
+11. **`CallUrl` is exported beside `Method`, and stays a plain union** (changed during implementation: the plan made
+    it a `type` alias, as `Method` is, but ty then reports a computed `str` as "Expected `CallUrl`", where
+    `tests/urls/test_call_url_types.py` pins that the message names `LiteralString`, the reason it is refused).
+    `RawContent` and `UploadFiles` are exported beside `Raw` and `Multipart`. `RawContent`'s value names `Callable[[], AsyncIterable[bytes]]` where
     it named the private `BodyFactory`, which goes, so the alias a user reads names only what they can import.
     `UploadFiles` keeps its underscore building blocks (a file, and a file with its name, type and headers), which say
     by their names that they are not imports.
@@ -96,8 +98,8 @@ member (ruff `SLF001`, which applies to `tests/` too).
    with no accepting call (a response no client sent) raises nothing. Covered in Task 4.
 4. **`SecurityOptions(check=...)` reaches every hop**, including the curl transport's own vetting and a redirect's
    next hop, not only the first request. Covered in Task 6.
-5. **`typing.get_type_hints` resolves `Raw`, `Multipart` and every `Client` verb** after `CallUrl` becomes a `type`
-   alias (the one-home hint test covers it once the three are exported). Covered in Task 8.
+5. **`typing.get_type_hints` resolves `Raw`, `Multipart` and every `Client` verb** once the three are exported (the
+   one-home hint test covers every export). Covered in Task 8.
 
 ---
 
@@ -207,8 +209,9 @@ check: AddressCheck | None = None)`; `GuardBinding.bind(guard: AddressGuard | No
 **Files:** `_url.py`, `_request_body.py`, `__init__.py`, `testing/_faults.py`; docs `configuration.md` or
 `index.md` (`CallUrl`), `responses.md` or wherever `Raw` and `Multipart` are documented, `testing.md`; tests.
 
-- [ ] **Tests:** `test_types_in_public_signatures_are_exported` (`headgate.CallUrl`, `headgate.RawContent`,
-  `headgate.UploadFiles` are `TypeAliasType`s, and `RawContent`'s value names no `BodyFactory`);
+- [ ] **Tests:** `test_the_types_public_signatures_use_are_exported` (the three are in `headgate.__all__`;
+  `RawContent` and `UploadFiles` are `TypeAliasType`s); `test_call_url_stays_a_plain_union`;
+  `test_raw_content_names_only_what_can_be_imported`;
   `test_faulty_transport_calls_is_a_tuple` (`type(network.calls) is tuple`, and assigning it raises
   `AttributeError`); Review Focus 5. Run: fail.
 - [ ] Implement Decisions 11 and 12. Snapshot. Changelog **Added** (the three exports) and **Changed** (`calls`).

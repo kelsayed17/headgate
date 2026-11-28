@@ -20,9 +20,12 @@ import re
 import sys
 import traceback
 import types
+import typing
 from collections import defaultdict
 from pathlib import Path
+from string.templatelib import Template
 
+import httpx2
 import msgspec
 import pytest
 
@@ -143,6 +146,24 @@ def test_the_errors_guide_names_each_errors_one_home() -> None:
     )
 
     assert listed == exported
+
+
+def test_the_types_public_signatures_use_are_exported() -> None:
+    """Export, beside ``Method``, ``Raw`` and ``Multipart``, the types their signatures name, so a wrapper can too."""
+    assert {"CallUrl", "RawContent", "UploadFiles"} <= set(headgate.__all__)
+    assert isinstance(headgate.RawContent, typing.TypeAliasType)
+    assert isinstance(headgate.UploadFiles, typing.TypeAliasType)
+
+
+def test_call_url_stays_a_plain_union() -> None:
+    """Keep ``CallUrl`` an implicit alias, so a type checker spells out ``LiteralString`` where it refuses a ``str``."""
+    assert not isinstance(headgate.CallUrl, typing.TypeAliasType)
+    assert typing.get_args(headgate.CallUrl) == (typing.LiteralString, Template, httpx2.URL)
+
+
+def test_raw_content_names_only_what_can_be_imported() -> None:
+    """Spell ``RawContent``'s factory out, rather than name a private alias a reader cannot import."""
+    assert "BodyFactory" not in repr(headgate.RawContent.__value__)
 
 
 def test_the_constants_left_the_top_level() -> None:

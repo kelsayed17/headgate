@@ -33,7 +33,6 @@ from headgate._core import check_kind
 
 __all__ = [
     "Body",
-    "BodyFactory",
     "EncodedBody",
     "Form",
     "Json",
@@ -118,11 +117,11 @@ type Writer[T] = Callable[[T], EncodedBody]
 """Encodes a value of type ``T`` into the :class:`EncodedBody` a call sends as ``body=``."""
 
 
-type BodyFactory = Callable[[], AsyncIterable[bytes]]
-"""Builds a fresh request body stream; called once for each send of the request."""
+type RawContent = bytes | AsyncIterable[bytes] | Callable[[], AsyncIterable[bytes]]
+"""What :class:`Raw` sends: bytes, a one-shot stream, or a factory of streams (which keeps the call retryable).
 
-type RawContent = bytes | AsyncIterable[bytes] | BodyFactory
-"""What :class:`Raw` sends: bytes, a one-shot stream, or a factory of streams (which keeps the call retryable)."""
+A factory builds a fresh stream of the body, called once for each send of the request.
+"""
 
 type _FileContent = IO[bytes] | bytes | str
 type _UploadFile = (
@@ -139,7 +138,7 @@ type UploadFiles = Mapping[str, _UploadFile] | Sequence[tuple[str, _UploadFile]]
 class _Replayed(httpx2.AsyncByteStream):
     """A request body built from its factory each time it is sent, so every attempt sends the whole body."""
 
-    def __init__(self, factory: BodyFactory) -> None:
+    def __init__(self, factory: Callable[[], AsyncIterable[bytes]]) -> None:
         """Build the body from *factory* on every send."""
         self._factory = factory
 
