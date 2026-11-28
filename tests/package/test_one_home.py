@@ -166,6 +166,23 @@ def test_raw_content_names_only_what_can_be_imported() -> None:
     assert "BodyFactory" not in repr(headgate.RawContent.__value__)
 
 
+@pytest.mark.parametrize(
+    ("cls", "instead"),
+    [
+        (headgate.retry.Backoff, "factor and max_wait"),
+        (headgate.RetryPolicy, "attempts, methods, statuses, backoff"),
+        (headgate.HttpCache, "methods, paths and statuses"),
+        (headgate.testing.Respond, "status_code, headers, json, content and retry_after"),
+    ],
+    ids=lambda value: value.__name__ if isinstance(value, type) else "fields",
+)
+def test_a_value_whose_methods_went_private_cannot_be_subclassed(cls: type, instead: str) -> None:
+    """Refuse a subclass whose override the stack would never call, naming the fields to set instead."""
+    assert getattr(cls, "__final__", False)
+    with pytest.raises(TypeError, match=rf"^Custom cannot subclass {cls.__name__}, which is final: set {instead}"):
+        type("Custom", (typing.cast("typing.Any", cls),), {})
+
+
 def test_the_constants_left_the_top_level() -> None:
     """Hold the default timeouts on ``Timeouts`` and keep the mint cap private."""
     assert not hasattr(headgate, "DEFAULT_TIMEOUTS")

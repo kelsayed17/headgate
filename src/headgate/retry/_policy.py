@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Final, final, override
 
 import httpx2
 
-from headgate._core import Slot, check_collection, check_kind, check_names, current_timing
+from headgate._core import Slot, check_collection, check_kind, check_names, current_timing, refuse_subclass
 from headgate.retry._budget import RetryLedger
 
 if TYPE_CHECKING:
@@ -105,6 +105,7 @@ def _check_positive(name: str, value: float) -> None:
         raise ValueError(msg)
 
 
+@final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Backoff:
     """Exponential backoff with full jitter: the wait before retry *n* is ``factor · 2^n`` times a uniform draw.
@@ -120,6 +121,11 @@ class Backoff:
         """Refuse a negative, infinite or NaN factor or cap."""
         _check_non_negative("factor", self.factor)
         _check_non_negative("max_wait", self.max_wait)
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a subclass: the retry layer computes the wait from the fields, and would call no override."""
+        del kwargs
+        refuse_subclass(cls, Backoff, "set factor and max_wait instead; the wait is factor * 2^retry times the jitter")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -202,6 +208,7 @@ class Hedge:
             raise ValueError(msg)
 
 
+@final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RetryPolicy:
     """How a call is re-sent: which failures, how many sends, how long apart, and within what budget.
@@ -254,6 +261,16 @@ class RetryPolicy:
         if self.hedge is not None and (unsafe := methods & _UNHEDGEABLE_METHODS):
             msg = f"a hedge may not be configured for non-idempotent methods ({', '.join(sorted(unsafe))})"
             raise ValueError(msg)
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a subclass: the retry layer reads the fields, and would call no override."""
+        del kwargs
+        refuse_subclass(
+            cls,
+            RetryPolicy,
+            "set attempts, methods, statuses, backoff, max_retry_after, budget, respect_should_retry, hedge and "
+            "min_attempt_time instead",
+        )
 
 
 def backoff_delay(backoff: Backoff, retry: int, draw: float) -> float:

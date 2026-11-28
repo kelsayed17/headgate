@@ -38,6 +38,7 @@ from headgate._core._kinds import (
     check_not_letters,
     check_options,
     named,
+    refuse_subclass,
     type_text,
 )
 from headgate._core._origin import origin_of, origin_text
@@ -120,6 +121,7 @@ __all__ = [
     "policy_disabled",
     "policy_is_disabled",
     "progress_of",
+    "refuse_subclass",
     "rehome",
     "retry_after_of",
     "segments_hold",
