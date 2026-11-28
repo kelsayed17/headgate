@@ -164,8 +164,9 @@ faults = FaultyTransport(schedule=[ConnectFail(), DropMidBody(after_bytes=200), 
 ```
 
 With that schedule, a POST without an idempotency key is re-sent after the `ConnectFail` (nothing was written) but not
-after the `DropMidBody` (bytes were written): the call raises `TransportError` and `faults.calls` shows two sends. A
-send past the end of the schedule raises `AssertionError`.
+after the `DropMidBody` (bytes were written): the call raises `TransportError` and `faults.calls` shows two sends.
+`faults.calls`, like `fake.calls`, is a tuple read afresh each time, of one `FaultCall` per send: its step, what it
+sent and what it got. A send past the end of the schedule raises `AssertionError`.
 
 ## Recorded cassettes
 

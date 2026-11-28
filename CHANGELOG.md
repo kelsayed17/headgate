@@ -232,6 +232,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `policy_disabled()` lives in the testing kit, beside `instant_retries()`, and `headgate.policy`, a module for one
   function, is removed: write `from headgate.testing import policy_disabled` for
   `from headgate.policy import policy_disabled`. It reports `headgate.testing` as its home.
+- `FaultyTransport.calls` is a read-only property returning a tuple, as `FakeTransport.calls` is, where it was a
+  list a test could append to or clear under the transport. Read it as before; write `list(network.calls)` where a
+  test needs a list, and build a new `FaultyTransport` where it cleared the log.
 - `headgate.health.BreakerSnapshot` is a frozen dataclass with `state`, `refusing` and `failures` (the consecutive
   failures since the last success, which only the live breaker showed), built by keyword, rather than a named tuple:
   write `snapshot.state, snapshot.refusing` for `state, refusing = snapshot`, and compare a snapshot with

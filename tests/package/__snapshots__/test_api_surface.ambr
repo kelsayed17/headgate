@@ -389,6 +389,7 @@
       field response_closed: bool | None = None
       field error: Exception | None = None
   class FaultyTransport(AsyncBaseTransport)(*, schedule: 'list[Step]') -> 'None'
+      property calls
       def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
   class PoolFull(object)() -> 'None'
   class RecordedRequest(Protocol)(*args, **kwargs)
