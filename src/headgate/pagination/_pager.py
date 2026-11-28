@@ -286,8 +286,14 @@ class Cursor[I, P, B = None](WritingPager[I, P, B]):
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* carrying *page*'s cursor, or ``None`` when it has none or (by default) no items."""
+        return self._next_after(page, self.items(page), request, response)
+
+    def _next_after(
+        self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
+    ) -> PageRequest[B] | None:
+        """Return :meth:`next_page`'s answer, given *items*, the items the walk read from *page* once."""
         del response
-        if self.stop_on_empty and not self.items(page):
+        if self.stop_on_empty and not items:
             return None
         cursor = self.next(page)
         return request.with_param(self.param, cursor) if bool(cursor) else None
@@ -362,8 +368,14 @@ class Offset[I, P, B = None](WritingPager[I, P, B]):
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* at the offset after *page*'s items, or ``None`` after the last page (see the class)."""
+        return self._next_after(page, self.items(page), request, response)
+
+    def _next_after(
+        self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
+    ) -> PageRequest[B] | None:
+        """Return :meth:`next_page`'s answer, given *items*, the items the walk read from *page* once."""
         del response
-        count = len(self.items(page))
+        count = len(items)
         following = _position(request, self.param, self.start, "an offset") + count
         if _last(page, count, self._size(request), self.total, following - self.start):
             return None
@@ -421,8 +433,14 @@ class PageNumber[I, P, B = None](WritingPager[I, P, B]):
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* at the next page number, or ``None`` when ``more`` says none or *page* is empty."""
+        return self._next_after(page, self.items(page), request, response)
+
+    def _next_after(
+        self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
+    ) -> PageRequest[B] | None:
+        """Return :meth:`next_page`'s answer, given *items*, the items the walk read from *page* once."""
         del response
-        if self.stop_on_empty and not self.items(page):
+        if self.stop_on_empty and not items:
             return None
         if not self.more(page):
             return None
@@ -457,8 +475,14 @@ class LinkHeader[I, P]:
 
     def next_page(self, page: P, request: PageRequest, response: httpx2.Response) -> PageRequest | None:
         """Return the request for *response*'s ``rel="next"`` link, or ``None`` when it has none or *page* is empty."""
-        del request
-        if self.stop_on_empty and not self.items(page):
+        return self._next_after(page, self.items(page), request, response)
+
+    def _next_after(
+        self, page: P, items: Sequence[I], request: PageRequest, response: httpx2.Response
+    ) -> PageRequest | None:
+        """Return :meth:`next_page`'s answer, given *items*, the items the walk read from *page* once."""
+        del page, request
+        if self.stop_on_empty and not items:
             return None
         target = next_link(response.headers, response.url)
         return None if target is None else _wire_url(target)
@@ -493,8 +517,14 @@ class NextUrl[I, P]:
 
     def next_page(self, page: P, request: PageRequest, response: httpx2.Response) -> PageRequest | None:
         """Return the request for *page*'s next URL, or ``None`` when it names none or (by default) has no items."""
+        return self._next_after(page, self.items(page), request, response)
+
+    def _next_after(
+        self, page: P, items: Sequence[I], request: PageRequest, response: httpx2.Response
+    ) -> PageRequest | None:
+        """Return :meth:`next_page`'s answer, given *items*, the items the walk read from *page* once."""
         del request, response
-        if self.stop_on_empty and not self.items(page):
+        if self.stop_on_empty and not items:
             return None
         target = self.next(page)
         return _wire_url(target) if bool(target) else None
@@ -538,8 +568,14 @@ class BodyCursor[I, P, B](WritingPager[I, P, B]):
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* with *page*'s cursor in its body, or ``None`` when it has none or (by default) no items."""
+        return self._next_after(page, self.items(page), request, response)
+
+    def _next_after(
+        self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
+    ) -> PageRequest[B] | None:
+        """Return :meth:`next_page`'s answer, given *items*, the items the walk read from *page* once."""
         del response
-        if self.stop_on_empty and not self.items(page):
+        if self.stop_on_empty and not items:
             return None
         cursor = self.next(page)
         if cursor is None or not cursor:
@@ -594,8 +630,14 @@ class BodyOffset[I, P, B](WritingPager[I, P, B]):
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request*'s body at the offset past *page*'s items, or ``None`` after a short page or at ``total``."""
+        return self._next_after(page, self.items(page), request, response)
+
+    def _next_after(
+        self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
+    ) -> PageRequest[B] | None:
+        """Return :meth:`next_page`'s answer, given *items*, the items the walk read from *page* once."""
         del response
-        count = len(self.items(page))
+        count = len(items)
         body = _posted(request, "BodyOffset")
         following = self.offset(body) + count
         if _last(page, count, self.page_size, self.total, following):

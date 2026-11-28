@@ -165,22 +165,37 @@ class PageWalk[I, P, B]:
         self._write = pager.write if isinstance(pager, WritingPager) else None
         self._counts = getattr(pager, "counts_pages", False) is True
         # The items of a page the loop guard looked into, by the page's id, until the walk moves past the page.
-        self._held: dict[int, Iterator[I]] = {}
+        self._held: dict[int, Iterable[I]] = {}
+
+    def _next_page(
+        self, page: P, items: Iterable[I], request: PageRequest[B], response: httpx2.Response
+    ) -> PageRequest[B] | None:
+        """Return the request after *page*, handing a built-in strategy the *items* already read.
+
+        Any other pager reads what it needs of the page itself.
+        """
+        given_items = getattr(self._pager, "_next_after", None)
+        if given_items is None:
+            return self._pager.next_page(page, request, response)
+        return cast("PageRequest[B] | None", given_items(page, items, request, response))
 
     def items_of(self, page: P) -> Iterable[I]:
         """Return the items on *page*: the ones the loop guard already read, else the pager's, read once either way."""
         held = self._held.pop(id(page), None)
         return self._pager.page_items(page) if held is None else held
 
-    def _held_items(self, page: P) -> bool:
-        """Read *page*'s items once, keep them for :meth:`items_of`, and return whether there is one."""
-        items = iter(self._pager.page_items(page))
+    def _read_items(self, page: P) -> tuple[Iterable[I], bool]:
+        """Read *page*'s items, once: return them, whole, and whether there is one.
+
+        An iterator gives up its first item to be seen, so it is put back in front of the rest.
+        """
+        items = self._pager.page_items(page)
+        if not isinstance(items, Iterator):
+            return items, next(iter(items), _NO_ITEM) is not _NO_ITEM
         first = next(items, _NO_ITEM)
         if first is _NO_ITEM:
-            self._held[id(page)] = items
-            return False
-        self._held[id(page)] = itertools.chain((cast("I", first),), items)
-        return True
+            return items, False
+        return itertools.chain((cast("I", first),), items), True
 
     async def pages(self) -> AsyncIterator[P]:
         """Iterate the pages, in order."""
@@ -200,13 +215,16 @@ class PageWalk[I, P, B]:
                 # A next URL from the wire is absolute, so the page is remembered as it was sent too.
                 requests.add(_sent_key(response))
             try:
+                # A page's items are read once, here, and held for the item walk; a built-in strategy is given them
+                # for its next request too, so its items= hook runs once per page.
+                items, has_items = self._read_items(page)
+                self._held[id(page)] = items
                 # A server that ignores counted paging sends one page forever under requests that never repeat: only
-                # a page's body tells. An empty page proves nothing, so it is not remembered. The items read to see
-                # that are held for the item walk, so page_items runs once per page.
-                if self._counts and self._held_items(page) and not bodies.add(response.content):
+                # a page's body tells. An empty page proves nothing, so it is not remembered.
+                if self._counts and has_items and not bodies.add(response.content):
                     raise self._repeat_error(request, fetched, response)
                 try:
-                    request = self._pager.next_page(page, request, response)
+                    request = self._next_page(page, items, request, response)
                     if request is not None:
                         request = _resolved(request, response)
                 except httpx2.InvalidURL as exc:

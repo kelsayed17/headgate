@@ -383,6 +383,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `Client(observers=)` and `Client(middleware=)` refuse an entry given as its class rather than an instance, with a
   `TypeError` naming it: `observers=[Metrics]` and `middleware=[Signer]` were accepted, and their methods called
   unbound. Write `observers=[Metrics()]` and `middleware=[Signer()]`.
+- A walk reads each page's items once, with its pager's `page_items`, and gives a built-in strategy those items for
+  its next request, so a strategy's `items=` hook runs once per page, where it ran twice: once to find the next
+  request and once for the items yielded. A pager of your own has its `page_items` called once for every page,
+  `pages()` iterated alone included, and its `next_page` still reads the page itself. Nothing to write differently.
 
 ### Removed
 

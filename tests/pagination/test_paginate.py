@@ -1199,3 +1199,71 @@ async def test_a_test_double_builds_a_paginated_from_its_pages() -> None:
     assert [page async for page in walk.pages()] == [[1, 2], [3]]
     assert await walk.collect(max_items=2) == [1, 2]
     assert await walk.collect() == [1, 2, 3], "each iteration starts the pages again"
+
+
+class _CountedItems:
+    """An ``items=`` hook that counts its calls."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, page: Page) -> list[Item]:
+        self.calls += 1
+        return page.data
+
+
+def _three_pages(request: httpx2.Request) -> httpx2.Response:
+    """Serve two full pages of two items and a short third, by offset, page number, link or next URL."""
+    params = request.url.params
+    index = int(params["offset"]) // 2 if "offset" in params else int(params.get("page", "1")) - 1
+    ids = [[1, 2], [3, 4], [5]][index]
+    following = f"{_BASE}/items?page={index + 2}" if index < len(("1-2", "3-4")) else None
+    response = _page(request, ids, next=following)
+    if following is not None:
+        response.headers["Link"] = f'<{following}>; rel="next"'
+    return response
+
+
+@pytest.mark.parametrize("strategy", ["offset", "page-number", "cursor", "link", "next-url"])
+async def test_a_strategy_calls_its_items_hook_once_per_page(strategy: str) -> None:
+    """Read a page's items once, for the loop guard, the next request and the items yielded alike."""
+    items = _CountedItems()
+    pagers: dict[str, Any] = {
+        "offset": Offset(reader(Page), items=items, page_size=2),
+        "page-number": PageNumber(reader(Page), items=items, more=has_next),
+        "cursor": Cursor(reader(Page), items=items, next=cursor_of, param="after"),
+        "link": LinkHeader(reader(Page), items=items),
+        "next-url": NextUrl(reader(Page), items=items, next=next_of),
+    }
+    api = _Api(_by_cursor if strategy == "cursor" else _three_pages)
+    walked = [item.id async for item in api.client().paginate("items", pager=pagers[strategy])]
+
+    assert walked
+    assert items.calls == len(api.sent), "each page's items are read once"
+
+
+def test_a_strategy_called_directly_reads_its_page_itself() -> None:
+    """Answer ``next_page`` called outside a walk, reading the page's items with its own hook."""
+    page = Page([Item(1)], cursor="c", next=f"{_BASE}/items?page=2")
+    response = httpx2.Response(
+        200, headers={"Link": f'<{_BASE}/items?page=2>; rel="next"'}, request=httpx2.Request("GET", f"{_BASE}/items")
+    )
+    request = PageRequest[None]("items")
+    query: dict[str, object] = {"q": 1}
+    posted = PageRequest[dict[str, object]]("items", payload=query)
+
+    cursor = Cursor(reader(Page), items=items_of, next=cursor_of, param="after").next_page(page, request, response)
+    link = LinkHeader(reader(Page), items=items_of).next_page(page, request, response)
+    next_url = NextUrl(reader(Page), items=items_of, next=next_of).next_page(page, request, response)
+    body = BodyCursor[Item, Page, dict[str, object]](
+        reader(Page), items=items_of, next=cursor_of, put=lambda query, after: {**query, "after": after}
+    ).next_page(page, posted, response)
+
+    assert cursor is not None
+    assert cursor.params == {"after": "c"}
+    assert link is not None
+    assert str(link.url) == f"{_BASE}/items?page=2"
+    assert next_url is not None
+    assert str(next_url.url) == f"{_BASE}/items?page=2"
+    assert body is not None
+    assert body.payload == {"q": 1, "after": "c"}

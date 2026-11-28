@@ -1019,3 +1019,32 @@ async def test_a_payload_that_is_not_builtins_is_refused_where_the_walk_is_made(
         with pytest.raises(TypeError, match=_NOT_BUILTINS):
             client.paginate("search", payload=_Search("open"), pager=pager)
     assert not fake.calls
+
+
+class _CountedItems:
+    """An ``items=`` hook that counts its calls."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, page: Page) -> list[Item]:
+        self.calls += 1
+        return page.data
+
+
+@pytest.mark.parametrize("strategy", ["offset", "cursor"])
+async def test_a_body_strategy_calls_its_items_hook_once_per_page(strategy: str) -> None:
+    """Read a page's items once, for the loop guard, the next request and the items yielded alike."""
+    items = _CountedItems()
+    if strategy == "offset":
+        pager: Any = BodyOffset[Item, Page, Query](
+            reader(Page), items=items, page_size=2, offset=offset_of, put=at_offset, write=QUERY
+        )
+        api = _Api(_by_body_offset(5))
+    else:
+        pager = BodyCursor[Item, Page, Query](reader(Page), items=items, next=cursor_of, put=with_cursor, write=QUERY)
+        api = _Api(_by_body_cursor)
+    walked = [item async for item in api.client().paginate("search", payload=Query(kind="a", limit=2), pager=pager)]
+
+    assert walked
+    assert items.calls == len(api.sent), "each page's items are read once"
