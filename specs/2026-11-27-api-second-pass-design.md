@@ -210,7 +210,10 @@ pay the same cost for the same reason. (Amended with the phase 3 review.)
 **4.2 No hidden global that repeats an event (P7, E16).** `health.cache_degradations()` and its counter are removed;
 the `CacheChecked` event with `outcome=DEGRADED` reports each one with its call. `observer_failures()` stays and says it
 is process-wide: an observer that raises cannot be reported through observers. (E16's per-client counter was not
-taken: an application reads health from one place without holding every client.)
+taken: an application reads health from one place without holding every client.) A write that fails after the call
+accepted the answer, which only the counter saw, is reported as `CacheChecked(outcome=UNSTORED)` on the accepting
+call, a `CacheOutcome` of its own, so `DEGRADED` keeps meaning a lookup that found the storage broken.
+(Amended with the phase 4 review.)
 
 **4.3 One module per idea (P9).** `policy_disabled()` moves to `headgate.testing`; `headgate.policy` is removed.
 

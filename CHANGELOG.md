@@ -34,6 +34,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `Raw(content)` and of `Multipart(files)`, which their signatures named but nothing exported: a wrapper writes
   `async def fetch(self, url: CallUrl, **options: Unpack[CallOptions])`. `CallUrl` is a plain union, so a type
   checker that refuses a computed `str` still names `LiteralString` in its message.
+- `CacheOutcome.UNSTORED` (value `"unstored"`): a call accepted the network's answer, but the cache could not store
+  it, because the storage failed while writing it or the write outlasted the call's deadline. It is a second
+  `CacheChecked` on that call, after its `MISS`, or its `COALESCED` when it waited on the download and was the first
+  to accept it, where the fault was only counted. `DEGRADED` keeps its one meaning, a lookup that found the storage
+  broken. An observer that took one `CacheChecked` per call as given may now see two; one that matches every outcome
+  adds a case for it.
 
 ### Changed
 
@@ -226,9 +232,6 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `headgate.msgspec.reader_for`.
 - `HttpCache(methods=(), paths=(), statuses=())`, an empty rule that made a cache store nothing, raises `ValueError`
   naming `cache=None`: write `CallPolicy(cache=None)` for a client without a cache.
-- A cache write that fails, or outlasts its call's deadline, after the call accepted a miss is reported as a
-  `CacheChecked` event with outcome `DEGRADED`, after that call's `MISS`, where it was only counted: a call whose
-  answer was not stored says so. An observer that took one `CacheChecked` per call as given may now see two.
 - `policy_disabled()` lives in the testing kit, beside `instant_retries()`, and `headgate.policy`, a module for one
   function, is removed: write `from headgate.testing import policy_disabled` for
   `from headgate.policy import policy_disabled`. It reports `headgate.testing` as its home.
@@ -281,9 +284,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   where `breaker_for()` built a closed breaker for it. A registry keeps its constructor, `policy`,
   `max_hosts`, `len()`, `clear()` and its `repr`.
 - `headgate.health.cache_degradations()` and the process-wide count behind it, which repeated what the
-  `CacheChecked` event already reported, without the call: count `CacheChecked(outcome=CacheOutcome.DEGRADED)` events
-  in an observer (per `event.call.url`'s host, for the old shape). `observer_failures()` stays, since an observer that
-  raises cannot be reported through observers.
+  `CacheChecked` event already reported, without the call: count the `CacheChecked` events whose outcome is
+  `CacheOutcome.DEGRADED` (a lookup found the storage broken) or `CacheOutcome.UNSTORED` (an accepted answer could not
+  be stored) in an observer, per `httpx2.URL(event.call.full_url).host` for the old per-host shape. The count held
+  both. `observer_failures()` stays, since an observer that raises cannot be reported through observers.
 - `AddressGuard`, `PinnedHTTPTransport` and `resolve_with_loop` from `headgate.security`, and
   `AsyncCurlTransport.bind_guard()`, the SSRF guard's machinery, which a client builds and binds from its
   `SecurityOptions`: configure the guard there. Write

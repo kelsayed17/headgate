@@ -80,8 +80,10 @@ class CacheOutcome(StrEnum):
     * ``HIT``: a stored response answered it;
     * ``MISS``: it went to the network (and its response may have been stored);
     * ``COALESCED``: it waited on an identical request's download and got a copy of its response, or its failure;
-    * ``DEGRADED``: the storage failed: the request went to the network uncached, or its response could not be stored
-      (reported after its ``MISS``).
+    * ``DEGRADED``: the storage failed when the request was looked up, so it went to the network uncached;
+    * ``UNSTORED``: the call accepted the network's answer, but it could not be stored: the storage failed while
+      writing it, or the write outlasted the call's deadline. Reported after the call's ``MISS``, or its ``COALESCED``
+      when it waited on the download and was the first to accept it, since an entry is written once.
 
     The cache is TTL-only and never revalidates an entry with the origin, so there is no revalidated outcome.
     """
@@ -90,6 +92,7 @@ class CacheOutcome(StrEnum):
     MISS = "miss"
     COALESCED = "coalesced"
     DEGRADED = "degraded"
+    UNSTORED = "unstored"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -142,7 +145,7 @@ class RateLimited(CallEvent):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CacheChecked(CallEvent):
-    """The HTTP cache checked the call: ``outcome`` says what it did."""
+    """The HTTP cache checked the call, or could not store its answer: ``outcome`` says which, and what it did."""
 
     outcome: CacheOutcome
 
