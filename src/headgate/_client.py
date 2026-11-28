@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Final, Literal, Self, Unpack, cast, final, ove
 
 import httpx2
 
-from headgate._auth import MINTING, Auth, failed_on_auth_hop, mint_hop_failure
+from headgate._auth import MINTING, Auth, failed_on_auth_hop, hold_timing, mint_hop_failure
 from headgate._body import read_capped, read_head
 from headgate._call_options import (
     BODY_HINTS,
@@ -353,6 +353,7 @@ class Client:
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
         self._source = httpx2.URL(base_url).netloc.decode("ascii")  # host, and a port other than the default
         self._timing = current_timing()
+        hold_timing(auth, self._timing)
         self._breakers = _registry_of(policy, self._timing)
         self._response_check = http.response_check
         self._max_response_bytes = http.max_response_bytes

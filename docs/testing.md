@@ -60,14 +60,15 @@ instead of waiting. Its wall clock reads `epoch` plus the reading, so a `Retry-A
 is the backoff's jitter draw: pass `random=lambda: 1.0` for a full backoff a test can predict.
 
 Everything built inside `clock.install()` with no `timing=` of its own runs on it: a client's deadlines, events, retry
-backoff and retry budget, a `CachedTokenAuth`'s token lifetimes, a `RateBudget` the block builds (shared by any number
+backoff and retry budget, the token lifetimes of the `CachedTokenAuth` it is given, a `RateBudget` the block builds (shared by any number
 of clients), and a `BreakerRegistry`'s cooldowns. So a test of a 60-second cooldown, or of a token that expires in an
 hour, runs in no time. What was built before the block keeps the clock it was built with.
 
 `install()` is `headgate.timing.timing_override(clock.timing)`. The seam is public, so a test kit of your own can
 install a clock the same way: a `Timing(clock=..., sleep=..., wall_clock=..., random=...)`, whose four fields satisfy
 the `Clock`, `Sleep` and `RandomSource` protocols, set for a block with `timing_override`, and read back with
-`current_timing()`. Each object takes `timing=` too, to run on one timing whatever block it is built in.
+`current_timing()`. A budget and a registry take `timing=` too, to run on one timing whatever block they are built
+in.
 
 Concurrent sleeps overlap as they would in real time: each sleeper wakes at the reading it began at plus its delay.
 The clock moves to the earliest wake after 16 turns of the event loop in which no sleep begins or ends, room for the

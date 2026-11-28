@@ -29,9 +29,9 @@ import inspect
 import math
 import secrets
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import UnionType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, get_args, get_origin, override
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, get_args, get_origin, override
 
 import httpx2
 
@@ -46,7 +46,7 @@ from headgate.security._credentials import CHAIN_ORIGIN, check_declarations
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable, Mapping
 
-    from headgate._core import Timing
+    from headgate._core import Clock, Timing
 
 __all__ = [
     "AUTH_HOP",
@@ -61,6 +61,7 @@ __all__ = [
     "SigningAuth",
     "StaticHeaderAuth",
     "failed_on_auth_hop",
+    "hold_timing",
     "mint_hop_failure",
 ]
 
@@ -543,6 +544,61 @@ def _token_type(cls: type) -> object | None:
     return None
 
 
+@dataclass(slots=True, kw_only=True)
+class _TokenState[T]:
+    """A :class:`CachedTokenAuth`'s cache: the clock its lifetimes run on, the token held, the mint lock and its record.
+
+    ``attempts`` counts the mints started so far and ``failed`` holds the last that failed, so a call that queued
+    behind a failed mint raises its error. ``identity`` is the instance's own credential identity, drawn once.
+    """
+
+    clock: Clock
+    identity: bytes = field(default_factory=lambda: secrets.token_bytes(32))
+    held: _Held[T] | None = None
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    attempts: int = 0
+    minting: bool = False
+    failed: _Failed | None = None
+
+
+#: The instance attribute a :class:`CachedTokenAuth`'s :class:`_TokenState` is kept under.
+_STATE: Final = "_headgate_token_state"
+
+
+def _state_of[T](auth: CachedTokenAuth[T], timing: Timing | None = None) -> _TokenState[T]:
+    """Return *auth*'s state, made now if it has none, on *timing*'s clock or the timing current now.
+
+    The base class has no constructor for a subclass to forget, so the state is made on first use: when a client is
+    built with the auth (:func:`hold_timing`), or at its first call or :meth:`~CachedTokenAuth.seed` if that comes
+    first.
+    """
+    attributes = vars(auth)
+    if _STATE not in attributes:
+        attributes[_STATE] = _TokenState[T](clock=(current_timing() if timing is None else timing).clock)
+    return cast("_TokenState[T]", attributes[_STATE])
+
+
+def hold_timing(auth: Auth | None, timing: Timing) -> None:
+    """Have a :class:`CachedTokenAuth` given to a client run its token lifetimes on the client's *timing*.
+
+    A client is built inside ``TestClock.install()`` and may be called after the block, so its auth's clock is fixed
+    when the client is built, unless the auth was already used.
+    """
+    if isinstance(auth, CachedTokenAuth):
+        _state_of(auth, timing)
+
+
+def _check_margin(cls: type[CachedTokenAuth[Any]]) -> None:
+    """Refuse a ``refresh_margin`` that is not a number of seconds, 0 or more, naming *cls*."""
+    margin: object = cls.refresh_margin
+    if isinstance(margin, bool) or not isinstance(margin, int | float) or not margin >= 0:
+        msg = (
+            f"{cls.__name__}.refresh_margin takes the seconds before expiry to refresh, a number of 0 or more "
+            f"(got {margin!r})"
+        )
+        raise TypeError(msg)
+
+
 class CachedTokenAuth[TokenT = str](Auth):
     """Bearer auth for providers that mint a short-lived token over the network.
 
@@ -576,6 +632,11 @@ class CachedTokenAuth[TokenT = str](Auth):
     bearer; a subclass whose token is of another type overrides :meth:`attach`, or its definition fails (or, when the
     type is bound further down, as ``class Mid[T](CachedTokenAuth[T])``, its first call). :meth:`seed` caches a token
     obtained elsewhere.
+
+    **It has no constructor to call.** The cache and its lock are made on first use, so a subclass's ``__init__`` sets
+    only its own state. A token's lifetime runs on the timing of the first client built with the auth
+    (:func:`headgate.timing.current_timing` then), so one given to a client built inside ``TestClock.install()``
+    expires on the test clock; an auth seeded or called before any client is built runs on the timing current then.
 
     **What it stamps is declared**, in :attr:`credential_headers` and :attr:`credential_params`, the names every
     :class:`Auth` and middleware declares with: the headers :meth:`attach` sets (``authorization`` by default) and the
@@ -628,21 +689,9 @@ class CachedTokenAuth[TokenT = str](Auth):
     #: them here.
     credential_params: ClassVar[frozenset[str]] = frozenset[str]()
 
-    def __init__(self, *, refresh_margin: float = 120.0, timing: Timing | None = None) -> None:
-        """Start with an empty cache that refreshes *refresh_margin* seconds before a token expires.
-
-        A token's lifetime runs on *timing*'s clock, or, without one, on the timing current when the auth is built
-        (:func:`headgate.timing.current_timing`), so one built inside ``TestClock.install()`` expires on the test clock.
-        """
-        self._clock = (current_timing() if timing is None else timing).clock
-        self._identity = secrets.token_bytes(32)
-        self._refresh_margin_s = refresh_margin
-        self._held: _Held[TokenT] | None = None
-        self._lock = asyncio.Lock()
-        # Mints started so far, and the last that failed: a call that queued behind a failed mint raises its error.
-        self._attempts = 0
-        self._minting = False
-        self._failed: _Failed | None = None
+    #: Seconds before a token expires that it is re-minted, at half its life when that is shorter. A subclass sets its
+    #: own as a class attribute, a number of 0 or more, checked when the class is defined.
+    refresh_margin: ClassVar[float] = 120.0
 
     # -- Subclass contract ---------------------------------------------------
 
@@ -650,10 +699,12 @@ class CachedTokenAuth[TokenT = str](Auth):
         """Refuse a subclass with no mint, or whose :meth:`attach` sets a credential it has not declared.
 
         When a subclass overrides :meth:`attach`, that class or one below it must declare :attr:`credential_headers` or
-        :attr:`credential_params`, not both empty. Its parameters are registered as secret.
+        :attr:`credential_params`, not both empty. Its parameters are registered as secret, and its
+        :attr:`refresh_margin` is checked.
         """
         super().__init_subclass__(**kwargs)
         declared = _declares_names(cls)
+        _check_margin(cls)
         mro = cls.__mro__
         attaching = next(klass for klass in mro if "attach" in vars(klass))
         below = [vars(klass) for klass in mro[: mro.index(attaching) + 1]]
@@ -681,7 +732,12 @@ class CachedTokenAuth[TokenT = str](Auth):
         A subclass whose instances should share a cache partition when they hold the same credential returns that
         credential's secret material here, never the short-lived token, which changes on every refresh.
         """
-        return self._identity
+        return self.__state.identity
+
+    @property
+    def __state(self) -> _TokenState[TokenT]:
+        """The token cache and its lock, made on first use (see :func:`_state_of`)."""
+        return _state_of(self)
 
     @abstractmethod
     def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[TokenT], httpx2.Response]:
@@ -749,14 +805,16 @@ class CachedTokenAuth[TokenT = str](Auth):
     def _cache(self, token: TokenT, lifetime: float, *, minted_at: float) -> None:
         # A lifetime at or under the margin would read as due the moment it was cached, so every request would mint
         # again: refresh at half-life instead.
-        margin = min(self._refresh_margin_s, lifetime / 2)
-        now = self._clock()
-        self._held = _Held(token=token, minted_at=minted_at, due_at=now + lifetime - margin, expires_at=now + lifetime)
+        margin = min(self.refresh_margin, lifetime / 2)
+        now = self.__state.clock()
+        self.__state.held = _Held(
+            token=token, minted_at=minted_at, due_at=now + lifetime - margin, expires_at=now + lifetime
+        )
 
     def _usable(self, rejected: TokenT | None) -> TokenT | None:
         """Return the cached token unless it is absent, the one a 401 just rejected, or within the refresh margin."""
-        held = self._held
-        if held is not None and held.token != rejected and self._clock() < held.due_at:
+        held = self.__state.held
+        if held is not None and held.token != rejected and self.__state.clock() < held.due_at:
             return held.token
         return None
 
@@ -765,15 +823,15 @@ class CachedTokenAuth[TokenT = str](Auth):
 
         A refresh inside the margin that fails falls back to it: it still carries the authority it was minted with.
         """
-        held = self._held
-        if held is not None and held.token != rejected and self._clock() < held.expires_at:
+        held = self.__state.held
+        if held is not None and held.token != rejected and self.__state.clock() < held.expires_at:
             return held.token
         return None
 
     def _forget(self, token: TokenT) -> None:
         """Drop *token* from the cache if it is still the cached one, so the next call mints."""
-        if self._held is not None and self._held.token == token:
-            self._held = None
+        if self.__state.held is not None and self.__state.held.token == token:
+            self.__state.held = None
 
     def _is_fresh(self, token: TokenT) -> bool:
         """Return whether *token* is still the cached one and was minted within :data:`FRESH_TOKEN_S`.
@@ -781,8 +839,8 @@ class CachedTokenAuth[TokenT = str](Auth):
         A rejected token that is no longer cached was already replaced by another request, so the replacement is worth
         a retry, and the cache hands it over without minting.
         """
-        held = self._held
-        return held is not None and token == held.token and self._clock() - held.minted_at < FRESH_TOKEN_S
+        held = self.__state.held
+        return held is not None and token == held.token and self.__state.clock() - held.minted_at < FRESH_TOKEN_S
 
     async def _mint_step[T](self, step: Awaitable[T]) -> T:
         """Await a *step* of the mint, raising a failure in it as the ``ClientError`` it means.
@@ -815,14 +873,14 @@ class CachedTokenAuth[TokenT = str](Auth):
         while True:
             _mark_minting(context, minting=True)
             # The mint this call waits behind: the one in flight, or else the next to start.
-            behind = self._attempts if self._minting else self._attempts + 1
-            async with self._lock:
+            behind = self.__state.attempts if self.__state.minting else self.__state.attempts + 1
+            async with self.__state.lock:
                 token = self._usable(rejected)
                 if token is None:
                     token = self._after_failed_wait(rejected, behind)
                 if token is None:
-                    self._attempts += 1
-                    self._minting = True
+                    self.__state.attempts += 1
+                    self.__state.minting = True
                     try:
                         # Only this generator can yield to the client, so it drives the mint flow: httpx2 sends each
                         # request the mint yields and hands its response back in.
@@ -842,11 +900,11 @@ class CachedTokenAuth[TokenT = str](Auth):
                     except ClientError as exc:
                         token = self._after_failed_mint(exc, rejected)
                     else:
-                        self._failed = None
+                        self.__state.failed = None
                         token = step.token
-                        self._cache(token, step.lifetime, minted_at=self._clock())
+                        self._cache(token, step.lifetime, minted_at=self.__state.clock())
                     finally:
-                        self._minting = False
+                        self.__state.minting = False
             _mark_minting(context, minting=False)
             self.attach(request, token)
             response = yield request
@@ -863,7 +921,7 @@ class CachedTokenAuth[TokenT = str](Auth):
         When that mint failed, its error is this call's answer too (raised as a copy), unless the held token has not
         expired yet: then that token is used, as it is by the call whose mint failed.
         """
-        failed = self._failed
+        failed = self.__state.failed
         if failed is None or failed.attempt < behind:
             return None
         token = self._unexpired(rejected)
@@ -876,7 +934,7 @@ class CachedTokenAuth[TokenT = str](Auth):
 
         :raises ClientError: *error*, when there is no such token.
         """
-        self._failed = _Failed(self._attempts, _copied(error))
+        self.__state.failed = _Failed(self.__state.attempts, _copied(error))
         token = self._unexpired(rejected)
         if token is None:
             raise error

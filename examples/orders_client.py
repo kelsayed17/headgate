@@ -78,7 +78,6 @@ class ShopTokenAuth(CachedTokenAuth):
 
     def __init__(self, client_id: str, client_secret: str) -> None:
         """Mint with *client_id* and *client_secret*."""
-        super().__init__()
         self._form = {"grant_type": "client_credentials", "client_id": client_id, "client_secret": client_secret}
 
     @override
