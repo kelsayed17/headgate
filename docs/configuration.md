@@ -231,9 +231,9 @@ class TracesFirstReportSends:
 
 ## Per-call options
 
-Every verb, `get`, `post`, `put`, `patch`, `delete` and `head`, has the same signature, except that `head` reads
-`expect=nothing` unless it is given another reader, since a HEAD has no body. An option left out takes the view's, the
-route's or the client's; `None` turns it off:
+Every verb, `get`, `post`, `put`, `patch`, `delete` and `head`, has the same signature, `expect=` included: a HEAD read
+for its status alone is `head(url, expect=nothing)`. An option left out takes the view's, the route's or the client's;
+`None` turns it off:
 
 ```python
 await client.get(

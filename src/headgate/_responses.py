@@ -48,6 +48,7 @@ __all__ = [
     "body_reader",
     "event_stream",
     "nothing",
+    "with_answers",
 ]
 
 
@@ -150,9 +151,8 @@ class Expect[T]:
     ``Expect`` is deliberately not callable: reading a response is the client's dispatch, and a callable ``Expect``
     would be a second way to read one outside it.
 
-    ``ok`` and every reader in ``answers`` must be a :class:`Reader`. The constructor refuses exactly what :meth:`on`
-    refuses, since an ``Expect`` built with ``answers`` makes the same claim, and then freezes ``answers`` into a
-    read-only copy that neither the caller's dict nor the default can change.
+    ``ok`` must be a :class:`Reader`. ``answers`` is filled only by :meth:`on`, which widens the result type with each
+    answer it declares, and is a read-only mapping.
 
     ``headers`` are request headers the declaration needs sent (a conditional read's preconditions, see
     :func:`headgate.cache.conditional`); a header the call sets itself wins.
@@ -164,18 +164,14 @@ class Expect[T]:
     """
 
     ok: Reader[T]
-    answers: Mapping[int, Reader[T]] = field(default_factory=dict)
+    answers: Mapping[int, Reader[T]] = field(default_factory=lambda: MappingProxyType({}), init=False)
     headers: Mapping[str, str] = field(default_factory=dict, kw_only=True)
     accept: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
-        """Refuse a non-reader, an unclaimable status in ``answers`` or a malformed ``accept``; freeze the mappings."""
+        """Refuse a non-reader or a malformed ``accept``; freeze the headers."""
         check_kind("ok", self.ok, Reader, "a Reader")
-        for status, read in self.answers.items():
-            _refuse_unclaimable(status)
-            check_kind("answers", read, Reader, "a Reader for each status")
         # A frozen, slotted dataclass refuses plain assignment even here; object.__setattr__ is the documented route.
-        object.__setattr__(self, "answers", MappingProxyType(dict(self.answers)))
         object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
         if self.accept is not None:
             _media_ranges(self.accept)
@@ -196,8 +192,14 @@ class Expect[T]:
         if status in self.answers:
             msg = f"{status} is already declared on this Expect"
             raise ValueError(msg)
-        widened: dict[int, Reader[T | E]] = {**self.answers, status: read}
-        return Expect(self.ok, widened, headers=self.headers, accept=self.accept)
+        return with_answers(Expect(self.ok, headers=self.headers, accept=self.accept), {**self.answers, status: read})
+
+
+def with_answers[T](expect: Expect[T], answers: Mapping[int, Reader[T]]) -> Expect[T]:
+    """Return *expect*, freshly built with no answers, holding *answers*, which :meth:`Expect.on` already checked."""
+    # A frozen, slotted dataclass refuses plain assignment; object.__setattr__ is the documented route.
+    object.__setattr__(expect, "answers", MappingProxyType(dict(answers)))
+    return expect
 
 
 def accepts[T](expect: Expect[T], resp: httpx2.Response) -> bool:

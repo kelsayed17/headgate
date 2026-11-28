@@ -519,7 +519,6 @@
       def events(self, url: 'CallUrl', *, last_event_id: 'str | None' = None, **options: 'Unpack[StreamOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
       def get(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[CallOptions]') -> 'T'
       def head(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[CallOptions]') -> 'T'
-      def head(self, url: 'CallUrl', **options: 'Unpack[CallOptions]') -> 'None'
       def paginate(self, url: 'CallUrl', *, pager: 'Pager[I, P, None]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
       def paginate(self, url: 'CallUrl', *, payload: 'B | None', pager: 'Pager[I, P, B]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
       def patch(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
@@ -547,7 +546,7 @@
   class EncodedBody(object)(content: 'bytes', content_type: 'str' = 'application/json') -> 'None'
       field content: bytes
       field content_type: str = 'application/json'
-  class Expect(Generic)(ok: 'Reader[T]', answers: 'Mapping[int, Reader[T]]' = <factory>, *, headers: 'Mapping[str, str]' = <factory>, accept: 'str | None' = None) -> 'None'
+  class Expect(Generic)(ok: 'Reader[T]', *, headers: 'Mapping[str, str]' = <factory>, accept: 'str | None' = None) -> 'None'
       field ok: Reader[T]
       field answers: Mapping[int, Reader[T]] = <factory>
       field headers: Mapping[str, str] = <factory>
