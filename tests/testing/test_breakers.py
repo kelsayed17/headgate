@@ -11,10 +11,11 @@ import pytest
 
 import headgate.breaker
 import headgate.testing
-from headgate import BreakerPolicy, CallPolicy, Client, HttpOptions, Rate, UpstreamStatusError, nothing
+from headgate import BreakerPolicy, CallPolicy, Client, HttpOptions, Rate, RateBudget, UpstreamStatusError, nothing
 from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
 from headgate.errors import CircuitOpenError
 from headgate.health import BreakerSnapshot, breaker_states
+from headgate.retry import RetryBudget, RetryShare
 from headgate.testing import FakeTransport, TestClock, breakers_of
 from tests.support.breakers import registry_of
 
@@ -119,3 +120,12 @@ def _only(registry: BreakerRegistry) -> CircuitBreaker:
     """Return the one breaker *registry* holds for the test origin."""
     (breaker,) = registry.breakers(_ORIGIN)
     return breaker
+
+
+def test_the_shared_live_objects_take_their_value_alike() -> None:
+    """Take the value a registry, a rate budget and a retry budget are built from by position or by name alike."""
+    policy = BreakerPolicy(failure_threshold=3)
+
+    assert BreakerRegistry(policy=policy).policy is BreakerRegistry(policy).policy is policy
+    assert RateBudget(rate=Rate.per_second(1)).rate == RateBudget(Rate.per_second(1)).rate
+    assert RetryBudget(share=RetryShare(ratio=0.1)).share == RetryBudget(RetryShare(ratio=0.1)).share

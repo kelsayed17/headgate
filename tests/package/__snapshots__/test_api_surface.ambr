@@ -3,7 +3,7 @@
   '''
   module headgate.breaker
   __all__ = ['BreakerRegistry', 'BreakerState', 'CircuitBreaker']
-  class BreakerRegistry(object)(policy: 'BreakerPolicy' = BreakerPolicy(failure_threshold=5, recovery_timeout=60.0), /, *, max_hosts: 'int' = 1024) -> 'None'
+  class BreakerRegistry(object)(policy: 'BreakerPolicy' = BreakerPolicy(failure_threshold=5, recovery_timeout=60.0), *, max_hosts: 'int' = 1024) -> 'None'
       def breaker_for(self, origin: 'httpx2.Origin | httpx2.URL | str') -> 'CircuitBreaker'
       def breakers(self, origin: 'httpx2.Origin | httpx2.URL | str | None' = None) -> 'tuple[CircuitBreaker, ...]'
       def clear(self) -> 'None'

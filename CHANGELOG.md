@@ -153,7 +153,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - Breakers take the shape a rate does: a policy's `breaker=` is a `BreakerPolicy`, from which the client builds
   breakers of its own, or a shared `BreakerRegistry`, built from one, whose breakers every client given it shares
   (`breaker: BreakerPolicy | BreakerRegistry | None`, as `rate: Rate | RateBudget | None`). The registry holds the
-  thresholds: `BreakerRegistry(policy=BreakerPolicy(), /, *, max_hosts=1024)`, read back as `.policy`. Write
+  thresholds, given first as a `RateBudget`'s rate is: `BreakerRegistry(BreakerPolicy(failure_threshold=3),
+  max_hosts=256)`, read back as `.policy`, and `BreakerPolicy()` when left out. Write
   `breaker=BreakerRegistry(BreakerPolicy(failure_threshold=3))` for
   `breaker=BreakerPolicy(failure_threshold=3, registry=BreakerRegistry())`, and `registry.breaker_for(origin)` for
   `registry.breaker_for(origin, failure_threshold=..., recovery_timeout=...)`.
