@@ -235,6 +235,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `FaultyTransport.calls` is a read-only property returning a tuple, as `FakeTransport.calls` is, where it was a
   list a test could append to or clear under the transport. Read it as before; write `list(network.calls)` where a
   test needs a list, and build a new `FaultyTransport` where it cleared the log.
+- `Backoff`, `RetryPolicy`, `HttpCache` and `headgate.testing.Respond` are final: a subclass raises `TypeError` when
+  it is defined, naming the fields to set, and ty reports it. The methods a subclass could override (`delay`,
+  `wait_after`, `caches_request`, `stores_status`, `response`) are no longer called by anything, so an override
+  would have been accepted and silently ignored. Set the fields instead: `Backoff(factor=..., max_wait=...)`,
+  `HttpCache(methods=..., paths=..., statuses=...)`, and for a reply a `Respond` cannot describe, a function in a
+  `FakeTransport` route.
 - `headgate.health.BreakerSnapshot` is a frozen dataclass with `state`, `refusing` and `failures` (the consecutive
   failures since the last success, which only the live breaker showed), built by keyword, rather than a named tuple:
   write `snapshot.state, snapshot.refusing` for `state, refusing = snapshot`, and compare a snapshot with
@@ -285,7 +291,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `headgate.testing.Respond.response()`, which only the stack and the fakes call. Read what a cache stores from its
   `methods`, `paths` and `statuses`, follow `Link` headers with `LinkHeader`, and read a `Respond` step's
   `status_code`, `headers`, `json`, `content` and `retry_after`. A subclass of `HttpCache` that overrode either rule
-  overrode nothing the cache reads now: give the cache the `methods`, `paths` and `statuses` it should keep.
+  raises `TypeError` when it is defined (see **Changed**): give the cache the `methods`, `paths` and `statuses` it
+  should keep.
 
 ### Fixed
 

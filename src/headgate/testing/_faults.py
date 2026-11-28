@@ -22,14 +22,14 @@ import math
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import override
+from typing import final, override
 
 import h2.errors
 import h2.events
 import httpcore2
 import httpx2
 
-from headgate._core import CallContext, current_timing
+from headgate._core import CallContext, current_timing, refuse_subclass
 from headgate.retry._tracking import head_size
 
 __all__ = [
@@ -57,6 +57,7 @@ class PoolFull:
     """Time out waiting for a pooled connection: ``httpx2.PoolTimeout``; nothing is sent."""
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class Respond:
     """Answer with ``status_code``, ``headers``, and a body: ``json`` encoded if given, else ``content``.
@@ -77,6 +78,16 @@ class Respond:
         if self.retry_after is not None and not (math.isfinite(self.retry_after) and self.retry_after >= 0):
             msg = f"retry_after must be a finite, non-negative number of seconds, got {self.retry_after!r}"
             raise ValueError(msg)
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a subclass: the fakes build the reply from the fields, and would call no override."""
+        del kwargs
+        refuse_subclass(
+            cls,
+            Respond,
+            "set status_code, headers, json, content and retry_after instead, or answer with a function in a "
+            "FakeTransport route",
+        )
 
 
 @dataclass(frozen=True, slots=True)

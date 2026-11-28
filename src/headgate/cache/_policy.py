@@ -21,13 +21,13 @@ import math
 import re
 from collections.abc import Collection
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, final
 from urllib.parse import unquote
 
 import httpx2
 from hishel import AsyncBaseStorage
 
-from headgate._core import check_collection, check_fragment, check_names, path_has_fragment
+from headgate._core import check_collection, check_fragment, check_names, path_has_fragment, refuse_subclass
 
 __all__ = ["HttpCache", "Partition", "caches_request", "stores_status"]
 
@@ -59,6 +59,7 @@ class Partition(enum.StrEnum):
     """
 
 
+@final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class HttpCache:
     """A client's opt-in HTTP response cache: what to keep, where, for how long, and whose it is.
@@ -125,6 +126,11 @@ class HttpCache:
             )
             raise ValueError(msg)
         object.__setattr__(self, "statuses", statuses)
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a subclass: the cache reads the rules from the fields, and would call no override."""
+        del kwargs
+        refuse_subclass(cls, HttpCache, "set methods, paths and statuses instead, which are all the cache reads")
 
 
 def caches_request(cache: HttpCache, method: str, path: str) -> bool:
