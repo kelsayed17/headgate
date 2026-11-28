@@ -26,9 +26,8 @@ import json
 import math
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Final, NoReturn, final, override
+from typing import Final, NoReturn, cast, final, override
 
 import httpx2
 
@@ -136,8 +135,14 @@ follow redirects (the client enforces it), because the check sees only the final
 """
 
 
+#: The headers an ``Expect`` sends when it is given none: read-only, so one instance serves every ``Expect``.
+_NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+
+#: What ``copy.replace`` may change on an ``Expect``: its answers are declared with ``on()`` only.
+_REPLACEABLE: Final = frozenset({"ok", "headers", "accept"})
+
+
 @final
-@dataclass(frozen=True, slots=True)
 class Expect[T]:
     """One endpoint's documented responses: a success reader for any 2xx, plus exact-status answers.
 
@@ -151,7 +156,9 @@ class Expect[T]:
     would be a second way to read one outside it.
 
     ``ok`` must be a :class:`Reader`. ``answers`` is filled only by :meth:`on`, which widens the result type with each
-    answer it declares, and is a read-only mapping.
+    answer it declares, and is a read-only mapping. An ``Expect`` is a frozen value: ``copy.replace`` (and
+    ``copy.copy``) keep its answers, and since it is not a dataclass, ``dataclasses.replace``, which would drop them,
+    raises ``TypeError``.
 
     ``headers`` are request headers the declaration needs sent (a conditional read's preconditions, see
     :func:`headgate.cache.conditional`); a header the call sets itself wins.
@@ -162,18 +169,41 @@ class Expect[T]:
     falls through to the status ladder, as an unreadable body does.
     """
 
-    ok: Reader[T]
-    answers: Mapping[int, Reader[T]] = field(default_factory=lambda: MappingProxyType({}), init=False)
-    headers: Mapping[str, str] = field(default_factory=dict, kw_only=True)
-    accept: str | None = field(default=None, kw_only=True)
+    __slots__ = ("_accept", "_answers", "_headers", "_ok")
 
-    def __post_init__(self) -> None:
-        """Refuse a non-reader or a malformed ``accept``; freeze the headers."""
-        check_kind("ok", self.ok, Reader, "a Reader")
-        # A frozen, slotted dataclass refuses plain assignment even here; object.__setattr__ is the documented route.
-        object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
-        if self.accept is not None:
-            _media_ranges(self.accept)
+    def __init__(self, ok: Reader[T], *, headers: Mapping[str, str] = _NO_HEADERS, accept: str | None = None) -> None:
+        """Read a 2xx with *ok*, sending *headers*, and accept *accept*'s media types; refuse a non-reader *ok*.
+
+        :raises TypeError: for an *ok* that is not a :class:`Reader`.
+        :raises ValueError: for a malformed *accept*.
+        """
+        check_kind("ok", ok, Reader, "a Reader")
+        if accept is not None:
+            _media_ranges(accept)
+        self._ok = ok
+        self._answers: Mapping[int, Reader[T]] = MappingProxyType({})
+        self._headers: Mapping[str, str] = MappingProxyType(dict(headers))
+        self._accept = accept
+
+    @property
+    def ok(self) -> Reader[T]:
+        """The reader of every 2xx the call does not declare as an answer."""
+        return self._ok
+
+    @property
+    def answers(self) -> Mapping[int, Reader[T]]:
+        """The exact statuses :meth:`on` declared, each with its reader; read-only."""
+        return self._answers
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        """The request headers the declaration needs sent; read-only."""
+        return self._headers
+
+    @property
+    def accept(self) -> str | None:
+        """The media types the endpoint answers with, sent as ``Accept`` and checked on each response."""
+        return self._accept
 
     def on[E](self, status: int, read: Reader[E]) -> Expect[T | E]:
         """Return a new ``Expect`` that also reads *status* with *read*, widening the result type to ``T | E``.
@@ -188,16 +218,52 @@ class Expect[T]:
         """
         check_kind("read", read, Reader, "a Reader")
         _refuse_unclaimable(status)
-        if status in self.answers:
+        if status in self._answers:
             msg = f"{status} is already declared on this Expect"
             raise ValueError(msg)
-        return with_answers(Expect(self.ok, headers=self.headers, accept=self.accept), {**self.answers, status: read})
+        widened: Expect[T | E] = Expect(self._ok, headers=self._headers, accept=self._accept)
+        answers: dict[int, Reader[T | E]] = {**self._answers, status: read}
+        return with_answers(widened, answers)
+
+    def __replace__(self, **changes: object) -> Expect[T]:
+        """Return a copy with *changes* to ``ok``, ``headers`` or ``accept``, keeping the answers; for ``copy.replace``.
+
+        :raises TypeError: for any other name, ``answers`` included, which only :meth:`on` declares.
+        """
+        if unknown := sorted(changes.keys() - _REPLACEABLE):
+            msg = f"copy.replace() of an Expect takes ok=, headers= and accept= (got {', '.join(unknown)}=)"
+            if "answers" in unknown:
+                msg += ": declare an answer with .on(status, reader)"
+            raise TypeError(msg)
+        ok = cast("Reader[T]", changes.get("ok", self._ok))
+        headers = cast("Mapping[str, str]", changes.get("headers", self._headers))
+        accept = cast("str | None", changes.get("accept", self._accept))
+        return with_answers(Expect(ok, headers=headers, accept=accept), self._answers)
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Expect) and self._key() == other._key()
+
+    @override
+    def __hash__(self) -> int:
+        return hash(self._key())
+
+    @override
+    def __repr__(self) -> str:
+        return (
+            f"Expect({self._ok!r}, answers={dict(self._answers)!r}, headers={dict(self._headers)!r}, "
+            f"accept={self._accept!r})"
+        )
+
+    def _key(self) -> tuple[object, ...]:
+        """Return what two equal ``Expect`` objects share: their readers, answers, headers and accept."""
+        return (self._ok, tuple(sorted(self._answers.items())), tuple(sorted(self._headers.items())), self._accept)
 
 
 def with_answers[T](expect: Expect[T], answers: Mapping[int, Reader[T]]) -> Expect[T]:
     """Return *expect*, freshly built with no answers, holding *answers*, which :meth:`Expect.on` already checked."""
-    # A frozen, slotted dataclass refuses plain assignment; object.__setattr__ is the documented route.
-    object.__setattr__(expect, "answers", MappingProxyType(dict(answers)))
+    # The answers are set once, here, on an Expect no one else holds yet; the class has no setter for them.
+    object.__setattr__(expect, "_answers", MappingProxyType(dict(answers)))
     return expect
 
 

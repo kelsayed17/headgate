@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import traceback
 from collections.abc import MutableMapping
@@ -358,12 +359,54 @@ def test_403_404_and_an_exact_204_are_claimable() -> None:
     assert set(expect.answers) == {403, 404, 204}
 
 
-@pytest.mark.parametrize("name", [f.name for f in dataclasses.fields(Expect)])
+@pytest.mark.parametrize("name", ["ok", "answers", "headers", "accept"])
 def test_an_expect_refuses_assignment_to_every_field(name: str) -> None:
     """Refuse rebinding any field at runtime, not only in a type checker."""
     expect = Expect(reader(_Ok)).on(404, nothing)
-    with pytest.raises(dataclasses.FrozenInstanceError):
+    with pytest.raises(AttributeError):
         setattr(expect, name, nothing)
+
+
+def test_a_copy_of_an_expect_keeps_its_answers() -> None:
+    """Keep the answers ``on()`` declared through ``copy.replace`` and ``copy.copy``, and refuse ``answers=`` there."""
+    expect = Expect(reader(_Ok), accept="application/json").on(404, nothing)
+
+    replaced = copy.replace(expect, headers={"X-Api-Version": "2"})
+    copied = copy.copy(expect)
+
+    assert (dict(replaced.answers), replaced.headers, replaced.accept) == (
+        {404: nothing},
+        {"X-Api-Version": "2"},
+        "application/json",
+    )
+    assert copied == expect
+    assert dict(copied.answers) == {404: nothing}
+    with pytest.raises(TypeError, match="answers"):
+        copy.replace(expect, **cast("Any", {"answers": {}}))
+    with pytest.raises(
+        TypeError, match=r"^copy.replace\(\) of an Expect takes ok=, headers= and accept= \(got oops=\)$"
+    ):
+        copy.replace(expect, **cast("Any", {"oops": 1}))
+
+
+def test_dataclasses_replace_refuses_an_expect() -> None:
+    """Refuse ``dataclasses.replace``, which would build an ``Expect`` without the answers ``on()`` declared."""
+    with pytest.raises(TypeError, match="dataclass"):
+        dataclasses.replace(cast("Any", Expect(reader(_Ok)).on(404, nothing)), accept="text/plain")
+
+
+def test_an_expect_is_a_value() -> None:
+    """Compare and hash by its readers, answers, headers and accept, and read as what it was built from."""
+    first = Expect(reader(_Ok)).on(404, nothing)
+
+    assert first == copy.copy(first)
+    assert hash(first) == hash(copy.copy(first))
+    assert first != Expect(first.ok)
+    assert first != first.ok
+    assert (
+        repr(Expect(nothing, accept="text/plain"))
+        == "Expect(Reader(nothing), answers={}, headers={}, accept='text/plain')"
+    )
 
 
 def test_an_expect_is_not_a_reader() -> None:

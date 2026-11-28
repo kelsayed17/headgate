@@ -544,11 +544,11 @@
   class EncodedBody(object)(content: 'bytes', content_type: 'str' = 'application/json') -> 'None'
       field content: bytes
       field content_type: str = 'application/json'
-  class Expect(Generic)(ok: 'Reader[T]', *, headers: 'Mapping[str, str]' = <factory>, accept: 'str | None' = None) -> 'None'
-      field ok: Reader[T]
-      field answers: Mapping[int, Reader[T]] = <factory>
-      field headers: Mapping[str, str] = <factory>
-      field accept: str | None = None
+  class Expect(Generic)(ok: 'Reader[T]', *, headers: 'Mapping[str, str]' = mappingproxy({}), accept: 'str | None' = None) -> 'None'
+      property accept
+      property answers
+      property headers
+      property ok
       def on(self, status: 'int', read: 'Reader[E]') -> 'Expect[T | E]'
   class Form(object)(fields: 'Mapping[str, object]') -> 'None'
       field fields: Mapping[str, object]
