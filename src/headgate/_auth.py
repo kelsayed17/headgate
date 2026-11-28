@@ -31,7 +31,7 @@ import secrets
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from types import UnionType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, get_args, get_origin, override
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, final, get_args, get_origin, override
 
 import httpx2
 
@@ -326,6 +326,21 @@ def _declares_names(cls: type) -> bool:
     return bool(headers or params)
 
 
+def _refuse_final_overrides(cls: type, base: type, hooks: str) -> None:
+    """Refuse *cls* overriding a member *base* marks ``@final``, as ty does, naming its *hooks*.
+
+    The flow holds the guarantees the hooks rely on (every attempt signed, one re-send on a 401), and an override of it
+    failed deep inside the call.
+    """
+    for name, member in vars(base).items():
+        if getattr(member, "__final__", False) and getattr(cls, name) is not member:
+            msg = (
+                f"{cls.__name__} overrides {name}, which {base.__name__} runs itself: its hooks are {hooks}, and a "
+                "per-request header belongs in a middleware"
+            )
+            raise TypeError(msg)
+
+
 def _carries(auth: Auth, request: httpx2.Request) -> bool:
     """Return whether *request* carries any of the headers or query parameters *auth* declares."""
     params = request.url.params
@@ -467,6 +482,7 @@ class SigningAuth(Auth):
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse a concrete subclass that declares nothing it signs with, and register its parameters as secret."""
         super().__init_subclass__(**kwargs)
+        _refuse_final_overrides(cls, SigningAuth, "sign and skips")
         declared = _declares_names(cls)
         if not inspect.isabstract(cls) and not declared:
             msg = (
@@ -498,6 +514,7 @@ class SigningAuth(Auth):
         """Return whether *request* carries any of the signed headers or parameters."""
         return _carries(self, request)
 
+    @final
     @override
     async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         if self.skips(request):
@@ -703,6 +720,7 @@ class CachedTokenAuth[TokenT = str](Auth):
         :attr:`refresh_margin` is checked.
         """
         super().__init_subclass__(**kwargs)
+        _refuse_final_overrides(cls, CachedTokenAuth, "mint, attach and skips")
         declared = _declares_names(cls)
         _check_margin(cls)
         mro = cls.__mro__
@@ -771,6 +789,7 @@ class CachedTokenAuth[TokenT = str](Auth):
         """Return whether *request* needs no credential from this auth: by default, one carrying its token's name."""
         return _carries(self, request)
 
+    @final
     def reject_credential_rotation(self, returned: str | None, configured: str, *, setting: str) -> None:
         """Raise ``ClientConfigurationError`` when a token endpoint returns a replacement for the configured credential.
 
@@ -859,6 +878,7 @@ class CachedTokenAuth[TokenT = str](Auth):
             mapped.add_note(f"from {type(exc).__name__}: {shorten(detail)}" if detail else f"from {type(exc).__name__}")
         raise mapped
 
+    @final
     @override
     async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         if self.skips(request):

@@ -78,6 +78,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `super().__init__(refresh_margin=30.0)`. `CachedTokenAuth(timing=)` is removed: a token's lifetime runs on the timing
   of the first client built with the auth, so build it, or the client, inside `timing_override()` or
   `TestClock.install()`.
+- `async_auth_flow` is `@final` on `SigningAuth` and `CachedTokenAuth`, and so is `reject_credential_rotation`: a
+  subclass that overrides one raises `TypeError` when it is defined, and ty reports `override-of-final-method`. An
+  override of the flow type-checked and failed inside the call (`'NoneType' object has no attribute 'status_code'`).
+  Their hooks are `sign` and `skips`, and `mint`, `attach` and `skips`; add a per-request header, such as a tenant id,
+  in a middleware.
 - `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.
