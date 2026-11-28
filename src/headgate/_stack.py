@@ -37,10 +37,11 @@ Nothing here reads the environment: the client and the default transport are bui
 cookie jar refuses every cookie unless ``HttpOptions(cookies=True)``.
 """
 
+import sys
 from contextvars import ContextVar
 from dataclasses import dataclass
 from http.cookiejar import CookieJar, DefaultCookiePolicy
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 import httpx2
 
@@ -59,12 +60,13 @@ from headgate.retry._transport import RetryTransport
 from headgate.security._addresses import AddressGuard, forbidden_reason, resolve_with_loop
 from headgate.security._credentials import CredentialGuard
 from headgate.security._downgrade import refuse_https_downgrade
-from headgate.security._transport import PinnedHTTPTransport, address_hook, guard_binding
+from headgate.security._transport import PinnedHTTPTransport, address_hook
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from headgate._core import Timing
+    from headgate._curl import GuardBinding
     from headgate._middleware import Middleware
     from headgate._options import CallPolicy, HttpOptions, Timeouts
     from headgate.ratelimit._budgets import PathBudgets
@@ -183,8 +185,8 @@ def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
     if (override := NETWORK_OVERRIDE.get()) is not None:
         return override
     if (transport := http.transport) is not None:
-        if (binding := guard_binding(transport)) is not None:
-            binding.bind(_address_guard(http))
+        if (bind := _guard_binder(transport)) is not None:
+            bind(_address_guard(http))
         return transport
     guard = _address_guard(http)
     if guard is not None:
@@ -196,6 +198,17 @@ def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
         proxy=http.proxy,
         trust_env=False,
     )
+
+
+def _guard_binder(transport: httpx2.AsyncBaseTransport) -> Callable[[AddressGuard | None], None] | None:
+    """Return what binds *transport* to a client's SSRF guard, for a transport that pins itself; else ``None``.
+
+    Only the curl transport pins itself. Its module needs the curl extra, so it is read only once something imported
+    it, which building a curl transport does.
+    """
+    curl = sys.modules.get("headgate._curl")
+    binding = None if curl is None else cast("GuardBinding | None", curl.guard_binding(transport))
+    return None if binding is None else binding.bind
 
 
 def _address_guard(http: HttpOptions) -> AddressGuard | None:
@@ -213,7 +226,7 @@ def _request_hooks(
     hooks: list[Callable[[httpx2.Request], Awaitable[None]]] = [credentials]
     addresses = _address_guard(http)
     network = NETWORK_OVERRIDE.get() or http.transport
-    unpinned = network is not None and guard_binding(network) is None
+    unpinned = network is not None and _guard_binder(network) is None
     if addresses is not None and unpinned:
         hooks.append(address_hook(addresses))
     return hooks

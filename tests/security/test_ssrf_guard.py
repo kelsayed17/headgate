@@ -244,6 +244,38 @@ async def test_a_check_judges_every_hop() -> None:
     assert [str(request.url) for request in web.sent] == [f"{BASE}/start", "https://internal.example/next"]
 
 
+@dataclasses.dataclass
+class _Unhashable(httpx2.AsyncBaseTransport):
+    """A transport a dataclass makes unhashable, as ``@dataclass`` does by its ``__eq__``."""
+
+    status: int = 200
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(self.status, request=request)
+
+
+class _Slotted(httpx2.AsyncBaseTransport):
+    """A transport with slots, and so no instance dictionary."""
+
+    __slots__ = ()
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, request=request)
+
+
+@pytest.mark.parametrize("transport", [_Unhashable(), _Slotted()], ids=["dataclass", "slots"])
+async def test_any_custom_transport_is_accepted(transport: httpx2.AsyncBaseTransport) -> None:
+    """Build a client on a transport of any shape, guarded or not: only the curl transport pins itself."""
+    for security in (
+        SecurityOptions(),
+        SecurityOptions(block_private_hosts=True, resolver=_Names(api_example=_PUBLIC)),
+    ):
+        async with Client(base_url=BASE, http=HttpOptions(transport=transport, security=security)) as client:
+            await client.get("x", expect=RESPONSE)
+
+
 def test_a_check_needs_the_guard() -> None:
     """Refuse a check nothing would use, and one that is not a function, as ``resolver=`` is refused."""
     with pytest.raises(

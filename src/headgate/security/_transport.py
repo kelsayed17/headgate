@@ -15,9 +15,9 @@ pin too, but the pool would then key connections by IP: a request to one name co
 authenticated for another name on the same address, which is exactly the substitution a DNS attacker wants. It would
 also put the IP into ``response.url``, relative redirects and the credential origin rule.
 
-**A transport that takes the guard** (``headgate.curl.AsyncCurlTransport``) holds a :class:`GuardBinding`, which the
-client's guard is bound to when the client is built (found with :func:`guard_binding`), and resolves, vets and pins each
-request itself through :func:`vet_request`, as the default transport does.
+**A transport that takes the guard** (``headgate.curl.AsyncCurlTransport``) holds a binding the client's guard is bound
+to when the client is built (``headgate._curl.guard_binding``), and resolves, vets and pins each request itself through
+:func:`vet_request`, as the default transport does.
 
 **Any other custom transport** (``HttpOptions(transport=...)``) resolves names itself, so the guard cannot choose its
 address: :func:`address_hook` vets every hop as a request hook, which refuses a forbidden host before anything is
@@ -27,9 +27,8 @@ sent, but the transport's own lookup could still be answered differently a momen
 import asyncio
 import contextlib
 import ssl
-import weakref
-from collections.abc import Awaitable, Callable, Iterable, Sequence
-from typing import Final, override
+from collections.abc import Awaitable, Callable, Iterable
+from typing import override
 
 import httpcore2
 import httpx2
@@ -38,63 +37,7 @@ from httpcore2._backends.base import SOCKET_OPTION
 
 from headgate.security._addresses import AddressGuard
 
-__all__ = ["GuardBinding", "PinnedHTTPTransport", "address_hook", "guard_binding", "pins_itself", "vet_request"]
-
-
-class GuardBinding:
-    """The SSRF guard a transport that pins itself serves: one guard, or none, set when the first client is built on it.
-
-    Such a transport (curl) keeps one DNS cache and one connection pool for every request it sends, so it serves one
-    guard: clients with the same guard may share it, and no other client may. *address_options* names the transport's
-    options that choose the address it connects to, which the guard must choose instead.
-    """
-
-    __slots__ = ("_address_options", "_bound", "guard")
-
-    def __init__(self, address_options: Sequence[str] = ()) -> None:
-        """Start unbound, with the names of the transport's own *address_options*, if it has any."""
-        self._address_options = tuple(address_options)
-        self._bound = False
-        self.guard: AddressGuard | None = None
-
-    def bind(self, guard: AddressGuard | None) -> None:
-        """Serve only requests the SSRF *guard* vets (``None``: an unguarded client), pinning each to its addresses.
-
-        :raises ValueError: when the transport already serves another guard (or none, or one where *guard* is none),
-            or when *guard* is given and the transport's own options choose the connection's address (a proxy, a
-            resolve or a connect-to entry).
-        """
-        if self._bound and guard != self.guard:
-            msg = (
-                "this AsyncCurlTransport already serves a client with a different SSRF guard "
-                "(SecurityOptions(block_private_hosts=..., resolver=..., check=...)): curl shares its DNS cache and "
-                "connections across requests, so give each client its own transport"
-            )
-            raise ValueError(msg)
-        if guard is not None and self._address_options:
-            names = ", ".join(self._address_options)
-            msg = (
-                f"block_private_hosts=True cannot be combined with curl_options {names}: "
-                "they choose the address curl connects to, which the SSRF guard must choose"
-            )
-            raise ValueError(msg)
-        self._bound = True
-        self.guard = guard
-
-
-#: The binding of each live transport that pins itself. Weak, and a binding holds no reference to its transport, so a
-#: transport nobody holds any more goes with its binding.
-_BINDINGS: Final[weakref.WeakKeyDictionary[httpx2.AsyncBaseTransport, GuardBinding]] = weakref.WeakKeyDictionary()
-
-
-def pins_itself(transport: httpx2.AsyncBaseTransport, binding: GuardBinding) -> None:
-    """Record that *transport* resolves, vets and pins each request itself, through the guard *binding* holds."""
-    _BINDINGS[transport] = binding
-
-
-def guard_binding(transport: httpx2.AsyncBaseTransport) -> GuardBinding | None:
-    """Return the guard binding of *transport*, or ``None`` for a transport that resolves names itself."""
-    return _BINDINGS.get(transport)
+__all__ = ["PinnedHTTPTransport", "address_hook", "vet_request"]
 
 
 class _VettingBackend(httpcore2.AsyncNetworkBackend):

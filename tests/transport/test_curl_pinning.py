@@ -12,21 +12,20 @@ address rather than looking the name up itself.
 from __future__ import annotations
 
 import asyncio
-import gc
+import copy
 import socket
-import weakref
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx2
 import pytest
 from curl_cffi import CurlOpt
 
 from headgate import Client, HttpOptions, Rate, SecurityOptions
+from headgate._curl import guard_binding
 from headgate._options import CallPolicy
 from headgate.curl import AsyncCurlTransport
 from headgate.errors import ForbiddenDestinationError
 from headgate.security._addresses import AddressGuard
-from headgate.security._transport import guard_binding
 from tests.security._servers import CERTS, serving
 from tests.support.responses import RESPONSE
 
@@ -277,14 +276,31 @@ async def test_a_transport_serving_one_guard_refuses_a_client_with_another(
             _client(transport, second)
 
 
-def test_a_binding_does_not_keep_its_transport_alive() -> None:
-    """Free a curl transport nobody holds, though the stack found it by its binding."""
+async def test_a_copy_of_a_transport_serves_its_guard() -> None:
+    """Refuse a guarded client on a copy of a transport an unguarded one uses: the copy shares curl's session."""
     transport = AsyncCurlTransport(impersonate="chrome")
-    gone = weakref.ref(transport)
-    del transport
-    gc.collect()
+    async with _client(transport):
+        with pytest.raises(ValueError, match="already serves a client with a different SSRF guard"):
+            _client(copy.copy(transport), _GUARDED)
 
-    assert gone() is None
+
+def test_a_wrapper_cannot_fake_a_binding() -> None:
+    """Read a transport's binding from its own attributes, so a wrapper forwarding attributes has none of its own."""
+
+    class Forwarding(httpx2.AsyncBaseTransport):
+        def __init__(self, inner: AsyncCurlTransport) -> None:
+            self.inner = inner
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self.inner, name)
+
+    assert guard_binding(Forwarding(AsyncCurlTransport(impersonate="chrome"))) is None
+    assert guard_binding(AsyncCurlTransport(impersonate="chrome")) is not None
+
+
+def test_an_object_without_attributes_of_its_own_has_no_binding() -> None:
+    """Find no binding on an object with no instance dictionary, rather than fail to look."""
+    assert guard_binding(cast("httpx2.AsyncBaseTransport", object())) is None
 
 
 @pytest.mark.parametrize(
