@@ -922,3 +922,25 @@ async def test_a_copy_keeps_a_cache_of_its_own(client_factory: _Factory) -> None
 
     assert (auth.mints, duplicate.mints) == (1, 2)
     assert duplicate.credential_identity() != auth.credential_identity()
+
+
+def test_a_client_refused_for_its_timing_builds_no_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Refuse a client on a second timing before it builds an ``httpx2.AsyncClient``, and leave the auth's clock."""
+    built: list[object] = []
+
+    class _Counting(httpx2.AsyncClient):
+        def __init__(self, **kwargs: object) -> None:
+            built.append(self)
+            super().__init__(**cast("Any", kwargs))
+
+    auth = _CountingAuth()
+    first_clock = TestClock()
+    with first_clock.install():
+        _client_for(auth)
+    monkeypatch.setattr(httpx2, "AsyncClient", _Counting)
+    with pytest.raises(TypeError, match=r"already runs its token lifetimes on another timing"):
+        _client_for(auth)
+
+    assert built == []
+    with first_clock.install():
+        _client_for(auth)  # still on the first client's timing

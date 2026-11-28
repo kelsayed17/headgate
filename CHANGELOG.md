@@ -86,8 +86,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   removed: a token's lifetime runs on the timing of the clients built with the auth, so build the client inside
   `timing_override()` or `TestClock.install()` (building the auth there alone does nothing). Its clients share one
   timing: a client built on another timing than an earlier one's, or than the one a token was seeded or minted on,
-  raises `TypeError`, so build them, and seed the auth, inside one block. A copy of an auth (`copy.copy`) starts
-  with a cache, lock and identity of its own, empty, rather than sharing the original's.
+  raises `TypeError` before it builds anything, leaving the auth as it was, so build them, and seed the auth, inside
+  one block. A copy of an auth (`copy.copy`) starts with a cache, lock and identity of its own, empty, rather than
+  sharing the original's.
 - `async_auth_flow` is `@final` on `SigningAuth` and `CachedTokenAuth`, and so is `reject_credential_rotation`: a
   subclass that overrides one raises `TypeError` when it is defined, and ty reports `override-of-final-method`. An
   override of the flow type-checked and failed inside the call (`'NoneType' object has no attribute 'status_code'`).

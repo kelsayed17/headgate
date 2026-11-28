@@ -60,6 +60,7 @@ __all__ = [
     "QueryParamAuth",
     "SigningAuth",
     "StaticHeaderAuth",
+    "check_timing",
     "failed_on_auth_hop",
     "hold_timing",
     "mint_hop_failure",
@@ -690,37 +691,52 @@ def _state_of[T](auth: CachedTokenAuth[T], timing: Timing | None = None) -> _Tok
     first. A copy of the auth (``copy.copy``) starts with a state of its own: two copies sharing one cache, lock and
     identity would be one auth under two names.
     """
-    attributes = vars(auth)
-    state = attributes.get(_STATE)
-    if not (isinstance(state, _TokenState) and state.owner == id(auth)):
+    state = _existing_state(auth)
+    if state is None:
         clock = (current_timing() if timing is None else timing).clock
-        state = attributes[_STATE] = _TokenState[T](clock=clock, owner=id(auth))
-    return cast("_TokenState[T]", state)
+        state = vars(auth)[_STATE] = _TokenState[T](clock=clock, owner=id(auth))
+    return state
+
+
+def _existing_state[T](auth: CachedTokenAuth[T]) -> _TokenState[T] | None:
+    """Return *auth*'s own state, or ``None`` when it has none yet, or holds only the state of the auth it copies."""
+    state = vars(auth).get(_STATE)
+    return cast("_TokenState[T]", state) if isinstance(state, _TokenState) and state.owner == id(auth) else None
+
+
+def check_timing(auth: Auth | None, timing: Timing) -> None:
+    """Refuse a :class:`CachedTokenAuth` that already runs on another clock than *timing*'s, changing nothing.
+
+    ``Client()`` calls it before it builds anything, so a refused client leaves no ``httpx2.AsyncClient`` behind, and
+    :func:`hold_timing` last, once nothing else can fail. An auth with no state yet, or whose state holds no token,
+    started no mint and was given to no client, may move to *timing*.
+
+    :raises TypeError: when the auth already runs on another clock: a client was built with it on another timing, or
+        it holds a token or minted on another, whose lifetime that clock measures.
+    """
+    state = _existing_state(auth) if isinstance(auth, CachedTokenAuth) else None
+    if state is None or state.clock == timing.clock:
+        return
+    if state.held_by_client or state.held is not None or state.attempts:
+        msg = (
+            f"{type(auth).__name__} already runs its token lifetimes on another timing, which a client built with "
+            "it or the token it holds was measured on: build all of its clients under one timing (one "
+            "TestClock.install() block), and seed it inside the same block"
+        )
+        raise TypeError(msg)
 
 
 def hold_timing(auth: Auth | None, timing: Timing) -> None:
     """Have a :class:`CachedTokenAuth` given to a client run its token lifetimes on the client's *timing*.
 
     A client is built inside ``TestClock.install()`` and may be called after the block, so its auth's clock is fixed
-    when the client is built. An auth already on *timing*'s clock is left as it is, and one whose state was made by a
-    first use that holds no token and started no mint moves to it.
-
-    :raises TypeError: when the auth already runs on another clock: a client was built with it on another timing, or
-        it holds a token or minted on another, whose lifetime that clock measures.
+    when the client is built. :func:`check_timing` refused, before the client was built, an auth this would move off
+    another clock it already runs on.
     """
-    if not isinstance(auth, CachedTokenAuth):
-        return
-    state = _state_of(auth, timing)
-    if state.clock != timing.clock:
-        if state.held_by_client or state.held is not None or state.attempts:
-            msg = (
-                f"{type(auth).__name__} already runs its token lifetimes on another timing, which a client built with "
-                "it or the token it holds was measured on: build all of its clients under one timing (one "
-                "TestClock.install() block), and seed it inside the same block"
-            )
-            raise TypeError(msg)
+    if isinstance(auth, CachedTokenAuth):
+        state = _state_of(auth, timing)
         state.clock = timing.clock
-    state.held_by_client = True
+        state.held_by_client = True
 
 
 def _check_margin(cls: type[CachedTokenAuth[Any]]) -> None:
