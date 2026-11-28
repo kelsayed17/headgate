@@ -246,6 +246,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   would have been accepted and silently ignored. Set the fields instead: `Backoff(factor=..., max_wait=...)`,
   `HttpCache(methods=..., paths=..., statuses=...)`, and for a reply a `Respond` cannot describe, a function in a
   `FakeTransport` route.
+- `headgate.health.observer_failures()` keys each observer class by its module and qualified name,
+  `"myapp.metrics.Exporter"`, where it used the qualified name alone, so two classes of one name in different modules
+  shared a count. Write `observer_failures().get("myapp.metrics.Exporter", 0)` for
+  `observer_failures().get("Exporter", 0)`, or `f"{cls.__module__}.{cls.__qualname__}"` for `cls.__qualname__`.
 - `headgate.health.BreakerSnapshot` is a frozen dataclass with `state`, `refusing` and `failures` (the consecutive
   failures since the last success, which only the live breaker showed), built by keyword, rather than a named tuple:
   write `snapshot.state, snapshot.refusing` for `state, refusing = snapshot`, and compare a snapshot with

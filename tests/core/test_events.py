@@ -22,16 +22,32 @@ class _Broken:
         raise RuntimeError(msg)
 
 
+def _key(cls: type) -> str:
+    """Return the key *cls*'s failures are counted under: its module and qualified name."""
+    return f"{cls.__module__}.{cls.__qualname__}"
+
+
+def test_two_observer_classes_of_one_name_are_counted_apart() -> None:
+    """Count a failing observer by its module and name, so a same-named class elsewhere keeps a count of its own."""
+    other = type("_Broken", (_Broken,), {"__module__": "elsewhere"})
+    before = (OBSERVER_FAILURES[_key(_Broken)], OBSERVER_FAILURES["elsewhere._Broken"])
+    event = CallStarted(call=CallInfo(method="GET", url="https://a.test/x", full_url="https://a.test/x"))
+
+    Emitter((other(),)).emit(event)
+
+    assert (OBSERVER_FAILURES[_key(_Broken)], OBSERVER_FAILURES["elsewhere._Broken"]) == (before[0], before[1] + 1)
+
+
 def test_a_failing_observer_is_counted_and_the_next_still_receives_the_event() -> None:
     """Count the broken observer's failure by its class and still deliver to the observers after it."""
-    before = OBSERVER_FAILURES[_Broken.__qualname__]
+    before = OBSERVER_FAILURES[_key(_Broken)]
     recorder = Recorder()
     event = CallStarted(call=CallInfo(method="GET", url="https://a.test/x", full_url="https://a.test/x"))
 
     Emitter((_Broken(), recorder)).emit(event)
 
     assert recorder.events == [event]
-    assert OBSERVER_FAILURES[_Broken.__qualname__] == before + 1
+    assert OBSERVER_FAILURES[_key(_Broken)] == before + 1
 
 
 def test_the_silent_emitter_has_no_listeners() -> None:
@@ -42,13 +58,13 @@ def test_the_silent_emitter_has_no_listeners() -> None:
 
 def test_an_observer_that_takes_the_event_is_not_counted_as_failing() -> None:
     """Count nothing for an observer whose ``notify`` returns normally."""
-    before = OBSERVER_FAILURES[Recorder.__qualname__]
+    before = OBSERVER_FAILURES[_key(Recorder)]
 
     Emitter((Recorder(),)).emit(
         CallStarted(call=CallInfo(method="GET", url="https://a.test/x", full_url="https://a.test/x"))
     )
 
-    assert OBSERVER_FAILURES[Recorder.__qualname__] == before
+    assert OBSERVER_FAILURES[_key(Recorder)] == before
 
 
 def test_a_call_info_requires_its_full_url() -> None:
