@@ -15,6 +15,7 @@ import pytest
 import headgate.retry
 from headgate import RetryPolicy
 from headgate.retry import IDEMPOTENT_METHODS, RETRY_STATUSES, Backoff, Hedge, RetryShare
+from headgate.retry._policy import backoff_delay, wait_after
 from headgate.timing import Timing
 
 if TYPE_CHECKING:
@@ -76,23 +77,29 @@ def test_the_defaults_are_the_documented_ones() -> None:
     assert not hasattr(headgate.retry, "NO_RETRY")
 
 
+def test_retry_values_hide_their_arithmetic() -> None:
+    """Leave the wait between attempts to the retry layer: a policy and a backoff are values, read by their fields."""
+    assert not hasattr(RetryPolicy, "wait_after")
+    assert not hasattr(Backoff, "delay")
+
+
 # --- Backoff ---
 
 
 def test_the_backoff_scales_the_jitter_draw() -> None:
     """Multiply ``factor * 2^retry`` by the jitter draw it is given."""
     draw = 0.25
-    assert Backoff().delay(1, draw) == _FACTOR * 2 * draw
+    assert backoff_delay(Backoff(), 1, draw) == _FACTOR * 2 * draw
 
 
 def test_the_backoff_is_capped_even_past_the_float_exponent_range() -> None:
     """Wait at most the cap on the 1100th retry, rather than overflowing ``2.0 ** 1100``."""
-    assert Backoff().delay(1100, 1.0) == _MAX_WAIT
+    assert backoff_delay(Backoff(), 1100, 1.0) == _MAX_WAIT
 
 
 def test_an_overflowing_backoff_with_a_zero_draw_waits_zero_not_nan() -> None:
     """Keep the wait finite when ``factor · 2^retry`` overflows to infinity and the jitter draws zero."""
-    assert Backoff(factor=2.0).delay(1023, 0.0) == 0.0
+    assert backoff_delay(Backoff(factor=2.0), 1023, 0.0) == 0.0
 
 
 def test_the_default_jitter_is_a_uniform_draw() -> None:
@@ -112,9 +119,9 @@ def test_wait_after_waits_a_retry_after_exactly_and_backs_off_otherwise() -> Non
     policy = RetryPolicy(backoff=Backoff())
     long_wait = 60.0
 
-    assert policy.wait_after(long_wait, 1, 1.0) == long_wait, "past the backoff's cap: max_retry_after governs instead"
-    assert policy.wait_after(0.0, 1, 1.0) == 0.0
-    assert policy.wait_after(None, 1, 1.0) == _FACTOR * 2
+    assert wait_after(policy, long_wait, 1, 1.0) == long_wait, "past the backoff's cap: max_retry_after governs instead"
+    assert wait_after(policy, 0.0, 1, 1.0) == 0.0
+    assert wait_after(policy, None, 1, 1.0) == _FACTOR * 2
 
 
 @pytest.mark.parametrize(
@@ -146,7 +153,7 @@ _EXACT = Backoff(factor=1.0, max_wait=1000.0)
 
 def test_the_backoff_doubles_with_each_retry() -> None:
     """Wait ``factor · 2^n`` before retry *n*: 2, 4, 8, 16 seconds for a factor of 1."""
-    assert [_EXACT.delay(retry, 1.0) for retry in range(1, 5)] == [2.0, 4.0, 8.0, 16.0]
+    assert [backoff_delay(_EXACT, retry, 1.0) for retry in range(1, 5)] == [2.0, 4.0, 8.0, 16.0]
 
 
 async def test_the_methods_and_statuses_read_as_frozensets(tmp_path: Path) -> None:

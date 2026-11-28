@@ -9,13 +9,19 @@ budget is asked for shows whether two calls spent one budget or two.
 
 from __future__ import annotations
 
-from typing import Any, Final, LiteralString, cast
+import copy
+from typing import TYPE_CHECKING, Any, Final, LiteralString, cast
 
 import pytest
 
-from headgate import CallPolicy, Client, HttpOptions, Rate, RetryPolicy, Route, UpstreamStatusError, nothing
+from headgate import CallPolicy, Client, HttpOptions, Rate, RateBudget, RetryPolicy, Route, UpstreamStatusError, nothing
+from headgate.breaker import BreakerRegistry
 from headgate.retry import Backoff, RetryBudget, RetryShare
+from headgate.retry._policy import ledger_of
 from tests.support.wire import Script
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 #: One retry per ten-second window.
 _ONE_RETRY: Final = RetryShare(ratio=0.0, min_per_second=0.1, window=10.0)
@@ -80,11 +86,43 @@ def test_a_retry_budget_is_built_from_a_share() -> None:
         RetryPolicy(budget=cast("Any", Backoff()))
 
 
+def test_a_retry_budget_shows_only_its_share() -> None:
+    """Leave spending a budget to the retry layer: its surface is the share it spends, and its ``repr``."""
+    assert [name for name in dir(RetryBudget) if not name.startswith("_")] == ["share"]
+
+
 def test_a_retry_budget_shows_its_state() -> None:
     """Name the share and what the window holds now."""
     budget = RetryBudget(_ONE_RETRY)
-    budget.record_first()
-    assert budget.try_spend()
+    ledger_of(budget).record_first()
+    assert ledger_of(budget).try_spend()
 
     assert repr(budget) == f"RetryBudget({_ONE_RETRY!r}, retries=1, firsts=1)"
     assert budget.share is _ONE_RETRY
+
+
+@pytest.mark.parametrize(
+    "shared",
+    [RetryBudget, BreakerRegistry, lambda: RateBudget(Rate.per_second(10))],
+    ids=["RetryBudget", "BreakerRegistry", "RateBudget"],
+)
+def test_a_copy_of_a_shared_handle_is_the_handle(shared: Callable[[], object]) -> None:
+    """Return the same object from ``copy.copy`` and ``copy.deepcopy``: a shared handle is shared by its copies too."""
+    handle = shared()
+
+    assert copy.copy(handle) is handle
+    assert copy.deepcopy(handle) is handle
+
+
+def test_a_deep_copy_of_a_policy_keeps_its_shared_objects() -> None:
+    """Keep the budgets and registry a policy shares when the policy is deep-copied, so its copy still shares them."""
+    budget, registry, rate = RetryBudget(), BreakerRegistry(), RateBudget(Rate.per_second(10))
+    policy = CallPolicy(rate=rate, retry=RetryPolicy(budget=budget), breaker=registry)
+
+    copied = copy.deepcopy(policy)
+
+    assert copied.rate is rate
+    assert copied.breaker is registry
+    assert copied.retry is not None
+    assert copied.retry.budget is budget
+    Client(base_url="https://api.example", policy=copied)

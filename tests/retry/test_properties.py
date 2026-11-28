@@ -130,7 +130,7 @@ class _Timed(httpx2.AsyncBaseTransport):
 class _Run:
     """What one example recorded."""
 
-    calls: list[FaultCall]
+    calls: tuple[FaultCall, ...]
     starts: list[float]
     sleeps: list[tuple[float, float]]
     notes: tuple[str, ...]

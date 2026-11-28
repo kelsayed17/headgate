@@ -39,15 +39,17 @@ from headgate import (
     TransportError,
     UpstreamStatusError,
 )
-from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
+from headgate.breaker import BreakerRegistry, BreakerState
+from headgate.breaker._registry import table_of
 from headgate.errors import CircuitOpenError, ClientConfigurationError, ResponseTooLargeError
-from headgate.policy import policy_disabled
+from headgate.testing import policy_disabled
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
 
     from headgate import Next
+    from headgate.breaker._breaker import CircuitBreaker
 
 _HOST = "api.example"
 _URL = f"https://{_HOST}"
@@ -128,7 +130,7 @@ def breaker() -> CircuitBreaker:
     breaker that opened and whose cooldown already elapsed, admitting the request as a probe.
     """
     _SHARED.clear()
-    return _SHARED.breaker_for(_URL)
+    return table_of(_SHARED).breaker_for(_URL)
 
 
 async def _fail(client: Client, times: int) -> None:
@@ -442,7 +444,7 @@ async def test_an_opted_out_client_is_not_refused_by_a_breaker_another_client_op
         ),
         _THRESHOLD,
     )
-    assert [breaker.state for breaker in shared.breakers(_URL)] == [BreakerState.OPEN]
+    assert [breaker.state for breaker in table_of(shared).breakers(_URL)] == [BreakerState.OPEN]
 
     refused = _ScriptedTransport(200)
     with pytest.raises(CircuitOpenError):

@@ -23,6 +23,7 @@ from headgate import (
 )
 from headgate._responses import nothing
 from headgate.breaker import BreakerState
+from headgate.breaker._registry import table_of
 from tests.support.breakers import failures, has_breaker, registry_of
 from tests.support.responses import RESPONSE
 
@@ -43,7 +44,7 @@ def _redirecting_to(location: str) -> httpx2.MockTransport:
 def _open_breaker(client: Client) -> None:
     """Trip *client*'s breaker for the test host, built for the default policy: its threshold's worth of failures."""
     policy = BreakerPolicy()
-    breaker = registry_of(client).breaker_for(f"https://{_HOST}")
+    breaker = table_of(registry_of(client)).breaker_for(f"https://{_HOST}")
     for _ in range(policy.failure_threshold):
         with contextlib.suppress(RuntimeError), breaker.track() as verdict:
             verdict.mark_failed()

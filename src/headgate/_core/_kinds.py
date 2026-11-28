@@ -5,7 +5,7 @@
 
 import re
 from collections.abc import Collection, Mapping
-from typing import Any, Final, NewType, TypeAliasType, get_origin
+from typing import Any, Final, NewType, NoReturn, TypeAliasType, get_origin
 
 __all__ = [
     "check_callable",
@@ -16,6 +16,7 @@ __all__ = [
     "check_not_letters",
     "check_options",
     "named",
+    "refuse_subclass",
     "type_text",
 ]
 
@@ -48,6 +49,18 @@ def named(value: object) -> str:
     if isinstance(value, type):
         return f"the class {value.__name__}"
     return type(value).__name__
+
+
+def refuse_subclass(cls: type, base: type, instead: str) -> NoReturn:
+    """Refuse *cls*, a subclass of the final *base*, whose overrides nothing would call, saying what to write *instead*.
+
+    For a value the stack reads by its fields: a method a subclass overrode would be accepted and never run, as ty
+    reports a subclass of a ``@final`` class.
+
+    :raises TypeError: always.
+    """
+    msg = f"{cls.__name__} cannot subclass {base.__name__}, which is final: {instead}"
+    raise TypeError(msg)
 
 
 def check_kind(option: str, value: object, kind: type | tuple[type, ...], wanted: str) -> None:

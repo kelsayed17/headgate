@@ -30,8 +30,8 @@ import pytest
 from hishel import AsyncBaseStorage, AsyncSqliteStorage, Entry, Headers, Request, Response
 
 from headgate import HttpCache, HttpOptions, TransportError, as_bytes
+from headgate.cache import _transport
 from headgate.cache._transport import (
-    CACHE_DEGRADATIONS,
     CACHE_DEGRADED_EXT,
     HOST_UNTESTED,
     CacheStorageError,
@@ -39,6 +39,7 @@ from headgate.cache._transport import (
     host_untested,
     served_from_cache,
 )
+from headgate.events import CacheOutcome
 from tests.cache._helpers import (
     GENEROUS_CAP,
     NETWORK_BODY,
@@ -49,6 +50,8 @@ from tests.cache._helpers import (
     accept,
     cache_transport,
     every_get_rules,
+    observed,
+    outcomes,
     stub_client,
 )
 from tests.support.breakers import failures
@@ -112,20 +115,22 @@ async def test_the_degraded_marker_names_the_backend_error_by_type_alone(storage
         pytest.param(lambda inner: _BodyFaulty(inner, StorageTimeoutError("timeout writing")), id="writing-the-body"),
     ],
 )
-async def test_a_store_fault_on_accept_is_counted_and_the_answer_stands(
+async def test_a_store_fault_on_accept_is_reported_unstored_and_the_answer_stands(
     faulty: Callable[[AsyncBaseStorage], AsyncBaseStorage], storage: AsyncSqliteStorage
 ) -> None:
-    """A miss is written when the call accepts it: a fault then is counted, and the answer the call has stands.
+    """A miss is written when the call accepts it: a fault then is reported on the call, and its answer stands.
 
     The network response was read whole and closed before; nothing is redone, and nothing is raised.
     """
     network = TrackingNetwork()
-    degraded_before = CACHE_DEGRADATIONS[_HOST]
+    request = httpx2.Request("GET", _URL)
+    recorder = observed(request)
 
-    resp = await cache_transport(faulty(storage), network).handle_async_request(httpx2.Request("GET", _URL))
+    resp = await cache_transport(faulty(storage), network).handle_async_request(request)
+    resp.request = request  # as the client's httpx2 sets it, so the write finds the call it reports on
 
     assert await accept(resp) == NETWORK_BODY
-    assert CACHE_DEGRADATIONS[_HOST] == degraded_before + 1
+    assert outcomes(recorder) == [CacheOutcome.MISS, CacheOutcome.UNSTORED]
     assert CACHE_DEGRADED_EXT not in resp.extensions, "the answer itself came from a healthy fetch"
     assert len(network.urls) == 1
     assert network.streams[0].closed
@@ -148,14 +153,15 @@ async def test_a_network_failure_mid_body_is_not_a_storage_fault(storage: AsyncS
     That error is still the network's: it reaches the retry layer as itself, after one fetch, with nothing degraded.
     """
     network = _FlakyNetwork()
-    degraded_before = CACHE_DEGRADATIONS[_HOST]
+    request = httpx2.Request("GET", _URL)
+    recorder = observed(request)
 
     with pytest.raises(httpx2.ReadError):
-        await cache_transport(storage, network).handle_async_request(httpx2.Request("GET", _URL))
+        await cache_transport(storage, network).handle_async_request(request)
 
     assert len(network.urls) == 1
     assert network.streams[0].closed, "the network response is closed"
-    assert CACHE_DEGRADATIONS[_HOST] == degraded_before
+    assert CacheOutcome.DEGRADED not in outcomes(recorder)
 
 
 class _DropsMidBody(TrackedStream):
@@ -194,13 +200,14 @@ async def test_an_oserror_mid_body_is_a_network_failure(storage: AsyncSqliteStor
     It reaches the retry layer as itself after one fetch, rather than being redone live and counted as a degradation.
     """
     network = _FlakyNetwork(ConnectionResetError("peer reset"))
-    degraded_before = CACHE_DEGRADATIONS[_HOST]
+    request = httpx2.Request("GET", _URL)
+    recorder = observed(request)
 
     with pytest.raises(ConnectionResetError):
-        await cache_transport(storage, network).handle_async_request(httpx2.Request("GET", _URL))
+        await cache_transport(storage, network).handle_async_request(request)
 
     assert len(network.urls) == 1
-    assert CACHE_DEGRADATIONS[_HOST] == degraded_before
+    assert CacheOutcome.DEGRADED not in outcomes(recorder)
 
 
 async def test_an_oserror_from_the_storage_itself_is_still_a_storage_fault(storage: AsyncSqliteStorage) -> None:
@@ -251,41 +258,36 @@ async def test_a_failed_degraded_fetch_does_not_carry_the_storage_error(storage:
     assert "hunter2" not in "".join(traceback.format_exception(raised.value))
 
 
-class _RequestRuleBug(HttpCache):
-    """A cache whose request rule raises: a bug, not an outage."""
-
-    @override
-    def caches_request(self, method: str, path: str) -> bool:
-        msg = "a bug in a cache rule"
-        raise RuntimeError(msg)
+def _buggy_rule(*_args: object) -> bool:
+    """Stand in for a cache rule with a bug: raise, as a bug does, rather than fail as an outage does."""
+    msg = "a bug in a cache rule"
+    raise RuntimeError(msg)
 
 
-class _StatusRuleBug(HttpCache):
-    """A cache whose status rule raises, which hishel reaches only after the network answered."""
-
-    @override
-    def stores_status(self, status: int) -> bool:
-        msg = "a bug in a cache rule"
-        raise RuntimeError(msg)
-
-
-async def test_a_bug_in_a_cache_rule_propagates_rather_than_degrading(storage: AsyncSqliteStorage) -> None:
+async def test_a_bug_in_a_cache_rule_propagates_rather_than_degrading(
+    storage: AsyncSqliteStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Only a storage fault falls back: an error from a rule is a bug to see, not an outage to hide."""
+    monkeypatch.setattr(_transport, "caches_request", _buggy_rule)
     network = Network()
-    degraded_before = CACHE_DEGRADATIONS[_HOST]
-    transport = ResilientCacheTransport(network, _RequestRuleBug(storage=storage), max_body_bytes=GENEROUS_CAP)
+    request = httpx2.Request("GET", _URL)
+    recorder = observed(request)
+    transport = ResilientCacheTransport(network, HttpCache(storage=storage), max_body_bytes=GENEROUS_CAP)
 
     with pytest.raises(RuntimeError, match="a bug in a cache rule"):
-        await transport.handle_async_request(httpx2.Request("GET", _URL))
+        await transport.handle_async_request(request)
 
     assert network.calls == 0
-    assert CACHE_DEGRADATIONS[_HOST] == degraded_before
+    assert CacheOutcome.DEGRADED not in outcomes(recorder)
 
 
-async def test_a_bug_inside_hishel_after_the_send_closes_the_network_response(storage: AsyncSqliteStorage) -> None:
+async def test_a_bug_inside_hishel_after_the_send_closes_the_network_response(
+    storage: AsyncSqliteStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A bug while hishel stores surfaces as itself, and the network response hishel abandoned with it is closed."""
+    monkeypatch.setattr(_transport, "stores_status", _buggy_rule)
     network = TrackingNetwork()
-    transport = ResilientCacheTransport(network, _StatusRuleBug(storage=storage), max_body_bytes=GENEROUS_CAP)
+    transport = ResilientCacheTransport(network, HttpCache(storage=storage), max_body_bytes=GENEROUS_CAP)
 
     with pytest.raises(RuntimeError, match="a bug in a cache rule"):
         await transport.handle_async_request(httpx2.Request("GET", _URL))

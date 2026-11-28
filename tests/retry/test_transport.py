@@ -26,7 +26,14 @@ from headgate._core import (
     RetryScheduled,
 )
 from headgate.retry import Backoff, Hedge, RetryShare
-from headgate.retry._policy import REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE, RetryOutcome
+from headgate.retry._policy import (
+    REPLAYABLE_BODY,
+    RETRY_OUTCOME,
+    RETRY_POLICY,
+    SEND_ONCE,
+    RetryOutcome,
+    backoff_delay,
+)
 from headgate.retry._transport import RetryTransport
 from headgate.testing import (
     ConnectFail,
@@ -143,7 +150,7 @@ async def test_an_idempotent_request_is_resent_until_it_succeeds() -> None:
 
     assert response.status_code == httpx2.codes.OK
     assert len(network.calls) == context.attempt == _THREE_SENDS
-    assert clock.sleeps == [_FULL.delay(1, 1.0), _FULL.delay(2, 1.0)]
+    assert clock.sleeps == [backoff_delay(_FULL, 1, 1.0), backoff_delay(_FULL, 2, 1.0)]
     assert [call.response_closed for call in network.calls] == [True, True, False]
     await response.aclose()
 
@@ -694,7 +701,7 @@ async def test_the_backoff_counts_retries_not_the_hedges_beside_them() -> None:
     scheduled = [event for event in observer.events if isinstance(event, RetryScheduled)]
     assert [(event.reason, event.delay) for event in scheduled] == [
         ("hedge", _HEDGE_AFTER),
-        ("503", _FULL.delay(1, 1.0)),
+        ("503", backoff_delay(_FULL, 1, 1.0)),
     ]
 
 
@@ -779,7 +786,7 @@ async def test_every_retry_is_announced_with_its_delay_and_reason() -> None:
     scheduled = [event for event in observer.events if isinstance(event, RetryScheduled)]
     assert [(event.attempt, event.delay, event.reason) for event in scheduled] == [
         (2, _RETRY_AFTER, "503"),
-        (3, _FULL.delay(2, 1.0), "ConnectError"),
+        (3, backoff_delay(_FULL, 2, 1.0), "ConnectError"),
     ]
 
 

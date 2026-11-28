@@ -96,13 +96,14 @@ returns that registry (or `None` for a client without a breaker); assert on it w
 ## What a client was built with
 
 A client fixes its options in its `__init__`, so a test of its configuration reads them back. `cache_of(client)` returns
-the `HttpCache` it was built with (or `None`), whose `caches_request(method, path)` and `stores_status(status)` say
-what it stores, from its `methods`, `paths` and `statuses`. `budget_for(client, url)` returns the `RateBudget` a
-request to `url` spends from: that of the first `Route` that matches it, when that route sets `rate=`, or the default;
-without a `url`, the default budget, built from the policy's `rate=`.
+the `HttpCache` it was built with (or `None`), whose `methods`, `paths` and `statuses` say what it stores.
+`budget_for(client, url)` returns the `RateBudget` a request to `url` spends from: that of the first `Route` that
+matches it, when that route sets `rate=`, or the default; without a `url`, the default budget, built from the policy's
+`rate=`. Neither sends anything. Whether a response is served from the cache shows through the front door too: a
+second call that a fake network never sees.
 
 ```python
-from headgate.testing import budget_for, cache_of
+from headgate.testing import FakeTransport, budget_for, cache_of, fake_network
 
 
 def test_candles_have_a_budget_of_their_own() -> None:
@@ -111,12 +112,22 @@ def test_candles_have_a_budget_of_their_own() -> None:
     assert budget_for(client).rate == Rate.per_second(10)
 
 
-def test_only_the_archives_are_cached(storage) -> None:
-    cache = cache_of(ArchiveClient(cache_storage=storage))
+async def test_only_the_archives_are_cached(storage) -> None:
+    fake = FakeTransport().reply("GET", "/archives/2025.zip", 200).reply("GET", "/status", 200)
+    with fake_network(fake):
+        client = ArchiveClient(cache_storage=storage)
+    async with client:
+        for _ in range(2):
+            await client.archive("2025.zip")
+            await client.status()
+
+    assert len(fake.calls_to("GET", "/archives/2025.zip")) == 1, "the second came from the cache"
+    assert len(fake.calls_to("GET", "/status")) == 2, "the status is never cached"
+    cache = cache_of(client)
     assert cache is not None and cache.ttl == 86_400.0
 ```
 
-Neither sends anything. A view made with `with_options()` reads back as the client it was made from.
+A view made with `with_options()` reads back as the client it was made from.
 
 ## A fake walk
 
@@ -165,8 +176,9 @@ faults = FaultyTransport(schedule=[ConnectFail(), DropMidBody(after_bytes=200), 
 ```
 
 With that schedule, a POST without an idempotency key is re-sent after the `ConnectFail` (nothing was written) but not
-after the `DropMidBody` (bytes were written): the call raises `TransportError` and `faults.calls` shows two sends. A
-send past the end of the schedule raises `AssertionError`.
+after the `DropMidBody` (bytes were written): the call raises `TransportError` and `faults.calls` shows two sends.
+`faults.calls`, like `fake.calls`, is a tuple read afresh each time, of one `FaultCall` per send: its step, what it
+sent and what it got. A send past the end of the schedule raises `AssertionError`.
 
 ## Recorded cassettes
 
@@ -202,8 +214,8 @@ it first.
 
 ## Switching the policy off
 
-Some tests, and connectivity probes, want the first failure as it is: no retries, no breaker, no pacing.
-`headgate.policy.policy_disabled()` builds the clients constructed in its block with retries off (whatever a call or
+A test that asserts on the first failure, as the fake network sends it, wants no retries, no breaker and no pacing.
+`headgate.testing.policy_disabled()` builds the clients constructed in its block with retries off (whatever a call or
 route asks for), no breaker (the client never reads a registry, so it cannot be refused by one another client opened),
 and a budget that paces nothing, also for its routes' `rate=` and a shared `RateBudget` passed in.
 
@@ -212,7 +224,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from headgate.policy import policy_disabled
+from headgate.testing import policy_disabled
 
 
 @pytest.fixture(autouse=True)

@@ -4,9 +4,8 @@
 """What a client was built with, read back: its cache, and the rate budget a request spends from.
 
 An SDK fixes its client's options where it builds it, so its tests check what it configured by reading it back: the
-cache it keeps (and, through :meth:`~headgate.HttpCache.caches_request` and
-:meth:`~headgate.HttpCache.stores_status`, what that stores) and the rate budget a path spends from. Neither sends
-anything.
+cache it keeps (whose ``methods``, ``paths`` and ``statuses`` say what it stores) and the rate budget a path spends
+from. Neither sends anything.
 """
 
 from headgate import Client, HttpCache
@@ -40,8 +39,7 @@ def budget_for(client: Client, url: str | None = None) -> RateBudget:
 def breakers_of(client: Client) -> BreakerRegistry | None:
     """Return the :class:`~headgate.breaker.BreakerRegistry` *client*'s breakers live in, or ``None`` without a breaker.
 
-    It is the client's own, built from its ``BreakerPolicy``, or the shared one it was given as ``breaker=``. Read a
-    breaker's state from it (``breakers_of(client).breakers(url)``), or pass it to
-    :func:`headgate.health.breaker_states`.
+    It is the client's own, built from its ``BreakerPolicy``, or the shared one it was given as ``breaker=``. Read its
+    breakers' states with :func:`headgate.health.breaker_states`.
     """
     return built_with(client).breakers

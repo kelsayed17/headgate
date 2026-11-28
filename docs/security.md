@@ -116,10 +116,25 @@ name, so TLS still sends it as SNI and verifies the certificate against it, and 
 - The guard cannot be combined with `proxy=`, since a proxy resolves the target itself.
 - `HttpOptions(security=SecurityOptions(resolver=...))` replaces the event loop's `getaddrinfo` (an async function of
   host and port returning addresses as text), and is accepted only with the guard on.
-- The pieces are public in `headgate.security`, for a transport of your own: `AddressGuard(resolver, check=...)`
-  resolves a host and refuses it unless every address passes; `forbidden_reason(address)`, the default check, says why
-  an address is refused (`"loopback"`, `"site-local"`, ...) or returns `None`; `PinnedHTTPTransport` is the pinned
-  default transport. `Resolver` and `AddressCheck` are the types of the two functions.
+- `SecurityOptions(check=...)` replaces the judgment of each address, a function of the address as text returning why
+  it is refused, or `None` to admit it; one of your own is accepted only with the guard on. Every hop, over every
+  transport, is judged by it. The default is `headgate.security.forbidden_reason` itself, which says why an address is
+  refused (`"loopback"`, `"site-local"`, ...), so a check can decide a few addresses and defer to it for the rest, such
+  as a test that reaches a loopback server:
+
+  ```python
+  from headgate import HttpOptions, SecurityOptions
+  from headgate.security import forbidden_reason
+
+
+  def loopback_too(address: str) -> str | None:
+      return None if address == "127.0.0.1" else forbidden_reason(address)
+
+
+  http = HttpOptions(security=SecurityOptions(block_private_hosts=True, check=loopback_too))
+  ```
+
+  `Resolver` and `AddressCheck`, in `headgate.security`, are the types of the two functions.
 
 ## Paths built from values
 

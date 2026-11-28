@@ -106,5 +106,5 @@ pauses the budget is reported once more on its own call, with reason `pushback`.
 
 ## Turning it off
 
-A client built inside `headgate.policy.policy_disabled()` paces at an effectively unlimited rate with no concurrency
+A client built inside `headgate.testing.policy_disabled()` paces at an effectively unlimited rate with no concurrency
 cap and no throttling, whatever it was given, a shared budget included. See [testing](testing.md#switching-the-policy-off).

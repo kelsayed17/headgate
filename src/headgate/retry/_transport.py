@@ -56,8 +56,8 @@ from headgate._core import (
     RetryScheduled,
     Sleep,
     Timing,
-    timing_override,
 )
+from headgate.retry._budget import RetryLedger
 from headgate.retry._classify import Attempted, Verdict, classify, nothing_sent
 from headgate.retry._policy import (
     NETWORK_ERRORS,
@@ -68,6 +68,8 @@ from headgate.retry._policy import (
     RetryOutcome,
     RetryShare,
     is_keyed,
+    ledger_of,
+    wait_after,
 )
 
 if TYPE_CHECKING:
@@ -192,11 +194,11 @@ class _Sequence:
         policy: RetryPolicy,
         *,
         via: _Via,
-        budget: RetryBudget | None,
+        budget: RetryLedger | None,
     ) -> None:
         """Prepare to send *request*, whose call is *context*, under *policy*, *via* the layer below.
 
-        *budget* is the retry budget the call spends, if the policy has one.
+        *budget* is the ledger of the retry budget the call spends, if the policy has one.
         """
         self._transport = via.transport
         self._sleep = via.sleep
@@ -380,7 +382,7 @@ class _Sequence:
         # The backoff grows with the retries made, not with the sends: a hedge is no retry.
         asked = attempt.verdict.retry_after
         # Draw only for a backoff, so a seeded source replays the same waits whatever the server asks.
-        delay = self._policy.wait_after(asked, self._retries + 1, 1.0 if asked is not None else self._random())
+        delay = wait_after(self._policy, asked, self._retries + 1, 1.0 if asked is not None else self._random())
         if (note := self._unaffordable(delay)) is not None:
             return _Decision(note=note)
         return _Decision(delay=delay)
@@ -523,8 +525,8 @@ class RetryTransport(httpx2.AsyncBaseTransport):
     """Re-send a request when its policy says it is safe and worthwhile, and close what it wraps.
 
     See the module docstring for the sequence it runs. A policy's :class:`~headgate.retry.RetryShare` is spent from a
-    :class:`~headgate.retry.RetryBudget` this transport keeps, one per distinct share, shared by every call through it
-    (one client and its views and routes); a policy's own ``RetryBudget`` is spent as it is, shared with whoever else
+    ledger this transport keeps, one per distinct share, shared by every call through it (one client and its views and
+    routes); a policy's own :class:`~headgate.retry.RetryBudget` is spent through its ledger, shared with whoever else
     holds it.
     """
 
@@ -540,17 +542,17 @@ class RetryTransport(httpx2.AsyncBaseTransport):
         self._via = _Via(transport, timing.sleep, timing.random, timing.wall_clock)
         self.policy = policy
         self._timing = timing
-        self._budgets: dict[RetryShare, RetryBudget] = {}
+        self._budgets: dict[RetryShare, RetryLedger] = {}
 
-    def _budget(self, budget: RetryShare | RetryBudget | None) -> RetryBudget | None:
-        """Return the budget a policy's *budget* names: a shared one as it is, this client's for a share; or none."""
-        if budget is None or isinstance(budget, RetryBudget):
-            return budget
+    def _budget(self, budget: RetryShare | RetryBudget | None) -> RetryLedger | None:
+        """Return the ledger a policy's *budget* spends: a shared budget's, this client's for a share; or none."""
+        if budget is None:
+            return None
+        if isinstance(budget, RetryBudget):
+            return ledger_of(budget)
         own = self._budgets.get(budget)
         if own is None:
-            # A budget reads the current timing when it is built: this one is built on the client's.
-            with timing_override(self._timing):
-                own = self._budgets[budget] = RetryBudget(budget)
+            own = self._budgets[budget] = RetryLedger(budget, self._timing.clock)
         return own
 
     @override

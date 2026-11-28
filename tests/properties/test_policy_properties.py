@@ -15,6 +15,7 @@ from headgate import Expect, RetryPolicy, nothing
 from headgate._codec import drop_none
 from headgate._core import retry_after_of
 from headgate.retry import Backoff
+from headgate.retry._policy import wait_after
 
 #: The longest a backoff wait may be: the default ``Backoff.max_wait``.
 _MAX_WAIT = 5.0
@@ -46,7 +47,7 @@ def test_a_retry_wait_is_finite_non_negative_and_capped_unless_the_server_asked(
     response = httpx2.Response(httpx2.codes.SERVICE_UNAVAILABLE, headers=headers)
 
     asked = retry_after_of(response)
-    wait = policy.wait_after(asked, retry, jitter)
+    wait = wait_after(policy, asked, retry, jitter)
 
     assert math.isfinite(wait)
     assert wait >= 0

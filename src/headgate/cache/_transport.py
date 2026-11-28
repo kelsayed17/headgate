@@ -30,10 +30,11 @@ a miss (answered by the network, stored or not), a degraded fetch, or a download
 
 **Faults.** A storage fault never fails a request that would otherwise succeed. Every call into the storage, and every
 body it streams, goes through a guard that raises any backend failure as :class:`CacheStorageError`; the transport
-counts it (:func:`headgate.health.cache_degradations`), redoes the request on the live transport, and marks the response
-with :data:`CACHE_DEGRADED_EXT`. Anything else raised inside hishel is a bug, not an outage, and propagates. A backend's
-own message can carry its DSN, password included, so nothing a caller can see repeats it: the degraded marker and
-every error raised past this layer name only the backend exception's type.
+reports it on the call (a ``CacheChecked`` with outcome ``DEGRADED``), redoes the request on the live transport, and
+marks the response with :data:`CACHE_DEGRADED_EXT`. A fault writing a miss the call already accepted is dropped and
+reported on that call with outcome ``UNSTORED``. Anything else raised inside hishel is a bug, not an outage, and
+propagates. A backend's own message can carry its DSN, password included, so nothing a caller can see repeats it: the
+degraded marker and every error raised past this layer name only the backend exception's type.
 
 **Outcomes that say nothing about the host.** Two things this layer hands up did not come from this request's own
 attempt on the network: a response or network failure another identical GET fetched (see
@@ -46,8 +47,8 @@ import asyncio
 import contextlib
 import dataclasses
 import enum
+import functools
 import uuid
-from collections import Counter
 from collections.abc import Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -58,9 +59,8 @@ from hishel import AsyncBaseStorage, Entry, Request, Response
 from hishel.httpx2 import AsyncCacheTransport
 
 from headgate._core import CacheChecked, CacheOutcome, CallContext, Slot, url_path
-from headgate.breaker._registry import DEFAULT_MAX_HOSTS
 from headgate.cache._credentials import CredentialScope
-from headgate.cache._policy import Partition
+from headgate.cache._policy import Partition, caches_request, stores_status
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
 
 if TYPE_CHECKING:
@@ -71,7 +71,6 @@ if TYPE_CHECKING:
     from headgate.cache._policy import HttpCache
 
 __all__ = [
-    "CACHE_DEGRADATIONS",
     "CACHE_DEGRADED_EXT",
     "HAS_BODY",
     "HOST_UNTESTED",
@@ -302,27 +301,29 @@ class _Store:
     """Write a deferred entry with its body, once, the first time a call accepts the response (:func:`store_accepted`).
 
     Shared by every copy of the response, a download's waiting requests included, so it is written at most once. A
-    storage fault while writing, or a write still running when the accepting call's deadline passes, is counted as a
-    degradation and dropped: the call already has its answer.
+    storage fault while writing, or a write still running when the accepting call's deadline passes, is reported on
+    that call as unstored and dropped: the call already has its answer.
     """
 
-    def __init__(self, backend: AsyncBaseStorage, deferred: _Deferred, body: bytes, host: str) -> None:
-        """Hold *deferred* and its whole *body*, to write to *backend*; *host* is counted on a fault."""
+    def __init__(self, backend: AsyncBaseStorage, deferred: _Deferred, body: bytes) -> None:
+        """Hold *deferred* and its whole *body*, to write to *backend*."""
         self._backend = backend
         self._deferred = deferred
         self._body = body
-        self._host = host
         self._written = False
 
-    async def __call__(self, time_left: float | None) -> None:
-        """Write the entry within *time_left* seconds (no bound for ``None``), unless it was written already."""
+    async def __call__(self, context: CallContext | None) -> None:
+        """Write the entry by the deadline of the accepting call *context*, unless it was written already.
+
+        *context* is ``None`` for a response no client call sent, whose write has no deadline and no call to report on.
+        """
         if self._written:
             return
         self._written = True
         entry, body = self._deferred.entry, self._body
         response = dataclasses.replace(entry.response, stream=_one_chunk(body))
         try:
-            async with asyncio.timeout(time_left):
+            async with asyncio.timeout(None if context is None else context.remaining()):
                 with _storage_faults():
                     stored = await self._backend.create_entry(
                         entry.request, response, self._deferred.key, ttl=self._deferred.ttl, tti=self._deferred.tti
@@ -331,7 +332,8 @@ class _Store:
                 async for _ in _guarded_chunks(stored.response.stream):
                     pass
         except CacheStorageError, TimeoutError:
-            _count_degradation(self._host)
+            if context is not None:
+                _report_on(context, CacheOutcome.UNSTORED)
 
 
 async def _one_chunk(body: bytes) -> AsyncIterator[bytes]:
@@ -347,7 +349,7 @@ async def store_accepted(response: httpx2.Response) -> None:
     """Store the cache miss *response* answers, now that the call accepted it; do nothing for any other response.
 
     The write is bounded by the time left before the accepting call's deadline, read from the request *response*
-    answers when it has one.
+    answers when it has one, and a fault writing it is reported on that call.
     """
     store = response.extensions.get(CACHE_STORE)
     if isinstance(store, _Store):
@@ -355,7 +357,7 @@ async def store_accepted(response: httpx2.Response) -> None:
             context = CallContext.find(response.request)
         except RuntimeError:  # A response no client sent carries no request.
             context = None
-        await store(None if context is None else context.remaining())
+        await store(context)
 
 
 #: Marks a call opened as a stream, which this layer hands up as it arrives: never read ahead, shared or stored.
@@ -386,19 +388,6 @@ CACHE_DEGRADED_EXT = "headgate.cache_degraded"
 #: The response extension, and the exception attribute, marking an outcome this request's own network attempt did not
 #: produce, so the circuit breaker must not record it. See :func:`host_untested`.
 HOST_UNTESTED = "headgate.host_untested"
-
-#: How many requests per host found the cache broken and were redone on the live transport, since process start.
-#: Process-global like the breaker registry, read through :func:`headgate.health.cache_degradations`, and bounded as
-#: it is: it holds at most ``DEFAULT_MAX_HOSTS`` hosts, ordered by when each last degraded, and drops the least
-#: recently degraded one to make room.
-CACHE_DEGRADATIONS: Counter[str] = Counter()
-
-
-def _count_degradation(host: str) -> None:
-    """Count one degradation for *host*, now the most recent, and drop the least recent host past the bound."""
-    CACHE_DEGRADATIONS[host] = CACHE_DEGRADATIONS.pop(host, 0) + 1
-    if len(CACHE_DEGRADATIONS) > DEFAULT_MAX_HOSTS:
-        del CACHE_DEGRADATIONS[next(iter(CACHE_DEGRADATIONS))]
 
 
 def host_untested(outcome: httpx2.Response | BaseException) -> bool:
@@ -619,7 +608,13 @@ class _InFlight:
 def _report(request: httpx2.Request, outcome: CacheOutcome) -> None:
     """Emit a :class:`~headgate._core.CacheChecked` with *outcome* on *request*'s call, when anyone is listening."""
     context = CallContext.find(request)
-    if context is not None and context.observed:
+    if context is not None:
+        _report_on(context, outcome)
+
+
+def _report_on(context: CallContext, outcome: CacheOutcome) -> None:
+    """Emit a :class:`~headgate._core.CacheChecked` with *outcome* on the call *context*, when anyone is listening."""
+    if context.observed:
         context.emit(CacheChecked(call=context.info, outcome=outcome))
 
 
@@ -718,7 +713,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
         Without a *scope*, requests are viewed as a client with no auth would send them.
         """
         shared = cache.partition is Partition.SHARED
-        storage = _GuardedStorage(cache.storage, stores=cache.stores_status, shared=shared)
+        storage = _GuardedStorage(cache.storage, stores=functools.partial(stores_status, cache), shared=shared)
         super().__init__(_RestoreRequest(next_transport), storage=storage)
         self._cache = cache
         self._backend = cache.storage
@@ -738,7 +733,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
         # A Range asks for part of a body, which no stored whole one answers and whose 206 is never stored.
         if (
             uncached
-            or not self._cache.caches_request(request.method, url_path(request.url))
+            or not caches_request(self._cache, request.method, url_path(request.url))
             or "range" in request.headers
         ):
             # Neither looked up nor stored, so nothing here needs its body: it goes up as it arrives.
@@ -802,8 +797,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
             return fetched
         # Outside the except block, so a live fetch that fails too does not carry the storage error (whose cause may
         # name a DSN and its password) as its __context__.
-        # Counted before the live fetch, so a fallback that then fails on the network too cannot hide the outage.
-        _count_degradation(request.url.host)
+        # Reported before the live fetch, so a fallback that then fails on the network too cannot hide the outage.
         _report(request, CacheOutcome.DEGRADED)
         live = await self._live.handle_async_request(request)
         # The query is dropped, since a key-in-the-URL provider carries its credential there.
@@ -850,6 +844,6 @@ class ResilientCacheTransport(AsyncCacheTransport):
             request.headers = call.headers
             _CALL.reset(token)
         if call.deferred is not None and body is not None:
-            store = _Store(self._backend, call.deferred, body, call.url.host)
+            store = _Store(self._backend, call.deferred, body)
             held.extensions = {**held.extensions, CACHE_STORE: store}
         return held, body

@@ -16,6 +16,7 @@ from headgate._core import SendProgress
 from headgate.retry import RetryBudget, RetryShare
 from headgate.retry._budget import RetryLedger
 from headgate.retry._classify import Attempted, classify, refused_stream
+from headgate.retry._policy import ledger_of
 from headgate.testing import TestClock
 from headgate.timing import Timing
 from tests.support.timing import built_on
@@ -80,11 +81,11 @@ def test_a_shared_budget_measures_its_window_on_its_own_timing() -> None:
     """Slide a live budget's window on the timing it was built with, whichever client spends it."""
     own = TestClock()
     budget = built_on(Timing(clock=own), lambda: RetryBudget(RetryShare(ratio=0.0, min_per_second=0.1, window=_WINDOW)))
-    assert budget.try_spend() is True
-    assert budget.try_spend() is False
+    assert ledger_of(budget).try_spend() is True
+    assert ledger_of(budget).try_spend() is False
 
     own.advance(_WINDOW * 2)
-    assert budget.try_spend() is True
+    assert ledger_of(budget).try_spend() is True
 
 
 # --- classify ---

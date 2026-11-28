@@ -16,20 +16,19 @@ layer concluded about the call's last attempt, which the client folds into the e
 
 import math
 import sys
-import threading
 import weakref
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final, final, override
+from typing import TYPE_CHECKING, Final, Self, final, override
 
 import httpx2
 
-from headgate._core import Slot, check_collection, check_kind, check_names, current_timing
+from headgate._core import Slot, check_collection, check_kind, check_names, current_timing, refuse_subclass
 from headgate.retry._budget import RetryLedger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from headgate._core import CallContext, Clock
+    from headgate._core import CallContext
 
 __all__ = [
     "IDEMPOTENCY_HEADER",
@@ -48,8 +47,10 @@ __all__ = [
     "RetryOutcome",
     "RetryPolicy",
     "RetryShare",
-    "clock_of",
+    "backoff_delay",
     "is_keyed",
+    "ledger_of",
+    "wait_after",
 ]
 
 #: The idempotent methods the client sends, re-sent after any retryable failure: the ones RFC 9110 defines as
@@ -104,6 +105,7 @@ def _check_positive(name: str, value: float) -> None:
         raise ValueError(msg)
 
 
+@final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Backoff:
     """Exponential backoff with full jitter: the wait before retry *n* is ``factor · 2^n`` times a uniform draw.
@@ -120,16 +122,10 @@ class Backoff:
         _check_non_negative("factor", self.factor)
         _check_non_negative("max_wait", self.max_wait)
 
-    def delay(self, retry: int, draw: float) -> float:
-        """Return the wait before retry number *retry* (from 1): the exponential times *draw*, capped at ``max_wait``.
-
-        *draw* is a uniform draw in ``[0, 1)``, the jitter.
-        """
-        exponent = min(retry, _MAX_BACKOFF_EXPONENT)
-        # A large factor times 2^1023 overflows to infinity, and infinity times a zero draw is NaN; the largest finite
-        # float keeps the product finite while leaving every value that does not overflow exactly as it was.
-        nominal = min(self.factor * (2.0**exponent), sys.float_info.max)
-        return min(nominal * draw, self.max_wait)
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a subclass: the retry layer computes the wait from the fields, and would call no override."""
+        del kwargs
+        refuse_subclass(cls, Backoff, "set factor and max_wait instead; the wait is factor * 2^retry times the jitter")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -168,47 +164,37 @@ class RetryBudget:
     built from a :class:`~headgate.Rate`. Two clients whose policies name the same ``RetryBudget`` spend one window
     together: once the first has spent it, the second's retries are refused too. The window runs on the clock of the
     timing current when the budget is built (:func:`headgate.timing.current_timing`). Its ``repr`` shows the share and
-    what the window holds now.
+    what the window holds now; what spends from it is the retry layer's own.
 
     :raises TypeError: for a *share* that is not a :class:`RetryShare`, and, as Python's own, for the old keywords
         (``RetryBudget(ratio=0.1)`` is now ``RetryBudget(RetryShare(ratio=0.1))``).
     """
 
-    __slots__ = ("__weakref__", "_ledger", "_lock", "_share")
+    __slots__ = ("__weakref__", "_ledger", "_share")
 
     def __init__(self, share: RetryShare = _DEFAULT_SHARE) -> None:
         """Spend *share* over its window, on the current timing's clock."""
         check_kind("share", share, RetryShare, "a RetryShare, such as RetryShare(ratio=0.1)")
         self._share = share
-        clock = current_timing().clock
-        self._ledger = RetryLedger(share, clock)
-        _CLOCKS[self] = clock
-        self._lock = threading.Lock()
+        self._ledger = _LEDGERS[self] = RetryLedger(share, current_timing().clock)
 
     @property
     def share(self) -> RetryShare:
         """The share this budget spends."""
         return self._share
 
-    def record_first(self) -> None:
-        """Count a first attempt, which earns retries their share."""
-        with self._lock:
-            self._ledger.record_first()
+    def __copy__(self) -> Self:
+        """Return this budget itself: a copy of a shared handle is the handle, so its holders share it."""
+        return self
 
-    def try_spend(self) -> bool:
-        """Count a retry and return ``True`` if the window has room for it, else count nothing and return ``False``."""
-        with self._lock:
-            return self._ledger.try_spend()
-
-    def refund(self) -> None:
-        """Take back a retry :meth:`try_spend` counted but never sent."""
-        with self._lock:
-            self._ledger.refund()
+    def __deepcopy__(self, memo: dict[int, object]) -> Self:
+        """Return this budget itself, as :meth:`__copy__` does, so a deep copy of a policy keeps sharing it."""
+        del memo
+        return self
 
     @override
     def __repr__(self) -> str:
-        with self._lock:
-            retries, firsts = self._ledger.counts()
+        retries, firsts = self._ledger.counts()
         return f"RetryBudget({self._share!r}, retries={retries}, firsts={firsts})"
 
 
@@ -231,6 +217,7 @@ class Hedge:
             raise ValueError(msg)
 
 
+@final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RetryPolicy:
     """How a call is re-sent: which failures, how many sends, how long apart, and within what budget.
@@ -284,14 +271,37 @@ class RetryPolicy:
             msg = f"a hedge may not be configured for non-idempotent methods ({', '.join(sorted(unsafe))})"
             raise ValueError(msg)
 
-    def wait_after(self, retry_after: float | None, retry: int, draw: float) -> float:
-        """Return how long to wait before retry number *retry* (from 1), after a failure that asked for *retry_after*.
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a subclass: the retry layer reads the fields, and would call no override."""
+        del kwargs
+        refuse_subclass(
+            cls,
+            RetryPolicy,
+            "set attempts, methods, statuses, backoff, max_retry_after, budget, respect_should_retry, hedge and "
+            "min_attempt_time instead",
+        )
 
-        *retry_after* is the delay the failed response's ``retry-after-ms`` or ``Retry-After`` asked for, as the
-        attempt's classification read it, or ``None``. It is waited exactly and uncapped (the retry layer refuses one
-        past :attr:`max_retry_after` instead of waiting it); without one, the wait is :meth:`Backoff.delay` of *draw*.
-        """
-        return self.backoff.delay(retry, draw) if retry_after is None else retry_after
+
+def backoff_delay(backoff: Backoff, retry: int, draw: float) -> float:
+    """Return *backoff*'s wait before retry number *retry* (from 1): the exponential times *draw*, capped.
+
+    *draw* is a uniform draw in ``[0, 1)``, the jitter; the cap is ``backoff.max_wait``.
+    """
+    exponent = min(retry, _MAX_BACKOFF_EXPONENT)
+    # A large factor times 2^1023 overflows to infinity, and infinity times a zero draw is NaN; the largest finite
+    # float keeps the product finite while leaving every value that does not overflow exactly as it was.
+    nominal = min(backoff.factor * (2.0**exponent), sys.float_info.max)
+    return min(nominal * draw, backoff.max_wait)
+
+
+def wait_after(policy: RetryPolicy, retry_after: float | None, retry: int, draw: float) -> float:
+    """Return how long *policy* waits before retry number *retry* (from 1), after a failure that asked *retry_after*.
+
+    *retry_after* is the delay the failed response's ``retry-after-ms`` or ``Retry-After`` asked for, as the
+    attempt's classification read it, or ``None``. It is waited exactly and uncapped (the retry layer refuses one past
+    ``policy.max_retry_after`` instead of waiting it); without one, the wait is :func:`backoff_delay` of *draw*.
+    """
+    return backoff_delay(policy.backoff, retry, draw) if retry_after is None else retry_after
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,10 +352,10 @@ REPLAYABLE_BODY = Slot[bool]("replayable_body")
 RETRY_OUTCOME = Slot[RetryOutcome]("retry_outcome")
 
 
-#: The clock each retry budget measures its window on, read without reaching into the budget.
-_CLOCKS: Final[weakref.WeakKeyDictionary[RetryBudget, Clock]] = weakref.WeakKeyDictionary()
+#: Each live budget's ledger. Weak, so a budget nobody holds any more goes with its ledger.
+_LEDGERS: Final[weakref.WeakKeyDictionary[RetryBudget, RetryLedger]] = weakref.WeakKeyDictionary()
 
 
-def clock_of(budget: RetryBudget) -> Clock:
-    """Return the clock *budget* measures its window on: the timing's current when it was built."""
-    return _CLOCKS[budget]
+def ledger_of(budget: RetryBudget) -> RetryLedger:
+    """Return the ledger *budget* spends through, with the clock its window runs on."""
+    return _LEDGERS[budget]

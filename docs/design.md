@@ -37,13 +37,13 @@ src/headgate/
   _health.py, _msgspec.py, _otel.py, _pydantic.py: what headgate.health, .msgspec, .otel and .pydantic export
   _core/             shared seams only: time, origins, CallContext, events, the policy switch
   retry/             RetryPolicy and its values, RetryTransport, send tracking, the budget ledger
-  breaker/           BreakerPolicy, BreakerRegistry, CircuitBreaker
+  breaker/           BreakerPolicy, BreakerRegistry, the per-origin breakers it holds
   ratelimit/         Rate, RateBudget, Adaptive, RateLimitTransport, server feedback
   cache/             HttpCache, partitions, the resilient cache transport, conditional reads
   security/          the credential guard, the https-downgrade refusal, the SSRF guard
   streaming/         Stream
   pagination/        Pager, its strategies, Paginated
-  errors.py, events.py, health.py, policy.py, otel.py, curl.py, msgspec.py, pydantic.py, testing/
+  errors.py, events.py, health.py, otel.py, curl.py, msgspec.py, pydantic.py, testing/
 ```
 
 `retry`, `breaker` and `ratelimit` may import only the standard library, `httpx2`, their own subpackage and

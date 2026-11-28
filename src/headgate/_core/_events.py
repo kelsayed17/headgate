@@ -80,7 +80,10 @@ class CacheOutcome(StrEnum):
     * ``HIT``: a stored response answered it;
     * ``MISS``: it went to the network (and its response may have been stored);
     * ``COALESCED``: it waited on an identical request's download and got a copy of its response, or its failure;
-    * ``DEGRADED``: the storage failed, so it went to the network uncached.
+    * ``DEGRADED``: the storage failed when the request was looked up, so it went to the network uncached;
+    * ``UNSTORED``: the call accepted the network's answer, but it could not be stored: the storage failed while
+      writing it, or the write outlasted the call's deadline. Reported after the call's ``MISS``, or its ``COALESCED``
+      when it waited on the download and was the first to accept it, since an entry is written once.
 
     The cache is TTL-only and never revalidates an entry with the origin, so there is no revalidated outcome.
     """
@@ -89,6 +92,7 @@ class CacheOutcome(StrEnum):
     MISS = "miss"
     COALESCED = "coalesced"
     DEGRADED = "degraded"
+    UNSTORED = "unstored"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -141,7 +145,7 @@ class RateLimited(CallEvent):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CacheChecked(CallEvent):
-    """The HTTP cache checked the call: ``outcome`` says what it did."""
+    """The HTTP cache checked the call, or could not store its answer: ``outcome`` says which, and what it did."""
 
     outcome: CacheOutcome
 
@@ -210,7 +214,8 @@ class Observer(Protocol):
         ...
 
 
-#: How many times each observer class raised from ``notify``, since process start.
+#: How many times each observer class raised from ``notify``, since process start, keyed by its module and qualified
+#: name (``"myapp.metrics.Exporter"``), so two classes of one name in different modules are counted apart.
 #: Unbounded, since its keys are observer classes, which a program defines a fixed few of, not hosts it is handed.
 OBSERVER_FAILURES: Counter[str] = Counter()
 
@@ -239,7 +244,8 @@ class Emitter:
                 observer.notify(event)
                 delivered = True
             if not delivered:
-                OBSERVER_FAILURES[type(observer).__qualname__] += 1
+                kind = type(observer)
+                OBSERVER_FAILURES[f"{kind.__module__}.{kind.__qualname__}"] += 1
 
 
 #: The emitter of a client with no observers.

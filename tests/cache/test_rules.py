@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""What an :class:`~headgate.HttpCache` keeps: :meth:`caches_request` and :meth:`stores_status`.
+"""What an :class:`~headgate.HttpCache` keeps, as the stack's ``caches_request`` and ``stores_status`` decide it.
 
 Each rule reads only the method, the URL path or the status, never the body or a credential.
 """
@@ -16,6 +16,7 @@ import pytest
 
 from headgate import HttpCache
 from headgate.cache import Partition
+from headgate.cache._policy import caches_request, stores_status
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -25,7 +26,16 @@ if TYPE_CHECKING:
 
 def _keeps(cache: HttpCache, method: str, path: str, status: int) -> bool:
     """Return whether *cache* stores the answer *status* to *method* on *path*."""
-    return cache.caches_request(method, path) and cache.stores_status(status)
+    return caches_request(cache, method, path) and stores_status(cache, status)
+
+
+def test_a_cache_is_read_by_its_fields(storage: AsyncSqliteStorage) -> None:
+    """Show what a cache keeps in ``methods``, ``paths`` and ``statuses``: the predicates over them are the stack's."""
+    cache = HttpCache(storage=storage, paths=["series"])
+
+    assert not hasattr(HttpCache, "caches_request")
+    assert not hasattr(HttpCache, "stores_status")
+    assert (cache.methods, cache.paths, cache.statuses) == (frozenset({"GET"}), ("series",), frozenset({200}))
 
 
 async def test_a_cache_stores_the_200s_of_every_get_by_default(storage: AsyncSqliteStorage) -> None:
@@ -74,9 +84,9 @@ async def test_a_cache_stores_the_paths_its_patterns_match(storage: AsyncSqliteS
     """Store a path a pattern matches, even inside a segment, beside the whole-segment fragments; keep it as given."""
     archive = re.compile(r"/fut_fin_txt_\d{4}\.zip$")
     cache = HttpCache(storage=storage, paths=[archive, "series"])
-    assert cache.caches_request("GET", "/history/fut_fin_txt_2019.zip")
-    assert cache.caches_request("GET", "/v1/series/GDP")
-    assert not cache.caches_request("GET", "/history/fut_fin_txt_2019.txt")
+    assert caches_request(cache, "GET", "/history/fut_fin_txt_2019.zip")
+    assert caches_request(cache, "GET", "/v1/series/GDP")
+    assert not caches_request(cache, "GET", "/history/fut_fin_txt_2019.txt")
     assert cache.paths == (archive, "series")
 
 

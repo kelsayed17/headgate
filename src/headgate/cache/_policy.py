@@ -5,10 +5,10 @@
 
 hishel 2 caches every successful GET and HEAD it is handed, whatever the response's cache headers say. headgate
 decides before and after it: a request whose method or path :class:`HttpCache` does not name never reaches hishel
-(:meth:`HttpCache.caches_request`), and a response whose status it does not name is never stored
-(:meth:`HttpCache.stores_status`). So a cache **stores whenever the request matches and an allowed status comes back,
-even past an RFC 9111** ``no-store``. That is the point for a provider that sends ``no-store`` or no cache headers at
-all, where an RFC 9111 cache would keep nothing. Store only the 200s (the default) so an error body never poisons the
+(:func:`caches_request`), and a response whose status it does not name is never stored (:func:`stores_status`). So
+a cache **stores whenever the request matches and an allowed status comes back, even past an RFC 9111** ``no-store``.
+That is the point for a provider that sends ``no-store`` or no cache headers at all, where an RFC 9111 cache would keep
+nothing. Store only the 200s (the default) so an error body never poisons the
 cache. The rules read only the method and the URL path, never a credential. ``methods`` names only GET and HEAD,
 which a URL keys: a POST is never cached.
 
@@ -21,15 +21,15 @@ import math
 import re
 from collections.abc import Collection
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, final
 from urllib.parse import unquote
 
 import httpx2
 from hishel import AsyncBaseStorage
 
-from headgate._core import check_collection, check_fragment, check_names, path_has_fragment
+from headgate._core import check_collection, check_fragment, check_names, path_has_fragment, refuse_subclass
 
-__all__ = ["HttpCache", "Partition"]
+__all__ = ["HttpCache", "Partition", "caches_request", "stores_status"]
 
 #: The methods ``HttpCache(methods=...)`` may name: those a URL identifies, since the URL is the cache key.
 _URL_KEYED_METHODS: Final = frozenset({"GET", "HEAD"})
@@ -59,6 +59,7 @@ class Partition(enum.StrEnum):
     """
 
 
+@final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class HttpCache:
     """A client's opt-in HTTP response cache: what to keep, where, for how long, and whose it is.
@@ -72,8 +73,7 @@ class HttpCache:
     ``statuses`` (200 by default). A string in ``paths`` is one or more whole segments, matched as
     :class:`~headgate.Route` matches; a compiled pattern is searched for in the path, for what segments cannot say,
     such as a file name's prefix or extension. An empty collection, which would store nothing, is refused:
-    ``cache=None`` is a client without a cache. :meth:`caches_request` and :meth:`stores_status` say what the three
-    decide.
+    ``cache=None`` is a client without a cache.
 
     :raises TypeError: for a ``methods``, ``paths`` or ``statuses`` that is not a collection: a bare ``str`` (read one
         letter at a time), a number or a one-shot iterator.
@@ -127,22 +127,28 @@ class HttpCache:
             raise ValueError(msg)
         object.__setattr__(self, "statuses", statuses)
 
-    def caches_request(self, method: str, path: str) -> bool:
-        """Return whether a request with *method* (in any case) and the URL path *path* goes through the cache.
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a subclass: the cache reads the rules from the fields, and would call no override."""
+        del kwargs
+        refuse_subclass(cls, HttpCache, "set methods, paths and statuses instead, which are all the cache reads")
 
-        *path* is the path as sent, percent-encoded (:func:`~headgate._core.url_path`): a fragment is matched segment by
-        segment, so an escaped ``/`` stays in its segment, and a pattern is searched in the decoded path, as written.
 
-        ``paths`` left ``None`` matches any path. Any other request is sent past
-        the cache: never looked up, never stored.
-        """
-        if method.upper() not in self.methods:
-            return False
-        return self.paths is None or any(_matches(path, rule) for rule in self.paths)
+def caches_request(cache: HttpCache, method: str, path: str) -> bool:
+    """Return whether a request with *method* (in any case) and the URL path *path* goes through *cache*.
 
-    def stores_status(self, status: int) -> bool:
-        """Return whether a response with *status* may be stored: one in ``statuses``."""
-        return status in self.statuses
+    *path* is the path as sent, percent-encoded (:func:`~headgate._core.url_path`): a fragment is matched segment by
+    segment, so an escaped ``/`` stays in its segment, and a pattern is searched in the decoded path, as written.
+
+    ``paths`` left ``None`` matches any path. Any other request is sent past the cache: never looked up, never stored.
+    """
+    if method.upper() not in cache.methods:
+        return False
+    return cache.paths is None or any(_matches(path, rule) for rule in cache.paths)
+
+
+def stores_status(cache: HttpCache, status: int) -> bool:
+    """Return whether a response with *status* may be stored by *cache*: one in its ``statuses``."""
+    return status in cache.statuses
 
 
 def _refuse_none(option: str, value: object, example: str, default: str) -> None:

@@ -75,9 +75,13 @@ so it is not refused by a breaker a client sharing one opened.
 Every transition a call causes is a `BreakerChanged` event (origin, previous and new state, failure count, and the
 call); a state is a `BreakerState`, a string enum of `closed`, `open` and `half_open`.
 `headgate.health.breaker_states(registry)` returns a snapshot per origin of the registry you pass (the one your clients
-share), with `refusing` alongside `state`: an open breaker whose cooldown has elapsed still reads open until a call
-takes the probe, so `refusing` is what says whether a call made now would be turned away. See
-[observability](observability.md).
+share), with `refusing` and `failures` alongside `state`: an open breaker whose cooldown has elapsed still reads open
+until a call takes the probe, so `refusing` is what says whether a call made now would be turned away, and `failures`
+counts the consecutive failures since the last success, a failed probe included. It is the one reader of a
+registry's breakers, which a registry itself does not hand out. Each key is the origin in canonical form,
+`scheme://host[:port]`, with the host lower-cased and the scheme's default port left out, so a client on
+`https://API.example:443/v1` is under `"https://api.example"`; an origin no client has called yet is absent, so read
+one with `breaker_states(registry).get("https://api.example")`. See [observability](observability.md).
 
 In tests, no breaker state crosses between tests, since each client keeps its own;
 `headgate.testing.breakers_of(client)` returns the registry a client's breakers live in. See [testing](testing.md).

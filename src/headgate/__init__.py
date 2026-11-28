@@ -8,7 +8,8 @@ Built on ``httpx2``; Python 3.14 or newer. An SDK holds a :class:`Client`, confi
 ``headgate.msgspec``, ``headgate.pydantic``, or any library as a :class:`Codec` of its own. Exported here is what a
 client is written with, and each name only here:
 
-* the client: :class:`Client`, :data:`Method`, :class:`RequestOptions`, :class:`CallOptions`, :class:`ViewOptions`;
+* the client: :class:`Client`, :data:`Method`, :data:`CallUrl` (what a verb takes as its URL),
+  :class:`RequestOptions`, :class:`CallOptions`, :class:`ViewOptions`;
 * configuration: :class:`CallPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`, :class:`Timeouts` (with
   :attr:`Timeouts.DEFAULT`), :class:`Route`, :class:`RouteOptions`, :class:`IdempotencyKeys`, :data:`ResponseCheck`;
 * middleware: :class:`Middleware`, :data:`Next` (what a middleware calls to continue) and :func:`call_view` (what it
@@ -19,7 +20,8 @@ client is written with, and each name only here:
   :data:`as_text`, :func:`body_reader`, :data:`nothing` and :data:`as_events`;
 * codecs: :class:`Codec`, and :func:`reader_for`, :func:`writer_for` and :func:`decode_with`, which build a reader, a
   writer and a decode on any codec;
-* request bodies: :data:`Body`, one of :class:`Json`, :class:`Form`, :class:`Multipart`, :class:`Raw` and a
+* request bodies: :data:`Body`, one of :class:`Json`, :class:`Form`, :class:`Multipart` (its files an
+  :data:`UploadFiles` of :data:`UploadFile` entries), :class:`Raw` (its content a :data:`RawContent`) and a
   :data:`Writer`'s :class:`EncodedBody`;
 * auth: :class:`Auth`, the one type ``auth=`` takes, and :class:`BearerAuth`, :class:`StaticHeaderAuth`,
   :class:`QueryParamAuth`, :class:`SigningAuth`, :class:`CachedTokenAuth` and :class:`Minted`;
@@ -67,7 +69,18 @@ from headgate._options import (
     SecurityOptions,
     Timeouts,
 )
-from headgate._request_body import Body, EncodedBody, Form, Json, Multipart, Raw, Writer
+from headgate._request_body import (
+    Body,
+    EncodedBody,
+    Form,
+    Json,
+    Multipart,
+    Raw,
+    RawContent,
+    UploadFile,
+    UploadFiles,
+    Writer,
+)
 from headgate._responses import (
     Expect,
     Reader,
@@ -79,6 +92,7 @@ from headgate._responses import (
     body_reader,
     nothing,
 )
+from headgate._url import CallUrl
 from headgate._view import ViewOptions
 from headgate.breaker._policy import BreakerPolicy
 from headgate.cache._policy import HttpCache
@@ -96,6 +110,7 @@ __all__ = [
     "CachedTokenAuth",
     "CallOptions",
     "CallPolicy",
+    "CallUrl",
     "Client",
     "ClientError",
     "ClientTimeoutError",
@@ -118,6 +133,7 @@ __all__ = [
     "RateBudget",
     "RateLimitError",
     "Raw",
+    "RawContent",
     "Reader",
     "RequestOptions",
     "ResponseCheck",
@@ -129,6 +145,8 @@ __all__ = [
     "StaticHeaderAuth",
     "Timeouts",
     "TransportError",
+    "UploadFile",
+    "UploadFiles",
     "UpstreamStatusError",
     "ViewOptions",
     "Writer",

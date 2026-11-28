@@ -22,14 +22,14 @@ import math
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import override
+from typing import final, override
 
 import h2.errors
 import h2.events
 import httpcore2
 import httpx2
 
-from headgate._core import CallContext, current_timing
+from headgate._core import CallContext, current_timing, refuse_subclass
 from headgate.retry._tracking import head_size
 
 __all__ = [
@@ -57,6 +57,7 @@ class PoolFull:
     """Time out waiting for a pooled connection: ``httpx2.PoolTimeout``; nothing is sent."""
 
 
+@final
 @dataclass(frozen=True, slots=True)
 class Respond:
     """Answer with ``status_code``, ``headers``, and a body: ``json`` encoded if given, else ``content``.
@@ -78,15 +79,15 @@ class Respond:
             msg = f"retry_after must be a finite, non-negative number of seconds, got {self.retry_after!r}"
             raise ValueError(msg)
 
-    def response(self) -> tuple[list[tuple[str, str]], bytes]:
-        """Return the headers and the body this step answers with."""
-        headers = list(self.headers.items())
-        if self.retry_after is not None:
-            headers.append(("Retry-After", _seconds(self.retry_after)))
-        if self.json is None:
-            return headers, self.content
-        headers.append(("Content-Type", "application/json"))
-        return headers, jsonlib.dumps(self.json).encode()
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a subclass: the fakes build the reply from the fields, and would call no override."""
+        del kwargs
+        refuse_subclass(
+            cls,
+            Respond,
+            "set status_code, headers, json, content and retry_after instead, or answer with a function in a "
+            "FakeTransport route",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,16 +210,21 @@ class FaultyTransport(httpx2.AsyncBaseTransport):
         """Answer sends with *schedule*, in order, waiting through the current timing's sleep."""
         self._schedule = list(schedule)
         self._sleep = current_timing().sleep
-        self.calls: list[FaultCall] = []
+        self._calls: list[FaultCall] = []
+
+    @property
+    def calls(self) -> tuple[FaultCall, ...]:
+        """Every send so far, in order, each with the step it took and what it sent and got."""
+        return tuple(self._calls)
 
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
-        if len(self.calls) >= len(self._schedule):
+        if len(self._calls) >= len(self._schedule):
             msg = f"FaultyTransport schedule exhausted after {len(self._schedule)} sends"
             raise AssertionError(msg)
-        step = self._schedule[len(self.calls)]
+        step = self._schedule[len(self._calls)]
         call = FaultCall(step, request.method, str(request.url), request.headers.copy())
-        self.calls.append(call)
+        self._calls.append(call)
         try:
             return await self._take(step, request, call)
         except Exception as exc:
@@ -290,9 +296,20 @@ async def _write(request: httpx2.Request, call: FaultCall, *, limit: int | None 
     return write
 
 
+def response_parts(step: Respond) -> tuple[list[tuple[str, str]], bytes]:
+    """Return the headers and the body *step* answers with, in :class:`FaultyTransport` and ``FakeTransport`` alike."""
+    headers = list(step.headers.items())
+    if step.retry_after is not None:
+        headers.append(("Retry-After", _seconds(step.retry_after)))
+    if step.json is None:
+        return headers, step.content
+    headers.append(("Content-Type", "application/json"))
+    return headers, jsonlib.dumps(step.json).encode()
+
+
 def _respond(step: Respond, request: httpx2.Request, call: FaultCall) -> httpx2.Response:
     """Return the response *step* describes, with a body that records its close in *call*."""
-    headers, content = step.response()
+    headers, content = response_parts(step)
     response = httpx2.Response(step.status_code, headers=headers, stream=_TrackedBody(content, call), request=request)
     call.response = response
     return response

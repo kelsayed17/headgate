@@ -1,8 +1,8 @@
 # Observability
 
 headgate writes no log records. A client reports what it does as **typed events** to the observers you install, its
-errors carry what a diagnosis needs (see [errors](errors.md)), and three counters of degraded state are readable on
-demand. What to record, where, and at what level is the application's decision.
+errors carry what a diagnosis needs (see [errors](errors.md)), and the state of its breakers and a count of failing
+observers are readable on demand. What to record, where, and at what level is the application's decision.
 
 ## Events
 
@@ -37,7 +37,7 @@ coroutine function: its events would be dropped. Hand slow work (a network sink)
 | `RetryScheduled` | the retry layer will send again | `attempt`, `delay`, `reason` (`"503"`, `"ConnectError"`, `"hedge"`) |
 | `RateLimited` | the rate budget held the call, or its response paused the budget | `delay`, `reason`: `paced`, `throttled`, `paused`, `pushback` |
 | `BreakerChanged` | an origin's breaker changed state | `origin`, `previous`, `state`, `failures`, `call` |
-| `CacheChecked` | the cache checked the call | `outcome`, a `CacheOutcome`: `hit`, `miss`, `coalesced`, `degraded` |
+| `CacheChecked` | the cache checked the call, or could not store its answer | `outcome`, a `CacheOutcome`: `hit`, `miss`, `coalesced`, `degraded`, `unstored` |
 | `DeprecationNoticed` | the response announced deprecation or a sunset | `deprecated`, `deprecated_at`, `sunset_at`, `link`, `sunset_link` |
 | `CallFinished` | a call ends, either way | `status_code`, `error` (the exception type's name; not that of a non-`ClientError` a `stream()` block raised itself), `attempts`, `elapsed` |
 
@@ -108,9 +108,13 @@ A `User-Agent` in `HttpOptions(headers=...)` replaces it entirely.
 
 `headgate.health` reads the state that says something is degraded, as fresh copies a metrics callback can poll:
 
-- `breaker_states(registry)`: a `BreakerSnapshot(state, refusing)` per origin, of the registry you pass. A client's
-  breakers are its own unless it is given a registry, so to watch them, build one and give it to the clients:
+- `breaker_states(registry)`: a `BreakerSnapshot` per origin, of the registry you pass, with its `state`, whether
+  it is `refusing` calls now, and its consecutive `failures` since the last success. A client's breakers are its own
+  unless it is given a registry, so to watch them, build one and give it to the clients:
   `breaker=BreakerRegistry(BreakerPolicy())`;
-- `cache_degradations()`: per host, how many requests found the cache broken and went to the network, for at most
-  the 1024 hosts most recently degraded;
-- `observer_failures()`: per observer class, how many events its `notify` raised on.
+- `observer_failures()`: per observer class, keyed by its module and qualified name (`"myapp.metrics.Exporter"`),
+  how many events its `notify` raised on, across the process, since an observer that raises cannot be told of it
+  through observers.
+
+A broken cache is not counted here: each call that found it broken reports a `CacheChecked` event with outcome
+`degraded`, or `unstored` when its answer could not be stored, which an observer counts with the call it names.

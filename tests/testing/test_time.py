@@ -30,10 +30,20 @@ from headgate import (
 )
 from headgate._core import Timing as CoreTiming
 from headgate._core import current_timing
-from headgate.breaker import BreakerRegistry, CircuitBreaker
-from headgate.policy import policy_disabled
+from headgate.breaker import BreakerRegistry
+from headgate.breaker._breaker import CircuitBreaker
+from headgate.breaker._registry import table_of
 from headgate.retry import Backoff, RetryBudget, RetryShare
-from headgate.testing import FakeTransport, FaultyTransport, Slow, TestClock, budget_for, instant_retries
+from headgate.retry._policy import ledger_of
+from headgate.testing import (
+    FakeTransport,
+    FaultyTransport,
+    Slow,
+    TestClock,
+    budget_for,
+    instant_retries,
+    policy_disabled,
+)
 from headgate.testing._time import _SETTLE_TURNS
 from headgate.timing import Timing
 
@@ -268,7 +278,7 @@ def test_what_is_built_outside_the_block_keeps_the_system_clock() -> None:
 
 def _breaker(registry: BreakerRegistry) -> CircuitBreaker:
     """Return *registry*'s breaker for the test origin, which trips after one failure and cools down for 30 s."""
-    return registry.breaker_for("https://h.test")
+    return table_of(registry).breaker_for("https://h.test")
 
 
 def _trip(registry: BreakerRegistry) -> None:
@@ -344,11 +354,11 @@ def test_a_retry_budget_built_in_the_block_slides_on_the_test_clock() -> None:
     clock = TestClock()
     with clock.install():
         budget = RetryBudget(RetryShare(ratio=0.0, min_per_second=0.1, window=10.0))
-    assert budget.try_spend()
-    assert not budget.try_spend()
+    assert ledger_of(budget).try_spend()
+    assert not ledger_of(budget).try_spend()
 
     clock.advance(20.0)
-    assert budget.try_spend()
+    assert ledger_of(budget).try_spend()
 
 
 async def test_an_errors_retry_after_date_is_read_against_the_clients_wall_clock() -> None:

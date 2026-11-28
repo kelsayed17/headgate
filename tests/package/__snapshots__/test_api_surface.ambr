@@ -2,10 +2,8 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.breaker]
   '''
   module headgate.breaker
-  __all__ = ['BreakerRegistry', 'BreakerState', 'CircuitBreaker']
+  __all__ = ['BreakerRegistry', 'BreakerState']
   class BreakerRegistry(object)(policy: 'BreakerPolicy' = BreakerPolicy(failure_threshold=5, recovery_timeout=60.0), *, max_hosts: 'int' = 1024) -> 'None'
-      def breaker_for(self, origin: 'httpx2.Origin | httpx2.URL | str') -> 'CircuitBreaker'
-      def breakers(self, origin: 'httpx2.Origin | httpx2.URL | str | None' = None) -> 'tuple[CircuitBreaker, ...]'
       def clear(self) -> 'None'
       property max_hosts
       property policy
@@ -13,14 +11,6 @@
       CLOSED = 'closed'
       OPEN = 'open'
       HALF_OPEN = 'half_open'
-  class CircuitBreaker(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0, name: 'str' = '') -> 'None'
-      property failure_count
-      property failure_threshold
-      property name
-      property recovery_timeout
-      property refusing
-      property state
-      def track(self, on_change: 'TransitionListener | None' = None) -> 'Generator[Verdict]'
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.cache]
@@ -49,7 +39,6 @@
   __all__ = ['AsyncCurlTransport']
   class AsyncCurlTransport(AsyncBaseTransport)(*, impersonate: 'BrowserTypeLiteral', default_headers: 'bool' = False, curl_options: 'Mapping[CurlOpt, Any] | None' = None, max_connections: 'int' = 10) -> 'None'
       def aclose(self) -> 'None'
-      def bind_guard(self, guard: 'AddressGuard | None', /) -> 'None'
       def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
   '''
 # ---
@@ -113,6 +102,7 @@
       MISS = 'miss'
       COALESCED = 'coalesced'
       DEGRADED = 'degraded'
+      UNSTORED = 'unstored'
   class CallEvent(object)(*, call: 'CallInfo') -> 'None'
       field call: CallInfo
   class CallFinished(CallEvent)(*, call: 'CallInfo', status_code: 'int | None' = None, error: 'str | None' = None, attempts: 'int', elapsed: 'float') -> 'None'
@@ -157,10 +147,12 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.health]
   '''
   module headgate.health
-  __all__ = ['BreakerSnapshot', 'breaker_states', 'cache_degradations', 'observer_failures']
-  class BreakerSnapshot(tuple)(state: 'BreakerState', refusing: 'bool')
+  __all__ = ['BreakerSnapshot', 'breaker_states', 'observer_failures']
+  class BreakerSnapshot(object)(*, state: 'BreakerState', refusing: 'bool', failures: 'int') -> 'None'
+      field state: BreakerState
+      field refusing: bool
+      field failures: int
   def breaker_states(registry: 'BreakerRegistry') -> 'dict[str, BreakerSnapshot]'
-  def cache_degradations() -> 'dict[str, int]'
   def observer_failures() -> 'dict[str, int]'
   '''
 # ---
@@ -193,7 +185,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.pagination]
   '''
   module headgate.pagination
-  __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageNumber', 'PageRequest', 'Pager', 'WritingPager', 'parse_link_header']
+  __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'LinkHeader', 'NextUrl', 'Offset', 'PageNumber', 'PageRequest', 'Pager', 'WritingPager']
   class BodyCursor(WritingPager, Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
       field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
@@ -225,10 +217,6 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Link(object)(target: 'str', params: 'Mapping[str, str]') -> 'None'
-      field target: str
-      field params: Mapping[str, str]
-      property rels
   class LinkHeader(Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', stop_on_empty: 'bool' = True) -> 'None'
       field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
@@ -282,14 +270,6 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Iterable[I]'
-  def parse_link_header(value: 'str') -> 'list[Link]'
-  '''
-# ---
-# name: test_the_public_surface_matches_the_snapshot[headgate.policy]
-  '''
-  module headgate.policy
-  __all__ = ['policy_disabled']
-  def policy_disabled() -> 'Generator[None]'
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.pydantic]
@@ -329,15 +309,11 @@
   class Backoff(object)(*, factor: 'float' = 0.5, max_wait: 'float' = 5.0) -> 'None'
       field factor: float = 0.5
       field max_wait: float = 5.0
-      def delay(self, retry: 'int', draw: 'float') -> 'float'
   class Hedge(object)(*, after: 'float' = 0.5, max_extra: 'int' = 1) -> 'None'
       field after: float = 0.5
       field max_extra: int = 1
   class RetryBudget(object)(share: 'RetryShare' = RetryShare(ratio=0.2, min_per_second=10.0, window=10.0)) -> 'None'
-      def record_first(self) -> 'None'
-      def refund(self) -> 'None'
       property share
-      def try_spend(self) -> 'bool'
   class RetryShare(object)(*, ratio: 'float' = 0.2, min_per_second: 'float' = 10.0, window: 'float' = 10.0) -> 'None'
       field ratio: float = 0.2
       field min_per_second: float = 10.0
@@ -347,19 +323,15 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.security]
   '''
   module headgate.security
-  __all__ = ['AddressCheck', 'AddressGuard', 'CredentialCarrier', 'CredentialStamper', 'PinnedHTTPTransport', 'Resolver', 'forbidden_reason', 'resolve_with_loop']
+  __all__ = ['AddressCheck', 'CredentialCarrier', 'CredentialStamper', 'Resolver', 'forbidden_reason']
   type AddressCheck = Callable[[str], str | None]
-  class AddressGuard(object)(resolver: 'Resolver' = <function resolve_with_loop at 0x…>, *, check: 'AddressCheck' = <function forbidden_reason at 0x…>) -> 'None'
-      def vet(self, host: 'str', port: 'int') -> 'tuple[str, ...]'
   class CredentialCarrier(Protocol)(*args, **kwargs)
       property credential_headers
       property credential_params
   class CredentialStamper(CredentialCarrier, Protocol)(*args, **kwargs)
       def credential_identity(self) -> 'bytes'
-  class PinnedHTTPTransport(AsyncHTTPTransport)(guard: 'AddressGuard', *, ssl_context: 'ssl.SSLContext | None', limits: 'httpx2.Limits') -> 'None'
   type Resolver = Callable[[str, int], Awaitable[Sequence[str]]]
   def forbidden_reason(address: 'str') -> 'str | None'
-  def resolve_with_loop(host: 'str', port: 'int') -> 'list[str]'
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.streaming]
@@ -391,7 +363,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.testing]
   '''
   module headgate.testing
-  __all__ = ['CassetteFilter', 'ConnectFail', 'DropMidBody', 'FakeTransport', 'FaultCall', 'FaultyTransport', 'PoolFull', 'RecordedRequest', 'RefusedStream', 'Reply', 'Respond', 'Slow', 'Step', 'TestClock', 'UnmatchedRequestError', 'breakers_of', 'budget_for', 'cache_of', 'check_codec', 'fake_network', 'instant_retries']
+  __all__ = ['CassetteFilter', 'ConnectFail', 'DropMidBody', 'FakeTransport', 'FaultCall', 'FaultyTransport', 'PoolFull', 'RecordedRequest', 'RefusedStream', 'Reply', 'Respond', 'Slow', 'Step', 'TestClock', 'UnmatchedRequestError', 'breakers_of', 'budget_for', 'cache_of', 'check_codec', 'fake_network', 'instant_retries', 'policy_disabled']
   class CassetteFilter(object)(*, auths: 'Iterable[CredentialCarrier]' = (), headers: 'Collection[str]' = (), params: 'Collection[str]' = (), replaying: 'bool' = False) -> 'None'
       def __call__(self, request: 'httpx2.Request', call_next: 'Next') -> 'httpx2.Response'
       def before_record_request(self, request: 'R') -> 'R | None'
@@ -418,6 +390,7 @@
       field response_closed: bool | None = None
       field error: Exception | None = None
   class FaultyTransport(AsyncBaseTransport)(*, schedule: 'list[Step]') -> 'None'
+      property calls
       def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
   class PoolFull(object)() -> 'None'
   class RecordedRequest(Protocol)(*args, **kwargs)
@@ -429,7 +402,6 @@
       field json: object = None
       field content: bytes = b''
       field retry_after: float | None = None
-      def response(self) -> 'tuple[list[tuple[str, str]], bytes]'
   class Slow(object)(seconds: 'float', then: 'Respond' = <factory>) -> 'None'
       field seconds: float
       field then: Respond = <factory>
@@ -448,6 +420,7 @@
   def check_codec(codec: 'Codec', *, record: 'TypeForm[object] | None' = None) -> 'None'
   def fake_network(transport: 'T') -> 'Generator[T]'
   def instant_retries() -> 'Generator[None]'
+  def policy_disabled() -> 'Generator[None]'
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.timing]
@@ -472,7 +445,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['Auth', 'AuthError', 'BearerAuth', 'Body', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CallPolicy', 'Client', 'ClientError', 'ClientTimeoutError', 'Codec', 'EncodedBody', 'Expect', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'Paginated', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_events', 'as_json', 'as_text', 'body_reader', 'call_view', 'decode_with', 'nothing', 'reader_for', 'writer_for']
+  __all__ = ['Auth', 'AuthError', 'BearerAuth', 'Body', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CallPolicy', 'CallUrl', 'Client', 'ClientError', 'ClientTimeoutError', 'Codec', 'EncodedBody', 'Expect', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'Paginated', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'RawContent', 'Reader', 'RequestOptions', 'ResponseCheck', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'UploadFile', 'UploadFiles', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_events', 'as_json', 'as_text', 'body_reader', 'call_view', 'decode_with', 'nothing', 'reader_for', 'writer_for']
   class Auth(Auth, ABC)()
       property credential_headers
       def credential_identity(self) -> 'bytes'
@@ -511,7 +484,8 @@
       field cache: HttpCache | None = None
       field idempotency: IdempotencyKeys | None = None
       field routes: tuple[Route, ...] = ()
-  class Client(object)(*, base_url: 'str', auth: 'Auth | None' = None, policy: 'CallPolicy' = CallPolicy(rate=None, retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryShare(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), timeout=Timeouts(connect=None, read=None, write=None, pool=None), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, response_check=None, security=SecurityOptions(trusted_origins=frozenset(), block_private_hosts=False, resolver=None), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')), observers: 'Sequence[Observer]' = (), middleware: 'Sequence[Middleware]' = ()) -> 'None'
+  CallUrl = typing.LiteralString | string.templatelib.Template | httpx2.URL
+  class Client(object)(*, base_url: 'str', auth: 'Auth | None' = None, policy: 'CallPolicy' = CallPolicy(rate=None, retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryShare(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), timeout=Timeouts(connect=None, read=None, write=None, pool=None), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, response_check=None, security=SecurityOptions(trusted_origins=frozenset(), block_private_hosts=False, resolver=None, check=<function forbidden_reason at 0x…>), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')), observers: 'Sequence[Observer]' = (), middleware: 'Sequence[Middleware]' = ()) -> 'None'
       def aclose(self) -> 'None'
       def delete(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def events(self, url: 'CallUrl', *, last_event_id: 'str | None' = None, **options: 'Unpack[StreamOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
@@ -559,8 +533,6 @@
       field methods: Collection[str] = frozenset({'GET'})
       field paths: Collection[str | re.Pattern[str]] | None = None
       field statuses: Collection[int] = frozenset({200})
-      def caches_request(self, method: 'str', path: 'str') -> 'bool'
-      def stores_status(self, status: 'int') -> 'bool'
   class HttpOptions(object)(*, transport: 'httpx2.AsyncBaseTransport | None' = None, headers: 'Mapping[str, str]' = <factory>, follow_redirects: 'bool' = True, max_redirects: 'int' = 5, max_response_bytes: 'int' = 33554432, response_check: 'ResponseCheck | None' = None, security: 'SecurityOptions' = <factory>, ssl_context: 'ssl.SSLContext | None' = None, limits: 'httpx2.Limits' = <factory>, proxy: 'str | None' = None, user_agent: 'str | None' = None, cookies: 'bool' = False, request_id_headers: 'tuple[str, ...]' = ('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')) -> 'None'
       field transport: httpx2.AsyncBaseTransport | None = None
       field headers: Mapping[str, str] = <factory>
@@ -618,6 +590,7 @@
   class Raw(object)(content: 'RawContent') -> 'None'
       field content: RawContent
       property replayable
+  type RawContent = bytes | AsyncIterable[bytes] | Callable[[], AsyncIterable[bytes]]
   class Reader(Generic)(read: 'Callable[[httpx2.Response], T]', /, *, name: 'str | None' = None) -> 'None'
       def __call__(self, response: 'httpx2.Response', /) -> 'T'
   class RequestOptions(dict)(no signature)
@@ -643,7 +616,6 @@
       field respect_should_retry: bool = True
       field hedge: Hedge | None = None
       field min_attempt_time: float = 0.05
-      def wait_after(self, retry_after: 'float | None', retry: 'int', draw: 'float') -> 'float'
   class Route(object)(fragment: 'str', /, **options: 'Unpack[RouteOptions]') -> 'None'
       property fragment
       property options
@@ -654,10 +626,11 @@
       key deadline: float | None (optional)
       key rate: Rate | RateBudget | None (optional)
       key cache: None (optional)
-  class SecurityOptions(object)(*, trusted_origins: 'frozenset[str]' = frozenset(), block_private_hosts: 'bool' = False, resolver: 'Resolver | None' = None) -> 'None'
+  class SecurityOptions(object)(*, trusted_origins: 'frozenset[str]' = frozenset(), block_private_hosts: 'bool' = False, resolver: 'Resolver | None' = None, check: 'AddressCheck' = <function forbidden_reason at 0x…>) -> 'None'
       field trusted_origins: frozenset[str] = frozenset()
       field block_private_hosts: bool = False
       field resolver: Resolver | None = None
+      field check: AddressCheck = <function forbidden_reason at 0x…>
   class SigningAuth(Auth)()
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
       def credential_identity(self) -> 'bytes'
@@ -675,6 +648,8 @@
       field pool: float | None = None
       def over(self, base: 'Timeouts') -> 'Timeouts'
   class TransportError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
+  type UploadFile = IO[bytes] | bytes | str | tuple[str | None, IO[bytes] | bytes | str] | tuple[str | None, IO[bytes] | bytes | str, str | None] | tuple[str | None, IO[bytes] | bytes | str, str | None, Mapping[str, str]]
+  type UploadFiles = Mapping[str, UploadFile] | Sequence[tuple[str, UploadFile]]
   class UpstreamStatusError(ClientError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
       property code
       property problem

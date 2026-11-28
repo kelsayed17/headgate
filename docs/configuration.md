@@ -112,6 +112,7 @@ requests and credentials may go:
 | `trusted_origins` | `frozenset()` | origins besides `base_url`'s that may receive credentials |
 | `block_private_hosts` | `False` | `True` turns on the SSRF guard |
 | `resolver` | `None` | how the SSRF guard resolves names; only with the guard on |
+| `check` | `forbidden_reason` | which addresses the SSRF guard refuses; one of your own only with the guard on |
 
 `ssl_context`, `limits` and `proxy` configure the default transport, so passing any of them with `transport=` is a
 `ValueError`; a custom transport owns its own TLS, pool and proxy. The SSRF guard cannot be combined with `proxy=`.
@@ -271,11 +272,12 @@ even past `no-store`, as an entry of `HttpCache(ttl=None)` is.
 The options are typed, so a wrapper can forward them with every key checked. `CallOptions` is the TypedDict of every
 per-call option but the body, which every verb and `paginate()` take, and all that `get()` and `head()` take;
 `RequestOptions` is a body verb's (`CallOptions` plus the body); `headgate.streaming.StreamOptions` is `stream()`'s
-(`RequestOptions` less `cache_ttl` and `max_response_bytes`); and `ViewOptions` is what `with_options()` takes. A
-wrapper typed on them forwards every option at once:
+(`RequestOptions` less `cache_ttl` and `max_response_bytes`); and `ViewOptions` is what `with_options()` takes.
+`CallUrl` is what a verb takes as its URL: a literal `str`, a t-string or an absolute `httpx2.URL`. A wrapper typed on
+them forwards the URL and every option at once:
 
 ```python
-async def fetch(self, url: LiteralString, **options: Unpack[CallOptions]) -> Series:
+async def fetch(self, url: CallUrl, **options: Unpack[CallOptions]) -> Series:
     return await self._http.get(url, expect=SERIES, **options)
 ```
 

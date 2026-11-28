@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, Any, cast, override
 
 import httpx2
 import pytest
@@ -25,6 +25,7 @@ from headgate.testing import (
     Slow,
     TestClock,
 )
+from headgate.testing._faults import response_parts
 from tests.support.timing import built_on
 
 if TYPE_CHECKING:
@@ -65,6 +66,20 @@ async def test_respond_answers_with_a_status_headers_and_a_json_body() -> None:
     assert call.bytes_sent == head_size(request) + len(_BODY)
     assert context.progress.connected is True
     assert context.progress.bytes_sent == head_size(request), "the body is left for a counting layer to report"
+
+
+async def test_the_log_of_sends_is_read_only() -> None:
+    """Log the sends as ``FakeTransport`` does: a fresh tuple to read, which no test can rewrite under the fake."""
+    network = FaultyTransport(schedule=[Respond(204)])
+    request, _ = _request()
+    await network.handle_async_request(request)
+
+    calls = network.calls
+
+    assert type(calls) is tuple
+    assert [call.method for call in calls] == ["POST"]
+    with pytest.raises(AttributeError):
+        cast("Any", network).calls = ()
 
 
 async def test_a_response_records_when_it_is_closed() -> None:
@@ -343,9 +358,14 @@ async def test_slow_exactly_at_the_read_timeout_still_answers() -> None:
     await response.aclose()
 
 
+def test_a_respond_step_is_read_by_its_fields() -> None:
+    """Leave building the reply to the fakes: a ``Respond`` step shows what it was given."""
+    assert not hasattr(Respond, "response")
+
+
 def test_respond_declares_its_json_and_its_retry_after() -> None:
     """Add ``Content-Type: application/json`` for a JSON body and ``Retry-After`` for a delay, after the step's own."""
-    headers, body = Respond(json={"a": 1}, headers={"X-Id": "7"}, retry_after=2.0).response()
+    headers, body = response_parts(Respond(json={"a": 1}, headers={"X-Id": "7"}, retry_after=2.0))
 
     assert headers == [("X-Id", "7"), ("Retry-After", "2"), ("Content-Type", "application/json")]
     assert body == b'{"a": 1}'
@@ -361,7 +381,7 @@ def test_a_retry_after_is_written_as_plain_decimal_seconds(seconds: float, heade
 
     Either way the value reads back as the same number of seconds, as headgate's own ``Retry-After`` parser reads it.
     """
-    headers, _ = Respond(503, retry_after=seconds).response()
+    headers, _ = response_parts(Respond(503, retry_after=seconds))
 
     assert headers == [("Retry-After", header)]
     assert parse_retry_after(header, now=0.0) == seconds

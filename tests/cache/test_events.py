@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, override
 import httpx2
 
 from headgate import CallPolicy, Client, HttpCache, HttpOptions, TransportError
-from headgate.cache._transport import served_from_cache
+from headgate._core import CallContext
+from headgate.cache._transport import ResilientCacheTransport, served_from_cache, store_accepted
 from headgate.events import CacheChecked, CacheOutcome, Event
 from tests.cache._helpers import FaultyStorage, Network, every_get_rules
 from tests.support.responses import RESPONSE
@@ -95,6 +96,45 @@ async def test_a_storage_fault_is_degraded(storage: AsyncSqliteStorage) -> None:
     assert recorder.outcomes == [CacheOutcome.DEGRADED]
 
 
+async def test_a_failed_store_is_reported_on_its_call(storage: AsyncSqliteStorage) -> None:
+    """Report a miss whose write then found the storage broken as unstored, on the call that accepted it."""
+    recorder = _Recorder()
+    client = _client(Network(), FaultyStorage(storage, RuntimeError("down"), failing="create_entry"), recorder)
+
+    await client.get(_URL, expect=RESPONSE)
+
+    assert recorder.outcomes == [CacheOutcome.MISS, CacheOutcome.UNSTORED]
+    assert recorder.urls == [_URL, _URL]
+
+
+async def test_a_coalesced_call_that_accepts_a_failed_store_reports_it(storage: AsyncSqliteStorage) -> None:
+    """Report the unstored download on the call that accepted it first, which may be one that waited on it."""
+    recorder = _Recorder()
+    network = _GatedNetwork()
+    faulty = FaultyStorage(storage, RuntimeError("down"), failing="create_entry")
+    client = _client(network, faulty, recorder)
+
+    tasks = [asyncio.create_task(client.get(_URL, expect=RESPONSE)) for _ in range(_CONCURRENT)]
+    await _until_fetching(network)
+    network.gate.set()
+    await asyncio.gather(*tasks)
+
+    assert recorder.outcomes.count(CacheOutcome.UNSTORED) == 1, "the entry is written, and fails, once"
+    assert CacheOutcome.DEGRADED not in recorder.outcomes, "every lookup found the storage working"
+
+
+async def test_a_failed_store_with_no_call_to_report_on_raises_nothing(storage: AsyncSqliteStorage) -> None:
+    """Drop a failed write of a response no client call accepted, as quietly as one no observer hears."""
+    faulty = FaultyStorage(storage, RuntimeError("down"), failing="create_entry")
+    transport = ResilientCacheTransport(Network(), HttpCache(**every_get_rules(), storage=faulty), max_body_bytes=1024)
+    response = await transport.handle_async_request(httpx2.Request("GET", _URL))
+    await response.aread()
+
+    await store_accepted(response)
+
+    assert not served_from_cache(response)
+
+
 async def test_requests_that_waited_on_another_report_a_shared_download(storage: AsyncSqliteStorage) -> None:
     """Identical GETs in flight together: the one that fetched misses, every one that waited shares."""
     recorder = _Recorder()
@@ -140,6 +180,19 @@ async def test_a_client_without_observers_emits_nothing(storage: AsyncSqliteStor
     assert network.calls == 1
 
 
+async def test_a_request_no_call_sent_reports_nothing_and_is_stamped_with_nothing(storage: AsyncSqliteStorage) -> None:
+    """Serve a request handed straight to the cache, which has no call to report on, without inventing one for it."""
+    transport = ResilientCacheTransport(
+        Network(), HttpCache(storage=storage, methods=("GET", "HEAD")), max_body_bytes=1024
+    )
+    request = httpx2.Request("HEAD", _URL)
+
+    response = await transport.handle_async_request(request)
+
+    assert response.status_code == httpx2.codes.OK
+    assert CallContext.find(request) is None
+
+
 def test_every_outcome_is_one_the_cache_emits() -> None:
     """Offer only the outcomes the cache reports: it never revalidates, so there is no revalidated outcome."""
-    assert {outcome.value for outcome in CacheOutcome} == {"hit", "miss", "coalesced", "degraded"}
+    assert {outcome.value for outcome in CacheOutcome} == {"hit", "miss", "coalesced", "degraded", "unstored"}

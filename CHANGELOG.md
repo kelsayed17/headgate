@@ -26,6 +26,22 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `response.text` raises). A leading UTF-8 byte order mark is dropped, and the rest read as UTF-8. A body its
   `charset` cannot decode at all (UTF-16 without a byte order mark) raises `ResponseParseError`. Write
   `expect=as_text` for a plain-text body.
+- `SecurityOptions(check=)`, beside `resolver=`: the function that judges each address the SSRF guard resolves,
+  returning why it refuses one or `None` to admit it, on every hop and over every transport. It defaults to
+  `headgate.security.forbidden_reason` itself, which a check of your own can defer to for the addresses it does not
+  decide. A check of your own is accepted only with `block_private_hosts=True` (`ValueError` otherwise, as for
+  `resolver=`), and `check=None` is a `TypeError` naming the default: leave it out.
+- `headgate.CallUrl`, `headgate.RawContent`, `headgate.UploadFiles` and `headgate.UploadFile`, the types of a verb's
+  URL, of `Raw(content)`, of `Multipart(files)` and of one file in it, which their signatures named but nothing
+  exported: a wrapper writes
+  `async def fetch(self, url: CallUrl, **options: Unpack[CallOptions])`. `CallUrl` is a plain union, so a type
+  checker that refuses a computed `str` still names `LiteralString` in its message.
+- `CacheOutcome.UNSTORED` (value `"unstored"`): a call accepted the network's answer, but the cache could not store
+  it, because the storage failed while writing it or the write outlasted the call's deadline. It is a second
+  `CacheChecked` on that call, after its `MISS`, or its `COALESCED` when it waited on the download and was the first
+  to accept it, where the fault was only counted. `DEGRADED` keeps its one meaning, a lookup that found the storage
+  broken. An observer that took one `CacheChecked` per call as given may now see two; one that matches every outcome
+  adds a case for it.
 
 ### Changed
 
@@ -154,8 +170,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   thresholds, given first as a `RateBudget`'s rate is: `BreakerRegistry(BreakerPolicy(failure_threshold=3),
   max_hosts=256)`, read back as `.policy`, and `BreakerPolicy()` when left out. Write
   `breaker=BreakerRegistry(BreakerPolicy(failure_threshold=3))` for
-  `breaker=BreakerPolicy(failure_threshold=3, registry=BreakerRegistry())`, and `registry.breaker_for(origin)` for
-  `registry.breaker_for(origin, failure_threshold=..., recovery_timeout=...)`.
+  `breaker=BreakerPolicy(failure_threshold=3, registry=BreakerRegistry())`. The lookup that took thresholds,
+  `registry.breaker_for(origin, failure_threshold=..., recovery_timeout=...)`, is gone with the lookup itself (see
+  **Removed**).
 - `TransportPolicy` is `CallPolicy`, the pair of `CallOptions`, which override it per call, leaving "transport" to
   the network layer (`HttpOptions(transport=)`, `TransportError`): write `Client(policy=CallPolicy(...))` for
   `Client(policy=TransportPolicy(...))`. It holds the client's rate, beside the routes that override it per path:
@@ -191,8 +208,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   hold them, where `None` stood for them; `None` for either raises `TypeError`, since `None` means off and the cache's
   off is `cache=None`. Leave them out for the defaults. `paths=None` is still the path filter off.
 - Time has one seam, `timing_override()` (and `TestClock.install()`, built on it), as it already was for `Client`:
-  `RateBudget`, `RetryBudget`, `BreakerRegistry` and `CircuitBreaker` take no `timing=`, and `FaultyTransport` no
-  `sleep=`. Each runs on the timing current when it is built, the breakers a registry builds later included. Write
+  `RateBudget`, `RetryBudget` and `BreakerRegistry` take no `timing=`, and `FaultyTransport` no `sleep=`. Each runs
+  on the timing current when it is built, the breakers a registry builds later included. Write
   `with clock.install(): shared = RateBudget(rate)` for `RateBudget(rate, timing=clock.timing)`, and
   `with clock.install(): network = FaultyTransport(schedule=[...])` for
   `FaultyTransport(schedule=[...], sleep=clock.sleep)`.
@@ -217,6 +234,26 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `headgate.msgspec.reader_for`.
 - `HttpCache(methods=(), paths=(), statuses=())`, an empty rule that made a cache store nothing, raises `ValueError`
   naming `cache=None`: write `CallPolicy(cache=None)` for a client without a cache.
+- `policy_disabled()` lives in the testing kit, beside `instant_retries()`, and `headgate.policy`, a module for one
+  function, is removed: write `from headgate.testing import policy_disabled` for
+  `from headgate.policy import policy_disabled`. It reports `headgate.testing` as its home.
+- `FaultyTransport.calls` is a read-only property returning a tuple, as `FakeTransport.calls` is, where it was a
+  list a test could append to or clear under the transport. Read it as before; write `list(network.calls)` where a
+  test needs a list, and build a new `FaultyTransport` where it cleared the log.
+- `Backoff`, `RetryPolicy`, `HttpCache` and `headgate.testing.Respond` are final: a subclass raises `TypeError` when
+  it is defined, naming the fields to set, and ty reports it. The methods a subclass could override (`delay`,
+  `wait_after`, `caches_request`, `stores_status`, `response`) are no longer called by anything, so an override
+  would have been accepted and silently ignored. Set the fields instead: `Backoff(factor=..., max_wait=...)`,
+  `HttpCache(methods=..., paths=..., statuses=...)`, and for a reply a `Respond` cannot describe, a function in a
+  `FakeTransport` route.
+- `headgate.health.observer_failures()` keys each observer class by its module and qualified name,
+  `"myapp.metrics.Exporter"`, where it used the qualified name alone, so two classes of one name in different modules
+  shared a count. Write `observer_failures().get("myapp.metrics.Exporter", 0)` for
+  `observer_failures().get("Exporter", 0)`, or `f"{cls.__module__}.{cls.__qualname__}"` for `cls.__qualname__`.
+- `headgate.health.BreakerSnapshot` is a frozen dataclass with `state`, `refusing` and `failures` (the consecutive
+  failures since the last success, which only the live breaker showed), built by keyword, rather than a named tuple:
+  write `snapshot.state, snapshot.refusing` for `state, refusing = snapshot`, and compare a snapshot with
+  `BreakerSnapshot(state=..., refusing=..., failures=...)` rather than a tuple.
 - A client given a shared object that holds time, built on another timing than the client, raises `TypeError` before
   it builds anything, as it does for a `CachedTokenAuth` that runs on another: a `RateBudget` (as its policy's or a
   route's `rate=`), a `BreakerRegistry` (as `breaker=`) or a `RetryBudget` (as the `budget=` of its policy's or a
@@ -238,9 +275,52 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `BreakerPolicy.registry`, `BreakerRegistry.bind()` and the `ValueError` for a client whose thresholds differed from
   the ones a shared registry was bound to: a registry carries its own policy, so its clients cannot disagree. Give the
   registry the thresholds, and the clients the registry.
+- `RetryBudget.record_first()`, `try_spend()` and `refund()`, which only the retry layer calls, and
+  `RetryPolicy.wait_after()` and `Backoff.delay()`, the arithmetic it waits by: a budget's surface is its `share` and
+  its `repr`, which shows what its window holds (`RetryBudget(RetryShare(...), retries=3, firsts=40)`), and a policy
+  and a backoff are values, read by their fields. A test that spent a budget by hand sends its retries through a
+  client instead; one that computed a wait reads `factor` and `max_wait`.
+- `CircuitBreaker` from `headgate.breaker`, and `BreakerRegistry.breaker_for()`, `breakers()` and iteration, which
+  handed out the live breakers only the client drives: `headgate.health.breaker_states(registry)` is the one reader
+  of a registry's breakers, building none. Write `breaker_states(registry).get("https://api.example")` for
+  `registry.breaker_for("https://api.example")`, reading `.state`, `.refusing` and `.failures` (for
+  `.failure_count`) from the snapshot, and `for origin, snapshot in breaker_states(registry).items()` for
+  `for breaker in registry`. Each key is the canonical origin, `scheme://host[:port]` with the host lower-cased and
+  the scheme's default port left out, and an origin no client has called yet is absent (`.get()` returns `None`),
+  where `breaker_for()` built a closed breaker for it. A registry keeps its constructor, `policy`,
+  `max_hosts`, `len()`, `clear()` and its `repr`.
+- `headgate.health.cache_degradations()` and the process-wide count behind it, which repeated what the
+  `CacheChecked` event already reported, without the call: count the `CacheChecked` events whose outcome is
+  `CacheOutcome.DEGRADED` (a lookup found the storage broken) or `CacheOutcome.UNSTORED` (an accepted answer could not
+  be stored) in an observer, per `httpx2.URL(event.call.full_url).host` for the old per-host shape. The count held
+  both. `observer_failures()` stays, since an observer that raises cannot be reported through observers.
+- `AddressGuard`, `PinnedHTTPTransport` and `resolve_with_loop` from `headgate.security`, and
+  `AsyncCurlTransport.bind_guard()`, the SSRF guard's machinery, which a client builds and binds from its
+  `SecurityOptions`: configure the guard there. Write
+  `HttpOptions(security=SecurityOptions(block_private_hosts=True, check=...))` where a test built
+  `PinnedHTTPTransport(AddressGuard(check=...), ...)` to reach a loopback server, and pass an `AsyncCurlTransport` as
+  `HttpOptions(transport=)` where it called `bind_guard()` itself.
+- `HttpCache.caches_request()` and `stores_status()`, `headgate.pagination.parse_link_header()` and `Link`, and
+  `headgate.testing.Respond.response()`, which only the stack and the fakes call. Read what a cache stores from its
+  `methods`, `paths` and `statuses`, follow `Link` headers with `LinkHeader`, and read a `Respond` step's
+  `status_code`, `headers`, `json`, `content` and `retry_after`. A subclass of `HttpCache` that overrode either rule
+  raises `TypeError` when it is defined (see **Changed**): give the cache the `methods`, `paths` and `statuses` it
+  should keep.
 
 ### Fixed
 
+- `copy.copy()` and `copy.deepcopy()` of a `RateBudget`, a `RetryBudget` or a `BreakerRegistry` return the object
+  itself, so a deep copy of a `CallPolicy`, or of anything else holding one, keeps sharing it. A copy was a new object
+  without the pacer, ledger or breakers the stack finds it by, which failed later with a bare `KeyError`, and a deep
+  copy failed with `cannot pickle '_thread.lock' object`. Nothing to write differently.
+- The value of every exported type alias evaluates at runtime: `headgate.Next.__value__`,
+  `headgate.security.Resolver.__value__` and `headgate.security.AddressCheck.__value__` raised `NameError` for
+  `Callable`, which their modules imported only for the type checker, so a library that reads an alias's value
+  (pydantic, `typing.get_type_hints` on a signature that names one) failed. Nothing to write differently.
+- A breaker's consecutive-failure count includes a failed half-open probe, so `BreakerSnapshot.failures` and
+  `BreakerChanged.failures` say what they are documented to: a breaker with `failure_threshold=2` whose probe failed
+  reads `failures=3`, where it read `2` and kept reading it until the next success. Nothing to write differently; a
+  test that pinned the old count after a failed probe adds one.
 - A `CachedTokenAuth` whose token type is not `str` no longer sends the token's `repr` as its bearer
   (`Authorization: Bearer {'access': ..., 'refresh': ...}`, the refresh token included). Its class must override
   `attach`: a subclass of `CachedTokenAuth[dict[str, str]]` that keeps the default raises `TypeError` when it is

@@ -15,8 +15,8 @@ pin too, but the pool would then key connections by IP: a request to one name co
 authenticated for another name on the same address, which is exactly the substitution a DNS attacker wants. It would
 also put the IP into ``response.url``, relative redirects and the credential origin rule.
 
-**A transport that takes the guard** (:class:`GuardedTransport`, which ``headgate.curl.AsyncCurlTransport`` is) is
-bound to the client's guard when the client is built, and resolves, vets and pins each request itself through
+**A transport that takes the guard** (``headgate.curl.AsyncCurlTransport``) holds a binding the client's guard is bound
+to when the client is built (``headgate._curl.guard_binding``), and resolves, vets and pins each request itself through
 :func:`vet_request`, as the default transport does.
 
 **Any other custom transport** (``HttpOptions(transport=...)``) resolves names itself, so the guard cannot choose its
@@ -28,7 +28,7 @@ import asyncio
 import contextlib
 import ssl
 from collections.abc import Awaitable, Callable, Iterable
-from typing import Protocol, override, runtime_checkable
+from typing import override
 
 import httpcore2
 import httpx2
@@ -37,16 +37,7 @@ from httpcore2._backends.base import SOCKET_OPTION
 
 from headgate.security._addresses import AddressGuard
 
-__all__ = ["GuardedTransport", "PinnedHTTPTransport", "address_hook", "vet_request"]
-
-
-@runtime_checkable
-class GuardedTransport(Protocol):
-    """A network transport that resolves, vets and pins each request itself, through the guard it is bound to."""
-
-    def bind_guard(self, guard: AddressGuard | None, /) -> None:
-        """Serve only requests *guard* vets (``None``: an unguarded client), or raise ``ValueError`` if it cannot."""
-        ...
+__all__ = ["PinnedHTTPTransport", "address_hook", "vet_request"]
 
 
 class _VettingBackend(httpcore2.AsyncNetworkBackend):

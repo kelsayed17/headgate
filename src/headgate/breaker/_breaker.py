@@ -3,9 +3,8 @@
 
 """The circuit breaker: stop calling an origin that is failing, find out cheaply when it recovers.
 
-There is one breaker per origin and breaker policy, shared by every client that uses the same
-:class:`~headgate.breaker.BreakerRegistry` (by default the process-wide one), so two clients addressing the same
-upstream cannot each spend their own quota of failures against it.
+A :class:`~headgate.breaker.BreakerRegistry` holds one breaker per origin, shared by every client given that registry,
+so two clients addressing the same upstream through it cannot each spend their own quota of failures against it.
 
 Three design choices, each fixing a failure mode of the usual ``with breaker:`` wrapper:
 
@@ -213,8 +212,16 @@ class CircuitBreaker:
 
     @property
     def failure_count(self) -> int:
-        """Consecutive failures recorded since the last success."""
+        """Consecutive failures recorded since the last success, a failed probe included."""
         return self._failures
+
+    def reading(self) -> tuple[BreakerState, bool, int]:
+        """Return :attr:`state`, :attr:`refusing` and :attr:`failure_count` as of one instant, read under the lock.
+
+        Read one by one, a transition landing between them could pair an open state with the count of a closed one.
+        """
+        with self._lock:
+            return self._state, not self._admits(), self._failures
 
     def _cooldown_left(self) -> float | None:
         """Return the seconds until a probe is admitted, or ``None`` while one is out."""
@@ -311,7 +318,8 @@ class CircuitBreaker:
                 self._state = BreakerState.CLOSED
                 self._failures = 0
             elif outcome is _Outcome.FAILURE:
-                # The origin was given its one chance.
+                # The origin was given its one chance; no success came since the failures that opened it.
+                self._failures += 1
                 self._open()
             return self._transition(previous)
 
