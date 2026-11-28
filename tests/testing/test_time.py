@@ -392,30 +392,41 @@ async def test_a_wait_the_server_asks_for_draws_no_random_number() -> None:
     assert clock.sleeps == [1.0, 4.0]
 
 
+#: Every shared object that holds time, built outside the block a test builds its client in.
+type _Shared = tuple[RateBudget, BreakerRegistry, RetryBudget]
+
+
 @pytest.mark.parametrize(
     ("policy", "what"),
     [
-        (lambda shared, _registry: CallPolicy(rate=shared), "RateBudget given as rate="),
-        (lambda shared, _registry: CallPolicy(routes=(Route("/x", rate=shared),)), "RateBudget given as rate="),
-        (lambda _shared, registry: CallPolicy(breaker=registry), "BreakerRegistry given as breaker="),
+        (lambda shared: CallPolicy(rate=shared[0]), "RateBudget given as rate="),
+        (lambda shared: CallPolicy(routes=(Route("/x", rate=shared[0]),)), "RateBudget given as rate="),
+        (lambda shared: CallPolicy(breaker=shared[1]), "BreakerRegistry given as breaker="),
+        (
+            lambda shared: CallPolicy(retry=RetryPolicy(budget=shared[2])),
+            "RetryBudget given as a RetryPolicy's budget=",
+        ),
+        (
+            lambda shared: CallPolicy(routes=(Route("/x", retry=RetryPolicy(budget=shared[2])),)),
+            "RetryBudget given as a RetryPolicy's budget=",
+        ),
     ],
-    ids=["rate", "route-rate", "breaker"],
+    ids=["rate", "route-rate", "breaker", "retry-budget", "route-retry-budget"],
 )
-def test_a_shared_object_on_another_timing_is_refused(
-    policy: Callable[[RateBudget, BreakerRegistry], CallPolicy], what: str
-) -> None:
+def test_a_shared_object_on_another_timing_is_refused(policy: Callable[[_Shared], CallPolicy], what: str) -> None:
     """Refuse a client built on one timing given a budget or registry built on another, as a token auth is refused."""
-    shared, registry = RateBudget(Rate.per_second(1)), BreakerRegistry()
+    shared = (RateBudget(Rate.per_second(1)), BreakerRegistry(), RetryBudget())
     with TestClock().install(), pytest.raises(TypeError, match=rf"^the {what} runs on another timing than this client"):
-        Client(base_url="https://h.test", policy=policy(shared, registry))
+        Client(base_url="https://h.test", policy=policy(shared))
 
 
 def test_a_shared_object_on_the_clients_timing_is_taken() -> None:
     """Take a budget and a registry built in the block the client is built in."""
     clock = TestClock()
     with clock.install():
-        shared, registry = RateBudget(Rate.per_second(1)), BreakerRegistry()
-        client = Client(base_url="https://h.test", policy=CallPolicy(rate=shared, breaker=registry))
+        shared, registry, retries = RateBudget(Rate.per_second(1)), BreakerRegistry(), RetryBudget()
+        policy = CallPolicy(rate=shared, breaker=registry, retry=RetryPolicy(budget=retries))
+        client = Client(base_url="https://h.test", policy=policy)
     assert budget_for(client) is shared
 
 
