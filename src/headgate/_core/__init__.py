@@ -36,6 +36,7 @@ from headgate._core._kinds import (
     check_kind,
     check_names,
     check_not_letters,
+    check_options,
     named,
     type_text,
 )
@@ -108,6 +109,7 @@ __all__ = [
     "check_kind",
     "check_names",
     "check_not_letters",
+    "check_options",
     "current_timing",
     "named",
     "origin_of",

@@ -24,23 +24,18 @@ only to the origins the client trusts. A next page that would take an ``https`` 
 as a redirect would be. Both are the walk's, so they hold for every pager.
 """
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Protocol, override
+from typing import Protocol, override
 
 import httpx2
 
+from headgate._request_body import Writer
+from headgate._responses import Expect, Reader
+from headgate._url import CallUrl
 from headgate.pagination._link import next_link
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Mapping, Sequence
-
-    from headgate._request_body import Writer
-    from headgate._responses import Expect, Reader
-    from headgate._url import CallUrl
 
 __all__ = [
     "BodyCursor",

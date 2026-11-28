@@ -116,7 +116,10 @@ def _render_class(name: str, cls: type) -> list[str]:
     bases = ", ".join(base.__qualname__ for base in cls.__bases__)
     lines = [f"class {name}({bases}){_signature(cls)}"]
     if dataclasses.is_dataclass(cls):
-        lines.extend(f"    field {f.name}: {f.type}{_field_default(f)}" for f in dataclasses.fields(cls))
+        written: dict[str, str] = {}
+        for klass in reversed(cls.__mro__):
+            written.update(annotationlib.get_annotations(klass, format=annotationlib.Format.STRING))
+        lines.extend(f"    field {f.name}: {written[f.name]}{_field_default(f)}" for f in dataclasses.fields(cls))
     elif is_typeddict(cls):
         annotations = annotationlib.get_annotations(cls, format=annotationlib.Format.STRING)
         required = getattr(cls, "__required_keys__", frozenset())

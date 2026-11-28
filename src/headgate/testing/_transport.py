@@ -3,8 +3,6 @@
 
 """A network transport for tests: a route table of canned replies, and a log of every request it was sent."""
 
-from __future__ import annotations
-
 from collections.abc import Awaitable, Callable, Generator
 from contextlib import contextmanager
 from typing import Self, cast, override

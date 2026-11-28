@@ -12,18 +12,14 @@ built. An SDK usually fixes its client's options and exposes none of them, so a
 test replaces the timing of everything it builds with :func:`timing_override` instead of reaching into each one.
 """
 
-from __future__ import annotations
-
 import asyncio
 import random
 import time
+from collections.abc import Awaitable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
-
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Generator
+from typing import Protocol
 
 __all__ = [
     "SYSTEM_TIMING",

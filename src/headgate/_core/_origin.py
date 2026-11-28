@@ -7,8 +7,6 @@
 form); these helpers name the operations every layer that keys or compares by origin needs.
 """
 
-from __future__ import annotations
-
 from typing import Final
 
 import httpx2

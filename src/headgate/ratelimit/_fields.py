@@ -9,8 +9,6 @@ Strings, Tokens, Integers, Decimals, Byte Sequences or Booleans, each with param
 grammar does not allow, makes the whole field malformed, and the draft says a malformed field is ignored.
 """
 
-from __future__ import annotations
-
 import base64
 import binascii
 import string

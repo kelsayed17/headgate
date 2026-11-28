@@ -37,8 +37,6 @@ Every attempt adds a history line to the call's notes, which the client attaches
 Lines name statuses and exception types only, never a URL, header or message, so they carry no credential.
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 from dataclasses import dataclass, replace

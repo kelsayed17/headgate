@@ -228,6 +228,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `attach` to put the token where the declaration says.
 - `CallInfo.full_url` is filled for every call, so a middleware reads the absolute URL of a client with no observers
   too, where it read `None`.
+- `typing.get_type_hints()` resolves on every exported class and function, and on the methods they define, after a
+  bare `import headgate`, so `msgspec.convert({"read": 5.0}, Timeouts)`, pydantic and `inspect.signature(Client)` read
+  headgate's options. They raised `NameError` for a name the annotation imported only for the type checker (`Mapping`,
+  `ClassVar`, `httpx2`). headgate's modules no longer use `from __future__ import annotations`; their annotations are
+  Python 3.14's own, evaluated on demand in the module that wrote them. Nothing to write differently.
 
 ### Security
 

@@ -7,8 +7,6 @@ The budget is chosen by URL path, which every layer sees as the caller built it:
 of the request and puts its URL back below hishel, so the path a budget is chosen by is the one the network gets.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, NamedTuple
 
 from headgate._core import (

@@ -3,8 +3,6 @@
 
 """The ``User-Agent`` every client sends: the caller's product token, then headgate's, httpx2's and Python's."""
 
-from __future__ import annotations
-
 import platform
 from importlib import metadata
 

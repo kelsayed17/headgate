@@ -30,8 +30,6 @@ ends does not wait: it raises :class:`BudgetPausedError` at once, with the secon
 and back up on success.
 """
 
-from __future__ import annotations
-
 import math
 import threading
 import weakref

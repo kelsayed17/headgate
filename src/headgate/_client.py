@@ -26,17 +26,17 @@ The six verbs are written out rather than generated so that each keeps an exact 
 every body is a single call into :meth:`Client._request`.
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import copy
 import functools
 import math
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Final, Literal, Self, Unpack, cast, final, overload
+from types import TracebackType
+from typing import Final, Literal, Self, Unpack, cast, final, overload
 
 import httpx2
 
@@ -50,7 +50,6 @@ from headgate._call_options import (
     CallOptions,
     RequestOptions,
     StreamOptions,
-    check_options,
     check_overrides,
 )
 from headgate._core import (
@@ -61,8 +60,11 @@ from headgate._core import (
     CallContext,
     Emitter,
     ExplicitHeaders,
+    Observer,
     Slot,
+    Timing,
     check_kind,
+    check_options,
     named,
     policy_is_disabled,
     url_path,
@@ -81,10 +83,13 @@ from headgate._failures import (
     transient_status_error,
     transport_error,
 )
+from headgate._middleware import Middleware
 from headgate._options import (
     KEYED_METHODS,
     CallPolicy,
     HttpOptions,
+    Route,
+    RouteOptions,
     Timeouts,
     check_deadline,
     check_hooks,
@@ -95,14 +100,15 @@ from headgate._options import (
     match_route,
     reject_upstream_httpx,
 )
-from headgate._request_body import Json, WireValue, lowered, wire_value
-from headgate._responses import Expect, Reader, accepts, with_answers
+from headgate._request_body import Json, Lowered, WireValue, lowered, wire_value
+from headgate._responses import Expect, Reader, ResponseCheck, accepts, with_answers
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
 from headgate._view import KEEP, ROOT_DEFAULTS, VIEW_KEYS, ViewOptions
 from headgate.breaker import BreakerRegistry, CircuitBreaker
-from headgate.breaker._breaker import BreakerOpenError
-from headgate.breaker._registry import NO_BREAKER
+from headgate.breaker._breaker import BreakerOpenError, Transition, Verdict
+from headgate.breaker._registry import NO_BREAKER, Breaker
+from headgate.cache._policy import HttpCache
 from headgate.cache._transport import (
     HAS_BODY,
     MAX_RESPONSE_BYTES,
@@ -115,31 +121,15 @@ from headgate.cache._transport import (
 )
 from headgate.errors import CircuitOpenError, DecodeError, ForbiddenDestinationError, RefusedError
 from headgate.events import BreakerChanged, CallFinished, CallInfo, CallStarted
-from headgate.pagination import PageRequest, WritingPager
+from headgate.pagination import Pager, PageRequest, WritingPager
 from headgate.pagination._paginated import PageWalk, Paginated, check_page_budget
-from headgate.ratelimit._budget import BudgetPausedError
+from headgate.ratelimit._budget import BudgetPausedError, RateBudget
 from headgate.ratelimit._budgets import CALL_BUDGET, Lane, PathBudgets
-from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE
+from headgate.ratelimit._rate import Rate
+from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE, RetryPolicy
+from headgate.streaming import Stream
 from headgate.streaming._stream import OpenStream
 from headgate.timing import current_timing, timing_override
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
-    from types import TracebackType
-
-    from headgate._core import Observer, Timing
-    from headgate._middleware import Middleware
-    from headgate._options import Route, RouteOptions
-    from headgate._request_body import Lowered
-    from headgate._responses import ResponseCheck
-    from headgate.breaker._breaker import Transition, Verdict
-    from headgate.breaker._registry import Breaker
-    from headgate.cache._policy import HttpCache
-    from headgate.pagination import Pager
-    from headgate.ratelimit._budget import RateBudget
-    from headgate.ratelimit._rate import Rate
-    from headgate.retry._policy import RetryPolicy
-    from headgate.streaming import Stream
 
 __all__ = ["Built", "Client", "Method", "built_with"]
 

@@ -20,20 +20,15 @@ read and write it through its methods, never through extension keys of their own
   reads and writes it with :meth:`~CallContext.get` and :meth:`~CallContext.put`.
 """
 
-from __future__ import annotations
-
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, cast, override
+from typing import Final, cast, override
 
-from headgate._core._events import SILENT, CallInfo
+import httpx2
 
-if TYPE_CHECKING:
-    import httpx2
-
-    from headgate._core._events import Emitter, Event
-    from headgate._core._time import Clock
+from headgate._core._events import SILENT, CallInfo, Emitter, Event
+from headgate._core._time import Clock
 
 __all__ = ["SENDING", "CallContext", "CallView", "SendProgress", "Slot", "call_view", "progress_of"]
 

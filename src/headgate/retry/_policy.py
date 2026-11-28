@@ -14,8 +14,6 @@ The values the retry layer exchanges with the rest of the stack through a call's
 layer concluded about the call's last attempt, which the client folds into the error it raises).
 """
 
-from __future__ import annotations
-
 import math
 import sys
 import threading

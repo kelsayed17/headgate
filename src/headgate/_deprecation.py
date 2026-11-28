@@ -14,8 +14,6 @@ when either header is, resolved against the request URL and with any credential 
 URL is skipped.
 """
 
-from __future__ import annotations
-
 import re
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime

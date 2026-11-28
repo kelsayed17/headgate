@@ -75,13 +75,11 @@ one transport serves one guard: a client built on it with another guard, or none
 those too.
 """
 
-from __future__ import annotations
-
 import asyncio
 import functools
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast, get_args, override
+from typing import Any, cast, get_args, override
 
 import httpx2
 
@@ -100,14 +98,13 @@ except ImportError as exc:
     msg = "AsyncCurlTransport needs the curl extra: pip install 'headgate[curl]'"
     raise ImportError(msg) from exc
 
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Mapping
-    from io import BytesIO
+from collections.abc import AsyncIterator, Callable, Mapping
+from io import BytesIO
 
-    from curl_cffi.requests import Response as _Response
-    from curl_cffi.requests.impersonate import BrowserTypeLiteral
+from curl_cffi.requests import Response as _Response
+from curl_cffi.requests.impersonate import BrowserTypeLiteral
 
-    from headgate.security import AddressGuard
+from headgate.security import AddressGuard
 
 __all__ = ["AsyncCurlTransport"]
 

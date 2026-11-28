@@ -12,8 +12,6 @@ A slot freed while someone waits is handed straight to the oldest waiter, so the
 cannot overtake. A waiter cancelled after its slot was handed over passes the slot on rather than leaking it.
 """
 
-from __future__ import annotations
-
 import asyncio
 import threading
 from collections import deque

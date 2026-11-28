@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from headgate.streaming._events import EventParser, EventTooLargeError
+from headgate._sse import EventParser, EventTooLargeError
 
 #: Every line ending the grammar knows, with a CR and a CRLF where a chunk boundary can split them from what follows.
 _BODY = b": hi\r\ndata: a\r\ndata: b\r\rdata: c\n\nid: 1\r\ndata: d\r\n\r\n"

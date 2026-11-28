@@ -3,10 +3,8 @@
 
 """The check that refuses an option value of the wrong kind, naming what it got, and how it writes a type."""
 
-from __future__ import annotations
-
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from typing import Any, Final, NewType, TypeAliasType, get_origin
 
 __all__ = [
@@ -16,6 +14,7 @@ __all__ = [
     "check_kind",
     "check_names",
     "check_not_letters",
+    "check_options",
     "named",
     "type_text",
 ]
@@ -137,3 +136,18 @@ def check_not_letters(where: str, names: Collection[str]) -> None:
             f"which splits a name into its letters: write frozenset({{{example!r}}})"
         )
     raise TypeError(msg)
+
+
+def check_options(
+    where: str, options: Mapping[str, object], allowed: frozenset[str], hints: Mapping[str, str] | None = None
+) -> None:
+    """Refuse a keyword *where* does not take, as a function with that signature would.
+
+    :raises TypeError: naming the first such keyword in sorted order, and what to write instead when *hints* says.
+    """
+    if unknown := options.keys() - allowed:
+        name = min(unknown)
+        msg = f"{where}() got an unexpected keyword argument {name!r}"
+        if hints is not None and (hint := hints.get(name)) is not None:
+            msg = f"{msg}: {hint}"
+        raise TypeError(msg)

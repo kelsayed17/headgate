@@ -8,8 +8,6 @@ bucket counts the first attempts and retries made in its slice of the window, an
 dropped as time moves on.
 """
 
-from __future__ import annotations
-
 from collections import deque
 from typing import TYPE_CHECKING, Final
 

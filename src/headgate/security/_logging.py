@@ -12,8 +12,6 @@ headgate adds :class:`RedactedUrls` to the ``httpx2`` logger, so the URL is logg
 headgate's: an ``httpx2.AsyncClient`` the application builds itself logs its URLs redacted too.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import override
 

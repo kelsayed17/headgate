@@ -16,17 +16,13 @@ The event set is defined here, below the policy subpackages, so that every layer
 the call's :class:`~headgate._core.CallContext`.
 """
 
-from __future__ import annotations
-
 import contextlib
 import itertools
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol
-
-if TYPE_CHECKING:
-    from datetime import datetime
+from typing import Protocol
 
 __all__ = [
     "OBSERVER_FAILURES",

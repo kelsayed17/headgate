@@ -3,27 +3,21 @@
 
 """The lazy sequence of pages and items :meth:`Client.paginate <headgate.Client.paginate>` returns."""
 
-from __future__ import annotations
-
 import hashlib
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import aclosing
 from dataclasses import replace
-from typing import TYPE_CHECKING, Final, Literal, final
+from typing import Final, Literal, final
 
 import httpx2
 
 from headgate._core import check_int
 from headgate._errors import ClientError
 from headgate._failures import loggable_url, shorten
+from headgate._request_body import Writer
 from headgate._url import redact_secrets
 from headgate.errors import ForbiddenDestinationError, PageLimitError
-from headgate.pagination._pager import BodyOffset, Offset, PageNumber, WritingPager
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
-
-    from headgate._request_body import Writer
-    from headgate.pagination._pager import Pager, PageRequest
+from headgate.pagination._pager import BodyOffset, Offset, PageNumber, Pager, PageRequest, WritingPager
 
 __all__ = ["REMEMBERED_PAGES", "OnLimit", "PageWalk", "Paginated", "Remembered", "check_page_budget"]
 

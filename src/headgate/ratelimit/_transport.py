@@ -20,8 +20,6 @@ one more, with the reason ``"pushback"``, for a response that asks the budget to
 reports it as well as every call that then waits it out.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, override
 
 import httpx2

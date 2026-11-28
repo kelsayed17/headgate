@@ -25,8 +25,6 @@ A transport that neither calls the trace nor reads the body stream (a custom or 
 the retry layer falls back to judging by the exception's type.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, Final, override
 
 import httpx2

@@ -21,8 +21,6 @@ Three sources are read, in this order of precedence:
   least :data:`_EPOCH_MILLIS_FLOOR` is a time in milliseconds.
 """
 
-from __future__ import annotations
-
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final

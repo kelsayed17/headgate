@@ -21,8 +21,6 @@ A reader's shape errors (a :class:`~headgate.errors.DecodeError`, or a ``ValueEr
 from code over ``response.json()``, or nesting too deep to parse) become ``ResponseParseError`` on a 2xx.
 """
 
-from __future__ import annotations
-
 import functools
 import json
 import math
@@ -35,8 +33,8 @@ from typing import Final, NoReturn, final, override
 import httpx2
 
 from headgate._core import check_kind
+from headgate._sse import EventParser, text_decoder
 from headgate.errors import DecodeError, RefusedError
-from headgate.streaming._events import EventParser, text_decoder
 
 __all__ = [
     "Expect",

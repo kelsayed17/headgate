@@ -23,10 +23,12 @@ import types
 from collections import defaultdict
 from pathlib import Path
 
+import msgspec
 import pytest
 
 import headgate
 import headgate.errors
+import headgate.retry
 import headgate.testing
 from tests.package.test_api_surface import _PUBLIC_MODULES
 
@@ -187,3 +189,59 @@ async def test_what_a_client_hands_out_reports_its_home_after_a_bare_import() ->
         "headgate.errors",
         "headgate",
     ]
+
+
+#: A script that resolves, after a bare ``import headgate``, the type hints of every class and function each public
+#: module exports, and of each function a class defines, and prints one line per one whose hints do not resolve.
+_HINTS = """
+import importlib, sys, types, typing
+import headgate
+failed = []
+for name in sys.argv[1:]:
+    module = importlib.import_module(name)
+    for export in module.__all__:
+        value = getattr(module, export)
+        if isinstance(value, type | types.FunctionType):
+            members = [value, *(vars(value).values() if isinstance(value, type) else ())]
+            for member in members:
+                if not isinstance(member, type | types.FunctionType):
+                    continue
+                try:
+                    typing.get_type_hints(member)
+                except Exception as error:
+                    failed.append(f"{name}.{export}.{member.__name__}: {type(error).__name__}: {error}")
+print("\\n".join(failed))
+"""
+
+
+async def test_every_exports_type_hints_resolve() -> None:
+    """Resolve ``typing.get_type_hints`` of every exported class and function, as msgspec and pydantic read them.
+
+    It runs in a fresh process after a bare ``import headgate``, so a hint is only resolved by the names its own module
+    binds at runtime: a name imported only for the type checker would fail here, as it would for a user.
+    """
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", _HINTS, *_public_modules(), stdout=asyncio.subprocess.PIPE
+    )
+    stdout, _ = await process.communicate()
+
+    assert stdout.decode().strip() == ""
+
+
+@pytest.mark.parametrize(
+    ("kind", "data"),
+    [
+        (headgate.Timeouts, {"read": 5.0}),
+        (headgate.BreakerPolicy, {"failure_threshold": 3}),
+        (headgate.retry.Backoff, {"factor": 1.0}),
+        (headgate.retry.RetryShare, {"ratio": 0.1}),
+    ],
+    ids=["timeouts", "breaker-policy", "backoff", "retry-share"],
+)
+def test_msgspec_converts_into_an_option(kind: type, data: dict[str, object]) -> None:
+    """Build an option from builtins with ``msgspec.convert``, which reads the option's type hints.
+
+    ``RetryPolicy`` resolves its hints too (above), but msgspec refuses its ``budget: RetryShare | RetryBudget | None``
+    itself, a union of two classes, so it is not converted here.
+    """
+    assert msgspec.convert(data, kind) == kind(**data)

@@ -12,8 +12,6 @@ DNS64 still reaches public IPv4 hosts. Other transition forms (6to4, Teredo, IPv
 or are reserved, so they are refused outright.
 """
 
-from __future__ import annotations
-
 import asyncio
 import ipaddress
 import socket

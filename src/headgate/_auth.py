@@ -21,33 +21,27 @@ never logged or stored.
 Only the async flow is implemented; the clients are async-only.
 """
 
-from __future__ import annotations
-
 import asyncio
 import copy
 import inspect
 import math
 import secrets
 from abc import ABC, abstractmethod
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable, Mapping
 from dataclasses import dataclass, field
 from types import UnionType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, final, get_args, get_origin, override
+from typing import Any, ClassVar, Final, cast, final, get_args, get_origin, override
 
 import httpx2
 
 from headgate._body import read_capped
-from headgate._core import CallContext, Slot, current_timing, origin_text, type_text
+from headgate._core import CallContext, Clock, Slot, Timing, current_timing, origin_text, type_text
 from headgate._errors import ClientError
 from headgate._failures import CallSite, loggable_url, mint_error, shorten, transport_error
 from headgate._url import redact_secrets, register_secret_params
 from headgate.errors import ClientConfigurationError
 from headgate.retry._policy import REPLAYABLE_BODY
 from headgate.security._credentials import CHAIN_ORIGIN, check_declarations
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable, Mapping
-
-    from headgate._core import Clock, Timing
 
 __all__ = [
     "AUTH_HOP",
