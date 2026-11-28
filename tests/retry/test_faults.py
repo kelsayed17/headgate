@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, Any, cast, override
 
 import httpx2
 import pytest
@@ -66,6 +66,20 @@ async def test_respond_answers_with_a_status_headers_and_a_json_body() -> None:
     assert call.bytes_sent == head_size(request) + len(_BODY)
     assert context.progress.connected is True
     assert context.progress.bytes_sent == head_size(request), "the body is left for a counting layer to report"
+
+
+async def test_the_log_of_sends_is_read_only() -> None:
+    """Log the sends as ``FakeTransport`` does: a fresh tuple to read, which no test can rewrite under the fake."""
+    network = FaultyTransport(schedule=[Respond(204)])
+    request, _ = _request()
+    await network.handle_async_request(request)
+
+    calls = network.calls
+
+    assert type(calls) is tuple
+    assert [call.method for call in calls] == ["POST"]
+    with pytest.raises(AttributeError):
+        cast("Any", network).calls = ()
 
 
 async def test_a_response_records_when_it_is_closed() -> None:

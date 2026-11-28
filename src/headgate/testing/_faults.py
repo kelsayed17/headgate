@@ -199,16 +199,21 @@ class FaultyTransport(httpx2.AsyncBaseTransport):
         """Answer sends with *schedule*, in order, waiting through the current timing's sleep."""
         self._schedule = list(schedule)
         self._sleep = current_timing().sleep
-        self.calls: list[FaultCall] = []
+        self._calls: list[FaultCall] = []
+
+    @property
+    def calls(self) -> tuple[FaultCall, ...]:
+        """Every send so far, in order, each with the step it took and what it sent and got."""
+        return tuple(self._calls)
 
     @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
-        if len(self.calls) >= len(self._schedule):
+        if len(self._calls) >= len(self._schedule):
             msg = f"FaultyTransport schedule exhausted after {len(self._schedule)} sends"
             raise AssertionError(msg)
-        step = self._schedule[len(self.calls)]
+        step = self._schedule[len(self._calls)]
         call = FaultCall(step, request.method, str(request.url), request.headers.copy())
-        self.calls.append(call)
+        self._calls.append(call)
         try:
             return await self._take(step, request, call)
         except Exception as exc:
