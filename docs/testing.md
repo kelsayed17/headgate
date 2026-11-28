@@ -132,6 +132,7 @@ second call that a fake network never sees.
 
 <!-- docs-test: run -->
 ```python
+import anysqlite
 from hishel import AsyncSqliteStorage
 
 from headgate import Rate
@@ -147,7 +148,7 @@ def test_candles_have_a_budget_of_their_own() -> None:
 
 
 async def test_only_the_archives_are_cached() -> None:
-    storage = AsyncSqliteStorage(database_path=":memory:")
+    storage = AsyncSqliteStorage(connection=await anysqlite.connect(":memory:"))
     fake = FakeTransport().reply("GET", "/archives/2025.zip", 200).reply("GET", "/status", 200)
     with fake_network(fake) as net:
         archive = ArchiveClient(cache_storage=storage)
