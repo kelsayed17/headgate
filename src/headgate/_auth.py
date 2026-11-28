@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, final, get_args, g
 import httpx2
 
 from headgate._body import read_capped
-from headgate._core import CallContext, CredentialStamper, Slot, current_timing, origin_text, type_text
+from headgate._core import CallContext, Slot, current_timing, origin_text, type_text
 from headgate._failures import CallSite, loggable_url, mint_error, shorten, transport_error
 from headgate._url import redact_secrets, register_secret_params
 from headgate.errors import ClientConfigurationError, ClientError
@@ -254,11 +254,12 @@ def _prepare_hop(hop: httpx2.Request, call: httpx2.Request, source: str) -> None
         context.fit_timeouts(hop)
 
 
-class Auth(httpx2.Auth, CredentialStamper, ABC):
+class Auth(httpx2.Auth, ABC):
     """An ``httpx2.Auth`` that declares what it stamps: the one type ``Client(auth=)`` takes.
 
     It is the :class:`~headgate.security.CredentialStamper` contract made a base class, so its three members are
-    abstract here.
+    abstract here. It is a ``CredentialStamper`` by its shape, not by deriving from the protocol, which would put the
+    protocol's ``(*args, **kwargs)`` constructor in every subclass's place and shadow a sibling base's.
 
     A subclass declares the headers and query parameters its flow sets, in :attr:`credential_headers` and
     :attr:`credential_params` (a ``frozenset`` of names each, as class attributes or properties, empty when it stamps
@@ -271,14 +272,6 @@ class Auth(httpx2.Auth, CredentialStamper, ABC):
     long, as ``frozenset("X-Api-Key")`` is. A declaration through a property is checked when a client is built.
     """
 
-    def __init__(self) -> None:
-        """Hold nothing: a subclass's constructor need not call this.
-
-        It is here so the constructor reads as what it takes, ``()``, not the protocol base's ``(*args, **kwargs)``.
-        It shadows the constructor of any base listed after it, so a subclass that wraps another ``httpx2.Auth`` lists
-        that one first: ``class Digest(httpx2.DigestAuth, Auth)``.
-        """
-
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse a declaration given as a class attribute that is not a frozenset of names, or splits a name."""
         super().__init_subclass__(**kwargs)
@@ -290,18 +283,15 @@ class Auth(httpx2.Auth, CredentialStamper, ABC):
 
     @property
     @abstractmethod
-    @override
     def credential_headers(self) -> frozenset[str]:
         """The headers this auth sets (compared case-insensitively)."""
 
     @property
     @abstractmethod
-    @override
     def credential_params(self) -> frozenset[str]:
         """The query parameters this auth sets."""
 
     @abstractmethod
-    @override
     def credential_identity(self) -> bytes:
         """Return stable bytes naming the credential (its secret material); never stored, only hashed."""
 
@@ -812,7 +802,7 @@ class CachedTokenAuth[TokenT = str](Auth):
             )
             raise TypeError(msg)
 
-    # -- What it stamps (CredentialStamper) ----------------------------------
+    # -- What it stamps -------------------------------------------------------
 
     @override
     def credential_identity(self) -> bytes:
