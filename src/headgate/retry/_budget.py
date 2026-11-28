@@ -6,8 +6,12 @@
 The window is kept as a fixed number of buckets, so memory stays constant however much traffic a client sends: each
 bucket counts the first attempts and retries made in its slice of the window, and buckets older than the window are
 dropped as time moves on.
+
+**Threads.** One budget may be shared by clients running on several event loops in several threads, so every read and
+change of the window happens under a ``threading.Lock``, held only for the arithmetic of one decision.
 """
 
+import threading
 from collections import deque
 from typing import TYPE_CHECKING, Final
 
@@ -34,9 +38,13 @@ class _Bucket:
 
 
 class RetryLedger:
-    """Count first attempts and retries over a :class:`RetryShare`'s window, and admit a retry while it fits."""
+    """Count first attempts and retries over a :class:`RetryShare`'s window, and admit a retry while it fits.
 
-    __slots__ = ("_buckets", "_clock", "_share", "_slice")
+    What a :class:`~headgate.retry.RetryBudget` spends through (see :func:`~headgate.retry._policy.ledger_of`), and
+    what the retry layer keeps of its own for a share.
+    """
+
+    __slots__ = ("_buckets", "_clock", "_lock", "_share", "_slice")
 
     def __init__(self, share: RetryShare, clock: Clock) -> None:
         """Account for *share*, measuring the window on *clock*."""
@@ -44,6 +52,12 @@ class RetryLedger:
         self._clock = clock
         self._slice = share.window / _BUCKETS
         self._buckets: deque[_Bucket] = deque()
+        self._lock = threading.Lock()
+
+    @property
+    def clock(self) -> Clock:
+        """The clock the window is measured on."""
+        return self._clock
 
     def _current(self) -> _Bucket:
         """Return the bucket for now, dropping every bucket that has slid out of the window."""
@@ -57,28 +71,32 @@ class RetryLedger:
 
     def record_first(self) -> None:
         """Count a first attempt, which earns retries their share."""
-        self._current().firsts += 1
+        with self._lock:
+            self._current().firsts += 1
 
     def try_spend(self) -> bool:
         """Count a retry and return ``True`` if the window has room for it, else count nothing and return ``False``."""
-        current = self._current()
-        firsts = sum(bucket.firsts for bucket in self._buckets)
-        retries = sum(bucket.retries for bucket in self._buckets)
-        allowance = self._share.ratio * firsts + self._share.min_per_second * self._share.window
-        if retries + 1 > allowance:
-            return False
-        current.retries += 1
-        return True
+        with self._lock:
+            current = self._current()
+            firsts = sum(bucket.firsts for bucket in self._buckets)
+            retries = sum(bucket.retries for bucket in self._buckets)
+            allowance = self._share.ratio * firsts + self._share.min_per_second * self._share.window
+            if retries + 1 > allowance:
+                return False
+            current.retries += 1
+            return True
 
     def counts(self) -> tuple[int, int]:
         """Return the retries and the first attempts the window holds now."""
-        self._current()
-        return sum(bucket.retries for bucket in self._buckets), sum(bucket.firsts for bucket in self._buckets)
+        with self._lock:
+            self._current()
+            return sum(bucket.retries for bucket in self._buckets), sum(bucket.firsts for bucket in self._buckets)
 
     def refund(self) -> None:
         """Take back a retry :meth:`try_spend` counted but never sent, from the latest bucket still counting one."""
-        self._current()
-        for bucket in reversed(self._buckets):
-            if bucket.retries:
-                bucket.retries -= 1
-                return
+        with self._lock:
+            self._current()
+            for bucket in reversed(self._buckets):
+                if bucket.retries:
+                    bucket.retries -= 1
+                    return

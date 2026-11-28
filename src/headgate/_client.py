@@ -134,8 +134,8 @@ from headgate.retry._policy import (
     SEND_ONCE,
     RetryBudget,
     RetryPolicy,
+    ledger_of,
 )
-from headgate.retry._policy import clock_of as retry_clock_of
 from headgate.streaming import Stream
 from headgate.streaming._stream import OpenStream
 from headgate.timing import Clock, current_timing, timing_override
@@ -1265,7 +1265,7 @@ def _shared_clocks(policy: CallPolicy) -> Iterator[tuple[str, Clock]]:
     retries = [policy.retry, *(route.options.get("retry") for route in policy.routes)]
     for retry in retries:
         if retry is not None and isinstance(retry.budget, RetryBudget):
-            yield "RetryBudget given as a RetryPolicy's budget=", retry_clock_of(retry.budget)
+            yield "RetryBudget given as a RetryPolicy's budget=", ledger_of(retry.budget).clock
 
 
 def _layered_timeout(over: Timeouts | None, under: Timeouts | None) -> Timeouts | None:

@@ -32,6 +32,7 @@ from headgate.breaker import CircuitBreaker
 from headgate.ratelimit._budget import Pacer
 from headgate.ratelimit._budgets import Lane, PathBudgets
 from headgate.retry._classify import Attempted, classify
+from headgate.retry._policy import wait_after
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -147,7 +148,7 @@ def test_retry_backoff_batch(benchmark: BenchmarkFixture) -> None:
     policy = RetryPolicy()
 
     def wait() -> float:
-        return policy.wait_after(retry_after_of(_DATED_503), 1, 0.5)
+        return wait_after(policy, retry_after_of(_DATED_503), 1, 0.5)
 
     benchmark(_batched(wait))
 
