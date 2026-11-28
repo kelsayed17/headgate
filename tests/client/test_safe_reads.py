@@ -18,13 +18,20 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Client, HttpCache, HttpOptions, Json, TransportPolicy, as_bytes, nothing
-from headgate.testing import FakeTransport
+from headgate import Client, HttpOptions, Json, nothing
+from headgate._core import CallContext, CallInfo
+from headgate.cache._transport import HAS_BODY, served_from_cache
+from headgate.testing import FakeTransport, Respond
+from tests.cache._helpers import Network, accept, cache_transport
+
+_URL = "https://x/series"
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from hishel import AsyncSqliteStorage
+
+    from headgate import Method
 
 
 @pytest.mark.parametrize("verb", ["get", "head"])
@@ -67,46 +74,55 @@ async def test_a_body_on_get_does_not_type_check(tmp_path: Path) -> None:
     assert "Found 2 diagnostics" in out, out
 
 
-async def _read(client: Client, body: Json | None) -> bytes:
-    """Open a GET stream of ``search`` with *body*, and return what it streams."""
-    async with client.stream("search", method="GET", body=body) as stream:
-        return b"".join([chunk async for chunk in stream.aiter_bytes()])
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+async def test_a_get_or_head_stream_refuses_a_body(method: Method) -> None:
+    """Refuse a body on a GET or HEAD stream before anything is sent, pointing to ``method="QUERY"``."""
+    fake = FakeTransport()
+    async with Client(base_url="https://api.example", http=HttpOptions(transport=fake)) as client:
+        with pytest.raises(TypeError, match=rf"^stream\(\) takes no body= for a {method}: .*method='QUERY'"):
+            async with client.stream("x", method=method, body=Json({"q": "alice"})):
+                pass
+
+    assert fake.calls == ()
 
 
-def _echoing(storage: AsyncSqliteStorage, sent: list[bytes]) -> Client:
-    """Return a client caching into *storage*, whose network records each request body and answers with it."""
+async def test_an_event_stream_refuses_a_body() -> None:
+    """Refuse a body on ``events()``, a GET stream, the same way."""
+    fake = FakeTransport()
+    async with Client(base_url="https://api.example", http=HttpOptions(transport=fake)) as client:
+        with pytest.raises(TypeError, match=r"takes no body= for a GET: .*method='QUERY'"):
+            async with client.events("feed", body=Json({"q": "alice"})):
+                pass
 
-    def handle(request: httpx2.Request) -> httpx2.Response:
-        sent.append(request.read())
-        return httpx2.Response(200, content=request.content or b"none")
-
-    return Client(
-        base_url="https://api.example",
-        policy=TransportPolicy(cache=HttpCache(storage=storage, ttl=60)),
-        http=HttpOptions(transport=httpx2.MockTransport(handle)),
-    )
+    assert fake.calls == ()
 
 
-async def test_the_cache_passes_a_bodied_request_by(storage: AsyncSqliteStorage) -> None:
-    """Send a bodied GET stream to the network, though the URL's entry is stored, so it gets its own body's answer."""
-    sent: list[bytes] = []
-    async with _echoing(storage, sent) as client:
-        stored = await client.get("search", expect=as_bytes)
-        answer = await _read(client, Json({"q": "bob"}))
-        hit = await client.get("search", expect=as_bytes)
+async def test_a_query_stream_takes_a_body() -> None:
+    """Send a QUERY stream's body: the safe read with a body."""
+    fake = FakeTransport().reply("QUERY", "/x", Respond(content=b"ok"))
+    client = Client(base_url="https://api.example", http=HttpOptions(transport=fake))
+    async with client, client.stream("x", method="QUERY", body=Json({"q": "alice"})) as stream:
+        assert b"".join([chunk async for chunk in stream.aiter_bytes()]) == b"ok"
 
-    assert (stored, answer, hit) == (b"none", b'{"q":"bob"}', b"none")
-    assert sent == [b"", b'{"q":"bob"}'], "the bodied stream was answered from the cache"
+    assert fake.calls[0].content == b'{"q":"alice"}'
 
 
-async def test_a_body_under_a_content_length_of_zero_is_still_passed_by(storage: AsyncSqliteStorage) -> None:
-    """Pass a bodied request by whatever ``Content-Length`` the caller wrote: the call, not the header, says so."""
-    sent: list[bytes] = []
-    async with _echoing(storage, sent) as client:
-        await client.get("search", expect=as_bytes)
-        async with client.stream(
-            "search", method="GET", body=Json({"q": "bob"}), headers={"Content-Length": "0"}
-        ) as stream:
-            _ = [chunk async for chunk in stream.aiter_bytes()]
+async def test_the_cache_passes_a_call_given_a_body_by(storage: AsyncSqliteStorage) -> None:
+    """Send a call marked as given a body to the network, though its URL's entry is stored and its headers say none.
 
-    assert len(sent) == len(("stored", "bodied")), "the bodied stream was answered from the cache"
+    No verb or stream sends a GET with a body now; the mark is the cache's defense should one arrive. It is the call's
+    own, so a ``Content-Length: 0`` the caller wrote does not hide the body.
+    """
+    network = Network()
+    transport = cache_transport(storage, network)
+    await accept(await transport.handle_async_request(httpx2.Request("GET", _URL)))
+    bodied = httpx2.Request("GET", _URL, headers={"Content-Length": "0"})
+    context = CallContext(CallInfo(method="GET", url=_URL))
+    context.put(HAS_BODY, value=True)
+    context.attach(bodied)
+
+    await (await transport.handle_async_request(bodied)).aread()
+    hit = await transport.handle_async_request(httpx2.Request("GET", _URL))
+
+    assert network.calls == len(("stored", "bodied")), "the bodied call was answered from the cache"
+    assert served_from_cache(hit)

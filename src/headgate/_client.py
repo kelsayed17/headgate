@@ -568,6 +568,8 @@ class Client:
           httpx2 error: it propagates unchanged, the breaker is charged nothing for it, and ``CallFinished`` reports
           the status the stream opened with and no error.
 
+        A GET or HEAD stream takes no ``body=``, as :meth:`get` takes none: ``method="QUERY"`` is the read with a body.
+
         ``last_event_id=`` sends ``Last-Event-ID`` (when not empty, and in place of one in ``headers=``), to resume a
         server-sent event stream after the last event a previous :class:`~headgate.streaming.Stream` saw (its
         ``last_event_id``).
@@ -576,6 +578,12 @@ class Client:
         """
         check_options("stream", options, STREAM_KEYS, BODY_HINTS)
         check_overrides(options)
+        if method in _NO_BODY_HINTS and options.get("body") is not None:
+            msg = (
+                f"stream() takes no body= for a {method}: a {method} has no body, and the cache does not key one: use "
+                "method='QUERY', the safe read with a body"
+            )
+            raise TypeError(msg)
         if bool(last_event_id):
             # Merged case-insensitively, so it replaces a Last-Event-ID however headers= spelled it.
             headers = httpx2.Headers(options.get("headers"))

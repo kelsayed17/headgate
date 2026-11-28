@@ -26,7 +26,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `get()` and `head()` take no `body=` (their options are `CallOptions`): a GET's body has no meaning, and the cache
   keyed the entry by its URL alone, so a second GET with another body was served the first one's answer. A body keyword
   on either raises `TypeError` pointing to `query()`, the safe read with a body: write
-  `query(url, expect=..., body=Json(...))`. `delete()` keeps `body=`.
+  `query(url, expect=..., body=Json(...))`. `delete()` keeps `body=`. A `stream()` with `method="GET"` or
+  `"HEAD"`, and `events()`, refuse `body=` the same way: write `stream(url, method="QUERY", body=...)`.
 - A call's `httpx2.URL` must be absolute. A relative one raises `TypeError`, since its only use was to skip escaping:
   `httpx2.URL(f"items/{uid}")` type-checked and reached `/admin` for `uid = "../admin"`. Write a t-string,
   `t"items/{uid}"`, or `{fragment:raw}` for a pre-built fragment. A URL of any other kind (`None`, `bytes`, a list, a
@@ -83,8 +84,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   middleware when the client is built, for an `Auth` subclass's class attribute (`credential_headers`, `signed_headers`,
   `token_headers` and the `_params`) when the class is defined, for a declaration through a property when the client is
   built, and for `CassetteFilter(headers=, params=)` and its auths' declarations when the filter is built.
-- The cache never looks up, stores or shares a request with a body, whatever its method, so a GET stream opened with
-  `body=` is no longer served the entry stored for its URL. It goes to the network as it arrives.
+- The cache never looks up, stores or shares a call given a body, whatever its method and whatever `Content-Length` the
+  caller wrote: a GET stream opened with `body=` was served the entry stored for its URL. No GET or HEAD takes a body
+  now; this is the cache's own defense.
 - `CassetteFilter(headers="x-api-key")` no longer records the header it was asked to scrub: it filtered the letters
   `x`, `-`, `a` and so on. A bare `str` is now refused.
 - Every pager's next-page `httpx2.URL` is resolved against the URL that answered the page, and a next page from

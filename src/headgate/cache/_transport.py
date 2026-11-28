@@ -702,9 +702,9 @@ class ResilientCacheTransport(AsyncCacheTransport):
     POSTs are never shared, since a POST's body is part of what it asks for, nor streams, nor a later send of the call
     fetching (a hedge), which would only wait on the send it is meant to overtake.
 
-    **A request with a body is never cached**, whatever its method: it goes to the network as it arrives, never looked
-    up, stored or shared, since the key is its URL and two bodies would share one entry. ``get()`` and ``head()`` take
-    no body; a GET stream with one is sent past the cache.
+    **A call given a body is never cached** (:data:`HAS_BODY`), whatever its method: it goes to the network as it
+    arrives, never looked up, stored or shared, since the key is its URL and two bodies would share one entry. No GET or
+    HEAD takes a body, a stream's included, so this is a defense.
     """
 
     def __init__(
