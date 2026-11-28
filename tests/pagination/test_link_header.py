@@ -10,13 +10,19 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from headgate.pagination import Link, parse_link_header
-from headgate.pagination._link import next_link
+import headgate.pagination
+from headgate.pagination._link import Link, next_link, parse_link_header
 
 
 def _pairs(header: str) -> list[tuple[str, dict[str, str]]]:
     """Return *header*'s links as plain ``(target, params)`` pairs."""
     return [(link.target, dict(link.params)) for link in parse_link_header(header)]
+
+
+def test_the_parser_is_the_pagers_own() -> None:
+    """Keep the ``Link`` parser out of ``headgate.pagination``: ``LinkHeader`` is what follows the header."""
+    assert {"Link", "parse_link_header"}.isdisjoint(headgate.pagination.__all__)
+    assert not hasattr(headgate.pagination, "parse_link_header")
 
 
 def test_a_github_style_header_yields_each_link_with_its_relation() -> None:

@@ -274,6 +274,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `HttpOptions(security=SecurityOptions(block_private_hosts=True, check=...))` where a test built
   `PinnedHTTPTransport(AddressGuard(check=...), ...)` to reach a loopback server, and pass an `AsyncCurlTransport` as
   `HttpOptions(transport=)` where it called `bind_guard()` itself.
+- `HttpCache.caches_request()` and `stores_status()`, `headgate.pagination.parse_link_header()` and `Link`, and
+  `headgate.testing.Respond.response()`, which only the stack and the fakes call. Read what a cache stores from its
+  `methods`, `paths` and `statuses`, follow `Link` headers with `LinkHeader`, and read a `Respond` step's
+  `status_code`, `headers`, `json`, `content` and `retry_after`. A subclass of `HttpCache` that overrode either rule
+  overrode nothing the cache reads now: give the cache the `methods`, `paths` and `statuses` it should keep.
 
 ### Fixed
 

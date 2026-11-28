@@ -47,6 +47,7 @@ import asyncio
 import contextlib
 import dataclasses
 import enum
+import functools
 import uuid
 from collections.abc import Iterator
 from contextvars import ContextVar
@@ -59,7 +60,7 @@ from hishel.httpx2 import AsyncCacheTransport
 
 from headgate._core import CacheChecked, CacheOutcome, CallContext, Slot, url_path
 from headgate.cache._credentials import CredentialScope
-from headgate.cache._policy import Partition
+from headgate.cache._policy import Partition, caches_request, stores_status
 from headgate.retry._policy import NETWORK_ERRORS, RETRY_POLICY
 
 if TYPE_CHECKING:
@@ -710,7 +711,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
         Without a *scope*, requests are viewed as a client with no auth would send them.
         """
         shared = cache.partition is Partition.SHARED
-        storage = _GuardedStorage(cache.storage, stores=cache.stores_status, shared=shared)
+        storage = _GuardedStorage(cache.storage, stores=functools.partial(stores_status, cache), shared=shared)
         super().__init__(_RestoreRequest(next_transport), storage=storage)
         self._cache = cache
         self._backend = cache.storage
@@ -730,7 +731,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
         # A Range asks for part of a body, which no stored whole one answers and whose 206 is never stored.
         if (
             uncached
-            or not self._cache.caches_request(request.method, url_path(request.url))
+            or not caches_request(self._cache, request.method, url_path(request.url))
             or "range" in request.headers
         ):
             # Neither looked up nor stored, so nothing here needs its body: it goes up as it arrives.

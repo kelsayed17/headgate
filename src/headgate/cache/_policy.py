@@ -5,10 +5,10 @@
 
 hishel 2 caches every successful GET and HEAD it is handed, whatever the response's cache headers say. headgate
 decides before and after it: a request whose method or path :class:`HttpCache` does not name never reaches hishel
-(:meth:`HttpCache.caches_request`), and a response whose status it does not name is never stored
-(:meth:`HttpCache.stores_status`). So a cache **stores whenever the request matches and an allowed status comes back,
-even past an RFC 9111** ``no-store``. That is the point for a provider that sends ``no-store`` or no cache headers at
-all, where an RFC 9111 cache would keep nothing. Store only the 200s (the default) so an error body never poisons the
+(:func:`caches_request`), and a response whose status it does not name is never stored (:func:`stores_status`). So
+a cache **stores whenever the request matches and an allowed status comes back, even past an RFC 9111** ``no-store``.
+That is the point for a provider that sends ``no-store`` or no cache headers at all, where an RFC 9111 cache would keep
+nothing. Store only the 200s (the default) so an error body never poisons the
 cache. The rules read only the method and the URL path, never a credential. ``methods`` names only GET and HEAD,
 which a URL keys: a POST is never cached.
 
@@ -29,7 +29,7 @@ from hishel import AsyncBaseStorage
 
 from headgate._core import check_collection, check_fragment, check_names, path_has_fragment
 
-__all__ = ["HttpCache", "Partition"]
+__all__ = ["HttpCache", "Partition", "caches_request", "stores_status"]
 
 #: The methods ``HttpCache(methods=...)`` may name: those a URL identifies, since the URL is the cache key.
 _URL_KEYED_METHODS: Final = frozenset({"GET", "HEAD"})
@@ -72,8 +72,7 @@ class HttpCache:
     ``statuses`` (200 by default). A string in ``paths`` is one or more whole segments, matched as
     :class:`~headgate.Route` matches; a compiled pattern is searched for in the path, for what segments cannot say,
     such as a file name's prefix or extension. An empty collection, which would store nothing, is refused:
-    ``cache=None`` is a client without a cache. :meth:`caches_request` and :meth:`stores_status` say what the three
-    decide.
+    ``cache=None`` is a client without a cache.
 
     :raises TypeError: for a ``methods``, ``paths`` or ``statuses`` that is not a collection: a bare ``str`` (read one
         letter at a time), a number or a one-shot iterator.
@@ -127,22 +126,23 @@ class HttpCache:
             raise ValueError(msg)
         object.__setattr__(self, "statuses", statuses)
 
-    def caches_request(self, method: str, path: str) -> bool:
-        """Return whether a request with *method* (in any case) and the URL path *path* goes through the cache.
 
-        *path* is the path as sent, percent-encoded (:func:`~headgate._core.url_path`): a fragment is matched segment by
-        segment, so an escaped ``/`` stays in its segment, and a pattern is searched in the decoded path, as written.
+def caches_request(cache: HttpCache, method: str, path: str) -> bool:
+    """Return whether a request with *method* (in any case) and the URL path *path* goes through *cache*.
 
-        ``paths`` left ``None`` matches any path. Any other request is sent past
-        the cache: never looked up, never stored.
-        """
-        if method.upper() not in self.methods:
-            return False
-        return self.paths is None or any(_matches(path, rule) for rule in self.paths)
+    *path* is the path as sent, percent-encoded (:func:`~headgate._core.url_path`): a fragment is matched segment by
+    segment, so an escaped ``/`` stays in its segment, and a pattern is searched in the decoded path, as written.
 
-    def stores_status(self, status: int) -> bool:
-        """Return whether a response with *status* may be stored: one in ``statuses``."""
-        return status in self.statuses
+    ``paths`` left ``None`` matches any path. Any other request is sent past the cache: never looked up, never stored.
+    """
+    if method.upper() not in cache.methods:
+        return False
+    return cache.paths is None or any(_matches(path, rule) for rule in cache.paths)
+
+
+def stores_status(cache: HttpCache, status: int) -> bool:
+    """Return whether a response with *status* may be stored by *cache*: one in its ``statuses``."""
+    return status in cache.statuses
 
 
 def _refuse_none(option: str, value: object, example: str, default: str) -> None:

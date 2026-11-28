@@ -42,8 +42,8 @@ statuses=frozenset({200}))`:
   never looked up or stored.
 - **`statuses` names 2xx statuses other than 206 only.** hishel stores no other response, and a 206 holds part of a
   body; any other status raises `ValueError`, rather than being accepted and never stored.
-- **`caches_request(method, path)` and `stores_status(status)`** say what the three decide. A request they do not
-  name is sent straight past hishel: never looked up, never stored.
+- **A request the three do not name is sent straight past hishel**: never looked up, never stored. A cache shows
+  them as it holds them, `methods` and `statuses` as frozensets (`"get"` upper-cased) and `paths` as a tuple.
 - **`Vary` is honored, and `Accept` always counts.** An entry answers only a request whose `Accept`, and whose
   headers named in the response's `Vary`, match the ones it was stored with, compared as keyed digests (see below), so
   a JSON and a CSV of one URL are two entries. A response that could never be matched is not stored: one with
