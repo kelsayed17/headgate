@@ -114,8 +114,8 @@ stays retryable. `body=` takes one `Body`, whose class says what it is:
 - a callable returning such an iterable: a **factory**, called once for each send, so the call stays retryable and
   redirects are followed. Prefer this for a file.
 
-A `Multipart`'s files are an `UploadFiles`, as httpx2 takes them: `{"name": file}`, each file alone or in a
-`(filename, file, content_type)` tuple, where the file is bytes, text or a binary file object; a file object that is
+A `Multipart`'s files are an `UploadFiles`, as httpx2 takes them: `{"name": file}`, each an `UploadFile`, the file
+alone or in a `(filename, file, content_type)` tuple, where the file is bytes, text or a binary file object; a file object that is
 neither a regular file nor in memory, such as a pipe, cannot be rewound, so the call is sent once. `Raw(...).replayable` and `Multipart(...).replayable` say which a body is.
 
 ```python

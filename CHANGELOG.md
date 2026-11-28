@@ -31,8 +31,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `headgate.security.forbidden_reason` itself, which a check of your own can defer to for the addresses it does not
   decide. A check of your own is accepted only with `block_private_hosts=True` (`ValueError` otherwise, as for
   `resolver=`), and `check=None` is a `TypeError` naming the default: leave it out.
-- `headgate.CallUrl`, `headgate.RawContent` and `headgate.UploadFiles`, the types of a verb's URL, of
-  `Raw(content)` and of `Multipart(files)`, which their signatures named but nothing exported: a wrapper writes
+- `headgate.CallUrl`, `headgate.RawContent`, `headgate.UploadFiles` and `headgate.UploadFile`, the types of a verb's
+  URL, of `Raw(content)`, of `Multipart(files)` and of one file in it, which their signatures named but nothing
+  exported: a wrapper writes
   `async def fetch(self, url: CallUrl, **options: Unpack[CallOptions])`. `CallUrl` is a plain union, so a type
   checker that refuses a computed `str` still names `LiteralString` in its message.
 - `CacheOutcome.UNSTORED` (value `"unstored"`): a call accepted the network's answer, but the cache could not store
@@ -304,6 +305,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- The value of every exported type alias evaluates at runtime: `headgate.Next.__value__`,
+  `headgate.security.Resolver.__value__` and `headgate.security.AddressCheck.__value__` raised `NameError` for
+  `Callable`, which their modules imported only for the type checker, so a library that reads an alias's value
+  (pydantic, `typing.get_type_hints` on a signature that names one) failed. Nothing to write differently.
 - A breaker's consecutive-failure count includes a failed half-open probe, so `BreakerSnapshot.failures` and
   `BreakerChanged.failures` say what they are documented to: a breaker with `failure_threshold=2` whose probe failed
   reads `failures=3`, where it read `2` and kept reading it until the next success. Nothing to write differently; a

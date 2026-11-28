@@ -40,6 +40,7 @@ __all__ = [
     "Multipart",
     "Raw",
     "RawContent",
+    "UploadFile",
     "UploadFiles",
     "WireValue",
     "Writer",
@@ -123,16 +124,20 @@ type RawContent = bytes | AsyncIterable[bytes] | Callable[[], AsyncIterable[byte
 A factory builds a fresh stream of the body, called once for each send of the request.
 """
 
-type _FileContent = IO[bytes] | bytes | str
-type _UploadFile = (
-    _FileContent
-    | tuple[str | None, _FileContent]
-    | tuple[str | None, _FileContent, str | None]
-    | tuple[str | None, _FileContent, str | None, Mapping[str, str]]
+type UploadFile = (
+    IO[bytes]
+    | bytes
+    | str
+    | tuple[str | None, IO[bytes] | bytes | str]
+    | tuple[str | None, IO[bytes] | bytes | str, str | None]
+    | tuple[str | None, IO[bytes] | bytes | str, str | None, Mapping[str, str]]
 )
+"""One multipart file, as httpx2 takes it: its content (a binary file, bytes or text), or a tuple of its filename (or
+``None``) and content, then optionally its content type (or ``None``) and its headers."""
 
-type UploadFiles = Mapping[str, _UploadFile] | Sequence[tuple[str, _UploadFile]]
-"""Multipart files, as httpx2 takes them: a file (or bytes), optionally with a filename, content type and headers."""
+
+type UploadFiles = Mapping[str, UploadFile] | Sequence[tuple[str, UploadFile]]
+"""Multipart files, as httpx2 takes them: each field name with its :data:`UploadFile`, as a mapping or as pairs."""
 
 
 class _Replayed(httpx2.AsyncByteStream):

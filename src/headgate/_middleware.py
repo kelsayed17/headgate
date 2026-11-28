@@ -19,6 +19,7 @@ shape every headgate auth has, empty when it stamps none), and has them removed 
 than ``base_url``'s and ``SecurityOptions.trusted_origins``. ``Client()`` refuses a middleware that declares neither.
 """
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Protocol, override
 
 import httpx2
@@ -27,8 +28,6 @@ from headgate._auth import SIGNER_EXT, SigningAuth, refuse_undeclared, stamped_n
 from headgate._core import CredentialCarrier
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
     from headgate._core import Clock
 
 __all__ = ["Middleware", "MiddlewareTransport", "Next"]

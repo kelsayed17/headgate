@@ -445,7 +445,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['Auth', 'AuthError', 'BearerAuth', 'Body', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CallPolicy', 'CallUrl', 'Client', 'ClientError', 'ClientTimeoutError', 'Codec', 'EncodedBody', 'Expect', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'Paginated', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'RawContent', 'Reader', 'RequestOptions', 'ResponseCheck', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'UploadFiles', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_events', 'as_json', 'as_text', 'body_reader', 'call_view', 'decode_with', 'nothing', 'reader_for', 'writer_for']
+  __all__ = ['Auth', 'AuthError', 'BearerAuth', 'Body', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CallPolicy', 'CallUrl', 'Client', 'ClientError', 'ClientTimeoutError', 'Codec', 'EncodedBody', 'Expect', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'Paginated', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'RawContent', 'Reader', 'RequestOptions', 'ResponseCheck', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'UploadFile', 'UploadFiles', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_events', 'as_json', 'as_text', 'body_reader', 'call_view', 'decode_with', 'nothing', 'reader_for', 'writer_for']
   class Auth(Auth, ABC)()
       property credential_headers
       def credential_identity(self) -> 'bytes'
@@ -648,7 +648,8 @@
       field pool: float | None = None
       def over(self, base: 'Timeouts') -> 'Timeouts'
   class TransportError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  type UploadFiles = Mapping[str, _UploadFile] | Sequence[tuple[str, _UploadFile]]
+  type UploadFile = IO[bytes] | bytes | str | tuple[str | None, IO[bytes] | bytes | str] | tuple[str | None, IO[bytes] | bytes | str, str | None] | tuple[str | None, IO[bytes] | bytes | str, str | None, Mapping[str, str]]
+  type UploadFiles = Mapping[str, UploadFile] | Sequence[tuple[str, UploadFile]]
   class UpstreamStatusError(ClientError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
       property code
       property problem
