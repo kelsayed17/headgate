@@ -115,7 +115,7 @@ async def test_the_degraded_marker_names_the_backend_error_by_type_alone(storage
         pytest.param(lambda inner: _BodyFaulty(inner, StorageTimeoutError("timeout writing")), id="writing-the-body"),
     ],
 )
-async def test_a_store_fault_on_accept_is_reported_and_the_answer_stands(
+async def test_a_store_fault_on_accept_is_reported_unstored_and_the_answer_stands(
     faulty: Callable[[AsyncBaseStorage], AsyncBaseStorage], storage: AsyncSqliteStorage
 ) -> None:
     """A miss is written when the call accepts it: a fault then is reported on the call, and its answer stands.
@@ -130,7 +130,7 @@ async def test_a_store_fault_on_accept_is_reported_and_the_answer_stands(
     resp.request = request  # as the client's httpx2 sets it, so the write finds the call it reports on
 
     assert await accept(resp) == NETWORK_BODY
-    assert outcomes(recorder) == [CacheOutcome.MISS, CacheOutcome.DEGRADED]
+    assert outcomes(recorder) == [CacheOutcome.MISS, CacheOutcome.UNSTORED]
     assert CACHE_DEGRADED_EXT not in resp.extensions, "the answer itself came from a healthy fetch"
     assert len(network.urls) == 1
     assert network.streams[0].closed

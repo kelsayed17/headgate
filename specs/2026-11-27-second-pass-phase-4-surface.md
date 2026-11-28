@@ -58,12 +58,14 @@ member (ruff `SLF001`, which applies to `tests/` too).
    the property tests call them there.
 6. **A store that fails after the answer is reported too (4.2).** `cache_degradations()` and `CACHE_DEGRADATIONS` go.
    The live fallback already emits `CacheChecked(outcome=DEGRADED)`; a deferred write that fails or overruns the
-   accepting call's deadline was only counted, so it now emits `CacheChecked(outcome=DEGRADED)` on the accepting
-   call, after that call's `MISS`, or the removal would leave it reported nowhere. `CacheOutcome.DEGRADED` reads "the
-   storage failed: the request went to the network uncached, or its response could not be stored".
-   `observer_failures()` says it is process-wide, and why: an observer that raises cannot be reported through
-   observers. Transport-level tests that read the count stamp their request with an observed call
-   (`tests/cache/_helpers.observed`) and assert the outcomes instead.
+   accepting call's deadline was only counted, so it now emits `CacheChecked(outcome=UNSTORED)`, a new outcome, on
+   the accepting call, after that call's `MISS`, or its `COALESCED` when it waited on the download and accepted it
+   first, or the removal would leave it reported nowhere. (Changed with the phase 4 review: the first cut reported it
+   as `DEGRADED`, giving that outcome two meanings.) A response with no call to report on (a transport driven
+   directly) reports nothing; the lookup is `CallContext.find`, which stamps no context. `observer_failures()` says it
+   is process-wide, and why: an observer that raises cannot be reported through observers. Transport-level tests that
+   read the count stamp their request with an observed call (`tests/cache/_helpers.observed`) and assert the outcomes
+   instead.
 7. **`policy_disabled` stays defined in `headgate._core._switch`** (a rate budget honors it where it is built, below
    every layer) and is exported, so rehomed, by `headgate.testing`, which reports `headgate.testing` as its home as soon
    as it is imported. Its docstring takes what `headgate.policy`'s said about what "off" means. `headgate.policy`

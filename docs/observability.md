@@ -1,8 +1,8 @@
 # Observability
 
 headgate writes no log records. A client reports what it does as **typed events** to the observers you install, its
-errors carry what a diagnosis needs (see [errors](errors.md)), and three counters of degraded state are readable on
-demand. What to record, where, and at what level is the application's decision.
+errors carry what a diagnosis needs (see [errors](errors.md)), and the state of its breakers and a count of failing
+observers are readable on demand. What to record, where, and at what level is the application's decision.
 
 ## Events
 
@@ -37,7 +37,7 @@ coroutine function: its events would be dropped. Hand slow work (a network sink)
 | `RetryScheduled` | the retry layer will send again | `attempt`, `delay`, `reason` (`"503"`, `"ConnectError"`, `"hedge"`) |
 | `RateLimited` | the rate budget held the call, or its response paused the budget | `delay`, `reason`: `paced`, `throttled`, `paused`, `pushback` |
 | `BreakerChanged` | an origin's breaker changed state | `origin`, `previous`, `state`, `failures`, `call` |
-| `CacheChecked` | the cache checked the call | `outcome`, a `CacheOutcome`: `hit`, `miss`, `coalesced`, `degraded` |
+| `CacheChecked` | the cache checked the call, or could not store its answer | `outcome`, a `CacheOutcome`: `hit`, `miss`, `coalesced`, `degraded`, `unstored` |
 | `DeprecationNoticed` | the response announced deprecation or a sunset | `deprecated`, `deprecated_at`, `sunset_at`, `link`, `sunset_link` |
 | `CallFinished` | a call ends, either way | `status_code`, `error` (the exception type's name; not that of a non-`ClientError` a `stream()` block raised itself), `attempts`, `elapsed` |
 
@@ -116,4 +116,4 @@ A `User-Agent` in `HttpOptions(headers=...)` replaces it entirely.
   observer that raises cannot be told of it through observers.
 
 A broken cache is not counted here: each call that found it broken reports a `CacheChecked` event with outcome
-`degraded`, which an observer counts with the call it names.
+`degraded`, or `unstored` when its answer could not be stored, which an observer counts with the call it names.

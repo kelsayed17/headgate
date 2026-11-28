@@ -102,6 +102,7 @@
       MISS = 'miss'
       COALESCED = 'coalesced'
       DEGRADED = 'degraded'
+      UNSTORED = 'unstored'
   class CallEvent(object)(*, call: 'CallInfo') -> 'None'
       field call: CallInfo
   class CallFinished(CallEvent)(*, call: 'CallInfo', status_code: 'int | None' = None, error: 'str | None' = None, attempts: 'int', elapsed: 'float') -> 'None'

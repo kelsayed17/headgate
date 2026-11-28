@@ -31,10 +31,10 @@ a miss (answered by the network, stored or not), a degraded fetch, or a download
 **Faults.** A storage fault never fails a request that would otherwise succeed. Every call into the storage, and every
 body it streams, goes through a guard that raises any backend failure as :class:`CacheStorageError`; the transport
 reports it on the call (a ``CacheChecked`` with outcome ``DEGRADED``), redoes the request on the live transport, and
-marks the response with :data:`CACHE_DEGRADED_EXT`. A fault writing a miss the call already accepted is reported the
-same way. Anything else raised inside hishel is a bug, not an outage, and propagates. A backend's
-own message can carry its DSN, password included, so nothing a caller can see repeats it: the degraded marker and
-every error raised past this layer name only the backend exception's type.
+marks the response with :data:`CACHE_DEGRADED_EXT`. A fault writing a miss the call already accepted is dropped and
+reported on that call with outcome ``UNSTORED``. Anything else raised inside hishel is a bug, not an outage, and
+propagates. A backend's own message can carry its DSN, password included, so nothing a caller can see repeats it: the
+degraded marker and every error raised past this layer name only the backend exception's type.
 
 **Outcomes that say nothing about the host.** Two things this layer hands up did not come from this request's own
 attempt on the network: a response or network failure another identical GET fetched (see
@@ -302,7 +302,7 @@ class _Store:
 
     Shared by every copy of the response, a download's waiting requests included, so it is written at most once. A
     storage fault while writing, or a write still running when the accepting call's deadline passes, is reported on
-    that call as a degraded fetch and dropped: the call already has its answer.
+    that call as unstored and dropped: the call already has its answer.
     """
 
     def __init__(self, backend: AsyncBaseStorage, deferred: _Deferred, body: bytes) -> None:
@@ -333,7 +333,7 @@ class _Store:
                     pass
         except CacheStorageError, TimeoutError:
             if context is not None:
-                _report_on(context, CacheOutcome.DEGRADED)
+                _report_on(context, CacheOutcome.UNSTORED)
 
 
 async def _one_chunk(body: bytes) -> AsyncIterator[bytes]:
@@ -607,7 +607,9 @@ class _InFlight:
 
 def _report(request: httpx2.Request, outcome: CacheOutcome) -> None:
     """Emit a :class:`~headgate._core.CacheChecked` with *outcome* on *request*'s call, when anyone is listening."""
-    _report_on(CallContext.of(request), outcome)
+    context = CallContext.find(request)
+    if context is not None:
+        _report_on(context, outcome)
 
 
 def _report_on(context: CallContext, outcome: CacheOutcome) -> None:

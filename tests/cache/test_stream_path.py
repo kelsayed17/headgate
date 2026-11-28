@@ -173,15 +173,15 @@ class _HungWrites(FaultyStorage):
         return await asyncio.Future["Entry"]()  # never resolved
 
 
-async def test_a_hung_write_ends_with_the_deadline_and_is_reported_degraded(storage: AsyncSqliteStorage) -> None:
-    """Return a verb's answer by its deadline though the write of its miss hangs, and report the write as degraded."""
+async def test_a_hung_write_ends_with_the_deadline_and_is_reported_unstored(storage: AsyncSqliteStorage) -> None:
+    """Return a verb's answer by its deadline though the write of its miss hangs, and report the answer unstored."""
     recorder = Recorder()
     client = stub_client(transport=Network(), cache=HttpCache(storage=_HungWrites(storage)), observers=(recorder,))
     async with client, asyncio.timeout(5):
         body = await client.get("series", expect=as_bytes, deadline=0.2)
 
     assert body == NETWORK_BODY
-    assert outcomes(recorder) == [CacheOutcome.MISS, CacheOutcome.DEGRADED]
+    assert outcomes(recorder) == [CacheOutcome.MISS, CacheOutcome.UNSTORED]
 
 
 class _StallsMidBody(FaultyStorage):
@@ -215,7 +215,7 @@ async def test_a_write_cut_off_mid_body_is_never_served(storage: AsyncSqliteStor
         second = await client.get("series", expect=as_bytes)
 
     assert first == second == NETWORK_BODY
-    assert outcomes(recorder)[:2] == [CacheOutcome.MISS, CacheOutcome.DEGRADED], "the deadline cut the first write off"
+    assert outcomes(recorder)[:2] == [CacheOutcome.MISS, CacheOutcome.UNSTORED], "the deadline cut the first write off"
     assert network.calls == _PAIR, "the half-written entry was not a hit"
 
 
