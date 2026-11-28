@@ -63,6 +63,8 @@ __all__ = [
     "failed_on_auth_hop",
     "hold_timing",
     "mint_hop_failure",
+    "refuse_undeclared",
+    "stamped_names",
     "was_checked",
 ]
 
@@ -395,6 +397,38 @@ def _check_mint(cls: type[CachedTokenAuth[Any]]) -> None:
         "an async generator that yields each request the exchange needs and ends with the Minted"
     )
     raise TypeError(msg)
+
+
+#: What a request carries before a hook stamps it: its header names (lower case, as httpx2 keys them) and its raw query.
+type Stamped = tuple[frozenset[str], bytes]
+
+
+def stamped_names(request: httpx2.Request) -> Stamped:
+    """Return what :func:`refuse_undeclared` compares *request* against after a hook stamps it."""
+    return frozenset(request.headers.keys()), request.url.query
+
+
+def refuse_undeclared(auth: Auth, hook: str, request: httpx2.Request, before: Stamped) -> None:
+    """Raise ``TypeError`` when *hook* set a header or query parameter on *request* that *auth* does not declare.
+
+    *before* is :func:`stamped_names` of the request before the hook ran. The guard withholds only what is declared,
+    so an undeclared name would follow the request to any origin; it is refused before anything is sent. Header names
+    are compared case-insensitively. The query is parsed only when the hook changed it, since this runs on every
+    attempt.
+    """
+    headers, query = before
+    added = frozenset(request.headers.keys()) - headers
+    undeclared = set(added - {name.lower() for name in auth.credential_headers}) if added else set[str]()
+    if request.url.query != query:
+        params = frozenset(request.url.params) - frozenset(httpx2.QueryParams(query))
+        undeclared |= params - auth.credential_params
+    if undeclared:
+        msg = (
+            f"{type(auth).__name__}.{hook} set {', '.join(sorted(undeclared))}, which it does not declare, so the "
+            "client could not withhold it from an origin it does not trust: add it to credential_headers (a header) "
+            "or credential_params (a query parameter)"
+        )
+        raise TypeError(msg)
 
 
 def _carries(auth: Auth, request: httpx2.Request) -> bool:
@@ -1004,7 +1038,9 @@ class CachedTokenAuth[TokenT = str](Auth):
                     finally:
                         self.__state.minting = False
             _mark_minting(context, minting=False)
+            before = stamped_names(request)
             self.attach(request, token)
+            refuse_undeclared(self, "attach", request, before)
             response = yield request
             # ``rejected`` is set only after the first 401, so this re-sends at most once. A 401 to a request the token
             # never reached (the credential guard withheld it from an untrusted origin, or httpx2 from a cross-origin

@@ -568,3 +568,43 @@ def test_an_async_skips_is_refused_when_defined() -> None:
 
     with pytest.raises(TypeError, match=r"_AsyncSkips\.skips is a coroutine function, which SigningAuth calls"):
         type("_AsyncSkips", (_Signer,), {"skips": skips})
+
+
+class _LeakySigner(SigningAuth):
+    """Signs with a declared header and slips in one it never declared, as ``probe_undeclared.py`` does."""
+
+    credential_headers: ClassVar = frozenset({"X-Sig"})
+
+    @override
+    def sign(self, request: httpx2.Request, now: float) -> None:
+        request.headers["X-Sig"] = "sig"
+        request.headers["X-Api-Key"] = "long-lived-secret"
+        request.url = request.url.copy_set_param("key_id", "k1")
+
+
+async def test_a_signer_that_sets_an_undeclared_name_is_refused_before_it_sends() -> None:
+    """Raise ``TypeError`` naming what ``sign`` set undeclared (R3), and send nothing, so it reaches no other origin."""
+    client, sent = _client(_LeakySigner(), _ok)
+    async with client:
+        with pytest.raises(TypeError, match=r"_LeakySigner\.sign set key_id, x-api-key, which it does not declare"):
+            await client.get("orders", expect=RESPONSE)
+
+    assert sent == []
+
+
+async def test_a_signer_may_rewrite_a_name_it_found_and_set_declared_names_in_any_case() -> None:
+    """Accept a declared name written in another case, and a header the request already carried."""
+
+    class _Tidy(SigningAuth):
+        credential_headers: ClassVar = frozenset({"x-sig"})
+
+        @override
+        def sign(self, request: httpx2.Request, now: float) -> None:
+            request.headers["X-SIG"] = "sig"
+            request.headers["Accept"] = "application/json"
+
+    client, sent = _client(_Tidy(), _ok)
+    async with client:
+        await client.get("orders", expect=RESPONSE)
+
+    assert (sent[0].headers["x-sig"], sent[0].headers["accept"]) == ("sig", "application/json")

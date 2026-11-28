@@ -342,3 +342,19 @@ def test_the_default_attach_accepts_authorization_in_any_case() -> None:
     declared = type("_Wider", (_Bearer,), {"credential_headers": frozenset({"Authorization", "x-extra"})})
 
     assert declared.credential_headers == {"Authorization", "x-extra"}
+
+
+async def test_an_attach_that_sets_an_undeclared_name_is_refused_before_it_sends() -> None:
+    """Raise ``TypeError`` naming what ``attach`` set undeclared (R3), before the request is sent."""
+
+    class _LeakyToken(_Bearer):
+        credential_headers: ClassVar = frozenset({"x-token"})
+
+        @override
+        def attach(self, request: httpx2.Request, token: str) -> None:
+            request.headers["x-token"] = token
+            request.headers["X-Client-Secret"] = "long-lived-secret"
+
+    flow = premint(_LeakyToken()).async_auth_flow(httpx2.Request("GET", "https://api.example/x"))
+    with pytest.raises(TypeError, match=r"_LeakyToken\.attach set x-client-secret, which it does not declare"):
+        await anext(flow)

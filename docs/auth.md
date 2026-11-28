@@ -139,7 +139,8 @@ class ExchangeAuth(SigningAuth):
 - `credential_headers` and `credential_params` declare what `sign` sets, the same two names every auth and middleware
   declares with, so the credential guard withholds exactly those from an origin you do not trust, and the cache keeps
   them out of storage. A subclass that declares neither fails when it is defined. Signed parameters are registered as
-  secret, so error messages redact them.
+  secret, so error messages redact them. A `sign` that sets a header or parameter it does not declare raises
+  `TypeError` naming it, before the request is sent; the same holds for a `CachedTokenAuth`'s `attach`.
 - `skips(request)` says a request is sent unsigned: by default, one already carrying a signed header or parameter.
   Override it for requests that need no signature, such as a provider's public reads.
 - `sign` and `skips` are the hooks. The flow, `async_auth_flow`, is final: it holds the guarantees above, so a subclass
