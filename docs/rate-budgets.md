@@ -25,9 +25,9 @@ or per second for a steadier pace. A client given a `Rate` builds a budget of it
 an object: pass one instance to several clients (or rules) and they spend from it together, across tasks, event loops
 and threads, because its state is plain numbers under a `threading.Lock` and nothing in it is bound to a loop.
 
-`RateBudget(rate, *, max_in_flight=None, adaptive=Adaptive(), timing=None)`, where `timing` (a
-`headgate.timing.Timing`) is the clock and sleep it paces on and the wall clock it reads epochs against, the current
-timing when it is built by default:
+`RateBudget(rate, *, max_in_flight=None, adaptive=Adaptive())` paces on the clock and sleep of the timing current when
+it is built (`headgate.timing.current_timing()`, which `timing_override()` and `TestClock.install()` set for a block),
+and reads epochs against its wall clock:
 
 - **Pacing** is GCRA, the virtual-scheduling form of a leaky bucket. Up to `rate.requests` requests (at least one) go
   out back to back; after that they are `period / requests` seconds apart. Waiters are served in arrival order, and a

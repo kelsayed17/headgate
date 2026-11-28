@@ -31,7 +31,7 @@ from headgate._core import Timing as CoreTiming
 from headgate._core import current_timing
 from headgate.breaker import BreakerRegistry, CircuitBreaker
 from headgate.retry import Backoff, RetryBudget, RetryShare
-from headgate.testing import FakeTransport, TestClock, instant_retries
+from headgate.testing import FakeTransport, FaultyTransport, Slow, TestClock, instant_retries
 from headgate.testing._time import _SETTLE_TURNS
 from headgate.timing import Timing
 
@@ -288,6 +288,47 @@ def test_the_old_clock_keywords_are_gone(build: Callable[[], object]) -> None:
     """Refuse ``jitter=``, ``wall_clock=`` and ``clock=``: each is a field of the one ``timing=`` now."""
     with pytest.raises(TypeError):
         build()
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: RateBudget(Rate.per_second(1), **cast("Any", {"timing": Timing()})),
+        lambda: RetryBudget(**cast("Any", {"timing": Timing()})),
+        lambda: BreakerRegistry(**cast("Any", {"timing": Timing()})),
+        lambda: CircuitBreaker(**cast("Any", {"timing": Timing()})),
+        lambda: FaultyTransport(schedule=[], **cast("Any", {"sleep": asyncio.sleep})),
+    ],
+    ids=["rate-budget", "retry-budget", "registry", "breaker", "faulty-sleep"],
+)
+def test_no_constructor_takes_its_own_timing(build: Callable[[], object]) -> None:
+    """Refuse ``timing=`` and ``FaultyTransport(sleep=)``: ``timing_override()`` and ``TestClock.install()`` are it."""
+    with pytest.raises(TypeError):
+        build()
+
+
+async def test_a_faulty_transport_sleeps_on_the_clock_it_was_built_under() -> None:
+    """Wait out a ``Slow`` step on the test clock installed when the fake network was built, after the block too."""
+    clock = TestClock()
+    with clock.install():
+        network = FaultyTransport(schedule=[Slow(seconds=2.0)])
+    async with httpx2.AsyncClient(transport=network) as client:
+        await client.get("https://h.test/x")
+
+    assert clock.now == pytest.approx(2.0)
+
+
+def test_a_shared_registry_built_in_the_block_keeps_the_test_clock_after_it() -> None:
+    """Trip and recover a breaker a shared registry builds after the block, on the clock installed when it was built."""
+    clock = TestClock()
+    with clock.install():
+        shared = BreakerRegistry(_TRIP_AT_ONCE)
+    _trip(shared)
+
+    clock.advance(29.0)
+    assert _breaker(shared).refusing
+    clock.advance(1.0)
+    assert not _breaker(shared).refusing
 
 
 def test_the_timing_module_is_the_one_seam() -> None:

@@ -3,7 +3,7 @@
   '''
   module headgate.breaker
   __all__ = ['BreakerRegistry', 'BreakerState', 'CircuitBreaker']
-  class BreakerRegistry(object)(policy: 'BreakerPolicy' = BreakerPolicy(failure_threshold=5, recovery_timeout=60.0), /, *, max_hosts: 'int' = 1024, timing: 'Timing | None' = None) -> 'None'
+  class BreakerRegistry(object)(policy: 'BreakerPolicy' = BreakerPolicy(failure_threshold=5, recovery_timeout=60.0), /, *, max_hosts: 'int' = 1024) -> 'None'
       def breaker_for(self, origin: 'httpx2.Origin | httpx2.URL | str') -> 'CircuitBreaker'
       def breakers(self, origin: 'httpx2.Origin | httpx2.URL | str | None' = None) -> 'tuple[CircuitBreaker, ...]'
       def clear(self) -> 'None'
@@ -13,7 +13,7 @@
       CLOSED = 'closed'
       OPEN = 'open'
       HALF_OPEN = 'half_open'
-  class CircuitBreaker(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0, name: 'str' = '', timing: 'Timing | None' = None) -> 'None'
+  class CircuitBreaker(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0, name: 'str' = '') -> 'None'
       property failure_count
       property failure_threshold
       property name
@@ -335,7 +335,7 @@
   class Hedge(object)(*, after: 'float' = 0.5, max_extra: 'int' = 1) -> 'None'
       field after: float = 0.5
       field max_extra: int = 1
-  class RetryBudget(object)(share: 'RetryShare' = RetryShare(ratio=0.2, min_per_second=10.0, window=10.0), *, timing: 'Timing | None' = None) -> 'None'
+  class RetryBudget(object)(share: 'RetryShare' = RetryShare(ratio=0.2, min_per_second=10.0, window=10.0)) -> 'None'
       def record_first(self) -> 'None'
       def refund(self) -> 'None'
       property share
@@ -419,7 +419,7 @@
       field response: httpx2.Response | None = None
       field response_closed: bool | None = None
       field error: Exception | None = None
-  class FaultyTransport(AsyncBaseTransport)(*, schedule: 'list[Step]', sleep: 'Callable[[float], Awaitable[None]]' = <function sleep at 0x…>) -> 'None'
+  class FaultyTransport(AsyncBaseTransport)(*, schedule: 'list[Step]') -> 'None'
       def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
   class PoolFull(object)() -> 'None'
   class RecordedRequest(Protocol)(*args, **kwargs)
@@ -609,7 +609,7 @@
       classmethod per_hour(cls, requests: 'float') -> 'Rate'
       classmethod per_minute(cls, requests: 'float') -> 'Rate'
       classmethod per_second(cls, requests: 'float') -> 'Rate'
-  class RateBudget(object)(rate: 'Rate', *, max_in_flight: 'int | None' = None, adaptive: 'Adaptive | None' = Adaptive(decrease=0.5, increase=0.1, min_rate=0.1), timing: 'Timing | None' = None) -> 'None'
+  class RateBudget(object)(rate: 'Rate', *, max_in_flight: 'int | None' = None, adaptive: 'Adaptive | None' = Adaptive(decrease=0.5, increase=0.1, min_rate=0.1)) -> 'None'
       property adaptive
       property effective_rate
       property in_flight

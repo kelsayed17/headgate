@@ -18,6 +18,7 @@ from headgate._core import (
     path_segments,
     policy_is_disabled,
     segments_hold,
+    timing_override,
     url_path,
 )
 from headgate.ratelimit._budget import RateBudget
@@ -40,11 +41,14 @@ def as_budget(rate: Rate | RateBudget | None, timing: Timing = SYSTEM_TIMING) ->
     policy off (:func:`headgate.policy.policy_disabled`), it is a private budget that paces nothing, with no
     concurrency cap and no throttling, whatever was asked for, a shared budget included.
     """
+    # A budget reads the current timing when it is built: each one built here is built on *timing*.
     if policy_is_disabled():
-        return RateBudget(UNPACED, adaptive=None, timing=timing)
+        with timing_override(timing):
+            return RateBudget(UNPACED, adaptive=None)
     if isinstance(rate, RateBudget):
         return rate
-    return RateBudget(UNPACED if rate is None else rate, timing=timing)
+    with timing_override(timing):
+        return RateBudget(UNPACED if rate is None else rate)
 
 
 #: The budget a call spends from, put on its context by the client once, from the call's route, so every hop of the

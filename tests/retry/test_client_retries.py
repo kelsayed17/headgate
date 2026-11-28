@@ -27,6 +27,7 @@ from headgate._core import RetryScheduled, Timing, timing_override
 from headgate.retry import Backoff, RetryShare
 from headgate.testing import ConnectFail, DropMidBody, FaultyTransport, Respond, Slow, TestClock
 from tests.support.breakers import failures
+from tests.support.timing import built_on
 
 #: The host every test client addresses.
 _HOST = "api.test"
@@ -191,7 +192,7 @@ async def test_the_budget_is_shared_by_every_call_of_a_client() -> None:
 async def test_an_exhausted_deadline_stops_the_retries() -> None:
     """Stop retrying when the backoff would leave no time before the call's deadline."""
     clock = TestClock()
-    network = FaultyTransport(schedule=[Slow(seconds=60), Respond(200)], sleep=clock.sleep)
+    network = built_on(clock.timing, lambda: FaultyTransport(schedule=[Slow(seconds=60), Respond(200)]))
     with timing_override(Timing(clock=clock, sleep=clock.sleep)):
         client = _client(network, deadline=2.0)
 

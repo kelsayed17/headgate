@@ -70,6 +70,7 @@ from headgate._core import (
     current_timing,
     named,
     policy_is_disabled,
+    timing_override,
     url_path,
 )
 from headgate._deprecation import announce_deprecation
@@ -1306,7 +1307,9 @@ def _registry_of(policy: CallPolicy, timing: Timing) -> BreakerRegistry | None:
     breaker = policy.breaker
     if breaker is None or isinstance(breaker, BreakerRegistry):
         return breaker
-    return BreakerRegistry(breaker, timing=timing)
+    # A registry reads the current timing when it is built: this one is built on the client's.
+    with timing_override(timing):
+        return BreakerRegistry(breaker)
 
 
 def _query_pairs(params: Mapping[str, object]) -> list[tuple[str, WireValue]]:

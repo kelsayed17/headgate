@@ -28,6 +28,7 @@ from headgate.retry import Backoff
 from headgate.testing import FakeTransport, TestClock
 from headgate.timing import Timing
 from tests.integration._support import client
+from tests.support.timing import built_on
 
 #: The server's pause, the backoff before the first retry, and a deadline that covers the pause but not both.
 _PAUSE = 1.0
@@ -47,7 +48,9 @@ def _full_jitter() -> float:
 async def test_a_pause_a_backoff_and_attempts_stay_inside_the_deadline() -> None:
     """Wait the pause and send, then stop rather than start a backoff the deadline cannot cover."""
     clock = TestClock(random=_full_jitter)
-    budget = RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
+    budget = built_on(
+        Timing(clock=clock, sleep=clock.sleep, wall_clock=clock), lambda: RateBudget(Rate.per_second(100))
+    )
     timeouts: list[float] = []
 
     def unavailable(request: httpx2.Request) -> httpx2.Response:

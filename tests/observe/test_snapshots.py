@@ -32,6 +32,7 @@ from headgate.timing import Timing, current_timing, timing_override
 from tests.cache._helpers import FaultyStorage, every_get_rules
 from tests.observe._support import client
 from tests.support.events import Recorder
+from tests.support.timing import built_on
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -83,7 +84,9 @@ async def _rate_limited(observers: tuple[Observer, ...], _storage: AsyncSqliteSt
     """
     clock = TestClock()
     limited = httpx2.Response(429, headers={"Retry-After": "1"})
-    budget = RateBudget(Rate.per_second(1000), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
+    budget = built_on(
+        Timing(clock=clock, sleep=clock.sleep, wall_clock=clock), lambda: RateBudget(Rate.per_second(1000))
+    )
     with clock.install():
         built = client(FakeTransport().reply("GET", "/v1/x", limited, 200), *observers, rate=budget, policy=_ONCE)
     await _call(built, times=2)

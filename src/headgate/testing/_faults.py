@@ -19,7 +19,6 @@ response it returned, if any, with whether that was closed.
 
 from __future__ import annotations
 
-import asyncio
 import json as jsonlib
 import math
 from dataclasses import dataclass, field
@@ -31,11 +30,11 @@ import h2.events
 import httpcore2
 import httpx2
 
-from headgate._core import CallContext
+from headgate._core import CallContext, current_timing
 from headgate.retry._tracking import head_size
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+    from collections.abc import AsyncIterator, Mapping
 
 __all__ = [
     "ConnectFail",
@@ -205,14 +204,15 @@ class _Write:
 class FaultyTransport(httpx2.AsyncBaseTransport):
     """Answer each send with the next step of ``schedule``, and record it in :attr:`calls`. See the module docstring.
 
-    *sleep* is what a :class:`Slow` step waits through; a test passes a fake clock's sleep to control time. A send past
-    the end of the schedule raises ``AssertionError``.
+    A :class:`Slow` step waits through the sleep of the timing current when the transport is built
+    (:func:`headgate.timing.current_timing`), so one built inside ``TestClock.install()`` waits on the test clock. A
+    send past the end of the schedule raises ``AssertionError``.
     """
 
-    def __init__(self, *, schedule: list[Step], sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
-        """Answer sends with *schedule*, in order, waiting through *sleep*."""
+    def __init__(self, *, schedule: list[Step]) -> None:
+        """Answer sends with *schedule*, in order, waiting through the current timing's sleep."""
         self._schedule = list(schedule)
-        self._sleep = sleep
+        self._sleep = current_timing().sleep
         self.calls: list[FaultCall] = []
 
     @override

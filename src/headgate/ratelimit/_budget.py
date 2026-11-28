@@ -376,11 +376,11 @@ class RateBudget:
 
     See the module docstring for the algorithm and for what sharing means. *rate* is the configured rate;
     *max_in_flight* caps how many requests may be in flight at once, a request counting from before its turn until its
-    response body is closed (``None``: no cap); *adaptive* lowers the rate on pushback (``None``: never). *timing*'s
-    clock (monotonic seconds) and sleep pace requests and wait out pauses, and its wall clock (Unix seconds) reads the
-    absolute times some rate-limit headers carry. Without a *timing*, the budget runs on the timing current when it is
-    built (:func:`headgate.timing.current_timing`), so one built inside ``TestClock.install()`` paces on the test
-    clock, whichever clients share it.
+    response body is closed (``None``: no cap); *adaptive* lowers the rate on pushback (``None``: never). The budget
+    runs on the timing current when it is built (:func:`headgate.timing.current_timing`): its clock (monotonic
+    seconds) and sleep pace requests and wait out pauses, and its wall clock (Unix seconds) reads the absolute times
+    some rate-limit headers carry. One built inside ``TestClock.install()`` paces on the test clock, whichever clients
+    share it.
 
     Two clients given the same budget pace together. What it reports (its rate, its effective rate after adaptive
     throttling, how many requests are in flight, how long a server pause has left) is read here; what spends from it is
@@ -397,11 +397,9 @@ class RateBudget:
         *,
         max_in_flight: int | None = None,
         adaptive: Adaptive | None = DEFAULT_ADAPTIVE,
-        timing: Timing | None = None,
     ) -> None:
         """Build a budget and the pacer it spends through; see the class docstring for the parameters."""
-        timing = current_timing() if timing is None else timing
-        self._pacer = Pacer(rate, max_in_flight=max_in_flight, adaptive=adaptive, timing=timing)
+        self._pacer = Pacer(rate, max_in_flight=max_in_flight, adaptive=adaptive, timing=current_timing())
         _PACERS[self] = self._pacer
 
     @property

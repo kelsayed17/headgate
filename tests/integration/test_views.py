@@ -31,6 +31,7 @@ from headgate.testing import FakeTransport, TestClock
 from headgate.timing import Timing
 from tests.integration._support import client
 from tests.support.events import Recorder
+from tests.support.timing import built_on
 
 #: A budget that admits exactly one retry per window, whatever the traffic: no ratio, a floor of one.
 _ONE_RETRY = RetryShare(ratio=0.0, min_per_second=0.1, window=10.0)
@@ -60,7 +61,9 @@ async def test_a_view_waits_out_a_pause_its_client_was_asked_for() -> None:
     recorder = Recorder()
     limited = httpx2.Response(429, headers={"Retry-After": f"{_PAUSE:g}"})
     fake = FakeTransport().reply("GET", "/v1/client", limited).reply("GET", "/v1/view", 200)
-    budget = RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
+    budget = built_on(
+        Timing(clock=clock, sleep=clock.sleep, wall_clock=clock), lambda: RateBudget(Rate.per_second(100))
+    )
     with clock.install():
         built = client(fake, rate=budget, policy=CallPolicy(retry=None), http=HttpOptions(), observers=(recorder,))
     view = built.with_options(deadline=None)
