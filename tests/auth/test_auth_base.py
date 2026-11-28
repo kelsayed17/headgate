@@ -9,6 +9,8 @@ origin: the client refuses it when it is built, ``httpx2.BasicAuth`` and ``httpx
 
 from __future__ import annotations
 
+import annotationlib
+import inspect
 from typing import TYPE_CHECKING, Any, ClassVar, cast, override
 
 import httpx2
@@ -144,7 +146,7 @@ def test_an_auth_is_a_credential_stamper_by_its_bases() -> None:
     assert CredentialStamper in headgate.Auth.__mro__
 
 
-class _Digest(headgate.Auth, httpx2.DigestAuth):
+class _Digest(httpx2.DigestAuth, headgate.Auth):
     """``httpx2.DigestAuth`` as an ``Auth``, as the auth guide writes it: its two declarations and its identity."""
 
     credential_headers: ClassVar = frozenset({"authorization"})
@@ -178,3 +180,20 @@ async def test_digest_auth_is_three_lines_of_auth() -> None:
     assert challenged[1] is not None
     assert challenged[1].startswith("Digest ")
     assert hop == ("cdn.example", None)
+
+
+@pytest.mark.parametrize(
+    ("auth_class", "signature"),
+    [
+        (headgate.Auth, "() -> 'None'"),
+        (SigningAuth, "() -> 'None'"),
+        (CachedTokenAuth, "() -> 'None'"),
+        (StaticHeaderAuth, "(headers: 'Mapping[str, str]') -> 'None'"),
+        (BearerAuth, "(token: 'str') -> 'None'"),
+        (QueryParamAuth, "(params: 'Mapping[str, str]') -> 'None'"),
+    ],
+    ids=lambda value: getattr(value, "__name__", ""),
+)
+def test_each_auth_reads_as_what_its_constructor_takes(auth_class: type, signature: str) -> None:
+    """Show each constructor's own parameters, not the ``(*args, **kwargs)`` the protocol base put there."""
+    assert str(inspect.signature(auth_class, annotation_format=annotationlib.Format.STRING)) == signature
