@@ -19,6 +19,7 @@ import headgate.msgspec
 import headgate.pydantic
 from headgate import Client, Expect, HttpOptions, Reader, as_bytes, as_events, as_text, body_reader, nothing, reader_for
 from headgate.cache import conditional
+from headgate.errors import ResponseParseError
 from headgate.msgspec import CODEC
 from headgate.testing import FakeTransport
 
@@ -186,3 +187,20 @@ def test_as_text_reads_a_charset_that_names_no_text_encoding_as_utf_8(charset: s
     """Read UTF-8 where the ``charset`` decodes no text, as ``aiter_lines`` does, where ``response.text`` raises."""
     content_type = f"text/plain; charset={charset}"
     assert as_text(httpx2.Response(200, headers={"content-type": content_type}, content="naïve".encode())) == "naïve"
+
+
+@pytest.mark.parametrize("content_type", ["text/plain", "text/plain; charset=utf-8", "text/plain; charset=latin-1"])
+def test_as_text_strips_a_leading_byte_order_mark(content_type: str) -> None:
+    """Drop a UTF-8 byte order mark and read the rest as UTF-8, which the mark says it is, whatever the charset."""
+    body = b"\xef\xbb\xbf" + "naïve".encode()
+    assert as_text(httpx2.Response(200, headers={"content-type": content_type}, content=body)) == "naïve"
+
+
+async def test_as_text_reports_a_body_its_charset_cannot_decode() -> None:
+    """Raise ``ResponseParseError`` for a UTF-16 body without a byte order mark, which UTF-16 cannot decode at all."""
+    fake = FakeTransport().reply(
+        "GET", "/x", httpx2.Response(200, headers={"content-type": "text/plain; charset=utf-16"}, content=b"h\x00i\x00")
+    )
+    async with Client(base_url="https://api.test", http=HttpOptions(transport=fake)) as client:
+        with pytest.raises(ResponseParseError, match="utf-16"):
+            await client.get("x", expect=as_text)

@@ -23,7 +23,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `ValueError` where it is given.
 - `as_text`, a `Reader[str]` beside `as_bytes`: the body as text, decoded by the response's `charset`, as
   `Stream.aiter_lines` decodes it (UTF-8 without one, or for one such as `base64` that names no text encoding, where
-  `response.text` raises). Write `expect=as_text` for a plain-text body.
+  `response.text` raises). A leading UTF-8 byte order mark is dropped, and the rest read as UTF-8. A body its
+  `charset` cannot decode at all (UTF-16 without a byte order mark) raises `ResponseParseError`. Write
+  `expect=as_text` for a plain-text body.
 
 ### Changed
 
