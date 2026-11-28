@@ -25,7 +25,7 @@ is not held here, so it is not stored, and neither is a stream's miss, whose bod
 per-call ``cache_ttl=``, which wins. hishel reports a hit in the response extension of the same name
 (:func:`served_from_cache`).
 
-**Events.** Each request this layer answers emits a :class:`~headgate._core.CacheResult` on its call's context: a hit,
+**Events.** Each request this layer answers emits a :class:`~headgate._core.CacheChecked` on its call's context: a hit,
 a miss (answered by the network, stored or not), a degraded fetch, or a download shared with an identical GET.
 
 **Faults.** A storage fault never fails a request that would otherwise succeed. Every call into the storage, and every
@@ -59,7 +59,7 @@ import httpx2
 from hishel import AsyncBaseStorage, Entry, Request, Response
 from hishel.httpx2 import AsyncCacheTransport
 
-from headgate._core import CacheOutcome, CacheResult, CallContext, Slot, url_path
+from headgate._core import CacheChecked, CacheOutcome, CallContext, Slot, url_path
 from headgate.breaker._registry import DEFAULT_MAX_HOSTS
 from headgate.cache._credentials import CredentialScope
 from headgate.cache._policy import Partition
@@ -619,10 +619,10 @@ class _InFlight:
 
 
 def _report(request: httpx2.Request, outcome: CacheOutcome) -> None:
-    """Emit a :class:`~headgate._core.CacheResult` with *outcome* on *request*'s call, when anyone is listening."""
+    """Emit a :class:`~headgate._core.CacheChecked` with *outcome* on *request*'s call, when anyone is listening."""
     context = CallContext.find(request)
     if context is not None and context.observed:
-        context.emit(CacheResult(call=context.info, outcome=outcome))
+        context.emit(CacheChecked(call=context.info, outcome=outcome))
 
 
 def _sharing_key(request: httpx2.Request) -> _SharingKey:
@@ -758,10 +758,10 @@ class ResilientCacheTransport(AsyncCacheTransport):
             await in_flight.finished.wait()
             outcome = in_flight.outcome
             if isinstance(outcome, NETWORK_ERRORS):
-                _report(request, CacheOutcome.SHARED)
+                _report(request, CacheOutcome.COALESCED)
                 raise _shared_failure(outcome)
             if isinstance(outcome, _Download):
-                _report(request, CacheOutcome.SHARED)
+                _report(request, CacheOutcome.COALESCED)
                 return outcome.response()
             if outcome is _Unshared.FETCH_OWN:
                 response, _ = await self._fetch(request)

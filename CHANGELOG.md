@@ -173,6 +173,14 @@ change the public API; such changes are listed under **Changed** and **Removed**
   other sizes are: write `aiter_bytes(chunk_size=1024)` for `aiter_bytes(1024)`.
 - `event_stream` is `as_events`, a reader beside `as_bytes`, `as_json` and `as_text`, where its name said it was a
   stream: write `expect=as_events` for `expect=event_stream`. `events()` still opens a stream.
+- Every event's name is a past-tense fact: `CacheResult` is `CacheChecked` and `Deprecated` is `DeprecationNoticed`,
+  so write `case CacheChecked(outcome=...)` and `isinstance(event, DeprecationNoticed)`. `CacheOutcome.SHARED`, a
+  call that waited on an identical request's download, is `CacheOutcome.COALESCED` (value `"coalesced"`), leaving
+  "shared" to `Partition.SHARED`. `Partition` is a `StrEnum`, as `BreakerState` and `CacheOutcome` are, so
+  `str(Partition.SHARED)` is `"shared"`.
+- `HttpCache(methods=, statuses=)` default to the values themselves, `frozenset({"GET"})` and `frozenset({200})`, and
+  hold them, where `None` stood for them; `None` for either raises `TypeError`, since `None` means off and the cache's
+  off is `cache=None`. Leave them out for the defaults. `paths=None` is still the path filter off.
 
 ### Removed
 

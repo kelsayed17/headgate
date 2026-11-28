@@ -88,7 +88,7 @@
         'template': None,
         'url': 'x',
       }),
-      'event': 'CacheResult',
+      'event': 'CacheChecked',
       'outcome': <CacheOutcome.DEGRADED: 'degraded'>,
     }),
     dict({
@@ -135,7 +135,7 @@
         'template': None,
         'url': 'x',
       }),
-      'event': 'CacheResult',
+      'event': 'CacheChecked',
       'outcome': <CacheOutcome.MISS: 'miss'>,
     }),
     dict({
@@ -178,7 +178,7 @@
         'template': None,
         'url': 'x',
       }),
-      'event': 'CacheResult',
+      'event': 'CacheChecked',
       'outcome': <CacheOutcome.HIT: 'hit'>,
     }),
     dict({
@@ -239,7 +239,7 @@
       }),
       'deprecated': True,
       'deprecated_at': datetime.datetime(2023, 6, 30, 23, 59, 59, tzinfo=datetime.timezone.utc),
-      'event': 'Deprecated',
+      'event': 'DeprecationNoticed',
       'link': None,
       'sunset_at': datetime.datetime(2024, 6, 30, 23, 59, 59, tzinfo=datetime.timezone.utc),
       'sunset_link': None,

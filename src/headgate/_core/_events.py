@@ -34,13 +34,13 @@ __all__ = [
     "AttemptFinished",
     "BreakerChanged",
     "BreakerState",
+    "CacheChecked",
     "CacheOutcome",
-    "CacheResult",
     "CallEvent",
     "CallFinished",
     "CallInfo",
     "CallStarted",
-    "Deprecated",
+    "DeprecationNoticed",
     "Emitter",
     "Event",
     "Observer",
@@ -83,7 +83,7 @@ class CacheOutcome(StrEnum):
 
     * ``HIT``: a stored response answered it;
     * ``MISS``: it went to the network (and its response may have been stored);
-    * ``SHARED``: it waited on an identical request's download and got a copy of its response, or its failure;
+    * ``COALESCED``: it waited on an identical request's download and got a copy of its response, or its failure;
     * ``DEGRADED``: the storage failed, so it went to the network uncached.
 
     The cache is TTL-only and never revalidates an entry with the origin, so there is no revalidated outcome.
@@ -91,7 +91,7 @@ class CacheOutcome(StrEnum):
 
     HIT = "hit"
     MISS = "miss"
-    SHARED = "shared"
+    COALESCED = "coalesced"
     DEGRADED = "degraded"
 
 
@@ -144,14 +144,14 @@ class RateLimited(CallEvent):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class CacheResult(CallEvent):
-    """What the HTTP cache did for the call."""
+class CacheChecked(CallEvent):
+    """The HTTP cache checked the call: ``outcome`` says what it did."""
 
     outcome: CacheOutcome
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class Deprecated(CallEvent):
+class DeprecationNoticed(CallEvent):
     """The call's response announced that its endpoint is deprecated (RFC 9745) or will be sunset (RFC 8594).
 
     * ``deprecated``: the response carried a valid ``Deprecation`` header;
@@ -199,8 +199,8 @@ type Event = (
     | RetryScheduled
     | RateLimited
     | BreakerChanged
-    | CacheResult
-    | Deprecated
+    | CacheChecked
+    | DeprecationNoticed
     | CallFinished
 )
 """Every event a client emits."""

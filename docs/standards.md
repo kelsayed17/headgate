@@ -73,7 +73,7 @@ RFCs. headgate reads them so you do not have to, and follows them by default.
 | :lucide-file-type: [RFC 6839](https://www.rfc-editor.org/rfc/rfc6839) Structured syntax suffixes | `application/problem+json` is a kind of JSON | an `Expect(accept="application/json")` [accepts it](responses.md#content-negotiation) |
 | :lucide-refresh-ccw: [RFC 9110 §13.1](https://www.rfc-editor.org/rfc/rfc9110#section-13.1) Conditional requests | `If-None-Match` and `If-Modified-Since` let a server answer 304 Not Modified | [`conditional()`](caching.md#conditional-reads) sends them and returns `Fresh` or `NotModified` |
 | :lucide-radio: [WHATWG Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html) | the `text/event-stream` format and `Last-Event-ID` resumption | [`aiter_events()`](streaming.md#server-sent-events) parses events as they arrive; `last_event_id=` resumes |
-| :lucide-calendar-x: [RFC 9745](https://www.rfc-editor.org/rfc/rfc9745) `Deprecation` and [RFC 8594](https://www.rfc-editor.org/rfc/rfc8594) `Sunset` | an endpoint announces it is deprecated or going away | a [`Deprecated` event](observability.md#deprecation-and-sunset) with the dates and links, once per call |
+| :lucide-calendar-x: [RFC 9745](https://www.rfc-editor.org/rfc/rfc9745) `Deprecation` and [RFC 8594](https://www.rfc-editor.org/rfc/rfc8594) `Sunset` | an endpoint announces it is deprecated or going away | a [`DeprecationNoticed` event](observability.md#deprecation-and-sunset) with the dates and links, once per call |
 
 ## Pages and links
 

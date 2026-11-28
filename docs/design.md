@@ -113,9 +113,9 @@ with no deadline.
 ## Events
 
 The event types are defined in `_core`, below every layer, so each layer emits the events it owns through the call's
-context: the client emits `CallStarted`, `CallFinished`, `BreakerChanged` and `Deprecated`; the attempt layer
+context: the client emits `CallStarted`, `CallFinished`, `BreakerChanged` and `DeprecationNoticed`; the attempt layer
 `AttemptFinished`; the retry layer `RetryScheduled`; the rate budget and its transport `RateLimited`; the cache
-`CacheResult`. A layer checks `context.observed` before building one, so a client without observers pays nothing.
+`CacheChecked`. A layer checks `context.observed` before building one, so a client without observers pays nothing.
 `Emitter` delivers to each observer in turn, swallowing and counting what one raises.
 
 ## Adding a layer

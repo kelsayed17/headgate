@@ -9,11 +9,13 @@ Each rule reads only the method, the URL path or the status, never the body or a
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 from headgate import HttpCache
+from headgate.cache import Partition
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -34,6 +36,21 @@ async def test_a_cache_stores_the_200s_of_every_get_by_default(storage: AsyncSql
     assert not _keeps(cache, "HEAD", "/any/path", 200)
     assert not _keeps(cache, "POST", "/any/path", 200)
     assert not _keeps(cache, "GET", "/any/path", 404)
+
+
+async def test_the_cache_defaults_are_values(storage: AsyncSqliteStorage) -> None:
+    """Default to the values themselves, GET and 200, so ``None`` keeps meaning off and is refused here."""
+    cache = HttpCache(storage=storage)
+    assert (cache.methods, cache.paths, cache.statuses) == (frozenset({"GET"}), None, frozenset({200}))
+    for option in ("methods", "statuses"):
+        with pytest.raises(TypeError, match=rf"^{option}= takes "):
+            HttpCache(storage=storage, **cast("Any", {option: None}))
+
+
+def test_partition_is_a_str_enum() -> None:
+    """Make ``Partition`` a ``StrEnum``, as ``BreakerState`` and ``CacheOutcome`` are."""
+    assert issubclass(Partition, StrEnum)
+    assert (str(Partition.CREDENTIAL), str(Partition.SHARED)) == ("credential", "shared")
 
 
 async def test_a_cache_stores_what_its_methods_paths_and_statuses_name(storage: AsyncSqliteStorage) -> None:
