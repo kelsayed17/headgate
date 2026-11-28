@@ -60,7 +60,8 @@ statuses=frozenset({200}))`:
 - **A `stream()` is never buffered.** It is served from a hit, but a miss goes up as it arrives and is not stored. A
   POST, a request with a `Range`, or any request the rules do not name, goes to the network unread and unshared.
 - **`ttl`** is the client's default lifetime in seconds; a call's `cache_ttl=` overrides it. Either must be a positive
-  finite number: anything else raises before the call is sent.
+  finite number: anything else raises before the call is sent, and so does a `cache_ttl=` on a client without a
+  cache, which would set the lifetime of nothing.
 - **TTL, not revalidation.** An entry is served until its lifetime ends and is never revalidated with the origin. For
   revalidation, use [conditional reads](#conditional-reads).
 - The body is held up to the call's `max_response_bytes=`, else `HttpOptions.max_response_bytes`, and a body past it

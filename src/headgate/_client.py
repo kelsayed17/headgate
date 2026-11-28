@@ -101,6 +101,7 @@ from headgate._options import (
     match_route,
     reject_upstream_httpx,
 )
+from headgate._redirects import redirect_method
 from headgate._request_body import Json, Lowered, WireValue, Writer, lowered, wire_value
 from headgate._responses import Expect, Reader, ResponseCheck, accepts, with_answers
 from headgate._stack import Credentials, build_http_client, build_transport_stack
@@ -662,7 +663,8 @@ class Client:
             and for a first page with a body and an idempotency key (``idempotency_key=``, or the policy's header in
             ``headers=``, a view's or the client's), as one key on pages with different bodies would have the server
             replay the first page's answer. A later page with a body is held to the same rule, and raises from the
-            iteration.
+            iteration. Also for a pager whose ``read`` declares a redirect (301, 302, 303, 307 or 308) on a walk that
+            follows redirects, which would never see one.
         :raises TypeError: for a keyword no call option names, ``body=``, ``json=`` and ``limit=`` included (a walk's
             body is ``payload=``, its page budget ``max_pages=``), for a ``max_pages`` that is not an ``int``, and for
             a pager whose ``read`` is not a :class:`~headgate.Reader` or an ``Expect``, before the pager runs.
@@ -671,6 +673,9 @@ class Client:
         check_overrides(options)
         check_page_budget(max_pages, on_limit)
         spec: Expect[P] = _expectation(_page_reader(pager))
+        if self._follows(options):
+            # Every page's body is builtins or a writer's bytes, so a redirect that sends it again is followed too.
+            _refuse_unseen_redirects(spec, "POST" if payload is not None else "GET", replayable=True)
         call_options = options.copy()
         # How a body is sent is the walk's: the pager's writer encodes every page's, whatever request the pager returns.
         write = _page_writer(pager)
@@ -741,6 +746,8 @@ class Client:
         check_overrides(call.options)
         spec: Expect[T] = _expectation(expect)
         prepared = self._prepare(call)
+        if prepared.follow_redirects:
+            _refuse_unseen_redirects(spec, call.method, replayable=prepared.context.get(REPLAYABLE_BODY) is not False)
         cap = call.options.get("max_response_bytes")
         if cap is not None:
             prepared.context.put(MAX_RESPONSE_BYTES, cap)
@@ -888,6 +895,12 @@ class Client:
         _mark_body(context, body, given=options.get("body") is not None)
         self._stamp_idempotency_key(request, context, options.get("idempotency_key"))
         # The cache transport only setdefaults the client's own TTL, so a per-call TTL stamped here wins.
+        if "cache_ttl" in options and self._policy.cache is None:
+            msg = (
+                f"cache_ttl= sets a cached response's lifetime, but the client of {self._source} has no cache: give it "
+                "CallPolicy(cache=HttpCache(...)), or leave cache_ttl= out"
+            )
+            raise ValueError(msg)
         if "cache_ttl" in options:
             stamp_ttl(request, options["cache_ttl"])
         context.attach(request)
@@ -1427,6 +1440,34 @@ def _checked(check: ResponseCheck | None, resp: httpx2.Response) -> RefusedError
         msg = f"response_check= returns a RefusedError, or None to accept the response (got {type(refused).__name__})"
         raise TypeError(msg)
     return refused
+
+
+#: The statuses a client follows as redirects, so an ``Expect`` on a call that follows them never reads one.
+_FOLLOWED: Final = frozenset({301, 302, 303, 307, 308})
+
+
+def _refuse_unseen_redirects[T](spec: Expect[T], method: str, *, replayable: bool) -> None:
+    """Refuse *spec*, read by a *method* call that follows redirects, when it declares a redirect that call never sees.
+
+    Every redirect is followed, but one that would send a one-shot body again (a 307 or 308, say, when the body is
+    not *replayable*), which reaches the call as its answer instead (see
+    :func:`~headgate._redirects.refuse_unreplayable_redirect`).
+
+    :raises ValueError: naming the statuses, and saying to pass ``follow_redirects=False``.
+    """
+    followed = (
+        status
+        for status in spec.answers
+        if status in _FOLLOWED and (replayable or redirect_method(method, status) != method)
+    )
+    if unseen := sorted(followed):
+        statuses = ", ".join(map(str, unseen))
+        verb = "is" if len(unseen) == 1 else "are"
+        msg = (
+            f"{statuses} {verb} declared on this Expect, but the call follows redirects, so it never sees one: pass "
+            "follow_redirects=False to read it"
+        )
+        raise ValueError(msg)
 
 
 def _expectation[T](expect: Reader[T] | Expect[T]) -> Expect[T]:
