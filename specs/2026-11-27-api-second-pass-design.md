@@ -154,7 +154,9 @@ is `pager=`, not `pages=` (which `Paginated.pages()` uses for pages). Generic pa
 **3.3 Breakers take the rate's shape (P2).** `CallPolicy(breaker: BreakerPolicy | BreakerRegistry | None)` and
 `BreakerRegistry(policy: BreakerPolicy = BreakerPolicy(), /, *, max_hosts=1024)`, as `rate: Rate | RateBudget` and
 `RetryBudget(share)`. Removed: `BreakerPolicy.registry`, `BreakerRegistry.bind`, its mismatch `ValueError`, and the
-threshold keywords on lookup.
+threshold keywords on lookup. The registry takes its policy as `RateBudget` takes its rate and `RetryBudget` its share,
+by position or by name: `BreakerRegistry(BreakerPolicy(failure_threshold=3), max_hosts=256)`, with no positional-only
+marker. (Amended with the phase 3 review.)
 
 **3.4 `CallPolicy`, holding the rate (P5, P18).** `TransportPolicy` becomes `CallPolicy`, the pair of `CallOptions`,
 leaving "transport" to the network layer and its failure. `rate=` moves from the `Client` constructor into it, beside

@@ -85,7 +85,6 @@ class BreakerRegistry:
     def __init__(
         self,
         policy: BreakerPolicy = _DEFAULT_POLICY,
-        /,
         *,
         max_hosts: int = DEFAULT_MAX_HOSTS,
     ) -> None:
