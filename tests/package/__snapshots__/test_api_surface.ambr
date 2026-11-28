@@ -260,12 +260,12 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class PageRequest(Generic)(url: 'CallUrl', params: 'Mapping[str, object] | None' = None, body: 'B | None' = None) -> 'None'
+  class PageRequest(Generic)(url: 'CallUrl', params: 'Mapping[str, object] | None' = None, payload: 'B | None' = None) -> 'None'
       field url: CallUrl
       field params: Mapping[str, object] | None = None
-      field body: B | None = None
-      def with_body(self, body: 'B') -> 'PageRequest[B]'
+      field payload: B | None = None
       def with_param(self, name: 'str', value: 'object') -> 'PageRequest[B]'
+      def with_payload(self, payload: 'B') -> 'PageRequest[B]'
   class Pager(Protocol)(*args, **kwargs)
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
@@ -504,7 +504,7 @@
       def head(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[CallOptions]') -> 'T'
       def head(self, url: 'CallUrl', **options: 'Unpack[CallOptions]') -> 'None'
       def paginate(self, url: 'CallUrl', *, expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, None]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
-      def paginate(self, url: 'CallUrl', *, query: 'B | None', expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, B]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
+      def paginate(self, url: 'CallUrl', *, payload: 'B | None', expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, B]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
       def patch(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def post(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def put(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'

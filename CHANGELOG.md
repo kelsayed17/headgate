@@ -112,6 +112,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.
 
+- A walk's body is its `payload`, so "query" names only the QUERY verb and, in prose, the URL query:
+  `paginate(payload=)`, `PageRequest.payload` and `PageRequest.with_payload()`. Write
+  `paginate(url, payload=Query(...), ...)` for `paginate(url, query=Query(...), ...)`, and `request.payload` and
+  `request.with_payload(...)` in a pager for `request.body` and `request.with_body(...)`. `paginate(query=)` raises
+  `TypeError` naming `payload=`.
+
 ### Removed
 
 - The cache's `ClientConfigurationError` for an auth that does not declare its credentials, which no auth can now

@@ -74,7 +74,7 @@ class Paginated[I, P = object](Protocol):
 
     A page that leads back to a request already made (a cursor or next URL that repeats) raises ``ClientError``
     instead of looping forever; the requests made are remembered for that, as a digest per page of its URL (as written
-    and as sent), query and, for a POST, the bytes its pager's ``write`` encodes the body to, or the ``repr`` of a body
+    and as sent), params and, for a POST, the bytes its pager's ``write`` encodes the body to, or the ``repr`` of a body
     of builtins sent as JSON. An :class:`~headgate.pagination.Offset`, :class:`~headgate.pagination.PageNumber` or
     :class:`~headgate.pagination.BodyOffset` walk builds each request from the last, so a server that ignores its
     paging would send the same page forever: a page with items whose body repeats an earlier page's raises
@@ -155,7 +155,7 @@ class PageWalk[P, I, B]:
                 raise self._loop_error(request, fetched)
             page, response = await self._fetch(request)
             fetched += 1
-            if request.body is None:
+            if request.payload is None:
                 # A next URL from the wire is absolute, so the page is remembered as it was sent too.
                 requests.add(_sent_key(response))
             if self._items_of is not None and self._items_of(page) and not bodies.add(response.content):
@@ -290,7 +290,7 @@ def _key[B](request: PageRequest[B], write: Writer[B] | None) -> bytes:
     which a later body can reuse. Without *write*, a body is builtins sent as JSON, whose ``repr`` is their value.
     """
     query = None if request.params is None else tuple(request.params.items())
-    body = request.body if request.body is None or write is None else write(request.body).content
+    body = request.payload if request.payload is None or write is None else write(request.payload).content
     return repr((request.url, query, body)).encode()
 
 
@@ -302,4 +302,4 @@ def _sent_key(response: httpx2.Response) -> bytes:
 
 def _method[B](request: PageRequest[B]) -> Literal["GET", "POST"]:
     """Return the method *request* is sent with: a POST when it has a body."""
-    return "GET" if request.body is None else "POST"
+    return "GET" if request.payload is None else "POST"
