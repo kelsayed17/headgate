@@ -272,20 +272,27 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - A call's options are checked for their kind before anything is sent, each a `TypeError` naming the option:
   `params=` must be a mapping with `str` keys (a list of pairs, httpx's habit, raised an `AttributeError`);
   `headers=`, on a call, a view (`with_options`, which now raises where the view is made), `HttpOptions` and an
-  `Expect`, must map names to `str` values (pairs raised an `AttributeError`, and `{"X-N": 1}` httpx2's own error at
-  the call); `idempotency_key=` must be a `str` (an `int` raised an `AttributeError`, and `None` is refused: leave the
+  `Expect`, must map names to `str` values (pairs raised an `AttributeError`, `{"X-N": 1}` httpx2's own error at the
+  call, and a `bytes` value, `{"X-N": b"1"}`, was accepted and sent); `idempotency_key=` must be a `str` (an `int` raised an `AttributeError`, and `None` is refused: leave the
   option out for no key); `events(last_event_id=)` must be a `str` or `None`; and `stream(method=)` must be one of
   `"GET"`, `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`, `"HEAD"` and `"QUERY"`, where any other value, a lower-case
   `"get"` included, was sent as given. Write `params={"a": 1}`, `headers={"X-N": "1"}`, `idempotency_key=str(key)`
   and `method="GET"`.
-- Every number a client is configured with is checked for its kind where it is given, a `TypeError` naming the field:
-  a `bool`, which a type checker takes for an `int`, and a `str` are refused, and a `float` where a count goes. This
-  covers `Timeouts`' four phases, `Rate`, `RateBudget(max_in_flight=)`, `RetryPolicy(attempts=, max_retry_after=,
-  min_attempt_time=)`, `Backoff`, `Hedge`, `RetryShare`, `Adaptive`, `BreakerPolicy`, `BreakerRegistry(max_hosts=)`,
-  `HttpCache(ttl=)`, the pagers' `page_size` and `start`, and the testing kit's `DropMidBody`, `Respond`, `Slow` and
-  `TestClock`. `Timeouts(read=True)`, `Rate(True, 1)` and `RetryPolicy(attempts=2.5)` were accepted, and
-  `Timeouts(read="5")` raised a comparison error from inside the constructor: write `Timeouts(read=5.0)`,
-  `Rate(1, 1)` and `RetryPolicy(attempts=3)`.
+- Every number a client is configured with is an `int` or a `float`, checked where it is given, a `TypeError` naming
+  the field: a `bool`, which a type checker takes for an `int`, a `str`, a `Decimal` and a `Fraction` are refused, and
+  a `float` where a count goes. This covers `Timeouts`' four phases, `Rate`, `RateBudget(max_in_flight=)`,
+  `RetryPolicy(attempts=, max_retry_after=, min_attempt_time=)`, `Backoff`, `Hedge`, `RetryShare`, `Adaptive`,
+  `BreakerPolicy`, `BreakerRegistry(max_hosts=)`, `HttpCache(ttl=)`, the pagers' `page_size` and `start`, and the
+  testing kit's `DropMidBody(after_bytes=)`, `Respond(status_code=, retry_after=)`, `Slow(seconds=)` and
+  `TestClock(start=, epoch=)`. `Timeouts(read=True)`, `Rate(True, 1)`, `RetryPolicy(attempts=2.5)`,
+  `Timeouts(read=Decimal("5"))` and `Rate(Fraction(1, 2), 1)` were accepted, and `Timeouts(read="5")` raised a
+  comparison error from inside the constructor: write `Timeouts(read=5.0)`, `Rate(1, 1)`, `RetryPolicy(attempts=3)`
+  and `float(value)` for a `Decimal` or a `Fraction`.
+- The testing kit checks its other fields where they are given, each a `TypeError` naming the field:
+  `Respond(headers=)` must map names to `str` values (a list of pairs was accepted), `Slow(then=)` must be a `Respond`
+  (`Slow(1, then=200)` was accepted and failed at the send), and `TestClock(random=)` must be callable
+  (`TestClock(random=0.5)` was accepted and failed at the first backoff). Write `Respond(headers={"X-A": "1"})`,
+  `Slow(1, then=Respond(200))` and `TestClock(random=lambda: 0.5)`.
 - `RateBudget(rate)` takes a `Rate` (`RateBudget(5)` raised an `AttributeError`: write
   `RateBudget(Rate.per_second(5))`), and `adaptive=` an `Adaptive` or `None`.
 - `RetryPolicy(statuses=)` and `HttpCache(statuses=)` hold `int` statuses from 100 to 599: a `bool` or a numeric
