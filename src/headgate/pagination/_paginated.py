@@ -4,7 +4,7 @@
 """The lazy sequence of pages and items :meth:`Client.paginate <headgate.Client.paginate>` returns."""
 
 import hashlib
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import aclosing
 from dataclasses import replace
 from typing import Final, Literal, cast, final
@@ -17,7 +17,7 @@ from headgate._failures import loggable_url, shorten
 from headgate._request_body import Writer
 from headgate._url import redact_secrets
 from headgate.errors import ForbiddenDestinationError, PageLimitError
-from headgate.pagination._pager import BodyOffset, Offset, PageNumber, Pager, PageRequest, WritingPager
+from headgate.pagination._pager import Pager, PageRequest, WritingPager
 
 __all__ = ["REMEMBERED_PAGES", "OnLimit", "PageWalk", "Paginated", "Remembered", "check_page_budget"]
 
@@ -71,12 +71,11 @@ class Paginated[I, P = object]:
     A page that leads back to a request already made (a cursor or next URL that repeats) raises ``ClientError``
     instead of looping forever; the requests made are remembered for that, as a digest per page of its URL (as written
     and as sent), params and, for a POST, the bytes its pager's ``write`` encodes the body to, or the ``repr`` of a body
-    of builtins sent as JSON. An :class:`~headgate.pagination.Offset`, :class:`~headgate.pagination.PageNumber` or
-    :class:`~headgate.pagination.BodyOffset` walk builds each request from the last, so a server that ignores its
-    paging would send the same page forever: a page with items whose body repeats an earlier page's raises
-    ``ClientError`` too. At most :data:`REMEMBERED_PAGES` of each are remembered, the oldest forgotten first. A walk
-    with ``max_pages=`` fetches at most that many pages, then raises ``PageLimitError`` or, with ``on_limit="stop"``,
-    stops.
+    of builtins sent as JSON. A server that ignores its paging would send the same page forever under requests that
+    never repeat, built from the last or read from the response, so a page with items whose body repeats an earlier
+    page's raises ``ClientError`` too, whatever the pager. At most :data:`REMEMBERED_PAGES` of each are remembered,
+    the oldest forgotten first. A walk with ``max_pages=`` fetches at most that many pages, then raises
+    ``PageLimitError`` or, with ``on_limit="stop"``, stops.
 
     ``I`` is the item type and ``P`` the page type, which defaults to ``object``: ``Paginated[Issue]`` is a walk of
     issues, and ``Paginated[Issue, IssuePage]`` names the pages :meth:`pages` yields too.
@@ -135,7 +134,7 @@ class Paginated[I, P = object]:
 class PageWalk[I, P, B]:
     """The pages of one walk, and the items on them: what the :class:`Paginated` ``paginate`` returns iterates."""
 
-    __slots__ = ("_fetch", "_first", "_items_of", "_max_pages", "_on_limit", "_pager", "_source", "_write")
+    __slots__ = ("_fetch", "_first", "_max_pages", "_on_limit", "_pager", "_source", "_write")
 
     def __init__(
         self,
@@ -163,11 +162,6 @@ class PageWalk[I, P, B]:
         self._on_limit = on_limit
         # A page is remembered by the body it sends: the bytes the writer encodes, as the walk's fetch encodes them.
         self._write = pager.write if isinstance(pager, WritingPager) else None
-        # The pagers whose next request is built from the last, not read from the page: only a page's body can tell
-        # that the server ignored the paging.
-        self._items_of: Callable[[P], Sequence[I]] | None = (
-            pager.items if isinstance(pager, Offset | PageNumber | BodyOffset) else None
-        )
 
     async def pages(self) -> AsyncIterator[P]:
         """Iterate the pages, in order."""
@@ -186,7 +180,10 @@ class PageWalk[I, P, B]:
             if request.payload is None:
                 # A next URL from the wire is absolute, so the page is remembered as it was sent too.
                 requests.add(_sent_key(response))
-            if self._items_of is not None and self._items_of(page) and not bodies.add(response.content):
+            # A server that ignores the paging sends one page forever, under requests that never repeat when the pager
+            # builds each from the last or reads it from the response: only a page's body tells. An empty page proves
+            # nothing, so it is not remembered.
+            if _has_items(self._pager.page_items(page)) and not bodies.add(response.content):
                 raise self._repeat_error(request, fetched, response)
             try:
                 request = self._pager.next_page(page, request, response)
@@ -225,6 +222,15 @@ class PageWalk[I, P, B]:
         where = "" if url is None else f" ({url})"
         msg = f"pagination loop: the page after page {fetched} repeats an earlier page's request{where}"
         return ClientError(msg, source=self._source, method=_method(request), url=url)
+
+
+def _has_items(items: Iterable[object]) -> bool:
+    """Return whether *items* holds an item, reading at most one: an iterator is read again for the walk's items."""
+    return next(iter(items), _NO_ITEM) is not _NO_ITEM
+
+
+#: What :func:`_has_items` reads from an empty page: no item a page can hold.
+_NO_ITEM: Final = object()
 
 
 def _resolved[B](request: PageRequest[B], response: httpx2.Response) -> PageRequest[B]:

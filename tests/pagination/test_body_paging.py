@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import itertools
 import json
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Final, assert_type, cast, override
@@ -357,9 +358,10 @@ async def test_a_walk_of_posts_can_stop_quietly_at_its_page_limit() -> None:
 
 async def test_a_repeating_body_cursor_raises_instead_of_looping() -> None:
     """Raise ``ClientError`` for the POST when a cursor leads back to a body already sent."""
+    served = itertools.count()
 
     def answer(request: httpx2.Request) -> httpx2.Response:
-        return _page(request, [1], "same")
+        return _page(request, [next(served)], "same")  # pages that differ, so only the request repeats
 
     first = Query(kind="a", limit=1)
     paginated = _Api(answer).client().paginate("search", payload=first, pager=QUERY_CURSOR)

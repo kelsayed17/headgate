@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, assert_type, cast
@@ -35,7 +36,7 @@ from headgate.pagination import BodyCursor, BodyOffset, Cursor, LinkHeader, Next
 from headgate.testing import FakeTransport
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Sequence
+    from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 
     from hishel import AsyncSqliteStorage
 
@@ -357,7 +358,7 @@ async def test_a_next_url_from_the_wire_is_sent_verbatim(kind: str) -> None:
 
     def answer(request: httpx2.Request) -> httpx2.Response:
         if request.url.path != "/start":
-            return _page(request, [1])
+            return _page(request, [2])
         if kind == "body":
             return _page(request, [1], next=following)
         response = _page(request, [1])
@@ -502,9 +503,10 @@ async def test_a_page_that_leads_back_raises_instead_of_looping() -> None:
 
 async def test_a_repeating_cursor_on_a_template_url_raises() -> None:
     """Raise when a cursor repeats on a templated URL, without naming the URL."""
+    served = itertools.count()
 
     def answer(request: httpx2.Request) -> httpx2.Response:
-        return _page(request, [1], cursor="same")
+        return _page(request, [next(served)], cursor="same")  # pages that differ, so only the request repeats
 
     pages = Cursor(reader(Page), items=items_of, next=cursor_of, param="after")
     paginated = _Api(answer).client().paginate(t"items/{'x'}", pager=pages)
@@ -882,19 +884,68 @@ async def test_empty_pages_that_repeat_are_walked_past() -> None:
     assert items == [1, 4]
 
 
-async def test_link_header_pages_with_the_same_body_are_walked() -> None:
-    """Follow ``Link`` pages whose bodies are alike: their next page comes from the response, not the request."""
-    last = 3
+async def test_link_header_pages_that_repeat_a_body_are_a_loop() -> None:
+    """Raise when a ``Link`` page repeats an earlier page's body: a server that ignores the page it is asked for.
+
+    The ``Link`` header names a new page each time, so the requests never repeat; only the bodies show the loop.
+    """
 
     def answer(request: httpx2.Request) -> httpx2.Response:
         page = int(request.url.params.get("page", "1"))
-        link = f'</items?page={page + 1}>; rel="next"' if page < last else ""
+        link = f'</items?page={page + 1}>; rel="next"'
         return httpx2.Response(200, json={"data": [{"id": 1}]}, headers={"link": link}, request=request)
 
     api = _Api(answer)
-    paginated = api.client().paginate("items", pager=LinkHeader(reader(Page), items=items_of))
+    paginated = api.client().paginate("items", pager=LinkHeader(reader(Page), items=items_of), max_pages=_BACKSTOP)
+    with pytest.raises(ClientError, match="page 2 repeats an earlier page's body"):
+        _ = [item async for item in paginated]
 
-    assert [item.id async for item in paginated] == [1, 1, 1]
+    assert len(api.sent) == len(("first", "repeated"))
+
+
+@dataclass(frozen=True)
+class _OwnOffset:
+    """A pager of its own, by its shape: an offset walk whose items come back as an iterator."""
+
+    read: Reader[Page]
+
+    def first(self, request: PageRequest[None]) -> PageRequest[None]:
+        """Start at offset 0."""
+        return request.with_param("offset", 0)
+
+    def page_items(self, page: Page) -> Iterator[Item]:
+        """Return *page*'s items as an iterator, which can be read only once."""
+        return iter(page.data)
+
+    def next_page(self, page: Page, request: PageRequest[None], response: httpx2.Response) -> PageRequest[None] | None:
+        """Return the request at the offset past *page*, or ``None`` after an empty page."""
+        del response
+        if not page.data:
+            return None
+        return request.with_param("offset", int(str((request.params or {})["offset"])) + len(page.data))
+
+
+async def test_a_pager_of_its_own_gets_the_loop_guard() -> None:
+    """Raise at the second page when the server ignores the offset of a pager the client does not ship."""
+    api = _Api(lambda request: _page(request, [0, 1]))
+    paginated = api.client().paginate("items", pager=_OwnOffset(reader(Page)), max_pages=_BACKSTOP)
+    with pytest.raises(ClientError, match="page 2 repeats an earlier page's body"):
+        _ = [item async for item in paginated]
+
+    assert len(api.sent) == len(("first", "repeated"))
+
+
+async def test_a_pager_whose_items_are_an_iterator_yields_them_all() -> None:
+    """Yield every item of a page whose items are an iterator, though the loop guard looked at it first."""
+    end = 4
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        offset = int(request.url.params["offset"])
+        return _page(request, [offset, offset + 1] if offset < end else [])
+
+    paginated = _Api(answer).client().paginate("items", pager=_OwnOffset(reader(Page)))
+
+    assert [item.id async for item in paginated] == [0, 1, 2, 3]
 
 
 async def test_an_offset_walk_starts_at_the_callers_own_offset() -> None:

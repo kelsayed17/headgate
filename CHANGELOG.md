@@ -331,6 +331,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   one raises from `paginate()`.
 - `cache_ttl=` on a client without a cache raises `ValueError` at the call, where it was silently ignored. Give the
   client `CallPolicy(cache=HttpCache(...))`, or leave `cache_ttl=` out.
+- Every walk raises `ClientError` ("repeats an earlier page's body") when a page with items repeats an earlier page's
+  body, whatever its pager: a `Cursor`, `LinkHeader`, `NextUrl` or `BodyCursor` walk, and a pager of your own, where
+  only `Offset`, `PageNumber` and `BodyOffset` walks were checked, so a server that ignored the paging while its
+  `Link` header counted on, or a custom pager's, was walked until `max_pages=` or forever. A walk whose distinct pages
+  are byte for byte alike is now refused at its second page: such pages carry nothing new, so stop at the first, or
+  give the walk a pager that ends there.
 
 ### Removed
 

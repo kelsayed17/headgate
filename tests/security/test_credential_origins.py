@@ -482,12 +482,12 @@ async def test_a_walks_own_headers_reach_a_later_page_only_on_the_first_pages_or
     def answer(request: httpx2.Request) -> httpx2.Response:
         sent.append(request)
         link = "" if len(sent) > 1 else f'<{following}>; rel="next"'
-        return httpx2.Response(httpx2.codes.OK, json=[1], headers={"Link": link})
+        return httpx2.Response(httpx2.codes.OK, json=[len(sent)], headers={"Link": link})
 
     http = HttpOptions(transport=httpx2.MockTransport(answer))
     async with Client(base_url=BASE, policy=CallPolicy(retry=None), http=http) as client:
         pages = client.paginate(first, pager=LinkHeader(reader(list[int]), items=list), headers={"X-Key": "k"})
-        assert [item async for item in pages] == [1, 1]
+        assert [item async for item in pages] == [1, 2]
 
     assert sent[0].headers["X-Key"] == "k"
     assert ("X-Key" in sent[1].headers) is kept
