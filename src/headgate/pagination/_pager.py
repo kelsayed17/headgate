@@ -26,7 +26,7 @@ as a redirect would be. Both are the walk's, so they hold for every pager.
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import KW_ONLY, dataclass, field, replace
+from dataclasses import KW_ONLY, dataclass, replace
 from types import MappingProxyType
 from typing import Protocol, override
 
@@ -115,41 +115,36 @@ class Pager[I, P, B = None](Protocol):
         ...
 
 
-class WritingPager[I, P, B](Pager[I, P, B], ABC):
+class WritingPager[I, P, B](ABC):
     """A :class:`Pager` that writes the walk's request bodies: ``write`` encodes the walk's ``payload=`` for every page.
+
+    It is a ``Pager`` by its shape, and does not subclass the protocol, whose ``read`` property a dataclass subclass
+    would take as its field's default.
 
     The body is the caller's own value, which ``write`` encodes; with ``write`` ``None``, the value is builtins, sent as
     JSON. :class:`Cursor`, :class:`Offset`,
     :class:`BodyCursor` and :class:`BodyOffset` are writing pagers; a pager of GETs is not one.
 
     A pager is one by subclassing this class, not by its shape: an attribute that only shares the name ``write`` is
-    never taken for a writer. Every member is abstract, so a subclass that leaves one out cannot be built.
+    never taken for a writer. Its methods are abstract, so a subclass that leaves one out cannot be built. ``read``
+    (the reader of every page, see :attr:`Pager.read`) and ``write`` (the flavor's ``writer`` that encodes each page's
+    body, or ``None`` for one sent as JSON) are declared here and given by the subclass, as dataclass fields or
+    properties; :meth:`~headgate.Client.paginate` refuses a writing pager without either.
     """
 
     __slots__ = ()
 
-    @property
-    @override
-    @abstractmethod
-    def read(self) -> Reader[P] | Expect[P]:
-        """The reader of every page (see :attr:`Pager.read`)."""
+    read: Reader[P] | Expect[P]
+    write: Writer[B] | None
 
-    @property
-    @abstractmethod
-    def write(self) -> Writer[B] | None:
-        """The writer (a flavor's ``writer``) that encodes each page's body, or ``None`` for one sent as JSON."""
-
-    @override
     @abstractmethod
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
         """Return the request for the first page, given the one the caller wrote (see :meth:`Pager.first`)."""
 
-    @override
     @abstractmethod
     def page_items(self, page: P) -> Iterable[I]:
         """Return the items on *page*."""
 
-    @override
     @abstractmethod
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return the request for the page after *page* (fetched by *request*, answered by *response*), or ``None``."""
@@ -222,8 +217,7 @@ class Cursor[I, P, B = None](WritingPager[I, P, B]):
     of POSTs without one sends it as JSON, and a walk of GETs leaves it unused.
     """
 
-    # field(): a bare annotation would take the inherited abstract property as its default.
-    read: Reader[P] | Expect[P] = field()
+    read: Reader[P] | Expect[P]
     _: KW_ONLY
     items: Callable[[P], Sequence[I]]
     next: Callable[[P], str | None]
@@ -275,8 +269,7 @@ class Offset[I, P, B = None](WritingPager[I, P, B]):
     and the walk steps by ``page_size``.
     """
 
-    # field(): a bare annotation would take the inherited abstract property as its default.
-    read: Reader[P] | Expect[P] = field()
+    read: Reader[P] | Expect[P]
     _: KW_ONLY
     items: Callable[[P], Sequence[I]]
     page_size: int
@@ -346,8 +339,7 @@ class PageNumber[I, P, B = None](WritingPager[I, P, B]):
     the type of the request body for a walk of POSTs, and ``write`` its writer, as on :class:`Cursor`.
     """
 
-    # field(): a bare annotation would take the inherited abstract property as its default.
-    read: Reader[P] | Expect[P] = field()
+    read: Reader[P] | Expect[P]
     _: KW_ONLY
     items: Callable[[P], Sequence[I]]
     more: Callable[[P], bool]
@@ -459,8 +451,7 @@ class BodyCursor[I, P, B](WritingPager[I, P, B]):
     follows the cursor past an empty page).
     """
 
-    # field(): a bare annotation would take the inherited abstract property as its default.
-    read: Reader[P] | Expect[P] = field()
+    read: Reader[P] | Expect[P]
     _: KW_ONLY
     items: Callable[[P], Sequence[I]]
     next: Callable[[P], str | None]
@@ -503,8 +494,7 @@ class BodyOffset[I, P, B](WritingPager[I, P, B]):
     ``write`` encodes each page's body, as for :class:`BodyCursor`.
     """
 
-    # field(): a bare annotation would take the inherited abstract property as its default.
-    read: Reader[P] | Expect[P] = field()
+    read: Reader[P] | Expect[P]
     _: KW_ONLY
     items: Callable[[P], Sequence[I]]
     page_size: int

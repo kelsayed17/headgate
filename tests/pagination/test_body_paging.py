@@ -886,3 +886,87 @@ def test_a_writing_pager_missing_a_method_cannot_be_built() -> None:
 
     with pytest.raises(TypeError, match="abstract method 'next_page'"):
         cast("Any", Unfinished)()
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _SearchPages(WritingPager[Item, Page, Query]):
+    """The pagination guide's own writing pager: its reader and writer are fields, its methods its own."""
+
+    read: Reader[Page]
+    write: Writer[Query]
+
+    @override
+    def first(self, request: PageRequest[Query]) -> PageRequest[Query]:
+        return request
+
+    @override
+    def page_items(self, page: Page) -> list[Item]:
+        return page.data
+
+    @override
+    def next_page(
+        self, page: Page, request: PageRequest[Query], response: httpx2.Response
+    ) -> PageRequest[Query] | None:
+        del response
+        return None if page.cursor is None else request.with_payload(with_cursor(_payload_of(request), page.cursor))
+
+
+@dataclass(frozen=True)
+class _PlainPages(WritingPager[Item, Page, Query]):
+    """A writing pager as a plain frozen dataclass, without slots or keyword-only fields."""
+
+    read: Reader[Page]
+    write: Writer[Query]
+
+    @override
+    def first(self, request: PageRequest[Query]) -> PageRequest[Query]:
+        return request
+
+    @override
+    def page_items(self, page: Page) -> list[Item]:
+        return page.data
+
+    @override
+    def next_page(
+        self, page: Page, request: PageRequest[Query], response: httpx2.Response
+    ) -> PageRequest[Query] | None:
+        del response
+        return None if page.cursor is None else request.with_payload(with_cursor(_payload_of(request), page.cursor))
+
+
+def _payload_of(request: PageRequest[Query]) -> Query:
+    """Return *request*'s payload, which every page of these walks carries."""
+    assert request.payload is not None
+    return request.payload
+
+
+@pytest.mark.parametrize(
+    "pages",
+    [_SearchPages(read=reader(Page), write=QUERY), _PlainPages(reader(Page), QUERY)],
+    ids=["guide", "plain-dataclass"],
+)
+async def test_a_writing_pager_of_your_own_walks(pages: WritingPager[Item, Page, Query]) -> None:
+    """Build and walk a writing pager whose reader and writer are dataclass fields, slotted or not."""
+    api = _Api(_by_body_cursor)
+    paginated = api.client().paginate("search", payload=Query(kind="a", limit=2), pager=pages)
+
+    assert [item.id async for item in paginated] == [1, 2, 3, 4]
+    assert pages.read is not None
+
+
+def test_a_writing_pager_is_built_with_its_reader() -> None:
+    """Refuse a writing pager dataclass built without ``read``, rather than default it to a reader of nothing."""
+    with pytest.raises(TypeError, match="read"):
+        cast("Any", _SearchPages)(write=QUERY)
+
+
+class _NoWriter(_PostsLater, WritingPager[Item, Page, Query]):
+    """A writing pager with a reader but no ``write``."""
+
+
+def test_paginate_refuses_a_writing_pager_without_write() -> None:
+    """Refuse a writing pager with no ``write``, naming it, before the pager runs."""
+    with pytest.raises(
+        TypeError, match=r"^paginate\(\)'s pager is a WritingPager, so it encodes each page's body with"
+    ):
+        _Api(_by_body_cursor).client().paginate("search", payload=Query(kind="a", limit=2), pager=_NoWriter())

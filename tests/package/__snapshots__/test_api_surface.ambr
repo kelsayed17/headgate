@@ -278,12 +278,10 @@
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Iterable[I]'
       property read
-  class WritingPager(Pager, ABC, Generic)(*args, **kwargs)
+  class WritingPager(ABC, Generic)()
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Iterable[I]'
-      property read
-      property write
   def parse_link_header(value: 'str') -> 'list[Link]'
   '''
 # ---

@@ -203,7 +203,7 @@ would carry it, and a server that honors it would answer each page with the firs
 
 A scheme the strategies do not cover implements the `Pager[I, P]` protocol (`Pager[I, P, B]` for a walk of POSTs whose
 bodies are of type `B`), items first as in `Paginated[I, P]`, with a `read` that reads its pages. One that encodes its
-walk's bodies subclasses `WritingPager[I, P, B]` and gives it a `write` property:
+walk's bodies subclasses `WritingPager[I, P, B]` and gives it a `write` too:
 a pager writes bodies because it says so, not because it has an attribute of that name.
 
 ```python
@@ -232,9 +232,10 @@ class HeaderTokens:
         return request.with_param("token", token) if token else None
 ```
 
-A pager that encodes its walk's bodies subclasses `WritingPager` instead, which makes every member abstract, so leaving
-one out is an error when the pager is built rather than a `None` mid-walk. Frozen dataclass fields named `read` and
-`write` give the reader and the writer, as the strategies do. Here the writer has no default, since this endpoint's
+A pager that encodes its walk's bodies subclasses `WritingPager` instead, which makes its methods abstract, so leaving
+one out is an error when the pager is built rather than a `None` mid-walk. It declares `read` and `write`, which the
+subclass gives: frozen dataclass fields named `read` and `write`, as the strategies have, slotted or not, or
+properties. `paginate` refuses a writing pager without either with a `TypeError`. Here the writer has no default, since this endpoint's
 bodies are not builtins (`SearchPages(read=reader(SearchPage), write=writer(Query))`):
 
 ```python
