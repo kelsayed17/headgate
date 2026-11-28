@@ -310,11 +310,15 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `StaticHeaderAuth({})`. A value of the wrong kind, a list of pairs, a bare `str` (`QueryParamAuth("key")` raised a
   `ValueError` about a dictionary update sequence) or a value that is not a `str`, raises `TypeError` naming the
   option.
-- `Json(value)` encodes its value where it is built. A value that is not builtins, such as a struct, a dataclass, a
-  pydantic model, a `date` or a `set`, raises `TypeError` there, naming its type and saying what to write, where it
-  raised the standard library's `Object of type Order is not JSON serializable` from inside the call; `NaN` and the
-  infinities raise `ValueError` there too. Write `body=writer(Order)(order)` with a flavor's writer, or
-  `body=Json(to_builtins(order))`.
+- `Json(value)` encodes its value once, where it is built, and the call sends those bytes. A value that is not
+  builtins, such as a struct, a dataclass, a pydantic model, a `date` or a `set`, raises `TypeError` there, naming its
+  type and saying what to write, where it raised the standard library's `Object of type Order is not JSON
+  serializable` from inside the call; `NaN`, the infinities and a value that holds itself raise `ValueError` there
+  too, naming `Json`. Write `body=writer(Order)(order)` with a flavor's writer, or `body=Json(to_builtins(order))`. A
+  change to the value after the `Json` is built is no longer sent: build the `Json` from the value you mean to send.
+  `Json` is a final value class rather than a dataclass: `dataclasses.replace`, `fields` and `asdict` no longer apply
+  to it, so write `copy.replace(body, value=...)` and `body.value`; it compares, hashes, prints and matches
+  (`case Json(value)`) as before, and a subclass raises `TypeError`.
 - `Reader` refuses a class with `TypeError` where it is built: `Reader(str)` type-checked and returned
   `'<Response [200 OK]>'`. Write `expect=as_text` for the body as text, and `Reader(lambda r: Cls(r))` for a class
   that is built from a response.

@@ -9,8 +9,11 @@ Whether a body is sent again on a retry, a redirect or a GOAWAY is pinned end to
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import importlib
 import io
+import json
 import math
 import os
 from dataclasses import dataclass
@@ -32,6 +35,7 @@ from headgate import (
     UpstreamStatusError,
     nothing,
 )
+from headgate._request_body import lowered
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
@@ -115,10 +119,50 @@ async def test_a_json_content_type_yields_to_the_calls_headers() -> None:
     assert script.sent[0].headers["content-type"] == "application/merge-patch+json"
 
 
-def test_a_json_value_json_cannot_carry_is_refused_where_it_is_built() -> None:
-    """Refuse ``NaN`` in a ``Json`` body where the body is built, rather than send invalid JSON or fail at the call."""
-    with pytest.raises(ValueError, match="Out of range float values are not JSON compliant"):
-        Json({"x": math.nan})
+@pytest.mark.parametrize("number", [math.nan, math.inf], ids=["nan", "inf"])
+def test_a_json_value_json_cannot_carry_is_refused_where_it_is_built(number: float) -> None:
+    """Refuse ``NaN`` or an infinity where the body is built, naming ``Json`` and what to write, not send bad JSON."""
+    with pytest.raises(ValueError, match=r"^Json takes a value JSON can carry \(Out of range float values .*\): write"):
+        Json({"x": number})
+
+
+def test_a_json_body_is_encoded_once_where_it_is_built() -> None:
+    """Send the bytes encoded where the body was built: a change to the value afterwards changes nothing sent."""
+    value = {"qty": 1}
+    body = Json(value)
+    value["qty"] = 2
+
+    def encoded_again(obj: object, **options: object) -> str:
+        raise AssertionError((obj, options))
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(json, "dumps", encoded_again)
+        sent = lowered(body)
+
+    assert sent.content == b'{"qty":1}'
+
+
+def test_a_json_body_is_a_value_of_its_value_alone() -> None:
+    """Show only its value: no other field, a match on ``value``, ``copy.replace`` and no attribute to set."""
+    body = Json({"a": 1})
+
+    match body:
+        case Json(value):
+            assert value == {"a": 1}
+    assert copy.replace(body, value=[1]) == Json([1])
+    assert not dataclasses.is_dataclass(body)
+    with pytest.raises(AttributeError, match=r"^Json is immutable"):
+        cast("Any", body).value = 2
+    with pytest.raises(AttributeError, match=r"^Json is immutable"):
+        del cast("Any", body).value
+
+
+def test_a_json_body_cannot_be_subclassed() -> None:
+    """Refuse a subclass, whose overrides nothing would call: the body is its encoded value."""
+    with pytest.raises(TypeError, match=r"^_Mine cannot subclass Json, which is final"):
+
+        class _Mine(cast("Any", Json)):
+            pass
 
 
 @dataclass(frozen=True)
