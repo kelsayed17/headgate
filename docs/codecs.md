@@ -84,8 +84,8 @@ def _exactly[T](kind: type[T]) -> Callable[[object, object], T]:
     """Return a hook taking a value of *kind* as it is, and refusing any other: no coercion."""
 
     def structure(value: object, _: object) -> T:
-        if isinstance(value, kind) and type(value) is kind:
-            return value
+        if type(value) is kind:  # exactly the class: a bool is not taken for an int, nor an int for a float
+            return cast("T", value)
         msg = f"expected {kind.__name__}"
         raise ValueError(msg)
 

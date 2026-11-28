@@ -182,6 +182,7 @@ async def test_a_refuse_that_returns_no_refusal_is_the_callers_bug() -> None:
 
 async def test_a_refuse_that_returns_a_class_names_it() -> None:
     """Name a class a check returned, as the class it is."""
+
     def returns_the_class(body: bytes) -> object:
         del body
         return RefusedError
