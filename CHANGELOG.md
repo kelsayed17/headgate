@@ -86,6 +86,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `SigningAuth.sign(request, now)` is handed the attempt's wall-clock time in Unix seconds, from the client's timing, so
   a signer runs on `TestClock.install()` like the rest of the client. Write `def sign(self, request, now)` and sign with
   `now` where you called `time.time()`.
+- A hook of the wrong color is refused where it is given, where it type-checked as an error but ran: a
+  `SigningAuth` whose `sign` is a coroutine function raises `TypeError` when the class is defined (its requests went
+  out unsigned, with only a "never awaited" warning): write `def sign(self, request, now)`. `Client()` raises
+  `TypeError` for an observer whose `notify` is a coroutine function (its events were dropped): write
+  `def notify(self, event)`; and for a middleware whose `__call__` is not one (it failed at the first call): write
+  `async def __call__(self, request, call_next)`.
 - `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.

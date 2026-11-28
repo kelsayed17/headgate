@@ -548,3 +548,13 @@ async def test_sign_is_handed_the_wall_clock_of_each_attempt() -> None:
 
     assert clock.sleeps, "the retry waited on the test clock"
     assert auth.signed_at == [clock.epoch, clock.epoch + sum(clock.sleeps)]
+
+
+def test_an_async_sign_is_refused_when_defined() -> None:
+    """Refuse a coroutine-function ``sign``, whose request went out unsigned (T13), naming it and what to write."""
+
+    async def sign(_self: SigningAuth, request: httpx2.Request, now: float) -> None:
+        request.headers["X-Sig"] = repr(now)
+
+    with pytest.raises(TypeError, match=r"_AsyncSign\.sign is a coroutine function, which the signing layer cannot"):
+        type("_AsyncSign", (SigningAuth,), {"sign": sign, "credential_headers": frozenset({"X-Sig"})})

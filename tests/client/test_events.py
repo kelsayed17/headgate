@@ -9,7 +9,7 @@ redacted), the t-string route template, and a call id. Durations are on the cloc
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, Any, cast, override
 
 import httpx2
 import pytest
@@ -239,3 +239,17 @@ async def test_a_client_without_observers_emits_nothing_and_still_works() -> Non
     fake = _get("x")
     await Client(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=fake)).get("x", expect=nothing)
     assert len(fake.calls) == 1
+
+
+class _AsyncObserver:
+    """An observer whose ``notify`` is a coroutine function: each event would be dropped, never awaited."""
+
+    async def notify(self, event: Event) -> None:
+        """Stand in for an observer that awaits a sink."""
+        del event
+
+
+def test_an_observer_whose_notify_is_async_is_refused() -> None:
+    """Refuse at ``Client()`` an observer with ``async def notify`` (T13), naming it and what to write."""
+    with pytest.raises(TypeError, match=r"observer _AsyncObserver's notify is a coroutine function, so its events"):
+        Client(base_url="https://x", observers=(cast("Any", _AsyncObserver()),))

@@ -483,6 +483,13 @@ class SigningAuth(Auth):
         """Refuse a concrete subclass that declares nothing it signs with, and register its parameters as secret."""
         super().__init_subclass__(**kwargs)
         _refuse_final_overrides(cls, SigningAuth, "sign and skips")
+        if inspect.iscoroutinefunction(cls.sign):
+            msg = (
+                f"{cls.__name__}.sign is a coroutine function, which the signing layer cannot await, so its requests "
+                "would go out unsigned: write def sign(self, request, now), and fetch what it needs (a key from a "
+                "KMS) before the call"
+            )
+            raise TypeError(msg)
         declared = _declares_names(cls)
         if not inspect.isabstract(cls) and not declared:
             msg = (

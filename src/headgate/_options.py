@@ -16,6 +16,7 @@ written, and freezes the collections it is given.
 from __future__ import annotations
 
 import functools
+import inspect
 import math
 import ssl
 import uuid
@@ -69,6 +70,7 @@ __all__ = [
     "check_deadline",
     "check_hooks",
     "check_middleware",
+    "check_observers",
     "check_timeout_fits",
     "httpx_timeout",
     "match_route",
@@ -446,7 +448,11 @@ def check_hooks(name: str, values: Iterable[object]) -> None:
 
 
 def check_middleware(middleware: Iterable[object]) -> None:
-    """Refuse a middleware that does not declare the credentials it stamps as two frozensets, or splits a name."""
+    """Refuse a middleware that does not declare the credentials it stamps as two frozensets, or splits a name.
+
+    A middleware whose call is not a coroutine function is refused too: its response is awaited, so a sync one failed
+    only at the first call.
+    """
     for item in middleware:
         name = getattr(item, "__qualname__", type(item).__qualname__)
         for attribute in ("credential_headers", "credential_params"):
@@ -458,6 +464,24 @@ def check_middleware(middleware: Iterable[object]) -> None:
                 )
                 raise TypeError(msg)
             check_not_letters(f"{name}.{attribute}", names)
+        # A function or partial is asked itself; an object, through its bound __call__.
+        if not (inspect.iscoroutinefunction(item) or (callable(item) and inspect.iscoroutinefunction(item.__call__))):
+            msg = (
+                f"middleware {name} must be an async callable, async def __call__(self, request, call_next), since "
+                "the client awaits the response it returns"
+            )
+            raise TypeError(msg)
+
+
+def check_observers(observers: Iterable[object]) -> None:
+    """Refuse an observer whose ``notify`` is a coroutine function: the client calls it and never awaits it."""
+    for item in observers:
+        if inspect.iscoroutinefunction(getattr(item, "notify", None)):
+            msg = (
+                f"observer {type(item).__qualname__}'s notify is a coroutine function, so its events would be dropped "
+                "unawaited: write def notify(self, event), and hand slow work to a queue or a task"
+            )
+            raise TypeError(msg)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

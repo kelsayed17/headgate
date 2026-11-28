@@ -11,6 +11,7 @@ attempt's nonce, which a server that rejects replays refuses; a middleware signs
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import hmac
 import itertools
@@ -22,11 +23,13 @@ import pytest
 from headgate import Client, HttpOptions, Json, Rate, RetryPolicy, TransportPolicy, call_info, nothing
 from headgate._core import CallContext
 from headgate.retry import Backoff, Hedge
-from headgate.testing import FakeTransport, TestClock
+from headgate.testing import FakeTransport, Respond, TestClock
 from tests.security._web import BASE, Web
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
     from headgate import Middleware, Next
     from headgate.events import CallView, Event
 
@@ -361,3 +364,56 @@ def _attempt(request: httpx2.Request) -> int:
     view = call_info(request)
     assert view is not None
     return view.attempt
+
+
+class _SyncCall:
+    """A middleware whose ``__call__`` is not a coroutine function, so its response would never be awaited."""
+
+    credential_headers: ClassVar = frozenset[str]()
+    credential_params: ClassVar = frozenset[str]()
+
+    def __call__(self, request: httpx2.Request, call_next: Next) -> Awaitable[httpx2.Response]:
+        return call_next(request)
+
+
+def _sync_function(request: httpx2.Request, call_next: Next) -> Awaitable[httpx2.Response]:
+    """Stand in for a plain function used as middleware, declared but not async."""
+    return call_next(request)
+
+
+def _declared[F](function: F) -> F:
+    """Return *function* with empty declarations set on it, as a function middleware declares."""
+    vars(function).update(credential_headers=frozenset[str](), credential_params=frozenset[str]())
+    return function
+
+
+@pytest.mark.parametrize(
+    ("item", "name"),
+    [
+        pytest.param(_SyncCall(), "_SyncCall", id="sync-call"),
+        pytest.param(_declared(_sync_function), "_sync_function", id="sync-function"),
+    ],
+)
+def test_a_middleware_that_is_not_async_is_refused(item: object, name: str) -> None:
+    """Refuse at ``Client()`` a middleware whose call is not a coroutine function (T13), naming it."""
+    with pytest.raises(TypeError, match=rf"middleware {name} must be an async callable, async def __call__"):
+        Client(base_url="https://x", middleware=(cast("Middleware", item),))
+
+
+async def test_an_async_function_middleware_and_a_partial_of_one_are_accepted() -> None:
+    """Accept a declared ``async def`` function, and a ``functools.partial`` of one, as middleware."""
+    seen: list[str] = []
+
+    async def tag(request: httpx2.Request, call_next: Next, *, label: str = "plain") -> httpx2.Response:
+        seen.append(label)
+        return await call_next(request)
+
+    fake = FakeTransport().reply("GET", "/x", Respond())
+    middleware = (_declared(tag), _declared(functools.partial(tag, label="partial")))
+    client = Client(
+        base_url=BASE, middleware=cast("tuple[Middleware, ...]", middleware), http=HttpOptions(transport=fake)
+    )
+    async with client:
+        await client.get("x", expect=nothing)
+
+    assert seen == ["plain", "partial"]
