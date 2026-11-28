@@ -32,7 +32,7 @@ from typing import Final, NoReturn, cast, final, override
 
 import httpx2
 
-from headgate._core import check_kind
+from headgate._core import check_headers, check_kind
 from headgate._sse import EventParser, text_decoder
 from headgate.errors import DecodeError, RefusedError
 
@@ -179,6 +179,7 @@ class Expect[T]:
         :raises ValueError: for a malformed *accept*.
         """
         check_kind("ok", ok, Reader, "a Reader")
+        check_headers("headers", headers)
         if accept is not None:
             _media_ranges(accept)
         self._ok = ok

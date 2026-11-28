@@ -19,7 +19,7 @@ from typing import Final
 # A closed TypedDict (PEP 728) refuses a keyword it does not name, so a stray or misspelled option is a type error.
 from typing_extensions import TypedDict
 
-from headgate._core import check_kind
+from headgate._core import check_headers, check_kind, check_str_mapping
 from headgate._options import Timeouts
 from headgate._request_body import Body
 from headgate.retry._policy import RetryPolicy
@@ -123,14 +123,18 @@ STREAM_KEYS: Final = frozenset(StreamOptions.__optional_keys__)
 
 
 def check_overrides(options: Mapping[str, object]) -> None:
-    """Check the kind of each override in *options*: ``retry``, ``follow_redirects``, ``cache_ttl`` and the size cap.
+    """Check the kind of each option in *options* that is not checked where it is read.
 
-    :raises TypeError: for a ``retry`` that is neither a ``RetryPolicy`` nor ``None`` (``True`` and ``False``
-        included, with what to write instead), a ``follow_redirects`` that is not a ``bool`` and a ``cache_ttl`` that
-        is neither a number nor ``None``, and a ``max_response_bytes`` that is not an ``int`` (a ``bool`` included).
+    :raises TypeError: for a ``params`` that is not a mapping with ``str`` keys (its values are checked as they are
+        encoded), ``headers`` that do not map names to ``str`` values (pairs included), an ``idempotency_key`` that is
+        not a ``str`` (``None`` included: leave it out for none), a ``retry`` that is neither a ``RetryPolicy`` nor
+        ``None`` (``True`` and ``False`` included, with what to write instead), a ``follow_redirects`` that is not a
+        ``bool`` and a ``cache_ttl`` that is neither a number nor ``None``, and a ``max_response_bytes`` that is not an
+        ``int`` (a ``bool`` included).
     :raises ValueError: for a ``cache_ttl`` that is not positive and finite, and a ``max_response_bytes`` that is not
         positive.
     """
+    _check_request_kinds(options)
     if "retry" in options:
         retry = options["retry"]
         if isinstance(retry, bool):
@@ -158,3 +162,13 @@ def check_overrides(options: Mapping[str, object]) -> None:
         elif cap <= 0:
             msg = f"max_response_bytes must be > 0 (got {cap})"
             raise ValueError(msg)
+
+
+def _check_request_kinds(options: Mapping[str, object]) -> None:
+    """Check what *options* add to the request: its ``params``, ``headers`` and ``idempotency_key`` (see above)."""
+    if (params := options.get("params")) is not None:
+        check_str_mapping("params", params, "a mapping of names to values, such as {'q': 'gdp'}", any_values=True)
+    if "headers" in options:
+        check_headers("headers", options["headers"])
+    if "idempotency_key" in options:
+        check_kind("idempotency_key", options["idempotency_key"], str, "a key, a str; leave it out for none")

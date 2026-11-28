@@ -5,16 +5,20 @@
 
 import re
 from collections.abc import Collection, Mapping
-from typing import Any, Final, NewType, NoReturn, TypeAliasType, get_origin
+from typing import Any, Final, NewType, NoReturn, TypeAliasType, cast, get_origin
 
 __all__ = [
     "check_callable",
     "check_collection",
+    "check_headers",
     "check_int",
     "check_kind",
     "check_names",
     "check_not_letters",
+    "check_number",
     "check_options",
+    "check_statuses",
+    "check_str_mapping",
     "named",
     "refuse_subclass",
     "type_text",
@@ -85,6 +89,72 @@ def check_int(option: str, value: object, wanted: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int):
         msg = f"{option}= takes {wanted} (got {named(value)})"
         raise TypeError(msg)
+
+
+def check_number(option: str, value: object, wanted: str) -> None:
+    """Refuse a *value* for *option* that is not an ``int`` or a ``float``, a ``bool`` included.
+
+    A ``bool`` is an ``int`` to ``isinstance`` and to a type checker, so ``True`` would pass for one second or one
+    request.
+
+    :raises TypeError: naming the option, what it takes (*wanted*) and what it got.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        msg = f"{option}= takes {wanted} (got {named(value)})"
+        raise TypeError(msg)
+
+
+def check_str_mapping(option: str, value: object, wanted: str, *, any_values: bool = False) -> None:
+    """Refuse a *value* for *option* that is not a mapping of ``str`` to ``str``: a list of pairs, above all.
+
+    With *any_values*, only the keys must be ``str``: the values are checked by what reads them.
+
+    :raises TypeError: naming the option, what it takes (*wanted*) and what it got: the value's type, a key that is not
+        a ``str``, or a value that is not one under its key.
+    """
+    got = named(value) if not isinstance(value, Mapping) else _bad_entry(value, any_values=any_values)
+    if got is not None:
+        msg = f"{option}= takes {wanted} (got {got})"
+        raise TypeError(msg)
+
+
+def _bad_entry(mapping: Mapping[object, object], *, any_values: bool) -> str | None:
+    """Return the first entry of *mapping* that is not ``str`` to ``str``, described, or ``None`` when all are."""
+    for key, value in mapping.items():
+        if not isinstance(key, str):
+            return f"the key {key!r}, of type {type(key).__name__}"
+        if not (any_values or isinstance(value, str)):
+            return f"{type(value).__name__} under {key!r}"
+    return None
+
+
+def check_headers(option: str, value: object) -> None:
+    """Refuse *value*, given as the headers *option*, unless it maps header names to ``str`` values.
+
+    :raises TypeError: as :func:`check_str_mapping` does: for pairs, and a name or value that is not a ``str``.
+    """
+    check_str_mapping(option, value, "a mapping of header names to str values, such as {'Accept-Language': 'en'}")
+
+
+#: The status range RFC 9110 defines.
+_STATUSES: Final = range(100, 600)
+
+
+def check_statuses(option: str, value: object, wanted: str) -> None:
+    """Refuse a *value* for *option* that is not a collection of HTTP statuses: ``int`` s from 100 to 599.
+
+    :raises TypeError: for a value that is not a collection (a bare ``str``, a one-shot iterator), or holds anything
+        but an ``int`` (a ``bool``, or ``"500"``, which no response's status equals), naming the option and the entry.
+    :raises ValueError: for an ``int`` outside 100-599, which no response has.
+    """
+    check_collection(option, value, wanted)
+    for status in cast("Collection[object]", value):
+        if isinstance(status, bool) or not isinstance(status, int):
+            msg = f"{option}= takes {wanted} (got {named(status)} {status!r} among them)"
+            raise TypeError(msg)
+        if status not in _STATUSES:
+            msg = f"{option}= takes HTTP statuses, 100 to 599 (got {status})"
+            raise ValueError(msg)
 
 
 def check_callable(option: str, value: object, wanted: str) -> None:

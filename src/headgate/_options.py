@@ -33,6 +33,7 @@ from headgate._core import (
     check_callable,
     check_collection,
     check_fragment,
+    check_headers,
     check_int,
     check_kind,
     check_names,
@@ -625,7 +626,7 @@ class HttpOptions:
         if self.transport is not None and not isinstance(self.transport, httpx2.AsyncBaseTransport):
             reject_upstream_httpx(self.transport, what="transport")
             check_kind("transport", self.transport, (), "an httpx2.AsyncBaseTransport, or None")
-        check_kind("headers", self.headers, Mapping, "a mapping of header names to values")
+        check_headers("headers", self.headers)
         check_kind("follow_redirects", self.follow_redirects, bool, "a bool")
         check_int("max_redirects", self.max_redirects, "a number of hops, an int")
         check_int("max_response_bytes", self.max_response_bytes, "a number of bytes, an int")

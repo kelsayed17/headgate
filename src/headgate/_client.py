@@ -36,7 +36,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
 from types import TracebackType
-from typing import Final, Literal, Self, Unpack, cast, final, overload
+from typing import Final, Literal, Self, Unpack, cast, final, get_args, overload
 
 import httpx2
 
@@ -144,6 +144,9 @@ __all__ = ["Built", "Client", "Method", "built_with"]
 
 type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "QUERY"]
 """The HTTP methods a client sends: one verb each, and :meth:`Client.stream`'s ``method``."""
+
+#: The methods :data:`Method` names, in its order: what ``stream(method=)`` takes.
+_METHODS: Final = get_args(Method.__value__)
 
 #: How much of a refused or failed streamed response is read, for the ``ClientError``'s body snippet.
 _STREAM_ERROR_HEAD_BYTES = 4096
@@ -553,6 +556,9 @@ class Client:
         """
         check_options("stream", options, STREAM_KEYS, BODY_HINTS)
         check_overrides(options)
+        if method not in _METHODS:
+            msg = f"method= takes one of {', '.join(map(repr, _METHODS))} (got {method!r})"
+            raise TypeError(msg)
         if method in _NO_BODY_HINTS and options.get("body") is not None:
             msg = (
                 f"stream() takes no body= for a {method}: a {method} has no body, and the cache does not key one: use "
@@ -575,6 +581,9 @@ class Client:
         stream after the last event a previous :class:`~headgate.streaming.Stream` saw (its ``last_event_id``); wait
         its ``reconnect_after`` first.
         """
+        check_kind("last_event_id", last_event_id, (str, type(None)), "the id of the last event seen, a str, or None")
+        # Before the merge below, which would take a list of pairs as headers.
+        check_overrides(options)
         # Merged case-insensitively, so Last-Event-ID replaces one however headers= spelled it.
         headers = httpx2.Headers(options.get("headers"))
         headers.setdefault("Accept", _EVENT_STREAM)
