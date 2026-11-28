@@ -115,6 +115,29 @@ def test_only_the_archives_are_cached(storage) -> None:
 
 Neither sends anything. A view made with `with_options()` reads back as the client it was made from.
 
+## A fake walk
+
+A test that stands in for an SDK whose method returns a walk, rather than for its network, builds a `Paginated` of its
+own: `Paginated(pages, items_of)`, where `pages` is a function of no arguments that starts the pages afresh each time it
+is called (an async generator function, say), and `items_of` returns the items on one page. It is the class
+`paginate()` returns, so the code under test iterates, collects and reads pages exactly as it does against the SDK:
+
+```python
+from collections.abc import AsyncIterator
+
+from headgate import Paginated
+
+
+async def two_pages() -> AsyncIterator[list[Issue]]:
+    yield [Issue(number=1, title="first")]
+    yield [Issue(number=2, title="second")]
+
+
+class FakeGitHub:
+    def open_issues(self, owner: str, name: str) -> Paginated[Issue]:
+        return Paginated(two_pages, lambda page: page)
+```
+
 ## Fault injection
 
 `FaultyTransport(schedule=[...])` waits out a `Slow` step on the sleep of the timing current when it is built (the test

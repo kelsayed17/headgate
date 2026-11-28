@@ -591,7 +591,7 @@
       field fields: Mapping[str, object] = <factory>
       property replayable
   type Next = Callable[[httpx2.Request], Awaitable[httpx2.Response]]
-  class Paginated(Generic)(pages: 'Callable[[], AsyncIterator[P]]', items: 'Callable[[], AsyncGenerator[I]]', /) -> 'None'
+  class Paginated(Generic)(pages: 'Callable[[], AsyncIterator[P]]', items_of: 'Callable[[P], Iterable[I]]', /) -> 'None'
       def collect(self, *, max_items: 'int | None' = None) -> 'list[I]'
       def pages(self) -> 'AsyncIterator[P]'
   class QueryParamAuth(Auth)(params: 'Mapping[str, str]') -> 'None'

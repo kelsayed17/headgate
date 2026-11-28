@@ -684,7 +684,7 @@ class Client:
             return await self.post(request.url, expect=paired, body=body, **page_options)
 
         walk = PageWalk(fetch, pager, first, source=self._source, max_pages=max_pages, on_limit=on_limit)
-        return Paginated(walk.pages, walk.items)
+        return Paginated(walk.pages, pager.page_items)
 
     def _one_key_for_every_page(self, options: CallOptions) -> bool:
         """Return whether every call made with *options* sends one fixed idempotency key.
