@@ -18,7 +18,7 @@ import math
 import sys
 import weakref
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final, final, override
+from typing import TYPE_CHECKING, Final, Self, final, override
 
 import httpx2
 
@@ -182,6 +182,15 @@ class RetryBudget:
     def share(self) -> RetryShare:
         """The share this budget spends."""
         return self._share
+
+    def __copy__(self) -> Self:
+        """Return this budget itself: a copy of a shared handle is the handle, so its holders share it."""
+        return self
+
+    def __deepcopy__(self, memo: dict[int, object]) -> Self:
+        """Return this budget itself, as :meth:`__copy__` does, so a deep copy of a policy keeps sharing it."""
+        del memo
+        return self
 
     @override
     def __repr__(self) -> str:

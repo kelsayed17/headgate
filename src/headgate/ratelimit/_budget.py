@@ -33,7 +33,7 @@ and back up on success.
 import math
 import threading
 import weakref
-from typing import TYPE_CHECKING, Final, override
+from typing import TYPE_CHECKING, Final, Self, override
 
 import httpx2
 
@@ -434,6 +434,15 @@ class RateBudget:
     def pause_remaining(self) -> float:
         """The seconds left in a pause the server asked for, or 0."""
         return self._pacer.pause_remaining()
+
+    def __copy__(self) -> Self:
+        """Return this budget itself: a copy of a shared handle is the handle, so its holders share it."""
+        return self
+
+    def __deepcopy__(self, memo: dict[int, object]) -> Self:
+        """Return this budget itself, as :meth:`__copy__` does, so a deep copy of a policy keeps sharing it."""
+        del memo
+        return self
 
     @override
     def __repr__(self) -> str:

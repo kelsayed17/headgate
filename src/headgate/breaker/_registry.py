@@ -29,7 +29,7 @@ import weakref
 from collections import OrderedDict
 from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager
-from typing import Final, Protocol, override
+from typing import Final, Protocol, Self, override
 
 import httpx2
 
@@ -210,6 +210,15 @@ class BreakerRegistry:
     def clear(self) -> None:
         """Forget every breaker, so each origin starts closed again."""
         self._table.clear()
+
+    def __copy__(self) -> Self:
+        """Return this registry itself: a copy of a shared handle is the handle, so its holders share it."""
+        return self
+
+    def __deepcopy__(self, memo: dict[int, object]) -> Self:
+        """Return this registry itself, as :meth:`__copy__` does, so a deep copy of a policy keeps sharing it."""
+        del memo
+        return self
 
     @override
     def __repr__(self) -> str:
