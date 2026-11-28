@@ -171,9 +171,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `headers` and `accept` are read-only properties, and two equal `Expect` objects hash alike.
 - `head()` requires `expect=`, as every verb does: write `head(url, expect=nothing)` for `head(url)`.
 - A middleware reads its call with `headgate.call_view(request)`, which returns a `CallView`: write `call_view` for
-  `call_info`. `CallView.call` is `CallView.info`, and `CallInfo.route`, the t-string template, is
-  `CallInfo.template`, OpenTelemetry's `url.template`, since a `Route` is the per-path rule: write
-  `call_view(request).info.template` for `call_info(request).call.route`, and `event.call.template` for
+  `call_info`. Its `call` is the call's `CallInfo`, as every event's `call` is. `CallInfo.route`, the t-string
+  template, is `CallInfo.template`, OpenTelemetry's `url.template`, since a `Route` is the per-path rule: write
+  `call_view(request).call.template` for `call_info(request).call.route`, and `event.call.template` for
   `event.call.route`.
 - `stream()` takes no `last_event_id=`, which `events()` keeps as the one way to resume a server-sent event stream:
   write `events(url, last_event_id=...)` for `stream(url, last_event_id=...)`, or send `Last-Event-ID` in a raw

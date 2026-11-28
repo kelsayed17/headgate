@@ -210,7 +210,7 @@ The two declarations are the `headgate.security.CredentialCarrier` protocol, and
 from `headgate.security`, never from a private module. An auth subclasses [`headgate.Auth`](auth.md#your-own-auth).
 
 A middleware reads its call through `headgate.call_view(request)`, a `headgate.events.CallView` taken when asked: its
-`info`, the call's `CallInfo` (method, URL, absolute URL and `template`, the same record events carry), its `attempt` (1 on the first send,
+`call`, the call's `CallInfo` (method, URL, absolute URL and `template`, the same record events carry), its `attempt` (1 on the first send,
 2 on the first retry or hedge) and the seconds `remaining` before its deadline, or `None` without one. It returns
 `None` for a request no client call built.
 
@@ -224,7 +224,7 @@ class TracesFirstReportSends:
 
     async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
         view = call_view(request)
-        if view is not None and view.info.template == "reports/{report_id}" and view.attempt == 1:
+        if view is not None and view.call.template == "reports/{report_id}" and view.attempt == 1:
             request.headers["X-Trace-Report"] = "1"
         return await call_next(request)
 ```

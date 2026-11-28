@@ -306,14 +306,14 @@ def progress_of(context: CallContext) -> SendProgress:
 class CallView:
     """A read-only view of the call a request belongs to, taken when :func:`call_view` is called.
 
-    * ``info``: the :class:`~headgate.events.CallInfo` every event about the call carries: its method, URL, absolute
-      URL and template (the t-string the URL was rendered from, or ``None``).
+    * ``call``: the :class:`~headgate.events.CallInfo` every event about the call carries, as its ``call``: its method,
+      URL, absolute URL and template (the t-string the URL was rendered from, or ``None``).
     * ``attempt``: how many sends the call has begun, so inside a middleware 1 on the first send and 2 on the first
       retry (or hedge).
     * ``remaining``: the seconds left before the call's deadline (negative once past it), or ``None`` without one.
     """
 
-    info: CallInfo
+    call: CallInfo
     attempt: int
     remaining: float | None
 
@@ -330,4 +330,4 @@ def call_view(request: httpx2.Request) -> CallView | None:
         return None
     sending = SENDING.get()
     attempt = sending[2] if sending is not None and sending[0] is context else context.attempt
-    return CallView(info=context.info, attempt=attempt, remaining=context.remaining())
+    return CallView(call=context.info, attempt=attempt, remaining=context.remaining())
