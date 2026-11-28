@@ -91,7 +91,7 @@ change the public API; such changes are listed under **Changed** and **Removed**
   Their hooks are `sign` and `skips`, and `mint`, `attach` and `skips`; add a per-request header, such as a tenant id,
   in a middleware.
 - `SigningAuth.sign(request, now)` is handed the attempt's wall-clock time in Unix seconds, from the client's timing, so
-  a signer runs on `TestClock.install()` like the rest of the client. Write `def sign(self, request, now)` and sign with
+  a signer whose client is built under `TestClock.install()` runs on the test clock like the rest of the client. Write `def sign(self, request, now)` and sign with
   `now` where you called `time.time()`.
 - A hook of the wrong color is refused where it is given, as ty already reported it: a `SigningAuth` whose `sign` is
   a coroutine function raises `TypeError` when the class is defined (its requests went out unsigned, with only a
