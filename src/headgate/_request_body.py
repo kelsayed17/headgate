@@ -200,16 +200,21 @@ class Json:
     :raises ValueError: for ``NaN`` or an infinity, which JSON cannot carry, and for a value that holds itself.
     """
 
-    __slots__ = ("_encoded", "value")
+    __slots__ = ("_encoded", "_value")
     __match_args__ = ("value",)
 
-    value: object
+    _value: object
     _encoded: bytes
 
     def __init__(self, value: object) -> None:
         """Encode *value*, refusing one that is not builtins or holds what JSON cannot carry."""
-        object.__setattr__(self, "value", value)
+        object.__setattr__(self, "_value", value)
         object.__setattr__(self, "_encoded", encoded_json(value))
+
+    @property
+    def value(self) -> object:
+        """The builtins the body was built from, as given; what is sent is their encoding when it was built."""
+        return self._value
 
     @override
     def __setattr__(self, name: str, value: object) -> None:
