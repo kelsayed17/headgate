@@ -13,6 +13,8 @@ import importlib
 import io
 import math
 import os
+from dataclasses import dataclass
+from datetime import date
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import pytest
@@ -113,14 +115,52 @@ async def test_a_json_content_type_yields_to_the_calls_headers() -> None:
     assert script.sent[0].headers["content-type"] == "application/merge-patch+json"
 
 
-async def test_a_json_value_json_cannot_carry_is_refused() -> None:
-    """Refuse ``NaN`` in a ``Json`` body before sending, as httpx2's ``json=`` did, rather than send invalid JSON."""
-    script = Script()
-
+def test_a_json_value_json_cannot_carry_is_refused_where_it_is_built() -> None:
+    """Refuse ``NaN`` in a ``Json`` body where the body is built, rather than send invalid JSON or fail at the call."""
     with pytest.raises(ValueError, match="Out of range float values are not JSON compliant"):
-        await _client(script).post("orders", expect=nothing, body=Json({"x": math.nan}))
+        Json({"x": math.nan})
 
-    assert script.sent == []
+
+@dataclass(frozen=True)
+class _Order:
+    """A value of a class JSON's encoder does not know."""
+
+    qty: int
+
+
+@pytest.mark.parametrize(
+    ("value", "got"),
+    [(_Order(1), "_Order"), ({"due": date(2026, 1, 1)}, "date"), ({"ids": {1, 2}}, "set")],
+    ids=["dataclass", "date", "set"],
+)
+def test_a_json_body_of_what_is_not_builtins_is_refused_where_it_is_built(value: object, got: str) -> None:
+    """Refuse a value JSON cannot encode where the ``Json`` is built, naming its type and what to write instead."""
+    with pytest.raises(TypeError, match=rf"^Json takes builtins.*\(got {got}\): .*writer\(.*to_builtins\(value\)"):
+        Json(value)
+
+
+@pytest.mark.parametrize(("value", "sent"), [((1, 2), b"[1,2]"), ({1: "a"}, b'{"1":"a"}')], ids=["tuple", "int-key"])
+async def test_a_json_body_takes_what_the_json_encoder_takes(value: object, sent: bytes) -> None:
+    """Send a tuple as an array and an ``int`` key as a string, as the standard library's encoder does."""
+    script = Script()
+    await _client(script).post("orders", expect=nothing, body=Json(value))
+
+    assert script.sent[0].content == sent
+
+
+def test_a_json_key_json_cannot_write_is_refused_where_it_is_built() -> None:
+    """Refuse a key JSON cannot write, such as a tuple, in the same words, saying which keys it can."""
+    with pytest.raises(
+        TypeError, match=r"^Json takes builtins.*\(keys must be str, int, float, bool or None, not tuple\)"
+    ):
+        Json({(1, 2): 1})
+
+
+def test_two_json_bodies_of_one_value_are_equal() -> None:
+    """Compare and hash a ``Json`` by its value, whatever it holds besides."""
+    assert Json({"a": 1}) == Json({"a": 1})
+    assert hash(Json((1, "a"))) == hash(Json((1, "a")))
+    assert repr(Json({"a": 1})) == "Json(value={'a': 1})"
 
 
 @pytest.mark.parametrize(

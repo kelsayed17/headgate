@@ -24,7 +24,7 @@ from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callab
 from dataclasses import dataclass, field
 from datetime import date, time
 from decimal import Decimal
-from typing import IO, Final, final, override
+from typing import IO, Final, NoReturn, final, override
 from uuid import UUID
 
 import httpx2
@@ -166,16 +166,61 @@ def _as_content(content: RawContent) -> bytes | AsyncIterable[bytes]:
     return _Replayed(content)
 
 
+#: What a :class:`Json` value may hold, and what to write for one that holds anything else.
+_JSON_TAKES: Final = "Json takes builtins: dict, list, tuple, str, int, float, bool and None"
+_JSON_INSTEAD: Final = (
+    "write body=writer(Type)(value) with a flavor's writer, or body=Json(to_builtins(value)) with its to_builtins"
+)
+
+
+class _NotBuiltinsError(TypeError):
+    """A :class:`Json` value held something JSON's encoder does not know: raised as it is."""
+
+
+def _not_builtins(value: object) -> NoReturn:
+    """Refuse *value*, which ``json.dumps`` met inside a :class:`Json` value and cannot encode, naming its type."""
+    msg = f"{_JSON_TAKES} (got {type(value).__name__}): {_JSON_INSTEAD}"
+    raise _NotBuiltinsError(msg)
+
+
 @final
 @dataclass(frozen=True, slots=True)
 class Json:
     """A JSON body of builtins, sent with ``Content-Type: application/json``; a codec's ``to_builtins`` builds one.
 
-    It is encoded as httpx2 encodes JSON, so ``Json(None)`` sends ``null``, and ``NaN`` or an infinity raises
-    ``ValueError``. The ``Content-Type`` yields to one the call's ``headers=`` (or its view's) set.
+    It is encoded where it is built, so a value JSON cannot carry fails there, and as httpx2 encodes JSON:
+    ``Json(None)`` sends ``null``, a tuple an array and an ``int`` key a string. The ``Content-Type`` yields to one the
+    call's ``headers=`` (or its view's) set.
+
+    :raises TypeError: for a value that is not builtins (a struct, a dataclass, a model, a ``date``, a ``set``), naming
+        its type: a flavor's ``writer(Type)`` encodes a typed value, and its ``to_builtins`` turns one into builtins.
+    :raises ValueError: for ``NaN`` or an infinity, which JSON cannot carry.
     """
 
     value: object
+
+    def __post_init__(self) -> None:
+        """Encode the value once, refusing one that is not builtins or holds a number JSON cannot carry."""
+        _encoded_json(self.value)
+
+
+def _encoded_json(value: object) -> bytes:
+    """Return *value* encoded as httpx2 encodes ``json=``, so a body reads the same whichever spelling built it.
+
+    The encoding is not kept on the :class:`Json`, whose one field is its value: a call encodes it again, as it is sent.
+
+    :raises TypeError: for a value that is not builtins, naming its type, or a key JSON cannot write.
+    :raises ValueError: for ``NaN`` or an infinity.
+    """
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False, default=_not_builtins)
+    except TypeError as exc:
+        if isinstance(exc, _NotBuiltinsError):
+            raise
+        # A key json.dumps cannot write, such as a tuple, which it refuses before asking default=.
+        msg = f"{_JSON_TAKES} ({exc}): {_JSON_INSTEAD}"
+        raise TypeError(msg) from None
+    return encoded.encode()
 
 
 @final
@@ -282,7 +327,6 @@ def lowered(body: Body | None) -> Lowered:
 
     :raises TypeError: for a value that is no :data:`Body`, such as bare ``bytes`` (write ``Raw(...)``) or a ``dict``
         (write ``Json(...)``).
-    :raises ValueError: for a ``Json`` value holding ``NaN`` or an infinity, which JSON cannot carry.
     """
     if body is not None:
         check_kind("body", body, _BODY_KINDS, "a Body: Json, Form, Multipart, Raw or a writer's EncodedBody")
@@ -290,9 +334,7 @@ def lowered(body: Body | None) -> Lowered:
         case EncodedBody(content=content, content_type=content_type):
             return Lowered(content, content_type)
         case Json(value=value):
-            # As httpx2 encodes json=, so a body reads the same whichever spelling built it.
-            encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
-            return Lowered(encoded, "application/json")
+            return Lowered(_encoded_json(value), "application/json")
         case Form(fields=fields):
             return Lowered(data=fields)
         case Multipart(files=files, fields=fields):

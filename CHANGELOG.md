@@ -303,6 +303,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `StaticHeaderAuth({})`. A value of the wrong kind, a list of pairs, a bare `str` (`QueryParamAuth("key")` raised a
   `ValueError` about a dictionary update sequence) or a value that is not a `str`, raises `TypeError` naming the
   option.
+- `Json(value)` encodes its value where it is built. A value that is not builtins, such as a struct, a dataclass, a
+  pydantic model, a `date` or a `set`, raises `TypeError` there, naming its type and saying what to write, where it
+  raised the standard library's `Object of type Order is not JSON serializable` from inside the call; `NaN` and the
+  infinities raise `ValueError` there too. Write `body=writer(Order)(order)` with a flavor's writer, or
+  `body=Json(to_builtins(order))`.
 
 ### Removed
 
