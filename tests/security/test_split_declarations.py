@@ -66,7 +66,7 @@ def _split_signer() -> type:
         credential_headers: ClassVar = frozenset("X-Api-Key")
 
         @override
-        def sign(self, request: httpx2.Request) -> None:
+        def sign(self, request: httpx2.Request, now: float) -> None:
             request.headers["X-Api-Key"] = "sig"
 
     return SplitSigner

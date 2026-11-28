@@ -83,6 +83,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   override of the flow type-checked and failed inside the call (`'NoneType' object has no attribute 'status_code'`).
   Their hooks are `sign` and `skips`, and `mint`, `attach` and `skips`; add a per-request header, such as a tenant id,
   in a middleware.
+- `SigningAuth.sign(request, now)` is handed the attempt's wall-clock time in Unix seconds, from the client's timing, so
+  a signer runs on `TestClock.install()` like the rest of the client. Write `def sign(self, request, now)` and sign with
+  `now` where you called `time.time()`.
 - `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.

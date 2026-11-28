@@ -289,7 +289,7 @@ def _attach_key(_self: CachedTokenAuth, request: httpx2.Request, token: str) -> 
     request.headers["X-Api-Key"] = token
 
 
-def _sign_nothing(_self: SigningAuth, _request: httpx2.Request) -> None:
+def _sign_nothing(_self: SigningAuth, _request: httpx2.Request, _now: float) -> None:
     """Sign nothing: only the declarations matter."""
 
 

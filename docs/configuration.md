@@ -165,7 +165,6 @@ nothing it stamps.
 ```python
 import hashlib
 import hmac
-import time
 from typing import ClassVar, override
 
 import httpx2
@@ -181,8 +180,8 @@ class HmacSigner(SigningAuth):
         self._secret = secret
 
     @override
-    def sign(self, request: httpx2.Request) -> None:
-        stamp = str(int(time.time()))
+    def sign(self, request: httpx2.Request, now: float) -> None:
+        stamp = str(int(now))
         payload = b"\n".join((request.method.encode(), request.url.raw_path, stamp.encode(), request.content))
         request.headers["X-Timestamp"] = stamp
         request.headers["X-Signature"] = hmac.new(self._secret, payload, hashlib.sha256).hexdigest()

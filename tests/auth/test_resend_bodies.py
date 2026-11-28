@@ -37,7 +37,7 @@ class _Signer(SigningAuth):
     credential_headers: ClassVar = frozenset({"X-Signature"})
 
     @override
-    def sign(self, request: httpx2.Request) -> None:
+    def sign(self, request: httpx2.Request, now: float) -> None:
         request.headers["X-Signature"] = "sig"
 
 

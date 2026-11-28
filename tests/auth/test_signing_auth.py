@@ -56,7 +56,7 @@ class _Signer(SigningAuth):
         self.signed = 0
 
     @override
-    def sign(self, request: httpx2.Request) -> None:
+    def sign(self, request: httpx2.Request, now: float) -> None:
         self.signed += 1
         nonce = str(next(self._nonces))
         request.headers["X-Nonce"] = nonce
@@ -77,7 +77,7 @@ class _QuerySigner(SigningAuth):
     credential_params: ClassVar = frozenset({"signature"})
 
     @override
-    def sign(self, request: httpx2.Request) -> None:
+    def sign(self, request: httpx2.Request, now: float) -> None:
         request.url = request.url.copy_set_param("signature", "sig")
 
 
@@ -225,8 +225,8 @@ class _StampSigner(_Signer):
     """Signs the middleware's ``X-Stamp`` too, so it fails if it signs before the middleware ran."""
 
     @override
-    def sign(self, request: httpx2.Request) -> None:
-        super().sign(request)
+    def sign(self, request: httpx2.Request, now: float) -> None:
+        super().sign(request, now)
         request.headers["X-Signature"] += f":{request.headers['X-Stamp']}"
 
 
@@ -403,7 +403,7 @@ def test_a_signer_declaring_nothing_fails_when_it_is_defined() -> None:
             """Return the key a subclass signs with."""
 
         @override
-        def sign(self, request: httpx2.Request) -> None:
+        def sign(self, request: httpx2.Request, now: float) -> None:
             request.headers["X-Key"] = self.key()
 
     with pytest.raises(TypeError, match="must declare the headers or parameters sign"):
@@ -425,17 +425,18 @@ def test_a_signer_declaring_nothing_fails_when_it_is_defined() -> None:
 
 
 class _ClockSigner(SigningAuth):
-    """Signs each attempt with the time on *clock*, as a timestamp a server checks for freshness."""
+    """Signs each attempt with the time it is handed, as a timestamp a server checks for freshness."""
 
     credential_headers: ClassVar = frozenset({"X-Signed-At"})
 
-    def __init__(self, clock: TestClock) -> None:
-        """Read the time from *clock*."""
-        self._clock = clock
+    def __init__(self) -> None:
+        """Record the time each attempt is signed at."""
+        self.signed_at: list[float] = []
 
     @override
-    def sign(self, request: httpx2.Request) -> None:
-        request.headers["X-Signed-At"] = str(self._clock.now)
+    def sign(self, request: httpx2.Request, now: float) -> None:
+        self.signed_at.append(now)
+        request.headers["X-Signed-At"] = repr(now)
 
 
 @pytest.mark.transport_policy
@@ -445,7 +446,7 @@ async def test_a_request_waiting_in_the_rate_queue_is_signed_when_it_leaves_it()
     ages: list[float] = []
 
     def handle(request: httpx2.Request) -> httpx2.Response:
-        ages.append(clock.now - float(request.headers["X-Signed-At"]))
+        ages.append(clock.wall_clock() - float(request.headers["X-Signed-At"]))
         return httpx2.Response(200)
 
     budget = RateBudget(Rate.per_second(1), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
@@ -453,7 +454,7 @@ async def test_a_request_waiting_in_the_rate_queue_is_signed_when_it_leaves_it()
         client = Client(
             base_url=_BASE,
             rate=budget,
-            auth=_ClockSigner(clock),
+            auth=_ClockSigner(),
             http=HttpOptions(transport=httpx2.MockTransport(handle)),
         )
     async with client:
@@ -490,7 +491,7 @@ class _MixedCaseSigner(SigningAuth):
     credential_headers: ClassVar = frozenset({"X-Sig"})
 
     @override
-    def sign(self, request: httpx2.Request) -> None:
+    def sign(self, request: httpx2.Request, now: float) -> None:
         request.headers["X-Sig"] = "signed"
 
 
@@ -531,3 +532,19 @@ def test_a_declaration_through_a_property_is_refused_when_defined(define: Callab
     """Refuse a ``credential_headers`` property on a signer or a token auth: they declare in class attributes."""
     with pytest.raises(TypeError, match=r"credential_headers is declared through a property: declare it as a class"):
         define()
+
+
+async def test_sign_is_handed_the_wall_clock_of_each_attempt() -> None:
+    """Hand ``sign`` the client's wall-clock time for each attempt, so a signer runs on a ``TestClock`` (E12)."""
+    clock = TestClock(random=lambda: 1.0)
+    answers = iter([httpx2.Response(503), httpx2.Response(200)])
+    auth = _ClockSigner()
+    with clock.install():
+        client = Client(
+            base_url=_BASE, auth=auth, http=HttpOptions(transport=httpx2.MockTransport(lambda _: next(answers)))
+        )
+    async with client:
+        await client.get("orders", expect=RESPONSE)
+
+    assert clock.sleeps, "the retry waited on the test clock"
+    assert auth.signed_at == [clock.epoch, clock.epoch + sum(clock.sleeps)]
