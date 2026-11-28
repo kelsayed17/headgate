@@ -8,6 +8,7 @@ and the origin's breaker is not refusing).
 Configure it once with `CallPolicy(retry=RetryPolicy(...))`; override it for a call with `retry=RetryPolicy(...)`,
 turn it off with `retry=None`, or set it per route with `Route(fragment, retry=...)`.
 
+<!-- docs-test: run -->
 ```python
 from headgate import RetryPolicy, CallPolicy
 from headgate.retry import Backoff, Hedge, RetryShare
@@ -103,6 +104,7 @@ A `RetryShare` is a value, as a `Rate` is: two clients given equal shares keep a
 several clients together, as a `RateBudget` paces them together, build one live `RetryBudget` from the share and give
 each client the same object:
 
+<!-- docs-test: run -->
 ```python
 from headgate import RetryPolicy, CallPolicy
 from headgate.retry import RetryBudget, RetryShare

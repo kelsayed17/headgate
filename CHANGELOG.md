@@ -428,6 +428,15 @@ change the public API; such changes are listed under **Changed** and **Removed**
   headgate's options. They raised `NameError` for a name the annotation imported only for the type checker (`Mapping`,
   `ClassVar`, `httpx2`). headgate's modules no longer use `from __future__ import annotations`; their annotations are
   Python 3.14's own, evaluated on demand in the module that wrote them. Nothing to write differently.
+- The codec guide's cattrs-over-orjson codec keeps the strictness headgate's codecs keep, and passes `check_codec`:
+  copied as it was written, it read `"1"` as `1` where an `int` is declared, and built a decoder for a type it could
+  not structure. It registers hooks that take a scalar only as itself, and raises `TypeError` from `decoder()` for a
+  type cattrs has no hook for: copy the new version. The `Codec` protocol says that a codec handles the built-in
+  containers, which `allow_empty_body=True` and `check_codec` rely on.
+- The guides' samples are type-checked with every rule an error, and those that need no server are run, by the test
+  suite, so a spelling the API no longer has cannot survive in them. The samples it found wrong are fixed: an
+  `Auth` without `@override`, a conditional read typed on the SDK rather than its `Client`, a deadline sum over
+  optional phases, a pager example whose page type clashed with the page's other one, and missing imports.
 
 ### Security
 

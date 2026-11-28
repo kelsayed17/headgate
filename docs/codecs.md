@@ -12,6 +12,7 @@ bytes into a type and writes a value back. headgate ships two, and any other lib
 
 `pip install headgate` alone brings neither. Each module has the same shortcuts, so switching is changing one import:
 
+<!-- docs-test: run -->
 ```python
 from headgate.msgspec import decode, reader, to_builtins, writer
 
@@ -55,42 +56,91 @@ A codec is any object with five members, the `Codec` protocol:
 | `encoder(Type)` | a function writing a value of `Type` as bytes, built once per type |
 | `describe(error)` | a message for one of `errors` that never quotes the input, which may hold a credential |
 
-cattrs over orjson, for example:
+A codec handles the built-in containers too, `dict`, `list` and the scalars inside them, besides its own record
+types: `reader_for(..., allow_empty_body=True)` encodes an empty `list[object]` when it builds the reader, and
+`check_codec` writes and reads `dict[str, int]` and `dict[str, str]`.
 
+cattrs over orjson, for example. cattrs builds a scalar by calling its type, so `int("1")` would read a numeric string
+as a number: the codec registers hooks that take a scalar only as itself, which is the strictness headgate's codecs
+keep. A type cattrs has no hook for raises `TypeError` where the decoder is built:
+
+<!-- docs-test: run -->
 ```python
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import cast
+
 import cattrs
 import orjson
+from typing_extensions import TypeForm
 
 from headgate import reader_for, writer_for
 
 converter = cattrs.Converter(forbid_extra_keys=False)
 
 
+def _exactly[T](kind: type[T]) -> Callable[[object, object], T]:
+    """Return a hook taking a value of *kind* as it is, and refusing any other: no coercion."""
+
+    def structure(value: object, _: object) -> T:
+        if isinstance(value, kind) and type(value) is kind:
+            return value
+        msg = f"expected {kind.__name__}"
+        raise ValueError(msg)
+
+    return structure
+
+
+for scalar in (int, float, str, bool):
+    converter.register_structure_hook(scalar, _exactly(scalar))
+
+
 class CattrsJson:
     """attrs classes and dataclasses, structured by cattrs, as JSON through orjson."""
 
     media_type = "application/json"
-    errors = (orjson.JSONDecodeError, cattrs.BaseValidationError)
+    # orjson's JSONDecodeError is a ValueError, as the hooks' refusal is.
+    errors = (cattrs.BaseValidationError, ValueError)
 
-    def decoder(self, type_):
-        return lambda content: converter.structure(orjson.loads(content), type_)
+    def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
+        try:
+            structure = converter.get_structure_hook(type_)
+        except cattrs.errors.StructureHandlerNotFoundError:
+            msg = f"cattrs cannot structure {type_!r}: register a structure hook for it"
+            raise TypeError(msg) from None
 
-    def encoder(self, type_):
+        def decode(content: bytes) -> T:
+            # cattrs and orjson are untyped: the hook structures into exactly the type it was fetched for.
+            return cast("T", structure(orjson.loads(content), type_))
+
+        return decode
+
+    def encoder[T](self, type_: TypeForm[T], /) -> Callable[[T], bytes]:
         return lambda value: orjson.dumps(converter.unstructure(value, type_))
 
-    def describe(self, error):
+    def describe(self, error: Exception, /) -> str:
         # The exception's type names the problem; describing only that keeps every value out of the message.
         return type(error).__name__
 
 
+@dataclass(frozen=True)
+class Invoice:
+    number: str
+    total: int
+
+
 CODEC = CattrsJson()
-ORDER = reader_for(CODEC, Order)
-NEW_ORDER = writer_for(CODEC, NewOrder)
+INVOICE = reader_for(CODEC, Invoice)
+NEW_INVOICE = writer_for(CODEC, Invoice)
 ```
+
+`TypeForm`, the type of a type expression such as `list[Order]`, comes from `typing_extensions`, which headgate
+depends on.
 
 A writer is a function of a value returning an `EncodedBody`: the bytes and the `Content-Type` they are sent with,
 `application/json` unless it names another. A body written without a codec is a plain function of that shape:
 
+<!-- docs-test: run -->
 ```python
 import json
 
@@ -110,6 +160,7 @@ A format other than JSON is the same five members with another `media_type`: a m
 `headgate.testing.check_codec` holds a codec to the promises the built-in ones keep, so a codec of your own behaves
 like them. Call it from your tests; `record=` is a record type of the codec's own kind holding one field, `value: int`:
 
+<!-- docs-test: run -->
 ```python
 from headgate.testing import check_codec
 

@@ -52,6 +52,7 @@ first request, each redirect, and each request an auth flow sends. On any hop ad
 The request still goes out, unsigned, so a signed download URL on a CDN works. A credential meant for another origin
 needs that origin in `trusted_origins`, written as a bare origin:
 
+<!-- docs-test: run -->
 ```python
 from headgate import HttpOptions, SecurityOptions
 
@@ -142,6 +143,7 @@ name, so TLS still sends it as SNI and verifies the certificate against it, and 
 
 A t-string path escapes every interpolated value as exactly one segment:
 
+<!-- docs-test: check -->
 ```python
 await client.delete(t"positions/{symbol}", expect=nothing)  # "BTC/USD" -> positions/BTC%2FUSD
 ```

@@ -29,6 +29,7 @@ client's name.
 `body_reader` turns a hand-written bytes decoder, the kind its tests feed fixture files, into a reader. Name each
 reader once, at module level, and pass a fixed argument with `functools.partial`:
 
+<!-- docs-test: run -->
 ```python
 from functools import partial
 from typing import Final
@@ -54,6 +55,7 @@ such a call as a statement.
 
 A reader of your own wraps its function in `Reader`, or puts `@Reader` over the `def`:
 
+<!-- docs-test: run -->
 ```python
 import httpx2
 
@@ -79,6 +81,7 @@ where `expect=reader(Order)` was meant) or a bare function, which are callable t
 
 ## Declared non-2xx answers
 
+<!-- docs-test: run -->
 ```python
 from http import HTTPStatus
 
@@ -132,6 +135,7 @@ client turns it into the `ClientError` its `kind` names (`UpstreamStatusError` b
 `RateLimitError`), with the status the wire sent and the provider's `code`. The simplest way is a reader's `refuse`,
 which runs on the decoded value and returns a refusal or `None`:
 
+<!-- docs-test: run -->
 ```python
 import msgspec
 
