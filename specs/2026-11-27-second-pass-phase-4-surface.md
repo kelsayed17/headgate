@@ -62,11 +62,13 @@ member (ruff `SLF001`, which applies to `tests/` too).
    call, after that call's `MISS`, or the removal would leave it reported nowhere. `CacheOutcome.DEGRADED` reads "the
    storage failed: the request went to the network uncached, or its response could not be stored".
    `observer_failures()` says it is process-wide, and why: an observer that raises cannot be reported through
-   observers.
+   observers. Transport-level tests that read the count stamp their request with an observed call
+   (`tests/cache/_helpers.observed`) and assert the outcomes instead.
 7. **`policy_disabled` stays defined in `headgate._core._switch`** (a rate budget honors it where it is built, below
    every layer) and is exported, so rehomed, by `headgate.testing`, which reports `headgate.testing` as its home as soon
    as it is imported. Its docstring takes what `headgate.policy`'s said about what "off" means. `headgate.policy`
-   goes, and CI's import smoke test stops importing it.
+   goes; CI's core-install import smoke test and the upstream-httpx isolation test import `headgate.testing` in its
+   place (added during implementation), so the module the switch now lives in is still checked there.
 8. **`SecurityOptions(check: AddressCheck | None = None)`**, `None` being `forbidden_reason`, accepted only with
    `block_private_hosts=True` (`ValueError`, as `resolver=`) and refused with `TypeError` when not callable.
    `AddressGuard`, `PinnedHTTPTransport` and `resolve_with_loop` stay in their private modules.
@@ -77,8 +79,10 @@ member (ruff `SLF001`, which applies to `tests/` too).
    keep their messages.
 10. **4.5's predicates become functions of their private modules:** `caches_request(cache, method, path)` and
     `stores_status(cache, status)` in `cache/_policy.py`, `response_parts(step)` in `testing/_faults.py` (both fakes
-    use it). `Link` and `parse_link_header` stay in `pagination/_link.py`. The testing guide reads a cache's
-    `methods`, `paths` and `statuses` instead.
+    use it; kept out of that module's `__all__`, which the one-home test requires to be exported whole by
+    `headgate.testing`). `Link` and `parse_link_header` stay in `pagination/_link.py`. The testing guide reads a
+    cache's `methods`, `paths` and `statuses` instead. The two tests that injected a bug into a rule by overriding the
+    method on an `HttpCache` subclass monkeypatch the function in `headgate.cache._transport` instead.
 11. **`CallUrl` is exported beside `Method`, and stays a plain union** (changed during implementation: the plan made
     it a `type` alias, as `Method` is, but ty then reports a computed `str` as "Expected `CallUrl`", where
     `tests/urls/test_call_url_types.py` pins that the message names `LiteralString`, the reason it is refused).
