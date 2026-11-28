@@ -10,6 +10,7 @@ else is observed on the requests a scripted network receives.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.metadata
 import math
 import re
@@ -23,6 +24,7 @@ import httpx2
 import pytest
 
 from headgate import (
+    CallPolicy,
     Client,
     HttpOptions,
     IdempotencyKeys,
@@ -33,7 +35,6 @@ from headgate import (
     SecurityOptions,
     Timeouts,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
     nothing,
 )
@@ -53,10 +54,10 @@ type Rows = list[int]
 _KEY = "key-1"
 
 
-def _client(script: Script, *, policy: TransportPolicy | None = None, http: HttpOptions | None = None) -> Client:
+def _client(script: Script, *, policy: CallPolicy | None = None, http: HttpOptions | None = None) -> Client:
     """Build a client over *script* with *policy* and *http*, whose transport is replaced by the script's."""
     options = replace(http or HttpOptions(), transport=script.transport())
-    return Client(base_url=_BASE, rate=_RATE, policy=policy or TransportPolicy(), http=options)
+    return Client(base_url=_BASE, policy=dataclasses.replace(policy or CallPolicy(), rate=_RATE), http=options)
 
 
 # --- Upstream httpx objects are refused by name ---
@@ -106,12 +107,20 @@ _UpstreamHook.__module__ = "httpx._client"
     [
         pytest.param(lambda: HttpOptions(transport=_UpstreamTransport()), "transport", id="transport"),
         pytest.param(
-            lambda: Client(base_url=_BASE, rate=_RATE, observers=(_UpstreamObserver(),)), "observers", id="observer"
+            lambda: Client(base_url=_BASE, policy=CallPolicy(rate=_RATE), observers=(_UpstreamObserver(),)),
+            "observers",
+            id="observer",
         ),
         pytest.param(
-            lambda: Client(base_url=_BASE, rate=_RATE, middleware=(_UpstreamHook(),)), "middleware", id="event-hook"
+            lambda: Client(base_url=_BASE, policy=CallPolicy(rate=_RATE), middleware=(_UpstreamHook(),)),
+            "middleware",
+            id="event-hook",
         ),
-        pytest.param(lambda: Client(base_url=_BASE, rate=_RATE, auth=cast("Any", _UpstreamAuth())), "auth", id="auth"),
+        pytest.param(
+            lambda: Client(base_url=_BASE, policy=CallPolicy(rate=_RATE), auth=cast("Any", _UpstreamAuth())),
+            "auth",
+            id="auth",
+        ),
     ],
 )
 def test_an_upstream_httpx_object_is_refused_by_name(build: Callable[[], object], what: str) -> None:
@@ -171,8 +180,8 @@ def test_a_bad_option_says_exactly_what_is_wrong(build: Callable[[], object], me
         (lambda: SecurityOptions(trusted_origins=frozenset({"https://user@cdn.example.test"})), "trusted origin"),
         (lambda: SecurityOptions(trusted_origins=frozenset({"https://[::1"})), "trusted origin"),
         (lambda: SecurityOptions(trusted_origins=frozenset({"/relative"})), "trusted origin"),
-        (lambda: TransportPolicy(deadline=0.0), "deadline"),
-        (lambda: TransportPolicy(deadline=float("inf")), "deadline"),
+        (lambda: CallPolicy(deadline=0.0), "deadline"),
+        (lambda: CallPolicy(deadline=float("inf")), "deadline"),
         (lambda: Route(""), "fragment"),
         (lambda: Route("/x", deadline=0.0), "deadline"),
         (lambda: IdempotencyKeys(header=""), "header"),
@@ -206,7 +215,7 @@ def test_options_freeze_and_normalize_what_they_are_given() -> None:
     options = HttpOptions(
         headers=headers, request_id_headers=("X-Trace-Id",), security=SecurityOptions(trusted_origins=origins)
     )
-    policy = TransportPolicy(routes=tuple(routes))
+    policy = CallPolicy(routes=tuple(routes))
     headers["X-A"] = "changed"
 
     assert isinstance(options.headers, MappingProxyType)
@@ -247,7 +256,9 @@ async def test_the_default_transport_reads_no_environment_and_takes_the_tls_pool
     context = ssl.create_default_context()
     limits = httpx2.Limits(max_connections=50, max_keepalive_connections=10)
     proxy = "http://proxy.example.test:3128"
-    client = Client(base_url=_BASE, rate=_RATE, http=HttpOptions(ssl_context=context, limits=limits, proxy=proxy))
+    client = Client(
+        base_url=_BASE, policy=CallPolicy(rate=_RATE), http=HttpOptions(ssl_context=context, limits=limits, proxy=proxy)
+    )
     await client.aclose()
 
     assert built == [{"verify": context, "http2": True, "limits": limits, "proxy": proxy, "trust_env": False}]
@@ -255,7 +266,7 @@ async def test_the_default_transport_reads_no_environment_and_takes_the_tls_pool
 
 async def test_the_default_transport_verifies_tls_by_default(built: list[dict[str, object]]) -> None:
     """Verify certificates with the default context, and use the default pool, when nothing else is configured."""
-    client = Client(base_url=_BASE, rate=_RATE)
+    client = Client(base_url=_BASE, policy=CallPolicy(rate=_RATE))
     await client.aclose()
 
     assert built == [{"verify": True, "http2": True, "limits": DEFAULT_LIMITS, "proxy": None, "trust_env": False}]
@@ -303,7 +314,7 @@ async def test_a_caller_set_cookie_header_is_still_sent() -> None:
 async def test_max_redirects_bounds_a_redirect_chain() -> None:
     """Raise once a redirect chain exceeds ``max_redirects``."""
     script = Script(httpx2.Response(302, headers={"Location": f"{_BASE}/next"}))
-    client = _client(script, policy=TransportPolicy(retry=None, breaker=None), http=HttpOptions(max_redirects=1))
+    client = _client(script, policy=CallPolicy(retry=None, breaker=None), http=HttpOptions(max_redirects=1))
 
     with pytest.raises(TransportError, match="redirect"):
         await client.get("start", expect=nothing)
@@ -355,7 +366,7 @@ async def test_idempotency_keys_are_stamped_once_per_call_on_post_and_patch() ->
     """Stamp one key per POST or PATCH call, the same on every attempt, and none on a GET."""
     keys = iter(["k1", "k2"])
     script = Script(503, 200)
-    client = _client(script, policy=TransportPolicy(idempotency=IdempotencyKeys(factory=lambda: next(keys))))
+    client = _client(script, policy=CallPolicy(idempotency=IdempotencyKeys(factory=lambda: next(keys))))
     await client.post("orders", expect=nothing)
     await client.get("orders", expect=nothing)
     await client.patch("orders/1", expect=nothing)
@@ -366,7 +377,7 @@ async def test_idempotency_keys_are_stamped_once_per_call_on_post_and_patch() ->
 async def test_a_calls_own_idempotency_key_is_used_under_the_configured_header() -> None:
     """Send a call's ``idempotency_key=`` under the policy's header, or the standard one without a policy."""
     script = Script()
-    await _client(script, policy=TransportPolicy(idempotency=IdempotencyKeys(header="X-Request-Key"))).put(
+    await _client(script, policy=CallPolicy(idempotency=IdempotencyKeys(header="X-Request-Key"))).put(
         "orders/1", expect=nothing, idempotency_key=_KEY
     )
     await _client(script).delete("orders/1", expect=nothing, idempotency_key=_KEY)
@@ -378,7 +389,7 @@ async def test_a_calls_own_idempotency_key_is_used_under_the_configured_header()
 async def test_an_idempotency_key_the_caller_set_in_headers_is_kept() -> None:
     """Keep a key the caller already put in ``headers=``, rather than replacing it with a generated one."""
     script = Script()
-    client = _client(script, policy=TransportPolicy(idempotency=IdempotencyKeys(factory=lambda: "generated")))
+    client = _client(script, policy=CallPolicy(idempotency=IdempotencyKeys(factory=lambda: "generated")))
     await client.post("orders", expect=nothing, headers={"Idempotency-Key": _KEY})
 
     assert script.sent[0].headers["idempotency-key"] == _KEY
@@ -387,7 +398,7 @@ async def test_an_idempotency_key_the_caller_set_in_headers_is_kept() -> None:
 async def test_the_default_idempotency_keys_are_random_uuids() -> None:
     """Generate a different UUID for each call by default."""
     script = Script()
-    client = _client(script, policy=TransportPolicy(idempotency=IdempotencyKeys()))
+    client = _client(script, policy=CallPolicy(idempotency=IdempotencyKeys()))
     await client.post("orders", expect=nothing)
     await client.post("orders", expect=nothing)
 
@@ -409,8 +420,8 @@ async def _route_with_deadline(deadline: float) -> None:
 
 
 async def _policy_with_deadline(deadline: float) -> None:
-    """Build a ``TransportPolicy`` with *deadline*."""
-    TransportPolicy(deadline=deadline)
+    """Build a ``CallPolicy`` with *deadline*."""
+    CallPolicy(deadline=deadline)
 
 
 async def _view_with_deadline(deadline: float) -> None:
@@ -435,7 +446,7 @@ async def test_every_place_a_deadline_is_set_refuses_the_same_values(
 async def test_a_route_gives_matching_paths_their_own_retry_policy() -> None:
     """Send a matching path under the route's retry policy and every other path under the client's."""
     script = Script(503)
-    policy = TransportPolicy(retry=RetryPolicy(attempts=3), routes=(Route("/reports", retry=None), Route("/x")))
+    policy = CallPolicy(retry=RetryPolicy(attempts=3), routes=(Route("/reports", retry=None), Route("/x")))
     client = _client(script, policy=policy)
     with pytest.raises(UpstreamStatusError):
         await client.get("v1/reports/daily", expect=nothing)
@@ -450,7 +461,7 @@ async def test_a_route_gives_matching_paths_their_own_retry_policy() -> None:
 async def test_a_calls_retry_policy_wins_over_its_route() -> None:
     """Let a call's ``retry=RetryPolicy(...)`` win over the route's policy."""
     script = Script(503)
-    client = _client(script, policy=TransportPolicy(routes=(Route("/reports", retry=None),)))
+    client = _client(script, policy=CallPolicy(routes=(Route("/reports", retry=None),)))
     with pytest.raises(UpstreamStatusError):
         await client.get("reports", expect=nothing, retry=RetryPolicy(attempts=2))
 
@@ -482,7 +493,9 @@ class _CountingNetwork(httpx2.AsyncBaseTransport):
 async def test_a_custom_transport_is_used_as_it_is() -> None:
     """Send through a custom transport, which owns its own pool and TLS."""
     network = _CountingNetwork()
-    await Client(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=network)).get("a", expect=nothing)
+    await Client(base_url=_BASE, policy=CallPolicy(rate=_RATE), http=HttpOptions(transport=network)).get(
+        "a", expect=nothing
+    )
     assert network.sends == 1
 
 
@@ -505,7 +518,7 @@ def test_an_installed_copy_reports_its_distributions_version() -> None:
 def test_check_kind_names_what_it_got(value: object, named: str) -> None:
     """Name a class, a type expression and a plain value apart, so a refusal says which mistake it was."""
     with pytest.raises(TypeError) as caught:
-        Client(base_url=_BASE, rate=cast("Any", value))
+        Client(base_url=_BASE, policy=CallPolicy(rate=cast("Any", value)))
     assert str(caught.value) == f"rate= takes a Rate, such as Rate.per_second(10), a RateBudget or None (got {named})"
 
 
@@ -515,8 +528,8 @@ def test_check_kind_names_what_it_got(value: object, named: str) -> None:
 def test_a_timeout_is_checked_against_the_deadline_of_its_policy() -> None:
     """Refuse a policy whose timeout is longer than its deadline where both are written, not in the client."""
     with pytest.raises(ValueError, match=r"^read timeout 120s is longer than the 60s deadline"):
-        TransportPolicy(timeout=Timeouts(read=120.0), deadline=60.0)
-    assert TransportPolicy(timeout=Timeouts(read=120.0), deadline=None).timeout == Timeouts(read=120.0)
+        CallPolicy(timeout=Timeouts(read=120.0), deadline=60.0)
+    assert CallPolicy(timeout=Timeouts(read=120.0), deadline=None).timeout == Timeouts(read=120.0)
 
 
 @pytest.mark.parametrize("name", ["timeout", "observers", "middleware"])
@@ -537,7 +550,7 @@ def test_the_client_takes_observers_and_middleware_as_sequences(name: str, value
     """Refuse a lone observer or middleware, or a ``str``, where the client takes a sequence of them."""
     given: dict[str, Any] = {name: value}
     with pytest.raises(TypeError, match=rf"^{name}= takes a sequence, such as a tuple, of them \(got {got}\)$"):
-        Client(base_url=_BASE, rate=_RATE, **given)
+        Client(base_url=_BASE, policy=CallPolicy(rate=_RATE), **given)
 
 
 async def test_the_clients_observers_hear_its_calls() -> None:
@@ -560,7 +573,7 @@ async def test_the_clients_observers_hear_its_calls() -> None:
     script = Script()
     client = Client(
         base_url=_BASE,
-        rate=_RATE,
+        policy=CallPolicy(rate=_RATE),
         http=HttpOptions(transport=script.transport()),
         observers=[_Observer()],
         middleware=[_Middleware()],
@@ -571,9 +584,9 @@ async def test_the_clients_observers_hear_its_calls() -> None:
 
 
 async def test_a_policy_of_no_retries_sends_once_and_a_calls_own_policy_wins() -> None:
-    """Send every call once under ``TransportPolicy(retry=None)``, unless the call gives a policy of its own."""
+    """Send every call once under ``CallPolicy(retry=None)``, unless the call gives a policy of its own."""
     script = Script(503, 503, 200)
-    client = _client(script, policy=TransportPolicy(retry=None))
+    client = _client(script, policy=CallPolicy(retry=None))
 
     with pytest.raises(UpstreamStatusError):
         await client.get("x", expect=nothing)
@@ -587,7 +600,7 @@ async def test_a_policy_of_no_retries_sends_once_and_a_calls_own_policy_wins() -
 def test_no_rate_paces_nothing_of_its_own(rate: str | None) -> None:
     """Build an unpaced budget of the client's own for ``rate=None`` and for no ``rate=`` at all, the same budget."""
     given: dict[str, Any] = {} if rate == "absent" else {"rate": None}
-    client = Client(base_url=_BASE, **given)
+    client = Client(base_url=_BASE, policy=CallPolicy(**given))
 
     budget = budget_for(client)
     assert (budget.rate, budget.max_in_flight) == (Rate.per_second(1_000_000), None)
@@ -599,14 +612,14 @@ _TRUE: Any = True
 #: Each configuration value of the wrong kind, the option the refusal names, and what it says it takes. The first
 #: five are review finding M22's, which used to pass construction and fail at the first request, or be misread.
 _WRONG_KINDS: Final[list[tuple[Callable[[], object], str]]] = [
-    (lambda: TransportPolicy(idempotency=_TRUE), r"^idempotency= takes IdempotencyKeys\(\), or None"),
-    (lambda: TransportPolicy(routes=cast("Any", ("/x",))), r"^routes= takes a tuple of Route"),
+    (lambda: CallPolicy(idempotency=_TRUE), r"^idempotency= takes IdempotencyKeys\(\), or None"),
+    (lambda: CallPolicy(routes=cast("Any", ("/x",))), r"^routes= takes a tuple of Route"),
     (lambda: HttpOptions(transport=cast("Any", httpx2.HTTPTransport())), r"^transport= takes an httpx2\.AsyncBase"),
     (lambda: HttpOptions(request_id_headers=cast("Any", "x-request-id")), r"^request_id_headers= takes a tuple of"),
     (lambda: SecurityOptions(trusted_origins=cast("Any", "https://cdn.example")), r"^trusted_origins= takes a frozen"),
-    (lambda: TransportPolicy(cache=cast("Any", "memory")), r"^cache= takes an HttpCache, or None"),
-    (lambda: TransportPolicy(deadline=cast("Any", "60")), r"^deadline= takes seconds, or None for no deadline"),
-    (lambda: TransportPolicy(deadline=_TRUE), r"^deadline= takes seconds, or None for no deadline"),
+    (lambda: CallPolicy(cache=cast("Any", "memory")), r"^cache= takes an HttpCache, or None"),
+    (lambda: CallPolicy(deadline=cast("Any", "60")), r"^deadline= takes seconds, or None for no deadline"),
+    (lambda: CallPolicy(deadline=_TRUE), r"^deadline= takes seconds, or None for no deadline"),
     (lambda: HttpOptions(headers=cast("Any", [("a", "b")])), r"^headers= takes a mapping of header names to values"),
     (lambda: HttpOptions(follow_redirects=cast("Any", "no")), r"^follow_redirects= takes a bool"),
     (lambda: HttpOptions(max_redirects=_TRUE), r"^max_redirects= takes a number of hops, an int"),
@@ -624,8 +637,8 @@ _WRONG_KINDS: Final[list[tuple[Callable[[], object], str]]] = [
     (lambda: IdempotencyKeys(factory=cast("Any", "uuid")), r"^factory= takes a function returning a fresh key"),
     (lambda: Client(base_url=cast("Any", None)), r"^base_url= takes the API root"),
     (lambda: Route(cast("Any", None)), r"^fragment= takes path segments, such as '/exports' \(got NoneType\)$"),
-    (lambda: TransportPolicy(routes=cast("Any", Route("/x"))), r"^routes= takes a tuple of Route.*\(got Route\)$"),
-    (lambda: Client(base_url=_BASE, policy=cast("Any", {})), r"^policy= takes TransportPolicy\(\.\.\.\)"),
+    (lambda: CallPolicy(routes=cast("Any", Route("/x"))), r"^routes= takes a tuple of Route.*\(got Route\)$"),
+    (lambda: Client(base_url=_BASE, policy=cast("Any", {})), r"^policy= takes CallPolicy\(\.\.\.\)"),
     (lambda: Client(base_url=_BASE, http=cast("Any", {})), r"^http= takes HttpOptions\(\.\.\.\)"),
 ]
 _WRONG_KIND_IDS: Final = [

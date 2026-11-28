@@ -20,7 +20,7 @@ import pytest
 from curl_cffi import CurlOpt
 
 from headgate import Client, HttpOptions, Rate, SecurityOptions, _stack
-from headgate._options import TransportPolicy
+from headgate._options import CallPolicy
 from headgate.curl import AsyncCurlTransport
 from headgate.errors import ForbiddenDestinationError
 from headgate.security import AddressGuard
@@ -183,8 +183,7 @@ class TestRealCurl:
             )
             client = Client(
                 base_url=f"http://api.example:{server.port}",
-                rate=Rate.per_second(1000),
-                policy=TransportPolicy(retry=None),
+                policy=CallPolicy(rate=Rate.per_second(1000), retry=None),
                 http=options,
             )
             async with client:
@@ -238,7 +237,7 @@ async def test_a_failed_lookup_leaves_a_one_shot_body_unread() -> None:
 def _client(transport: AsyncCurlTransport, security: SecurityOptions | None = None) -> Client:
     """Build a client over *transport*, guarded by *security* when given."""
     http = HttpOptions(transport=transport, security=security or SecurityOptions())
-    return Client(base_url="https://api.example", rate=Rate.per_second(1000), http=http)
+    return Client(base_url="https://api.example", policy=CallPolicy(rate=Rate.per_second(1000)), http=http)
 
 
 async def _resolve(_host: str, _port: int) -> Sequence[str]:

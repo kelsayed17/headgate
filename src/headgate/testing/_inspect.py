@@ -24,7 +24,7 @@ __all__ = ["breakers_of", "budget_for", "cache_of"]
 
 
 def cache_of(client: Client) -> HttpCache | None:
-    """Return the :class:`~headgate.HttpCache` *client* was built with (``TransportPolicy(cache=...)``), or ``None``."""
+    """Return the :class:`~headgate.HttpCache` *client* was built with (``CallPolicy(cache=...)``), or ``None``."""
     return built_with(client).cache
 
 

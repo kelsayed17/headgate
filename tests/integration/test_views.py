@@ -15,12 +15,12 @@ import pytest
 
 from headgate import (
     BreakerPolicy,
+    CallPolicy,
     HttpOptions,
     Rate,
     RateBudget,
     RateLimitError,
     RetryPolicy,
-    TransportPolicy,
     UpstreamStatusError,
     nothing,
 )
@@ -42,7 +42,7 @@ _PAUSE = 5.0
 async def test_a_view_spends_its_clients_retry_budget() -> None:
     """Find the one retry the budget allows already spent by the client, so the view's 503 is not retried."""
     fake = FakeTransport().reply("GET", "/v1/client", 503, 200).reply("GET", "/v1/view", 503, 200)
-    built = client(fake, policy=TransportPolicy(retry=RetryPolicy(budget=_ONE_RETRY)))
+    built = client(fake, policy=CallPolicy(retry=RetryPolicy(budget=_ONE_RETRY)))
     view = built.with_options(headers={"X-View": "1"})
 
     await built.get("client", expect=nothing)
@@ -62,7 +62,7 @@ async def test_a_view_waits_out_a_pause_its_client_was_asked_for() -> None:
     fake = FakeTransport().reply("GET", "/v1/client", limited).reply("GET", "/v1/view", 200)
     budget = RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
     with clock.install():
-        built = client(fake, rate=budget, policy=TransportPolicy(retry=None), http=HttpOptions(), observers=(recorder,))
+        built = client(fake, rate=budget, policy=CallPolicy(retry=None), http=HttpOptions(), observers=(recorder,))
     view = built.with_options(deadline=None)
 
     with pytest.raises(RateLimitError):
@@ -79,7 +79,7 @@ async def test_a_view_waits_out_a_pause_its_client_was_asked_for() -> None:
 async def test_a_view_is_refused_by_a_breaker_its_client_opened() -> None:
     """Refuse the view's call without sending it once the client's failure opened the origin's breaker."""
     fake = FakeTransport().reply("GET", "/v1/x", 503, 200)
-    policy = TransportPolicy(retry=None, breaker=BreakerPolicy(failure_threshold=1))
+    policy = CallPolicy(retry=None, breaker=BreakerPolicy(failure_threshold=1))
     built = client(fake, policy=policy)
     view = built.with_options(headers={"X-View": "v"})
 

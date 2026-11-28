@@ -24,7 +24,7 @@ from hishel import AsyncSqliteStorage
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from headgate import Auth, Client, HttpCache, HttpOptions, StaticHeaderAuth, TransportPolicy
+from headgate import Auth, CallPolicy, Client, HttpCache, HttpOptions, StaticHeaderAuth
 from headgate._core import CredentialStamper
 from headgate.cache import Partition
 from headgate.cache._credentials import CredentialScope, credential_scope
@@ -117,7 +117,7 @@ def _client(
     return Client(
         base_url="https://x",
         auth=auth,
-        policy=TransportPolicy(cache=HttpCache(**series_rules(), storage=storage, partition=partition)),
+        policy=CallPolicy(cache=HttpCache(**series_rules(), storage=storage, partition=partition)),
         http=dataclasses.replace(http or HttpOptions(), transport=network),
         middleware=middleware,
     )

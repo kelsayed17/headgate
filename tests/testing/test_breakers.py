@@ -11,7 +11,7 @@ import pytest
 
 import headgate.breaker
 import headgate.testing
-from headgate import BreakerPolicy, Client, HttpOptions, Rate, TransportPolicy, UpstreamStatusError, nothing
+from headgate import BreakerPolicy, CallPolicy, Client, HttpOptions, Rate, UpstreamStatusError, nothing
 from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
 from headgate.errors import CircuitOpenError
 from headgate.health import BreakerSnapshot, breaker_states
@@ -29,8 +29,7 @@ def _client(fake: FakeTransport, breaker: BreakerPolicy | BreakerRegistry | None
     """Build a client for :data:`_HOST` that sends once and trips its breaker on the first failure."""
     return Client(
         base_url=_ORIGIN,
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=None, breaker=breaker),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=None, breaker=breaker),
         http=HttpOptions(transport=fake),
     )
 

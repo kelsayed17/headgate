@@ -28,7 +28,7 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage
 
-from headgate import Client, HttpCache, HttpOptions, Rate, RetryPolicy, Route, TransportPolicy
+from headgate import CallPolicy, Client, HttpCache, HttpOptions, Rate, RetryPolicy, Route
 from headgate.ratelimit._budget import Pacer, pacer_of
 from headgate.ratelimit._budgets import Lane, PathBudgets
 from headgate.ratelimit._transport import RateLimitTransport
@@ -106,8 +106,7 @@ async def test_a_cache_hit_takes_no_token(sqlite_storage: AsyncSqliteStorage, ac
     base = _CountingTransport()
     client = Client(
         base_url="https://x",
-        rate=Rate.per_second(_INSTANT),
-        policy=TransportPolicy(cache=HttpCache(storage=sqlite_storage, paths=("/series",))),
+        policy=CallPolicy(rate=Rate.per_second(_INSTANT), cache=HttpCache(storage=sqlite_storage, paths=("/series",))),
         http=HttpOptions(transport=base),
     )
 
@@ -126,8 +125,7 @@ async def test_every_retry_takes_a_token(acquired: dict[int, int]) -> None:
     base = _CountingTransport(*statuses)
     client = Client(
         base_url="https://x",
-        rate=Rate.per_second(_INSTANT),
-        policy=TransportPolicy(retry=RetryPolicy(attempts=len(statuses))),
+        policy=CallPolicy(rate=Rate.per_second(_INSTANT), retry=RetryPolicy(attempts=len(statuses))),
         http=HttpOptions(transport=base),
     )
 
@@ -147,7 +145,9 @@ async def test_the_token_is_taken_before_the_request_is_sent(acquired: dict[int,
     inner transport records the tally as each request reaches it.
     """
     base = _CountingTransport(acquired=acquired)
-    client = Client(base_url="https://x", rate=Rate.per_second(_INSTANT), http=HttpOptions(transport=base))
+    client = Client(
+        base_url="https://x", policy=CallPolicy(rate=Rate.per_second(_INSTANT)), http=HttpOptions(transport=base)
+    )
 
     await client.get("/thing", expect=RESPONSE)
 
@@ -160,8 +160,7 @@ async def test_each_retry_takes_its_token_before_it_is_sent(acquired: dict[int, 
     base = _CountingTransport(*statuses, acquired=acquired)
     client = Client(
         base_url="https://x",
-        rate=Rate.per_second(_INSTANT),
-        policy=TransportPolicy(retry=RetryPolicy(attempts=len(statuses))),
+        policy=CallPolicy(rate=Rate.per_second(_INSTANT), retry=RetryPolicy(attempts=len(statuses))),
         http=HttpOptions(transport=base),
     )
 
@@ -175,8 +174,7 @@ async def test_a_path_rule_selects_its_own_budget(acquired: dict[int, int]) -> N
     base = _CountingTransport()
     client = Client(
         base_url="https://x",
-        rate=Rate.per_second(_INSTANT),
-        policy=TransportPolicy(routes=(Route("/candles", rate=Rate.per_second(_INSTANT)),)),
+        policy=CallPolicy(rate=Rate.per_second(_INSTANT), routes=(Route("/candles", rate=Rate.per_second(_INSTANT)),)),
         http=HttpOptions(transport=base),
     )
 
@@ -196,7 +194,7 @@ async def test_aclose_reaches_the_transport_below_the_budget() -> None:
     it would silently strand the connection pool below it.
     """
     base = _CountingTransport()
-    client = Client(rate=Rate.per_second(2), base_url="https://x", http=HttpOptions(transport=base))
+    client = Client(policy=CallPolicy(rate=Rate.per_second(2)), base_url="https://x", http=HttpOptions(transport=base))
 
     await client.aclose()
 

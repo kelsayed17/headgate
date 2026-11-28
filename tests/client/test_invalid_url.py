@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from headgate import ClientError, Rate
+from headgate import CallPolicy, ClientError, Rate
 from headgate._client import Client
 from headgate._responses import as_bytes
 from tests.support.breakers import failures
@@ -20,7 +20,7 @@ from tests.support.breakers import failures
 
 def _client() -> Client:
     """Build with the defaults."""
-    return Client(base_url="https://example.test", rate=Rate.per_second(1000))
+    return Client(base_url="https://example.test", policy=CallPolicy(rate=Rate.per_second(1000)))
 
 
 async def test_a_malformed_url_is_a_client_error_and_not_a_host_failure() -> None:

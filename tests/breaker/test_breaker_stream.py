@@ -24,6 +24,7 @@ import pytest
 from headgate import (
     BreakerPolicy,
     CachedTokenAuth,
+    CallPolicy,
     Client,
     ClientError,
     ClientTimeoutError,
@@ -31,7 +32,6 @@ from headgate import (
     Minted,
     Rate,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
 )
 from headgate._core import BreakerState, CallFinished
@@ -75,8 +75,7 @@ class _Breakers:
         """Return a client over *transport* that sends each call once, on this registry."""
         return Client(
             base_url=_ORIGIN,
-            rate=_RATE,
-            policy=TransportPolicy(retry=None, breaker=self.policy),
+            policy=CallPolicy(rate=_RATE, retry=None, breaker=self.policy),
             http=HttpOptions(transport=transport),
             observers=observers,
             middleware=middleware,
@@ -163,8 +162,7 @@ async def test_a_timeout_reading_an_error_head_is_the_networks_not_the_deadline(
     breakers = _Breakers(threshold=2)
     client = Client(
         base_url=_ORIGIN,
-        rate=_RATE,
-        policy=TransportPolicy(retry=None, breaker=breakers.policy, deadline=60.0),
+        policy=CallPolicy(rate=_RATE, retry=None, breaker=breakers.policy, deadline=60.0),
         http=HttpOptions(transport=_answering(404, _DiesMidBody(TimeoutError("read timed out")))),
     )
     with pytest.raises(ClientError) as raised:
@@ -249,9 +247,8 @@ async def test_a_deadline_passing_during_a_401_re_mint_is_not_charged_to_the_ori
     breakers = _Breakers(threshold=1)
     client = Client(
         base_url=_ORIGIN,
-        rate=_RATE,
         auth=_HangingMint(hop=hop),
-        policy=TransportPolicy(retry=None, breaker=breakers.policy, deadline=_DEADLINE),
+        policy=CallPolicy(rate=_RATE, retry=None, breaker=breakers.policy, deadline=_DEADLINE),
         http=HttpOptions(transport=_ApiThenHangingTokenHost()),
     )
     with pytest.raises(ClientTimeoutError):

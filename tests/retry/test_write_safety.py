@@ -19,13 +19,13 @@ import httpx2
 import pytest
 
 from headgate import (
+    CallPolicy,
     HttpOptions,
     IdempotencyKeys,
     Multipart,
     Raw,
     RetryPolicy,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
     nothing,
 )
@@ -166,7 +166,7 @@ async def test_a_hedge_copies_an_in_memory_body() -> None:
 
     fake = FakeTransport().reply("PUT", "/v1/x", slow, 200)
     with clock.install():
-        built = client(fake, policy=TransportPolicy(retry=RetryPolicy(hedge=_HEDGE, budget=None)))
+        built = client(fake, policy=CallPolicy(retry=RetryPolicy(hedge=_HEDGE, budget=None)))
 
     await built.put("x", body=Raw(_BODY), expect=nothing)
 
@@ -183,7 +183,7 @@ async def test_a_hedge_never_shares_a_streamed_body() -> None:
 
     fake = FakeTransport().reply("PUT", "/v1/x", slow, 200)
     with clock.install():
-        built = client(fake, policy=TransportPolicy(retry=RetryPolicy(hedge=_HEDGE, budget=None)))
+        built = client(fake, policy=CallPolicy(retry=RetryPolicy(hedge=_HEDGE, budget=None)))
 
     await built.put("x", body=Multipart({"file": ("data.bin", io.BytesIO(_BODY))}), expect=nothing)
 
@@ -218,7 +218,7 @@ async def test_a_hedge_can_be_read_by_middleware() -> None:
     with clock.install():
         built = client(
             fake,
-            policy=TransportPolicy(retry=RetryPolicy(hedge=_HEDGE, budget=None)),
+            policy=CallPolicy(retry=RetryPolicy(hedge=_HEDGE, budget=None)),
             http=HttpOptions(),
             middleware=(middleware,),
         )
@@ -255,7 +255,7 @@ async def test_an_empty_idempotency_key_is_refused(key: str) -> None:
 async def test_an_empty_key_from_the_factory_is_refused() -> None:
     """Refuse a key the policy's ``IdempotencyKeys`` factory made empty, before anything is sent."""
     fake = FakeTransport().reply("POST", "/v1/x", 201)
-    built = client(fake, policy=TransportPolicy(idempotency=IdempotencyKeys(factory=lambda: "")))
+    built = client(fake, policy=CallPolicy(idempotency=IdempotencyKeys(factory=lambda: "")))
 
     with pytest.raises(ValueError, match=r"^IdempotencyKeys\(factory=\.\.\.\) must return a key that is not empty"):
         await built.post("x", body=Raw(_BODY), expect=nothing)

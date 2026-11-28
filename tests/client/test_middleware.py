@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, ClassVar, cast, override
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, Json, Rate, RetryPolicy, TransportPolicy, call_info, nothing
+from headgate import CallPolicy, Client, HttpOptions, Json, Rate, RetryPolicy, call_info, nothing
 from headgate._core import CallContext
 from headgate.retry import Backoff, Hedge
 from headgate.testing import FakeTransport, Respond, TestClock
@@ -75,8 +75,7 @@ def _client(script: Script, *middleware: HmacSigner | Recorder | ShortCircuit) -
     """Build a client over *script* with *middleware*, retrying up to three sends."""
     return Client(
         base_url="https://api.example.test",
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=RetryPolicy(attempts=_ATTEMPTS)),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=RetryPolicy(attempts=_ATTEMPTS)),
         http=HttpOptions(transport=script.transport()),
         middleware=middleware,
     )
@@ -179,7 +178,7 @@ async def test_the_client_closes_the_network_under_the_middleware(count: int) ->
     middleware = (Recorder("r", []),) * count
     client = Client(
         base_url="https://api.example.test",
-        rate=Rate.per_second(1000),
+        policy=CallPolicy(rate=Rate.per_second(1000)),
         http=HttpOptions(transport=_Network(script)),
         observers=(_Silent(),) * count,
         middleware=middleware,
@@ -310,8 +309,7 @@ async def test_a_middleware_reads_its_call_through_call_info() -> None:
     with clock.install():
         client = Client(
             base_url="https://h.test",
-            rate=Rate.per_second(1000),
-            policy=TransportPolicy(retry=RetryPolicy(backoff=Backoff(factor=1.0)), breaker=None),
+            policy=CallPolicy(rate=Rate.per_second(1000), retry=RetryPolicy(backoff=Backoff(factor=1.0)), breaker=None),
             http=HttpOptions(transport=FakeTransport().reply("GET", "/series/s1", 503, 200)),
             middleware=(_Reader(),),
         )
@@ -349,8 +347,9 @@ async def test_a_hedged_send_reads_its_own_attempt() -> None:
 
     client = Client(
         base_url="https://h.test",
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=RetryPolicy(budget=None, hedge=Hedge(after=0.01)), breaker=None),
+        policy=CallPolicy(
+            rate=Rate.per_second(1000), retry=RetryPolicy(budget=None, hedge=Hedge(after=0.01)), breaker=None
+        ),
         http=HttpOptions(transport=FakeTransport().reply("GET", "/x", 200)),
         middleware=(_Reader(),),
     )

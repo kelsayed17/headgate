@@ -8,6 +8,7 @@ An in-memory API reads each page's JSON body and answers from it, so what a walk
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 from dataclasses import dataclass, field, replace
@@ -19,6 +20,7 @@ import pytest
 
 from headgate import (
     CallOptions,
+    CallPolicy,
     Client,
     ClientError,
     EncodedBody,
@@ -28,7 +30,6 @@ from headgate import (
     Rate,
     Reader,
     RetryPolicy,
-    TransportPolicy,
     UpstreamStatusError,
     Writer,
 )
@@ -125,7 +126,7 @@ class _Api:
     """An in-memory API: a function of the request answering each page, recording every request it was sent."""
 
     answer: Callable[[httpx2.Request], httpx2.Response]
-    policy: TransportPolicy = field(default_factory=lambda: TransportPolicy(breaker=None))
+    policy: CallPolicy = field(default_factory=lambda: CallPolicy(breaker=None))
     sent: list[httpx2.Request] = field(default_factory=list)
 
     def handle(self, request: httpx2.Request) -> httpx2.Response:
@@ -136,7 +137,9 @@ class _Api:
     def client(self) -> Client:
         """Return a client over this API."""
         transport = httpx2.MockTransport(self.handle)
-        return Client(base_url=_BASE, rate=_RATE, policy=self.policy, http=HttpOptions(transport=transport))
+        return Client(
+            base_url=_BASE, policy=dataclasses.replace(self.policy, rate=_RATE), http=HttpOptions(transport=transport)
+        )
 
     def bodies[T](self, type_: type[T]) -> list[T]:
         """Return the body of every request sent, decoded as *type_*."""
@@ -453,7 +456,7 @@ async def test_a_post_page_is_resent_under_a_policy_that_treats_post_as_idempote
 @pytest.mark.transport_policy
 async def test_each_post_page_gets_its_own_idempotency_key() -> None:
     """Stamp a fresh key on each page under ``IdempotencyKeys``, so a page is re-sent with its own key."""
-    api = _Api(_flaky(), policy=TransportPolicy(breaker=None, idempotency=IdempotencyKeys()))
+    api = _Api(_flaky(), policy=CallPolicy(breaker=None, idempotency=IdempotencyKeys()))
     first = Query(kind="a", limit=2)
     paginated = api.client().paginate("search", payload=first, pager=QUERY_CURSOR)
 
@@ -558,7 +561,7 @@ def test_a_walk_of_posts_refuses_one_idempotency_key_for_every_page(options: Cal
 
 def test_a_walk_of_posts_refuses_a_fixed_key_in_the_configured_idempotency_header() -> None:
     """Refuse a fixed key in the header the client's ``IdempotencyKeys`` names, not only in ``Idempotency-Key``."""
-    policy = TransportPolicy(breaker=None, idempotency=IdempotencyKeys(header="X-Request-Key"))
+    policy = CallPolicy(breaker=None, idempotency=IdempotencyKeys(header="X-Request-Key"))
     first = Query(kind="a", limit=2)
     with pytest.raises(ValueError, match="idempotency key would be sent with every page's body"):
         _Api(_by_body_cursor, policy=policy).client().paginate(
@@ -576,7 +579,9 @@ def test_a_walk_of_posts_refuses_a_fixed_key_the_client_or_a_view_sends(where: s
         client = api.client().with_options(headers=headers)
     else:
         client = Client(
-            base_url=_BASE, rate=_RATE, policy=api.policy, http=HttpOptions(transport=transport, headers=headers)
+            base_url=_BASE,
+            policy=dataclasses.replace(api.policy, rate=_RATE),
+            http=HttpOptions(transport=transport, headers=headers),
         )
     with pytest.raises(ValueError, match="idempotency key would be sent with every page's body"):
         client.paginate("search", payload=Query(kind="a", limit=2), pager=QUERY_CURSOR)

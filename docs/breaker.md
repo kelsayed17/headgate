@@ -57,17 +57,17 @@ clients share a `RateBudget` in place of a `Rate`: `breaker=BreakerRegistry(poli
 origin and builds every breaker with its own policy, so every breaker it holds trips as each client sharing it expects.
 
 ```python
-from headgate import BreakerPolicy, TransportPolicy
+from headgate import BreakerPolicy, CallPolicy
 from headgate.breaker import BreakerRegistry
 
 critical = BreakerRegistry(BreakerPolicy(failure_threshold=3, recovery_timeout=30.0), max_hosts=256)
-policy = TransportPolicy(breaker=critical)
-no_breaker = TransportPolicy(breaker=None)
+policy = CallPolicy(breaker=critical)
+no_breaker = CallPolicy(breaker=None)
 ```
 
 A registry is thread-safe (clients on different event loops and threads can share it) and bounded: past `max_hosts`
 breakers (default 1024) it drops the least recently used closed one, or, when every breaker is open or half-open, the
-least recently used of all. `TransportPolicy(breaker=None)` turns the breaker off; such a client never reads a registry,
+least recently used of all. `CallPolicy(breaker=None)` turns the breaker off; such a client never reads a registry,
 so it is not refused by a breaker a client sharing one opened.
 
 ## Watching it

@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING
 
-from headgate import Auth, Client, HttpOptions, Rate, TransportPolicy
+from headgate import Auth, CallPolicy, Client, HttpOptions, Rate
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -23,7 +24,7 @@ RATE = Rate.per_second(1000)
 def client(
     fake: FakeTransport,
     *observers: Observer,
-    policy: TransportPolicy | None = None,
+    policy: CallPolicy | None = None,
     http: HttpOptions | None = None,
     auth: Auth | None = None,
     rate: Rate | RateBudget = RATE,
@@ -33,9 +34,8 @@ def client(
     options = http or HttpOptions()
     return Client(
         base_url=BASE,
-        rate=rate,
         auth=auth,
-        policy=policy or TransportPolicy(),
+        policy=dataclasses.replace(policy or CallPolicy(), rate=rate),
         http=HttpOptions(transport=fake, headers=options.headers),
         observers=observers,
         middleware=middleware,

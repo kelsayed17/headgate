@@ -1,20 +1,20 @@
 # Caching
 
-A client caches when its policy says so: `TransportPolicy(cache=HttpCache(...))`. The cache is
+A client caches when its policy says so: `CallPolicy(cache=HttpCache(...))`. The cache is
 [hishel](https://hishel.com)'s, made safe to share between credentials and to fail. It sits below the retry layer and
 above the rate budget, so a hit returns before any retry and spends no rate turn.
 
 ```python
 from hishel import AsyncSqliteStorage
 
-from headgate import HttpCache, TransportPolicy
+from headgate import HttpCache, CallPolicy
 
 cache = HttpCache(
     storage=AsyncSqliteStorage(database_path="api-cache.db"),  # yours to close; many clients may share it
     paths=("/series", "/releases"),  # the GETs it keeps, and only their 200s
     ttl=3600,
 )
-policy = TransportPolicy(cache=cache)
+policy = CallPolicy(cache=cache)
 ```
 
 `AsyncSqliteStorage` needs `anysqlite`, which a plain `pip install headgate` does not bring: install

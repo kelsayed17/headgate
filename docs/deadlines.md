@@ -6,18 +6,18 @@ each send's timeouts inside it.
 
 ## The deadline
 
-`TransportPolicy(deadline=60.0)` is the default: every call ends within 60 seconds, or raises `ClientTimeoutError`
+`CallPolicy(deadline=60.0)` is the default: every call ends within 60 seconds, or raises `ClientTimeoutError`
 (`GET series/GDP: deadline exceeded after 60s`). It is set, from the most specific to the least:
 
 1. the call's `deadline=` (seconds, or `None` for no deadline);
 2. a `with_options(deadline=...)` view's;
-3. the first matching `Route(fragment, deadline=...)` in `TransportPolicy(routes=...)`;
+3. the first matching `Route(fragment, deadline=...)` in `CallPolicy(routes=...)`;
 4. the policy's `deadline`.
 
 ```python
-from headgate import Route, TransportPolicy
+from headgate import Route, CallPolicy
 
-policy = TransportPolicy(deadline=20.0, routes=(Route("/reports", deadline=300.0),))
+policy = CallPolicy(deadline=20.0, routes=(Route("/reports", deadline=300.0),))
 ```
 
 ```python
@@ -63,7 +63,7 @@ async with asyncio.timeout(600), client.stream("export.csv") as stream:
 
 `Timeouts(connect=10.0, read=30.0, write=10.0, pool=15.0)` are the defaults, per phase, in seconds: obtaining a pooled
 connection (`pool`), connecting, writing the request, and waiting for each read. A `Timeouts` sets only the phases it
-names, so `TransportPolicy(timeout=Timeouts(read=60.0))` keeps the other three defaults. A phase set to `math.inf`
+names, so `CallPolicy(timeout=Timeouts(read=60.0))` keeps the other three defaults. A phase set to `math.inf`
 has no limit of its own (`Timeouts(read=math.inf)`), while one left `None` takes the layer beneath's: under a
 deadline, an unlimited phase gets the time the deadline leaves, and it is never refused as longer than the deadline.
 The defaults are

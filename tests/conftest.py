@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The suite's fixtures: autouse ones that keep the transport policy real but instant and isolated, and a storage.
+"""The suite's fixtures: autouse ones that keep the call policy real but instant and isolated, and a storage.
 
 They apply to every test under ``tests/``: a mocked failure is retried as production retries it without sleeping
 through the backoff, and the rate budget admits at once. A test whose subject is the throttle's own timing opts out of

@@ -21,7 +21,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import SpanContext, SpanKind, StatusCode, format_span_id, format_trace_id
 
-from headgate import HttpOptions, QueryParamAuth, TransportError, TransportPolicy, UpstreamStatusError, nothing
+from headgate import CallPolicy, HttpOptions, QueryParamAuth, TransportError, UpstreamStatusError, nothing
 from headgate._user_agent import headgate_version
 from headgate.errors import ResponseParseError
 from headgate.events import AttemptFinished, CallFinished, CallInfo, CallStarted, RetryScheduled
@@ -173,9 +173,9 @@ async def test_a_transport_failure_is_named_by_its_error_class(telemetry: Teleme
     """Report a failure without a status as the ``ClientError`` class the call raised."""
     fake = FakeTransport().reply("GET", "/v1/x", _refuse)
     with pytest.raises(TransportError):
-        await client(
-            fake, telemetry.observer, policy=TransportPolicy(retry=None), middleware=(telemetry.observer,)
-        ).get("x", expect=nothing)
+        await client(fake, telemetry.observer, policy=CallPolicy(retry=None), middleware=(telemetry.observer,)).get(
+            "x", expect=nothing
+        )
 
     attributes = _attributes(telemetry.span())
     assert attributes["error.type"] == "TransportError"

@@ -15,12 +15,12 @@ import httpx2
 import pytest
 
 from headgate import (
+    CallPolicy,
     ClientTimeoutError,
     Rate,
     RateBudget,
     RateLimitError,
     RetryPolicy,
-    TransportPolicy,
     UpstreamStatusError,
     nothing,
 )
@@ -58,7 +58,7 @@ async def test_a_pause_a_backoff_and_attempts_stay_inside_the_deadline() -> None
     fake = FakeTransport().reply("GET", "/v1/limited", limited).reply("GET", "/v1/x", unavailable)
     retry = RetryPolicy(backoff=Backoff(factor=_BACKOFF / 2, max_wait=_BACKOFF))
     with clock.install():
-        built = client(fake, rate=budget, policy=TransportPolicy(retry=retry))
+        built = client(fake, rate=budget, policy=CallPolicy(retry=retry))
     with pytest.raises(RateLimitError):
         await built.get("limited", expect=nothing, retry=None)
     started = clock.now
@@ -80,7 +80,7 @@ async def test_an_attempt_still_running_at_the_deadline_raises_client_timeout_er
         raise AssertionError
 
     fake = FakeTransport().reply("GET", "/v1/x", 503, hangs)
-    built = client(fake, policy=TransportPolicy(retry=RetryPolicy(backoff=Backoff(factor=0.0))))
+    built = client(fake, policy=CallPolicy(retry=RetryPolicy(backoff=Backoff(factor=0.0))))
 
     with pytest.raises(ClientTimeoutError, match="deadline exceeded") as raised:
         await built.get("x", expect=nothing, deadline=_SHORT_DEADLINE)
@@ -105,7 +105,7 @@ async def test_a_call_whose_budget_turn_is_past_the_deadline_fails_at_once_unsen
     """
     budget = RateBudget(Rate(requests=1, period=0.1), adaptive=None)
     fake = FakeTransport().reply("GET", "/v1/x", 200)
-    built = client(fake, rate=budget, policy=TransportPolicy(deadline=_QUEUE_DEADLINE))
+    built = client(fake, rate=budget, policy=CallPolicy(deadline=_QUEUE_DEADLINE))
 
     results = await asyncio.gather(*(built.get("x", expect=nothing) for _ in range(_QUEUED)), return_exceptions=True)
 

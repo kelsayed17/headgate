@@ -19,7 +19,7 @@ import httpx2
 import pytest
 
 from headgate import Client, ClientTimeoutError, HttpOptions, Rate, Timeouts, TransportError
-from headgate._options import DEFAULT_LIMITS, TransportPolicy
+from headgate._options import DEFAULT_LIMITS, CallPolicy
 from headgate.errors import ForbiddenDestinationError
 from headgate.security import AddressGuard, PinnedHTTPTransport
 from headgate.security._transport import _VettingBackend
@@ -61,8 +61,7 @@ def _client(base_url: str, guard: AddressGuard, *, tls: bool = False, timeout: T
     transport = PinnedHTTPTransport(guard, ssl_context=client_ssl_context() if tls else None, limits=DEFAULT_LIMITS)
     return Client(
         base_url=base_url,
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=None, timeout=timeout or Timeouts()),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=None, timeout=timeout or Timeouts()),
         http=HttpOptions(transport=transport),
     )
 

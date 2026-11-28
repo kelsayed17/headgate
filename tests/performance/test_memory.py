@@ -23,7 +23,7 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage
 
-from headgate import Client, ClientError, HttpCache, HttpOptions, Rate, RetryPolicy, TransportPolicy, as_bytes
+from headgate import CallPolicy, Client, ClientError, HttpCache, HttpOptions, Rate, RetryPolicy, as_bytes
 from tests.support.events import Recorder
 
 if TYPE_CHECKING:
@@ -80,8 +80,7 @@ def _client(
     """
     return Client(
         base_url="https://api.example.test",
-        rate=_FAST,
-        policy=TransportPolicy(retry=RetryPolicy(budget=None), cache=cache),
+        policy=CallPolicy(rate=_FAST, retry=RetryPolicy(budget=None), cache=cache),
         http=HttpOptions(transport=httpx2.MockTransport(handler)),
         observers=(Recorder(),) if observed else (),
     )

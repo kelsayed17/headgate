@@ -13,7 +13,7 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage
 
-from headgate import Client, HttpCache, HttpOptions, Rate, RetryPolicy, Route, TransportPolicy, UpstreamStatusError
+from headgate import CallPolicy, Client, HttpCache, HttpOptions, Rate, RetryPolicy, Route, UpstreamStatusError
 from headgate._core import CallContext, check_fragment, path_has_fragment, url_path
 from tests.support.responses import RESPONSE
 
@@ -89,8 +89,9 @@ async def test_an_escaped_slash_in_a_value_does_not_pick_another_paths_route() -
     wire = _Counting(503)
     client = Client(
         base_url="https://x.example",
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=RetryPolicy(attempts=2), routes=(Route("/exports", retry=None),)),
+        policy=CallPolicy(
+            rate=Rate.per_second(1000), retry=RetryPolicy(attempts=2), routes=(Route("/exports", retry=None),)
+        ),
         http=HttpOptions(transport=wire),
     )
     name = "exports/q3"
@@ -114,8 +115,7 @@ async def test_the_cache_filter_matches_fragments_by_segment_and_patterns_on_the
     storage = AsyncSqliteStorage(connection=await anysqlite.connect(":memory:"))
     client = Client(
         base_url="https://x.example",
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(cache=HttpCache(storage=storage, paths=(rule,), ttl=60)),
+        policy=CallPolicy(rate=Rate.per_second(1000), cache=HttpCache(storage=storage, paths=(rule,), ttl=60)),
         http=HttpOptions(transport=wire),
     )
     name = "exports/q3"

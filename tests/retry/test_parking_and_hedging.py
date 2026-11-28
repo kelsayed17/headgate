@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, override
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, Rate, RetryPolicy, TransportPolicy
+from headgate import CallPolicy, Client, HttpOptions, Rate, RetryPolicy
 from headgate._core import (
     BREAKER_GATE,
     BudgetBacklogError,
@@ -855,9 +855,9 @@ async def test_a_hedge_cancelled_before_it_was_sent_gives_its_retry_budget_back(
     middleware = _SlowToSend()
     client = Client(
         base_url="https://hedged.example",
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(
-            retry=RetryPolicy(hedge=Hedge(after=0.001), budget=RetryShare(ratio=0.0, min_per_second=0.1, window=10.0))
+        policy=CallPolicy(
+            rate=Rate.per_second(1000),
+            retry=RetryPolicy(hedge=Hedge(after=0.001), budget=RetryShare(ratio=0.0, min_per_second=0.1, window=10.0)),
         ),
         http=HttpOptions(
             transport=httpx2.MockTransport(lambda request: httpx2.Response(200, content=b"{}", request=request))

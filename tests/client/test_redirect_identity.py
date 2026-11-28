@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate import Rate
+from headgate import CallPolicy, Rate
 from headgate._client import Client
 from tests.support.responses import RESPONSE
 
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 def _client() -> Client:
     """Build against ``example.test``."""
-    return Client(base_url="https://example.test", rate=Rate.per_second(1000.0))
+    return Client(base_url="https://example.test", policy=CallPolicy(rate=Rate.per_second(1000.0)))
 
 
 def _redirecting(httpx2_mock: HTTPXMock) -> None:

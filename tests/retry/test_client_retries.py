@@ -10,6 +10,7 @@ import json
 import pytest
 
 from headgate import (
+    CallPolicy,
     Client,
     HttpOptions,
     IdempotencyKeys,
@@ -18,7 +19,6 @@ from headgate import (
     RateLimitError,
     RetryPolicy,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
     body_reader,
     nothing,
@@ -64,8 +64,7 @@ def _client(
     chosen = RetryPolicy(backoff=_FULL, budget=None) if retry is None else retry
     return Client(
         base_url=f"https://{_HOST}",
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=chosen, idempotency=idempotency, deadline=deadline),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=chosen, idempotency=idempotency, deadline=deadline),
         http=HttpOptions(transport=network),
     )
 
@@ -210,8 +209,7 @@ async def test_retries_are_announced_to_the_clients_observers() -> None:
     network = FaultyTransport(schedule=[Respond(503), Respond(200)])
     client = Client(
         base_url=f"https://{_HOST}",
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=RetryPolicy(backoff=_FULL, budget=None)),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=RetryPolicy(backoff=_FULL, budget=None)),
         http=HttpOptions(transport=network),
         observers=(observer,),
     )

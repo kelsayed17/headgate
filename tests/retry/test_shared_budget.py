@@ -13,7 +13,7 @@ from typing import Any, Final, LiteralString, cast
 
 import pytest
 
-from headgate import Client, HttpOptions, Rate, RetryPolicy, Route, TransportPolicy, UpstreamStatusError, nothing
+from headgate import CallPolicy, Client, HttpOptions, Rate, RetryPolicy, Route, UpstreamStatusError, nothing
 from headgate.retry import Backoff, RetryBudget, RetryShare
 from tests.support.wire import Script
 
@@ -25,8 +25,7 @@ def _client(script: Script, budget: RetryShare | RetryBudget | None, *routes: Ro
     """Return a client over *script* whose policy retries 503s from *budget*, with *routes*."""
     return Client(
         base_url="https://api.example.test",
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=RetryPolicy(budget=budget), breaker=None, routes=routes),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=RetryPolicy(budget=budget), breaker=None, routes=routes),
         http=HttpOptions(transport=script.transport()),
     )
 

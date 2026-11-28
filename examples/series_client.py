@@ -10,7 +10,7 @@ from typing import Self
 import msgspec
 from pydantic import BaseModel
 
-from headgate import Client, QueryParamAuth, Rate
+from headgate import CallPolicy, Client, QueryParamAuth, Rate
 from headgate import msgspec as msgspec_flavor
 from headgate import pydantic as pydantic_flavor
 
@@ -42,9 +42,7 @@ class MsgspecClient:
     def __init__(self, api_key: str) -> None:
         """Send *api_key* as the ``api_key`` query parameter."""
         self._http = Client(
-            base_url=_BASE_URL,
-            rate=_RATE,
-            auth=QueryParamAuth({"api_key": api_key}),
+            base_url=_BASE_URL, policy=CallPolicy(rate=_RATE), auth=QueryParamAuth({"api_key": api_key})
         )
 
     async def __aenter__(self) -> Self:
@@ -70,9 +68,7 @@ class PydanticClient:
     def __init__(self, api_key: str) -> None:
         """Send *api_key* as the ``api_key`` query parameter."""
         self._http = Client(
-            base_url=_BASE_URL,
-            rate=_RATE,
-            auth=QueryParamAuth({"api_key": api_key}),
+            base_url=_BASE_URL, policy=CallPolicy(rate=_RATE), auth=QueryParamAuth({"api_key": api_key})
         )
 
     async def __aenter__(self) -> Self:

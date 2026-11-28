@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Self
 
 import msgspec
 
-from headgate import BearerAuth, Client, Expect, Rate, nothing
+from headgate import BearerAuth, CallPolicy, Client, Expect, Rate, nothing
 from headgate.msgspec import reader
 from headgate.pagination import Cursor
 
@@ -65,7 +65,7 @@ class CatalogClient:
         """Authenticate with *api_key*."""
         self._http = Client(
             base_url="https://api.catalog.example/v1",
-            rate=Rate.per_second(10),
+            policy=CallPolicy(rate=Rate.per_second(10)),
             auth=BearerAuth(api_key),
         )
 

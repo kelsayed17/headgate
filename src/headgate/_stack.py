@@ -68,7 +68,7 @@ if TYPE_CHECKING:
 
     from headgate._core import Timing
     from headgate._middleware import Middleware
-    from headgate._options import HttpOptions, Timeouts, TransportPolicy
+    from headgate._options import CallPolicy, HttpOptions, Timeouts
     from headgate.ratelimit._budgets import PathBudgets
 
 __all__ = ["NETWORK_OVERRIDE", "Credentials", "build_http_client", "build_transport_stack"]
@@ -143,7 +143,7 @@ def build_http_client(
 
 def build_transport_stack(
     budgets: PathBudgets,
-    policy: TransportPolicy,
+    policy: CallPolicy,
     http: HttpOptions,
     timing: Timing,
     credentials: Credentials,

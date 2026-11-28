@@ -16,7 +16,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from headgate import Client, ClientError, Expect, HttpOptions, Paginated, Rate, Reader, UpstreamStatusError
+from headgate import CallPolicy, Client, ClientError, Expect, HttpOptions, Paginated, Rate, Reader, UpstreamStatusError
 from headgate._client import _paired
 from headgate.errors import ForbiddenDestinationError, PageLimitError, ResponseParseError
 from headgate.msgspec import reader
@@ -80,7 +80,9 @@ class _Api:
 
     def client(self) -> Client:
         """Return a client over this API."""
-        return Client(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=httpx2.MockTransport(self.handle)))
+        return Client(
+            base_url=_BASE, policy=CallPolicy(rate=_RATE), http=HttpOptions(transport=httpx2.MockTransport(self.handle))
+        )
 
 
 def _page(request: httpx2.Request, ids: Sequence[int], **links: str | None) -> httpx2.Response:
@@ -565,7 +567,7 @@ def test_pagination_terminates_for_any_page_graph(links: list[int | None]) -> No
     names it; the cursor repeating after that ends the walk.
     """
     graph = _Graph(links)
-    client = Client(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=graph))
+    client = Client(base_url=_BASE, policy=CallPolicy(rate=_RATE), http=HttpOptions(transport=graph))
     paginated = client.paginate("items", pager=Cursor(reader(Page), items=items_of, next=cursor_of, param="at"))
 
     path = [0]

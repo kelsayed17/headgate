@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import Client, ClientTimeoutError, HttpCache, HttpOptions, RetryPolicy, Timeouts, TransportPolicy
+from headgate import CallPolicy, Client, ClientTimeoutError, HttpCache, HttpOptions, RetryPolicy, Timeouts
 from tests.cache._helpers import series_rules, stamped_ttl, stub_client
 from tests.support.responses import RESPONSE
 
@@ -53,7 +53,7 @@ async def test_the_timeout_survives_the_cache_layer(storage: AsyncSqliteStorage)
     client = stub_client(
         transport=base,
         http=HttpOptions(),
-        policy=TransportPolicy(timeout=Timeouts(read=_CLIENT_TIMEOUT)),
+        policy=CallPolicy(timeout=Timeouts(read=_CLIENT_TIMEOUT)),
         cache=HttpCache(**series_rules(), storage=storage),
     )
 
@@ -71,7 +71,7 @@ async def test_a_per_call_timeout_still_wins_through_the_cache(storage: AsyncSql
     client = stub_client(
         transport=base,
         http=HttpOptions(),
-        policy=TransportPolicy(timeout=Timeouts(read=_CLIENT_TIMEOUT)),
+        policy=CallPolicy(timeout=Timeouts(read=_CLIENT_TIMEOUT)),
         cache=HttpCache(**series_rules(), storage=storage),
     )
 
@@ -100,7 +100,7 @@ async def test_a_black_holing_host_times_out_through_the_cache(storage: AsyncSql
 
     client = Client(
         base_url=f"http://127.0.0.1:{port}",
-        policy=TransportPolicy(
+        policy=CallPolicy(
             retry=RetryPolicy(attempts=1),
             cache=HttpCache(**series_rules(), storage=storage),
             timeout=Timeouts(read=_SHORT_TIMEOUT),

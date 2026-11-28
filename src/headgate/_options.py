@@ -1,10 +1,10 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The option objects a :class:`~headgate.Client` is configured with, beyond its URL, rate and auth.
+"""The option objects a :class:`~headgate.Client` is configured with, beyond its URL and auth.
 
-* :class:`TransportPolicy`: what the transport stack does for every request (retries, the timeouts and the deadline
-  they are checked against, the breaker, per-path rates, the cache, idempotency keys, per-route overrides).
+* :class:`CallPolicy`: what the stack does with every call (its rate, retries, the timeouts and the deadline they are
+  checked against, the breaker, the cache, idempotency keys, per-route overrides).
 * :class:`HttpOptions`: how a request is sent and its response read (the network transport and its TLS, pool and proxy,
   headers, redirects, the body cap, cookies).
 * :class:`Timeouts`, :class:`IdempotencyKeys` and :class:`Route`, the values those hold.
@@ -61,13 +61,13 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_LIMITS",
     "KEYED_METHODS",
+    "CallPolicy",
     "HttpOptions",
     "IdempotencyKeys",
     "Route",
     "RouteOptions",
     "SecurityOptions",
     "Timeouts",
-    "TransportPolicy",
     "check_deadline",
     "check_hooks",
     "check_middleware",
@@ -230,7 +230,7 @@ def check_timeout_fits(timeout: Timeouts, deadline: float | None) -> None:
         if deadline < limit < math.inf:
             msg = (
                 f"{name} timeout {limit:g}s is longer than the {deadline:g}s deadline it runs under, so it can never "
-                f"take effect: raise the deadline (TransportPolicy(deadline=...) or deadline=), or lower the timeout"
+                f"take effect: raise the deadline (CallPolicy(deadline=...) or deadline=), or lower the timeout"
             )
             raise ValueError(msg)
 
@@ -269,6 +269,8 @@ class RouteOptions(TypedDict, total=False, closed=True):
     """What a :class:`Route` sets for its paths; an option left out takes the policy's, and ``None`` is off.
 
     * ``retry``: a :class:`~headgate.RetryPolicy` that replaces the policy's on these paths, or ``None`` to send once.
+    * ``timeout``: :class:`Timeouts` whose set phases replace the policy's on these paths, as a view's do; a view's and
+      a call's own win over it. A phase it sets may not be longer than the deadline the paths run under.
     * ``deadline``: seconds a call on these paths may take in all, or ``None`` for no deadline.
     * ``rate``: a :class:`~headgate.Rate`, from which the client builds a budget of these paths' own, a
       :class:`~headgate.RateBudget` shared with whoever else holds it, or ``None`` to pace nothing of their own (the
@@ -278,6 +280,7 @@ class RouteOptions(TypedDict, total=False, closed=True):
     """
 
     retry: RetryPolicy | None
+    timeout: Timeouts
     deadline: float | None
     rate: Rate | RateBudget | None
     cache: None
@@ -303,8 +306,8 @@ class Route:
 
     :raises TypeError: for an option :class:`RouteOptions` does not name, and for a value of the wrong kind, such as
         ``retry=False`` (write ``retry=None``).
-    :raises ValueError: for a fragment naming no segment, which would match every path, and for a deadline that is not
-        positive and finite.
+    :raises ValueError: for a fragment naming no segment, which would match every path, for a deadline that is not
+        positive and finite, and for a timeout longer than the route's own deadline.
     """
 
     __slots__ = ("_fragment", "_options")
@@ -322,6 +325,8 @@ class Route:
             check_kind("retry", retry, (RetryPolicy, type(None)), "a RetryPolicy, or None to send once")
         if "deadline" in options:
             check_deadline(options["deadline"])
+        if "timeout" in options:
+            check_timeout_fits(options["timeout"], options.get("deadline"))
         if "rate" in options:
             check_kind("rate", options["rate"], (Rate, RateBudget, type(None)), "a Rate, a RateBudget or None")
         if "cache" in options and options["cache"] is not None:
@@ -359,9 +364,14 @@ def match_route(routes: tuple[Route, ...], path: str) -> Route | None:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class TransportPolicy:
-    """What the transport stack does for every request.
+class CallPolicy:
+    """What the stack does with every call: the pair of :class:`~headgate.CallOptions`, which override it per call.
 
+    * ``rate``: a :class:`~headgate.Rate`, from which the client builds a budget of its own, or a
+      :class:`~headgate.RateBudget` it shares with every other client given the same one. Without one (``None``) the
+      client paces nothing itself, but still waits out the pauses the server asks for: a 429 or 503 with
+      ``Retry-After``, and a spent ``RateLimit`` quota. Set one when the provider states its quota. A route's
+      ``rate=`` overrides it on its paths.
     * ``retry``: how a call is re-sent (:class:`~headgate.RetryPolicy`), or ``None`` to send every call once. A call
       opts out with ``retry=None``, and a call's or a route's policy replaces this one.
     * ``timeout``: :class:`Timeouts`; a phase it leaves unset takes its default (:attr:`Timeouts.DEFAULT`). A phase it
@@ -373,10 +383,11 @@ class TransportPolicy:
       ``None`` for none.
     * ``cache``: an opt-in :class:`~headgate.HttpCache`.
     * ``idempotency``: stamp idempotency keys on POST and PATCH (:class:`IdempotencyKeys`), or ``None``.
-    * ``routes``: the per-path rules (:class:`Route`): a call's first matching route sets its retry, deadline, rate and
-      cache, and what it leaves out comes from here.
+    * ``routes``: the per-path rules (:class:`Route`): a call's first matching route sets its retry, timeout,
+      deadline, rate and cache, and what it leaves out comes from here.
     """
 
+    rate: Rate | RateBudget | None = None
     retry: RetryPolicy | None = field(default_factory=RetryPolicy)
     timeout: Timeouts = field(default_factory=Timeouts)
     deadline: float | None = 60.0
@@ -386,12 +397,22 @@ class TransportPolicy:
     routes: tuple[Route, ...] = ()
 
     def __post_init__(self) -> None:
-        """Refuse a retry or breaker of the wrong kind and a deadline that is not positive and finite; freeze the rules.
+        """Refuse an option of the wrong kind, a bad deadline, and a timeout longer than its deadline; freeze the rules.
 
-        :raises TypeError: for a ``retry`` that is neither a :class:`~headgate.RetryPolicy` nor ``None`` (a ``bool``
+        A deadline must be positive and finite, and a timeout (the policy's or a route's) no longer than the deadline
+        it runs under.
+
+        :raises TypeError: for a ``rate`` that is neither a ``Rate``, a ``RateBudget`` nor ``None``, such as a bare
+            number, a ``retry`` that is neither a :class:`~headgate.RetryPolicy` nor ``None`` (a ``bool``
             included), or a ``breaker`` that is neither a :class:`~headgate.BreakerPolicy`, a ``BreakerRegistry`` nor
             ``None``.
         """
+        check_kind(
+            "rate",
+            self.rate,
+            (Rate, RateBudget, type(None)),
+            "a Rate, such as Rate.per_second(10), a RateBudget or None",
+        )
         check_kind("retry", self.retry, (RetryPolicy, type(None)), "a RetryPolicy, or None to send every call once")
         check_kind(
             "breaker",
@@ -410,6 +431,9 @@ class TransportPolicy:
         routes = tuple(self.routes)
         for route in routes:
             check_kind("routes", route, Route, wanted)
+            options = route.options
+            if "timeout" in options and "deadline" not in options:
+                check_timeout_fits(options["timeout"], self.deadline)
         object.__setattr__(self, "routes", routes)
 
 
@@ -550,7 +574,7 @@ class HttpOptions:
     * ``cookies``: ``True`` keeps httpx2's cookie jar; by default no cookie a response sets is stored or sent back.
     * ``request_id_headers``: the response headers a ``ClientError``'s ``request_id`` is read from, first match wins.
 
-    The timeouts are the policy's (``TransportPolicy(timeout=)``), and the observers and middleware the client's own
+    The timeouts are the policy's (``CallPolicy(timeout=)``), and the observers and middleware the client's own
     (``Client(observers=, middleware=)``): parts of the stack, not settings of how a request is sent.
 
     Nothing is read from the environment: no proxy variable, no ``.netrc``, no ``SSL_CERT_FILE``.

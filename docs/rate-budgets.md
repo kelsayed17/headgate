@@ -6,14 +6,13 @@ client side is cheaper than collecting 429s, and a budget that listens to the se
 hammering an API that has said "slow down".
 
 ```python
-from headgate import Client, Rate, RateBudget, Route, TransportPolicy
+from headgate import CallPolicy, Client, Rate, RateBudget, Route
 
 shared = RateBudget(Rate.per_minute(600), max_in_flight=8)  # one provider quota, two clients
-search = Client(base_url="https://api.example.com/search", rate=shared)
+search = Client(base_url="https://api.example.com/search", policy=CallPolicy(rate=shared))
 reports = Client(
     base_url="https://api.example.com/reports",
-    rate=shared,
-    policy=TransportPolicy(routes=(Route("/export", rate=Rate.per_minute(6)),)),
+    policy=CallPolicy(rate=shared, routes=(Route("/export", rate=Rate.per_minute(6)),)),
 )
 ```
 
@@ -47,7 +46,7 @@ timing when it is built by default:
 
 ## Per-path lanes
 
-`TransportPolicy(routes=(Route(fragment, rate=...), ...))` gives the calls whose URL path holds `fragment` a budget of
+`CallPolicy(routes=(Route(fragment, rate=...), ...))` gives the calls whose URL path holds `fragment` a budget of
 their own, spent **instead of** the client's. A route's `rate` is a `Rate` (a budget per client), a shared
 `RateBudget`, or `None`, which paces nothing of the route's own while the server's pauses still apply; a route that
 leaves `rate` out spends from the client's budget. The fragment is one or more whole path segments, matched anywhere

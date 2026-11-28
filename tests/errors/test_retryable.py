@@ -20,6 +20,7 @@ import pytest
 from headgate import (
     AuthError,
     BreakerPolicy,
+    CallPolicy,
     Client,
     ClientError,
     HttpOptions,
@@ -27,7 +28,6 @@ from headgate import (
     RateLimitError,
     RetryPolicy,
     SecurityOptions,
-    TransportPolicy,
     UpstreamStatusError,
     as_bytes,
     body_reader,
@@ -65,7 +65,7 @@ def _client(
     """Return a client whose every request is answered *status*, retried once without waiting."""
     return Client(
         base_url=_BASE,
-        policy=TransportPolicy(retry=_ONCE_MORE, breaker=breaker),
+        policy=CallPolicy(retry=_ONCE_MORE, breaker=breaker),
         http=http or HttpOptions(transport=_answering(status)),
     )
 

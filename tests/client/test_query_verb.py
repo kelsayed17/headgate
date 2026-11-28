@@ -13,7 +13,7 @@ import asyncio
 
 import httpx2
 
-from headgate import Client, HttpOptions, Json, RetryPolicy, TransportPolicy, nothing
+from headgate import CallPolicy, Client, HttpOptions, Json, RetryPolicy, nothing
 from headgate.retry import Backoff, Hedge
 from headgate.testing import FakeTransport, TestClock
 
@@ -24,7 +24,7 @@ _SENT = b'{"select":["id"],"where":{"open":true}}'
 
 def _client(fake: FakeTransport, *, retry: RetryPolicy | None = None) -> Client:
     """Return a client over *fake*, retrying under *retry*."""
-    return Client(base_url=_BASE, policy=TransportPolicy(retry=retry), http=HttpOptions(transport=fake))
+    return Client(base_url=_BASE, policy=CallPolicy(retry=retry), http=HttpOptions(transport=fake))
 
 
 async def test_query_sends_its_body_with_the_query_method() -> None:

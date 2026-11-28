@@ -21,6 +21,7 @@ import pytest
 
 from headgate import (
     BreakerPolicy,
+    CallPolicy,
     Client,
     ClientError,
     HttpOptions,
@@ -30,7 +31,6 @@ from headgate import (
     Reader,
     RetryPolicy,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
     body_reader,
     nothing,
@@ -59,10 +59,7 @@ def _client(script: Script | httpx2.MockTransport) -> Client:
     """Build a client over *script* that sends each call once."""
     transport = script if isinstance(script, httpx2.MockTransport) else script.transport()
     return Client(
-        base_url=_BASE,
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=None),
-        http=HttpOptions(transport=transport),
+        base_url=_BASE, policy=CallPolicy(rate=Rate.per_second(1000), retry=None), http=HttpOptions(transport=transport)
     )
 
 
@@ -107,7 +104,7 @@ async def test_the_request_id_is_read_from_the_configured_headers_and_bounded() 
     script = Script(httpx2.Response(404, headers={"X-Trace": long_id, "X-Request-Id": _REQUEST_ID}))
     client = Client(
         base_url=_BASE,
-        rate=Rate.per_second(1000),
+        policy=CallPolicy(rate=Rate.per_second(1000)),
         http=HttpOptions(transport=script.transport(), request_id_headers=("x-trace", "x-request-id")),
     )
 
@@ -182,8 +179,7 @@ async def test_a_redirect_loop_is_not_retried_nor_charged_to_the_breaker() -> No
     breaker = BreakerRegistry(BreakerPolicy(failure_threshold=1))
     client = Client(
         base_url=_BASE,
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(breaker=breaker),
+        policy=CallPolicy(rate=Rate.per_second(1000), breaker=breaker),
         http=HttpOptions(transport=script.transport(), max_redirects=_LOOP_HOPS),
     )
 
@@ -260,8 +256,7 @@ async def test_an_open_breaker_raises_circuit_open_error_with_its_cooldown() -> 
     script = Script(503)
     client = Client(
         base_url=_BASE,
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=None, breaker=breaker),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=None, breaker=breaker),
         http=HttpOptions(transport=script.transport()),
     )
     await _raised(client)
@@ -303,8 +298,7 @@ async def test_notes_a_layer_added_reach_the_error() -> None:
 
     client = Client(
         base_url=_BASE,
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=None),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=None),
         http=HttpOptions(transport=Script(404).transport()),
         middleware=(Annotate(),),
     )
@@ -319,7 +313,7 @@ async def test_a_body_over_the_cap_records_its_call() -> None:
     script = Script(httpx2.Response(200, content=b"x" * (cap * 2), headers={"X-Request-Id": _REQUEST_ID}))
     client = Client(
         base_url=_BASE,
-        rate=Rate.per_second(1000),
+        policy=CallPolicy(rate=Rate.per_second(1000)),
         http=HttpOptions(transport=script.transport(), max_response_bytes=cap),
     )
 
@@ -508,8 +502,7 @@ async def test_a_surviving_status_outside_the_policy_still_carries_its_retry_aft
     """Report a 503's ``Retry-After`` though the call's policy does not retry 503s."""
     client = Client(
         base_url=_BASE,
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=RetryPolicy(statuses=frozenset({500}))),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=RetryPolicy(statuses=frozenset({500}))),
         http=HttpOptions(transport=Script(httpx2.Response(503, headers={"Retry-After": "2"})).transport()),
     )
 
