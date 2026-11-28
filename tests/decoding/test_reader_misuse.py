@@ -106,6 +106,40 @@ def test_the_pydantic_flavor_refuses_a_class_it_has_no_schema_for(type_: TypeFor
         headgate.pydantic.reader(type_)
 
 
+@pytest.mark.parametrize(
+    ("type_", "message"),
+    [
+        (_Plain, r"^headgate\.msgspec cannot encode _Plain, a class msgspec does not know: "),
+        (list[_Plain], r"^headgate\.msgspec cannot encode _Plain, a class msgspec does not know: "),
+        (
+            _Model,
+            r"^headgate\.msgspec cannot encode _Model, a pydantic model: use headgate\.pydantic\.writer\(_Model\)",
+        ),
+    ],
+    ids=["class", "list", "model"],
+)
+def test_the_msgspec_flavor_refuses_a_writer_of_a_class_it_does_not_know(type_: TypeForm[object], message: str) -> None:
+    """Refuse a writer of a class msgspec cannot encode where it is built, as its reader is refused."""
+    with pytest.raises(TypeError, match=message):
+        headgate.msgspec.writer(type_)
+
+
+@pytest.mark.parametrize(("type_", "name"), [(_Plain, "_Plain"), (list[_Plain], "_Plain")], ids=["class", "list"])
+def test_the_pydantic_flavor_refuses_a_writer_of_a_class_it_has_no_schema_for(
+    type_: TypeForm[object], name: str
+) -> None:
+    """Say ``encode`` for a writer, and point a msgspec struct to the msgspec flavor's writer."""
+    message = rf"^headgate\.pydantic cannot encode {name}, a class pydantic has no schema for: "
+    with pytest.raises(TypeError, match=message + r".*headgate\.msgspec\.writer"):
+        headgate.pydantic.writer(type_)
+
+
+def test_the_pydantic_flavor_names_the_class_it_was_given() -> None:
+    """Name the class given, not pydantic's spelling of it, when the type is one class."""
+    with pytest.raises(TypeError, match=r"^headgate\.pydantic cannot decode _Row, "):
+        headgate.pydantic.reader(_Row)
+
+
 class _TrustsEveryClass(MsgspecCodec):
     """A codec whose decoder builds for any class, and fails only at the first body."""
 

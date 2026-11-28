@@ -4,7 +4,7 @@
 """The implementation of :mod:`headgate.msgspec`, which exports it and documents it."""
 
 import re
-from typing import ClassVar, Final, cast, overload
+from typing import ClassVar, Final, Literal, cast, overload
 
 try:
     import msgspec
@@ -64,13 +64,17 @@ class MsgspecCodec:
         :raises TypeError: for a type that holds, anywhere, a class msgspec does not know (a pydantic model, a plain
             class), which msgspec would build a decoder for and then refuse every body with: here, naming the class.
         """
-        _refuse_unknown_classes(type_)
+        _refuse_unknown_classes(type_, "decode")
         json_decoder = cast("msgspec.json.Decoder[T]", msgspec.json.Decoder(type_, strict=self._strict))
         return json_decoder.decode
 
     def encoder[T](self, type_: TypeForm[T], /) -> Callable[[T], bytes]:
-        """Return the function that encodes a value of *type_*: msgspec encodes by the value's own type."""
-        del type_  # the expression only types the writer
+        """Return the function that encodes a value of *type_*: msgspec encodes by the value's own type.
+
+        :raises TypeError: for a type that holds, anywhere, a class msgspec does not know, which no value of could be
+            encoded: here, naming the class, as :meth:`decoder` refuses it.
+        """
+        _refuse_unknown_classes(type_, "encode")
         drop_none = self._drop_none
 
         def encode(value: T) -> bytes:
@@ -83,8 +87,8 @@ class MsgspecCodec:
         return _QUOTED_INPUT.sub(r"\1", str(error))
 
 
-def _refuse_unknown_classes(type_: object) -> None:
-    """Refuse *type_* when it holds a class msgspec reports as a custom type, which it cannot decode without a hook.
+def _refuse_unknown_classes(type_: object, verb: Literal["decode", "encode"]) -> None:
+    """Refuse *type_* when it holds a class msgspec reports as a custom type, which it cannot *verb* without a hook.
 
     ``object`` is a custom type to :func:`msgspec.inspect.type_info` too, but msgspec decodes it as any value. The
     walk keeps the nodes it has seen, so a recursive struct ends.
@@ -100,7 +104,7 @@ def _refuse_unknown_classes(type_: object) -> None:
         seen.add(id(node))
         if isinstance(node, msgspec.inspect.CustomType):
             if node.cls is not object:
-                raise TypeError(_unknown_class(node.cls))
+                raise TypeError(_unknown_class(node.cls, verb))
             continue
         for field in msgspec.structs.fields(cast("msgspec.Struct", node)):
             value = getattr(node, field.name)
@@ -108,14 +112,18 @@ def _refuse_unknown_classes(type_: object) -> None:
             pending.extend(item for item in items if isinstance(item, msgspec.inspect.Type | msgspec.inspect.Field))
 
 
-def _unknown_class(cls: type) -> str:
-    """Describe *cls*, a class headgate.msgspec cannot decode, and what to write instead."""
-    name = cls.__qualname__
+def _unknown_class(cls: type, verb: Literal["decode", "encode"]) -> str:
+    """Describe *cls*, a class headgate.msgspec cannot *verb*, and what to write instead."""
+    name = cls.__name__
+    builder = "reader" if verb == "decode" else "writer"
     if any(base.__module__.partition(".")[0] == "pydantic" for base in cls.__mro__):
-        return f"headgate.msgspec cannot decode {name}, a pydantic model: use headgate.pydantic.reader({name})"
+        return f"headgate.msgspec cannot {verb} {name}, a pydantic model: use headgate.pydantic.{builder}({name})"
+    by_hand = (
+        f"read it with Reader(lambda r: {name}(...))" if verb == "decode" else "write it with a Writer of your own"
+    )
     return (
-        f"headgate.msgspec cannot decode {name}, a class msgspec does not know: declare it as a msgspec.Struct, a "
-        f"dataclass or a TypedDict, or read it with Reader(lambda r: {name}(...))"
+        f"headgate.msgspec cannot {verb} {name}, a class msgspec does not know: declare it as a msgspec.Struct, a "
+        f"dataclass or a TypedDict, or {by_hand}"
     )
 
 
