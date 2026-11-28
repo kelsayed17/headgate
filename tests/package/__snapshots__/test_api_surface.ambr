@@ -485,7 +485,7 @@
       field idempotency: IdempotencyKeys | None = None
       field routes: tuple[Route, ...] = ()
   CallUrl = typing.LiteralString | string.templatelib.Template | httpx2.URL
-  class Client(object)(*, base_url: 'str', auth: 'Auth | None' = None, policy: 'CallPolicy' = CallPolicy(rate=None, retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryShare(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), timeout=Timeouts(connect=None, read=None, write=None, pool=None), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, response_check=None, security=SecurityOptions(trusted_origins=frozenset(), block_private_hosts=False, resolver=None, check=None), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')), observers: 'Sequence[Observer]' = (), middleware: 'Sequence[Middleware]' = ()) -> 'None'
+  class Client(object)(*, base_url: 'str', auth: 'Auth | None' = None, policy: 'CallPolicy' = CallPolicy(rate=None, retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryShare(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), timeout=Timeouts(connect=None, read=None, write=None, pool=None), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, response_check=None, security=SecurityOptions(trusted_origins=frozenset(), block_private_hosts=False, resolver=None, check=<function forbidden_reason at 0x…>), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')), observers: 'Sequence[Observer]' = (), middleware: 'Sequence[Middleware]' = ()) -> 'None'
       def aclose(self) -> 'None'
       def delete(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def events(self, url: 'CallUrl', *, last_event_id: 'str | None' = None, **options: 'Unpack[StreamOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
@@ -626,11 +626,11 @@
       key deadline: float | None (optional)
       key rate: Rate | RateBudget | None (optional)
       key cache: None (optional)
-  class SecurityOptions(object)(*, trusted_origins: 'frozenset[str]' = frozenset(), block_private_hosts: 'bool' = False, resolver: 'Resolver | None' = None, check: 'AddressCheck | None' = None) -> 'None'
+  class SecurityOptions(object)(*, trusted_origins: 'frozenset[str]' = frozenset(), block_private_hosts: 'bool' = False, resolver: 'Resolver | None' = None, check: 'AddressCheck' = <function forbidden_reason at 0x…>) -> 'None'
       field trusted_origins: frozenset[str] = frozenset()
       field block_private_hosts: bool = False
       field resolver: Resolver | None = None
-      field check: AddressCheck | None = None
+      field check: AddressCheck = <function forbidden_reason at 0x…>
   class SigningAuth(Auth)()
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
       def credential_identity(self) -> 'bytes'

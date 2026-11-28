@@ -50,7 +50,7 @@ from headgate.cache._policy import HttpCache
 from headgate.ratelimit._budget import RateBudget
 from headgate.ratelimit._rate import Rate
 from headgate.retry._policy import RetryPolicy
-from headgate.security import AddressCheck, Resolver
+from headgate.security import AddressCheck, Resolver, forbidden_reason
 
 __all__ = [
     "DEFAULT_LIMITS",
@@ -526,13 +526,13 @@ class SecurityOptions:
       ``getaddrinfo`` by default; only with ``block_private_hosts=True``.
     * ``check``: which addresses the SSRF guard refuses (:data:`~headgate.security.AddressCheck`), returning why it
       refuses one or ``None``; :func:`~headgate.security.forbidden_reason` by default, which a check of your own can
-      defer to for every address it does not decide itself. Only with ``block_private_hosts=True``.
+      defer to for every address it does not decide itself. A check of your own only with ``block_private_hosts=True``.
     """
 
     trusted_origins: frozenset[str] = frozenset()
     block_private_hosts: bool = False
     resolver: Resolver | None = None
-    check: AddressCheck | None = None
+    check: AddressCheck = forbidden_reason
 
     def __post_init__(self) -> None:
         """Refuse a value of the wrong kind, and a resolver or check without the SSRF guard; normalize the origins."""
@@ -543,10 +543,13 @@ class SecurityOptions:
         check_kind("block_private_hosts", self.block_private_hosts, bool, "a bool")
         if self.resolver is not None:
             check_callable("resolver", self.resolver, "a resolver function, or None")
-        if self.check is not None:
-            check_callable("check", self.check, "an address check, such as headgate.security.forbidden_reason, or None")
-        for option in ("resolver", "check"):
-            if not self.block_private_hosts and getattr(self, option) is not None:
+        if self.check is None:
+            msg = "check= takes an address check, not None: leave it out for forbidden_reason, the default"
+            raise TypeError(msg)
+        check_callable("check", self.check, "an address check, such as headgate.security.forbidden_reason")
+        given = {"resolver": self.resolver is not None, "check": self.check is not forbidden_reason}
+        for option, set_ in given.items():
+            if set_ and not self.block_private_hosts:
                 msg = f"{option}= is used only by the SSRF guard, so it needs block_private_hosts=True"
                 raise ValueError(msg)
         object.__setattr__(self, "trusted_origins", frozenset(map(_normalized_origin, self.trusted_origins)))

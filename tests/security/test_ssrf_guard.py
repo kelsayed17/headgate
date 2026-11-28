@@ -277,13 +277,21 @@ async def test_any_custom_transport_is_accepted(transport: httpx2.AsyncBaseTrans
 
 
 def test_a_check_needs_the_guard() -> None:
-    """Refuse a check nothing would use, and one that is not a function, as ``resolver=`` is refused."""
+    """Refuse a check of your own nothing would use, and one that is not a function, as ``resolver=`` is refused."""
     with pytest.raises(
         ValueError, match=r"^check= is used only by the SSRF guard, so it needs block_private_hosts=True$"
     ):
-        SecurityOptions(check=forbidden_reason)
+        SecurityOptions(check=_admitting("127.0.0.1"))
     with pytest.raises(TypeError, match=r"^check= takes an address check"):
         SecurityOptions(block_private_hosts=True, check=cast("Any", "loopback"))
+
+
+def test_the_default_check_is_a_value() -> None:
+    """Hold ``forbidden_reason`` as the default, which needs no guard, and refuse ``None``, naming the default."""
+    assert SecurityOptions().check is forbidden_reason
+    assert SecurityOptions(check=forbidden_reason).check is forbidden_reason
+    with pytest.raises(TypeError, match=r"^check= takes an address check, not None: leave it out for forbidden_reason"):
+        SecurityOptions(block_private_hosts=True, check=cast("Any", None))
 
 
 def test_the_guard_is_configured_only_through_security_options() -> None:

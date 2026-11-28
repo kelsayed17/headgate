@@ -28,8 +28,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `expect=as_text` for a plain-text body.
 - `SecurityOptions(check=)`, beside `resolver=`: the function that judges each address the SSRF guard resolves,
   returning why it refuses one or `None` to admit it, on every hop and over every transport. It defaults to
-  `headgate.security.forbidden_reason`, which a check of your own can defer to for the addresses it does not decide,
-  and is accepted only with `block_private_hosts=True` (`ValueError` otherwise, as for `resolver=`).
+  `headgate.security.forbidden_reason` itself, which a check of your own can defer to for the addresses it does not
+  decide. A check of your own is accepted only with `block_private_hosts=True` (`ValueError` otherwise, as for
+  `resolver=`), and `check=None` is a `TypeError` naming the default: leave it out.
 - `headgate.CallUrl`, `headgate.RawContent` and `headgate.UploadFiles`, the types of a verb's URL, of
   `Raw(content)` and of `Multipart(files)`, which their signatures named but nothing exported: a wrapper writes
   `async def fetch(self, url: CallUrl, **options: Unpack[CallOptions])`. `CallUrl` is a plain union, so a type

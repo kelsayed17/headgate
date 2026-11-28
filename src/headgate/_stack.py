@@ -57,7 +57,7 @@ from headgate.ratelimit._transport import RateLimitTransport
 from headgate.retry._policy import SEND_ONCE
 from headgate.retry._tracking import SendTrackingTransport
 from headgate.retry._transport import RetryTransport
-from headgate.security._addresses import AddressGuard, forbidden_reason, resolve_with_loop
+from headgate.security._addresses import AddressGuard, resolve_with_loop
 from headgate.security._credentials import CredentialGuard
 from headgate.security._downgrade import refuse_https_downgrade
 from headgate.security._transport import PinnedHTTPTransport, address_hook
@@ -216,7 +216,8 @@ def _address_guard(http: HttpOptions) -> AddressGuard | None:
     security = http.security
     if not security.block_private_hosts:
         return None
-    return AddressGuard(security.resolver or resolve_with_loop, check=security.check or forbidden_reason)
+    resolver = resolve_with_loop if security.resolver is None else security.resolver
+    return AddressGuard(resolver, check=security.check)
 
 
 def _request_hooks(
