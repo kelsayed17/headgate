@@ -75,6 +75,7 @@ if TYPE_CHECKING:
 __all__ = [
     "CACHE_DEGRADATIONS",
     "CACHE_DEGRADED_EXT",
+    "HAS_BODY",
     "HOST_UNTESTED",
     "MAX_RESPONSE_BYTES",
     "STREAMED",
@@ -365,6 +366,10 @@ STREAMED = Slot[bool]("streamed")
 #: A call's own ``max_response_bytes``, which this layer holds a body up to in place of the client's cap.
 MAX_RESPONSE_BYTES = Slot[int]("max_response_bytes")
 
+#: Marks a call given a body, which this layer sends past the cache: its key is the URL, which two bodies would share.
+#: The call says so, not the request's headers, which the caller may have written (a ``Content-Length: 0``).
+HAS_BODY = Slot[bool]("has_body")
+
 #: Marks a call whose route keeps it out of the cache (``Route(..., cache=None)``): neither looked up nor stored.
 UNCACHED = Slot[bool]("uncached")
 
@@ -639,11 +644,6 @@ def _sharing_key(request: httpx2.Request) -> _SharingKey:
     return str(request.url), headers, timeouts, retry, ttl
 
 
-def _has_body(request: httpx2.Request) -> bool:
-    """Return whether *request* carries a body: a ``Content-Length`` other than ``0``, or a chunked one."""
-    return request.headers.get("content-length", "0") != "0" or "transfer-encoding" in request.headers
-
-
 def _cut_short(request: httpx2.Request, failure: Exception) -> bool:
     """Return whether *failure* is a timeout of *request*'s own deadline-fitted timeouts, not of the ones it asked for.
 
@@ -736,14 +736,12 @@ class ResilientCacheTransport(AsyncCacheTransport):
         if self._ttl is not None:
             stamp_ttl(request, self._ttl, keep=True)
         context = CallContext.find(request)
-        uncached = context is not None and bool(context.get(UNCACHED))
-        # A Range asks for part of a body, which no stored whole one answers and whose 206 is never stored; a request
-        # body is not part of the key, so two requests with different ones would share an entry.
+        uncached = context is not None and bool(context.get(UNCACHED) or context.get(HAS_BODY))
+        # A Range asks for part of a body, which no stored whole one answers and whose 206 is never stored.
         if (
             uncached
             or not self._cache.caches_request(request.method, url_path(request.url))
             or "range" in request.headers
-            or _has_body(request)
         ):
             # Neither looked up nor stored, so nothing here needs its body: it goes up as it arrives.
             return await self._live.handle_async_request(request)

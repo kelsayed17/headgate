@@ -106,6 +106,7 @@ from headgate.breaker import BreakerRegistry, CircuitBreaker
 from headgate.breaker._breaker import BreakerOpenError
 from headgate.breaker._registry import NO_BREAKER
 from headgate.cache._transport import (
+    HAS_BODY,
     MAX_RESPONSE_BYTES,
     STREAMED,
     UNCACHED,
@@ -889,8 +890,7 @@ class Client:
             context.put(STREAMED, value=True)
         context.follow_redirects = follow
         self._stamp_route(context, call, route_options, path)
-        if not body.replayable:
-            context.put(REPLAYABLE_BODY, value=False)
+        _mark_body(context, body, given=options.get("body") is not None)
         self._stamp_idempotency_key(request, context, options.get("idempotency_key"))
         # The cache transport only setdefaults the client's own TTL, so a per-call TTL stamped here wins.
         if "cache_ttl" in options:
@@ -1217,6 +1217,14 @@ class Client:
     def _unsent_site(self, prepared: _Prepared) -> CallSite:
         """Return :meth:`_site` for a call whose current attempt never reached the network: it does not count."""
         return replace(self._site(prepared), attempts=prepared.context.attempt - 1)
+
+
+def _mark_body(context: CallContext, body: Lowered, *, given: bool) -> None:
+    """Say on *context* what the layers below need of a call's *body*: that it was *given*, and if it is one-shot."""
+    if given:
+        context.put(HAS_BODY, value=True)
+    if not body.replayable:
+        context.put(REPLAYABLE_BODY, value=False)
 
 
 def _check_url(url: object) -> None:

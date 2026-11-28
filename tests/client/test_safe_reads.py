@@ -97,3 +97,16 @@ async def test_the_cache_passes_a_bodied_request_by(storage: AsyncSqliteStorage)
 
     assert (stored, answer, hit) == (b"none", b'{"q":"bob"}', b"none")
     assert sent == [b"", b'{"q":"bob"}'], "the bodied stream was answered from the cache"
+
+
+async def test_a_body_under_a_content_length_of_zero_is_still_passed_by(storage: AsyncSqliteStorage) -> None:
+    """Pass a bodied request by whatever ``Content-Length`` the caller wrote: the call, not the header, says so."""
+    sent: list[bytes] = []
+    async with _echoing(storage, sent) as client:
+        await client.get("search", expect=as_bytes)
+        async with client.stream(
+            "search", method="GET", body=Json({"q": "bob"}), headers={"Content-Length": "0"}
+        ) as stream:
+            _ = [chunk async for chunk in stream.aiter_bytes()]
+
+    assert len(sent) == len(("stored", "bodied")), "the bodied stream was answered from the cache"
