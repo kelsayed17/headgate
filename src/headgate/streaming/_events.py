@@ -4,15 +4,19 @@
 """The ``text/event-stream`` grammar (WHATWG HTML, "Server-sent events"), parsed from bytes as they arrive.
 
 :class:`EventParser` is what :meth:`Stream.aiter_events <headgate.streaming.Stream.aiter_events>` and the buffered
-:data:`~headgate.event_stream` reader share. It follows the grammar where httpx2's ``EventSource`` departs from it: the
+:data:`~headgate.as_events` reader share. It follows the grammar where httpx2's ``EventSource`` departs from it: the
 stream is UTF-8 whatever its ``charset`` says, one leading byte order mark is skipped, a block whose data buffer is
 empty (``event: ping``, ``retry:`` or ``id:`` alone) dispatches nothing, and ``retry:`` takes only ASCII digits. Each
 event is still an ``httpx2.ServerSentEvent``, carrying the ``retry`` its own block named, as httpx2's does; the
 reconnection time the grammar keeps across blocks, a ``retry:`` alone included, is :attr:`EventParser.retry`.
+
+:func:`text_decoder` is how a body that is text, not events, is decoded: by its ``charset``, read as UTF-8 when that
+names no text encoding.
 """
 
 from __future__ import annotations
 
+import codecs
 import re
 from typing import TYPE_CHECKING, Final
 
@@ -21,7 +25,19 @@ import httpx2
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-__all__ = ["EventParser", "EventTooLargeError"]
+__all__ = ["EventParser", "EventTooLargeError", "text_decoder"]
+
+
+def text_decoder(encoding: str | None) -> codecs.IncrementalDecoder:
+    """Return an incremental decoder for *encoding*, or UTF-8's when it decodes no text (``base64``, ``undefined``)."""
+    name = encoding or "utf-8"
+    try:
+        # One byte, since a codec that is no text encoding refuses only a non-empty body.
+        b"a".decode(name, "replace")
+    except LookupError, UnicodeError:
+        name = "utf-8"
+    return codecs.getincrementaldecoder(name)("replace")
+
 
 #: A line ending: CRLF, a lone LF or a lone CR. CR and LF never occur inside a UTF-8 sequence, so lines split as bytes.
 _LINE_END: Final = re.compile(rb"\r\n|\r|\n")

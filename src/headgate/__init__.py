@@ -16,7 +16,7 @@ client is written with, and each name only here:
 * the policy values a client usually sets: :class:`RetryPolicy`, :class:`BreakerPolicy`, :class:`Rate`,
   :class:`RateBudget` and :class:`HttpCache`;
 * declared responses: :class:`Expect`, :class:`Reader` and the readers :data:`as_json`, :data:`as_bytes`,
-  :func:`body_reader`, :data:`nothing` and :func:`event_stream`;
+  :data:`as_text`, :func:`body_reader`, :data:`nothing` and :data:`as_events`;
 * codecs: :class:`Codec`, and :func:`reader_for`, :func:`writer_for` and :func:`decode_with`, which build a reader, a
   writer and a decode on any codec;
 * request bodies: :data:`Body`, one of :class:`Json`, :class:`Form`, :class:`Multipart`, :class:`Raw` and a
@@ -64,9 +64,10 @@ from headgate._responses import (
     Reader,
     ResponseCheck,
     as_bytes,
+    as_events,
     as_json,
+    as_text,
     body_reader,
-    event_stream,
     nothing,
 )
 from headgate._view import ViewOptions
@@ -131,11 +132,12 @@ __all__ = [
     "ViewOptions",
     "Writer",
     "as_bytes",
+    "as_events",
     "as_json",
+    "as_text",
     "body_reader",
     "call_view",
     "decode_with",
-    "event_stream",
     "nothing",
     "reader_for",
     "writer_for",

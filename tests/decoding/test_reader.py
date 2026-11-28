@@ -17,7 +17,7 @@ import headgate
 import headgate.errors
 import headgate.msgspec
 import headgate.pydantic
-from headgate import Client, Expect, HttpOptions, Reader, as_bytes, body_reader, event_stream, nothing, reader_for
+from headgate import Client, Expect, HttpOptions, Reader, as_bytes, as_events, as_text, body_reader, nothing, reader_for
 from headgate.cache import conditional
 from headgate.msgspec import CODEC
 from headgate.testing import FakeTransport
@@ -113,13 +113,30 @@ def test_the_old_builders_are_gone() -> None:
 
 
 def test_stock_readers_are_readers() -> None:
-    """Ship ``nothing``, ``as_bytes`` and ``event_stream`` as readers, each named after itself."""
+    """Ship ``nothing``, ``as_bytes``, ``as_text`` and ``as_events`` as readers, each named after itself."""
     assert isinstance(nothing, Reader)
     assert isinstance(as_bytes, Reader)
-    assert isinstance(event_stream, Reader)
+    assert isinstance(as_text, Reader)
+    assert isinstance(as_events, Reader)
     assert repr(nothing) == "Reader(nothing)"
     assert repr(as_bytes) == "Reader(as_bytes)"
-    assert repr(event_stream) == "Reader(event_stream)"
+    assert repr(as_text) == "Reader(as_text)"
+    assert repr(as_events) == "Reader(as_events)"
+    assert not hasattr(headgate, "event_stream")
+
+
+@pytest.mark.parametrize(
+    ("content_type", "body", "text"),
+    [
+        ("text/plain; charset=iso-8859-1", "naïve".encode("latin-1"), "naïve"),
+        ("text/plain; charset=utf-8", "naïve".encode(), "naïve"),
+        ("text/csv", b"a,b\n1,2\n", "a,b\n1,2\n"),
+    ],
+    ids=["latin-1", "utf-8", "no-charset"],
+)
+def test_as_text_decodes_with_the_charset(content_type: str, body: bytes, text: str) -> None:
+    """Return the body as text, decoded by the response's own ``charset``."""
+    assert as_text(httpx2.Response(200, headers={"content-type": content_type}, content=body)) == text
 
 
 @_NOT_READERS
@@ -162,3 +179,10 @@ async def test_every_call_refuses_a_non_reader_expect(verb: str, value: object, 
             await _CALLS[verb](client, cast("Any", value))
     assert str(caught.value) == f"expect= takes a Reader or an Expect (got {named})"
     assert not fake.calls
+
+
+@pytest.mark.parametrize("charset", ["base64", "rot13", "no-such-charset"])
+def test_as_text_reads_a_charset_that_names_no_text_encoding_as_utf_8(charset: str) -> None:
+    """Read UTF-8 where the ``charset`` decodes no text, as ``aiter_lines`` does, where ``response.text`` raises."""
+    content_type = f"text/plain; charset={charset}"
+    assert as_text(httpx2.Response(200, headers={"content-type": content_type}, content="naïve".encode())) == "naïve"

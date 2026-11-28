@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``headgate._responses.event_stream``, the stock server-sent events reader.
+"""``headgate._responses.as_events``, the stock server-sent events reader.
 
 It shares its parser with ``Stream.aiter_events``, and these cases are written against the WHATWG grammar rather than
 that implementation: they are what keeps swapping the parser a no-op. The client tests exercise the one-line
@@ -14,20 +14,20 @@ import json
 
 import pytest
 
-from headgate._responses import event_stream
+from headgate._responses import as_events
 from tests.support.responses import response
 
 _ONE_MEBIBYTE = 1024 * 1024
 
 
 def _data(body: bytes) -> list[str]:
-    """Return the ``data`` of each event :data:`event_stream` reads from *body*."""
-    return [event.data for event in event_stream(response(body))]
+    """Return the ``data`` of each event :data:`as_events` reads from *body*."""
+    return [event.data for event in as_events(response(body))]
 
 
 def test_each_event_keeps_its_fields() -> None:
     """Return the events whole: their ``event``, ``data``, ``id`` and ``retry``, as a stream's events are."""
-    (event,) = event_stream(response(b'event: update\nid: 7\nretry: 3000\ndata: {"id": 1}\n\n'))
+    (event,) = as_events(response(b'event: update\nid: 7\nretry: 3000\ndata: {"id": 1}\n\n'))
     assert (event.event, event.data, event.id, event.retry) == ("update", '{"id": 1}', "7", 3000)
 
 
@@ -78,21 +78,21 @@ def test_one_leading_byte_order_mark_is_skipped() -> None:
 def test_the_body_is_utf_8_whatever_the_charset() -> None:
     """Decode UTF-8, which the grammar requires of every event stream, replacing a malformed sequence."""
     body = "data: café\n\n".encode() + b"data: \xff\n\n"
-    events = event_stream(response(body, headers={"content-type": "text/event-stream; charset=iso-8859-1"}))
+    events = as_events(response(body, headers={"content-type": "text/event-stream; charset=iso-8859-1"}))
     assert [event.data for event in events] == ["café", "�"]
 
 
 @pytest.mark.parametrize("value", ["-5", "+5", " 5", "5.0", "1_000", "٣", ""])
 def test_a_retry_that_is_not_ascii_digits_is_ignored(value: str) -> None:
     """Ignore a ``retry:`` field whose value is anything but ASCII digits."""
-    (event,) = event_stream(response(f"retry: {value}\ndata: x\n\n".encode()))
+    (event,) = as_events(response(f"retry: {value}\ndata: x\n\n".encode()))
     assert event.retry is None
 
 
 def test_an_id_carries_over_to_later_events_until_the_server_resets_it() -> None:
     """Keep the last ``id`` for the events that name none, ignore one holding NUL, and reset it on an empty one."""
     body = b"id: 7\ndata: a\n\ndata: b\n\nid: 8\x009\ndata: c\n\nid\ndata: d\n\n"
-    assert [event.id for event in event_stream(response(body))] == ["7", "7", "7", ""]
+    assert [event.id for event in as_events(response(body))] == ["7", "7", "7", ""]
 
 
 def test_cr_line_endings_parse_like_lf() -> None:
@@ -102,7 +102,7 @@ def test_cr_line_endings_parse_like_lf() -> None:
 
 def test_an_event_name_lasts_one_event() -> None:
     """Name an event after its ``event`` field, and the next one ``message`` again."""
-    events = event_stream(response(b"event: tick\ndata: 1\n\ndata: 2\n\n"))
+    events = as_events(response(b"event: tick\ndata: 1\n\ndata: 2\n\n"))
     assert [event.event for event in events] == ["tick", "message"]
 
 

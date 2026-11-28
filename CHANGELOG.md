@@ -21,6 +21,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   timeout=Timeouts(read=120.0))` sets the phases it names on its paths, under a view's and a call's own timeouts and
   over the policy's. A route timeout longer than the deadline its paths run under (its own, else the policy's) raises
   `ValueError` where it is given.
+- `as_text`, a `Reader[str]` beside `as_bytes`: the body as text, decoded by the response's `charset`, as
+  `Stream.aiter_lines` decodes it (UTF-8 without one, or for one such as `base64` that names no text encoding, where
+  `response.text` raises). Write `expect=as_text` for a plain-text body.
 
 ### Changed
 
@@ -168,6 +171,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   like every other duration: write `await asyncio.sleep(stream.reconnect_after)` for
   `await asyncio.sleep(stream.retry / 1000)`. `Stream.aiter_bytes()` takes `chunk_size=` by keyword only, as the
   other sizes are: write `aiter_bytes(chunk_size=1024)` for `aiter_bytes(1024)`.
+- `event_stream` is `as_events`, a reader beside `as_bytes`, `as_json` and `as_text`, where its name said it was a
+  stream: write `expect=as_events` for `expect=event_stream`. `events()` still opens a stream.
 
 ### Removed
 

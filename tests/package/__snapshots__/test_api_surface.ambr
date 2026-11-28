@@ -474,7 +474,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['Auth', 'AuthError', 'BearerAuth', 'Body', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CallPolicy', 'Client', 'ClientError', 'ClientTimeoutError', 'Codec', 'EncodedBody', 'Expect', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'Paginated', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_json', 'body_reader', 'call_view', 'decode_with', 'event_stream', 'nothing', 'reader_for', 'writer_for']
+  __all__ = ['Auth', 'AuthError', 'BearerAuth', 'Body', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CallPolicy', 'Client', 'ClientError', 'ClientTimeoutError', 'Codec', 'EncodedBody', 'Expect', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'Paginated', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_events', 'as_json', 'as_text', 'body_reader', 'call_view', 'decode_with', 'nothing', 'reader_for', 'writer_for']
   class Auth(Auth, ABC)()
       property credential_headers
       def credential_identity(self) -> 'bytes'
@@ -690,11 +690,12 @@
       key follow_redirects: bool (optional)
   type Writer[T] = Callable[[T], EncodedBody]
   as_bytes: Reader[bytes] = Reader(as_bytes)
+  as_events: Reader[list[httpx2.ServerSentEvent]] = Reader(as_events)
   as_json: Reader[object] = Reader(as_json)
+  as_text: Reader[str] = Reader(as_text)
   def body_reader(decode: 'Callable[[bytes], T]', /, *, empty: 'bytes | None' = None, refuse: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
   def call_view(request: 'httpx2.Request') -> 'CallView | None'
   def decode_with(codec: 'Codec', content: 'bytes', type_: 'TypeForm[T]') -> 'T'
-  event_stream: Reader[list[httpx2.ServerSentEvent]] = Reader(event_stream)
   nothing: Reader[None] = Reader(nothing)
   def reader_for(codec: 'Codec', type_: 'TypeForm[T]', *, allow_empty_body: 'bool' = False, refuse: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
   def writer_for(codec: 'Codec', type_: 'TypeForm[T]') -> 'Writer[T]'

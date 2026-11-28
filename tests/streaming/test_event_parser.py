@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``EventParser``, the incremental event-stream parser behind ``Stream.aiter_events`` and ``event_stream``.
+"""``EventParser``, the incremental event-stream parser behind ``Stream.aiter_events`` and ``as_events``.
 
 The grammar itself is covered through those two readers; these cases are the parser's own: a body cut into chunks at
 any point, and the exact bounds of ``max_event_size``.

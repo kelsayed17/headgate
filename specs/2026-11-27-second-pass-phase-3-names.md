@@ -57,8 +57,9 @@ a public module exports, and the six top-level errors move to a private module t
    implementation: the plan first made it a required `str`). `None` is left for a `CallInfo` built by hand, as tests
    of observers and every layer's own test build one, so no test of the retry properties changes beyond spellings.
    `CallInfo.template` replaces `route`.
-7. **`as_text` lands here**: it is `Reader(lambda r: r.text)`, one line beside `as_events`, and 3.5's rename names it.
-   5.3's refusal of `Reader(str)` pointing to it stays phase 5's.
+7. **`as_text` lands here**, beside `as_events`, since 3.5's rename names it. It decodes as `Stream.aiter_lines` does,
+   with the decoder the two now share (changed during implementation: the plan first wrapped `response.text`, which
+   raises for a `charset` such as `base64`). 5.3's refusal of `Reader(str)` pointing to it stays phase 5's.
 8. **The six top-level errors move to `headgate/_errors.py`, with every other error, `ErrorDetails` and `Problem`.**
    `headgate.errors` imports the nine, `ErrorDetails` and `Problem` from it, and nothing else, so
    `from headgate.errors import ClientError` raises `ImportError`. Internal modules import the six from

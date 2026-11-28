@@ -10,16 +10,16 @@ mapping (and the breaker charge that goes with a network failure) is the client'
 
 from __future__ import annotations
 
-import codecs
 import functools
 from typing import TYPE_CHECKING, Final, Protocol, final
 
 from headgate._failures import parse_error
 from headgate.errors import ResponseTooLargeError
 from headgate.retry._policy import NETWORK_ERRORS
-from headgate.streaming._events import EventParser, EventTooLargeError
+from headgate.streaming._events import EventParser, EventTooLargeError, text_decoder
 
 if TYPE_CHECKING:
+    import codecs
     from collections.abc import AsyncIterator, Callable, Iterator
 
     import httpx2
@@ -179,7 +179,7 @@ class OpenStream:
         no text encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is, and a body its ``charset``
         cannot decode raises ``ResponseParseError``.
         """
-        decoder = _text_decoder(self._response.encoding)
+        decoder = text_decoder(self._response.encoding)
         chunks = _Guarded(self._response.aiter_bytes(), self._fail)
         unreadable = functools.partial(parse_error, resp=self._response, site=self._site)
         too_large = functools.partial(self._too_large, f"line over {max_line_size} characters")
@@ -210,17 +210,6 @@ class OpenStream:
         """Return the error for *what* outgrew its limit: the body's fault, so it charges no breaker."""
         message = f"{what} from {self._site.method} {self._site.url}"
         return ResponseTooLargeError(message, **self._site.details(self._response))
-
-
-def _text_decoder(encoding: str | None) -> codecs.IncrementalDecoder:
-    """Return an incremental decoder for *encoding*, or UTF-8's when it decodes no text (``base64``, ``undefined``)."""
-    name = encoding or "utf-8"
-    try:
-        # One byte, since a codec that is no text encoding refuses only a non-empty body.
-        b"a".decode(name, "replace")
-    except LookupError, UnicodeError:
-        name = "utf-8"
-    return codecs.getincrementaldecoder(name)("replace")
 
 
 async def _lines(
