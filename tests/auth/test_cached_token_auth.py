@@ -790,3 +790,14 @@ class TestNoBaseConstructor:
             await client.get("x", expect=RESPONSE)
 
         assert auth.mints == _MINT_AND_RE_MINT
+
+
+@pytest.mark.parametrize("hook", ["skips", "attach"])
+def test_an_async_token_hook_is_refused_when_defined(hook: str) -> None:
+    """Refuse a coroutine-function ``skips`` or ``attach`` (R2): a coroutine is truthy, and is never awaited."""
+
+    async def coroutine(*_args: object) -> None:
+        """Stand in for an ``async def`` hook."""
+
+    with pytest.raises(TypeError, match=rf"_Async\.{hook} is a coroutine function, which CachedTokenAuth calls"):
+        type("_Async", (_CountingAuth,), {hook: coroutine, "credential_headers": frozenset({"x-token"})})
