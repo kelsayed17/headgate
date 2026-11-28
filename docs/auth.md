@@ -75,7 +75,9 @@ api_key_header = StaticHeaderAuth({"x-api-key": api_key})
 query_key = QueryParamAuth({"api_key": api_key})
 ```
 
-`StaticHeaderAuth({})` is a no-op, so a builder with no key configured can return one rather than `None`.
+Each stamps something: an empty mapping raises `ValueError`, so a builder with no key configured passes `auth=None`.
+`BearerAuth` refuses an empty or blank token (the unset environment variable) and one that already starts with
+`Bearer `, which it adds itself.
 `QueryParamAuth` registers its parameter names as secret, so they are redacted from every error message and kept out of
 the cache; prefer a header where the provider allows one (see [security](security.md#redaction)).
 

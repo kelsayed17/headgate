@@ -35,7 +35,18 @@ from typing import Any, ClassVar, Final, cast, final, get_args, get_origin, over
 import httpx2
 
 from headgate._body import read_capped
-from headgate._core import CallContext, Clock, Slot, Timing, current_timing, origin_text, type_text
+from headgate._core import (
+    CallContext,
+    Clock,
+    Slot,
+    Timing,
+    check_headers,
+    check_kind,
+    check_str_mapping,
+    current_timing,
+    origin_text,
+    type_text,
+)
 from headgate._errors import ClientError
 from headgate._failures import CallSite, loggable_url, mint_error, shorten, transport_error
 from headgate._url import redact_secrets, register_secret_params
@@ -434,15 +445,32 @@ def _carries(auth: Auth, request: httpx2.Request) -> bool:
     )
 
 
+#: The scheme :class:`BearerAuth` sends its token under, with the space after it.
+_BEARER: Final = "Bearer "
+
+
+def _refuse_empty(auth: Auth, stamped: Mapping[str, str], what: str) -> None:
+    """Refuse a static *auth* given no *what* to stamp: ``auth=None`` is the client without a credential."""
+    if not stamped:
+        msg = f"{type(auth).__name__} needs at least one {what} to stamp: pass auth=None for a client without a key"
+        raise ValueError(msg)
+
+
 class StaticHeaderAuth(Auth):
     """Stamp a fixed set of headers onto every request, without overriding a header the caller set.
 
-    Covers the static API key and static bearer cases (an ``Authorization: Bearer`` or ``x-api-key`` header). An empty
-    mapping is a no-op, so a builder with no key configured returns ``StaticHeaderAuth({})`` rather than ``None``.
+    Covers the static API key and static bearer cases (an ``Authorization: Bearer`` or ``x-api-key`` header). It stamps
+    at least one header: a client with no key configured is built with ``auth=None``.
     """
 
     def __init__(self, headers: Mapping[str, str]) -> None:
-        """Copy *headers*, so a later change to the caller's mapping does not reach the auth."""
+        """Copy *headers*, so a later change to the caller's mapping does not reach the auth.
+
+        :raises TypeError: for *headers* that do not map names to ``str`` values, such as a list of pairs.
+        :raises ValueError: for no headers, which would stamp nothing: pass ``auth=None`` for a client without a key.
+        """
+        check_headers("headers", headers)
+        _refuse_empty(self, headers, "header")
         self._headers = dict(headers)
 
     @property
@@ -473,8 +501,20 @@ class BearerAuth(StaticHeaderAuth):
     """Send a static bearer token as ``Authorization: Bearer <token>``: the most common :class:`StaticHeaderAuth`."""
 
     def __init__(self, token: str) -> None:
-        """Send *token* on every request to a trusted origin."""
-        super().__init__({"Authorization": f"Bearer {token}"})
+        """Send *token* on every request to a trusted origin.
+
+        :raises TypeError: for a *token* that is not a ``str``.
+        :raises ValueError: for an empty or blank *token* (an unset environment variable, say), which would send
+            ``Bearer `` alone, and for one that already starts with ``Bearer ``, which would send the scheme twice.
+        """
+        check_kind("token", token, str, "the token, a str")
+        if not token.strip():
+            msg = "BearerAuth(token=) takes a token that is not empty or blank: is the variable holding it set?"
+            raise ValueError(msg)
+        if token[: len(_BEARER)].lower() == _BEARER.lower():
+            msg = "BearerAuth(token=) takes the token alone, without its 'Bearer ' scheme, which it adds itself"
+            raise ValueError(msg)
+        super().__init__({"Authorization": f"{_BEARER}{token}"})
 
 
 class QueryParamAuth(Auth):
@@ -488,7 +528,13 @@ class QueryParamAuth(Auth):
     """
 
     def __init__(self, params: Mapping[str, str]) -> None:
-        """Copy *params* and register their names as secret, for redaction from error messages and the cache."""
+        """Copy *params* and register their names as secret, for redaction from error messages and the cache.
+
+        :raises TypeError: for *params* that do not map names to ``str`` values, such as a bare ``str``.
+        :raises ValueError: for no parameters, which would stamp nothing: pass ``auth=None`` for a client without a key.
+        """
+        check_str_mapping("params", params, "a mapping of parameter names to str values, such as {'api_key': key}")
+        _refuse_empty(self, params, "parameter")
         self._params = dict(params)
         register_secret_params(self._params)
 
