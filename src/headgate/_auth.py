@@ -699,16 +699,26 @@ def _existing_state[T](auth: CachedTokenAuth[T]) -> _TokenState[T] | None:
     return cast("_TokenState[T]", state) if isinstance(state, _TokenState) and state.owner == id(auth) else None
 
 
-def check_timing(auth: Auth | None, timing: Timing) -> None:
-    """Refuse a :class:`CachedTokenAuth` that already runs on another clock than *timing*'s, changing nothing.
+def check_timing(auth: Auth | None, timing: Timing, shared: Iterable[tuple[str, Clock]] = ()) -> None:
+    """Refuse a :class:`CachedTokenAuth`, or a *shared* object, that already runs on another clock than *timing*'s.
 
     ``Client()`` calls it before it builds anything, so a refused client leaves no ``httpx2.AsyncClient`` behind, and
     :func:`hold_timing` last, once nothing else can fail. An auth with no state yet, or whose state holds no token,
-    started no mint and was given to no client, may move to *timing*.
+    started no mint and was given to no client, may move to *timing*. A *shared* object, named by what it was given as,
+    with the clock it was built on, cannot move: a shared rate budget or breaker registry measures one quota or
+    cooldown for every client, so its clients run on the timing it was built on.
 
     :raises TypeError: when the auth already runs on another clock: a client was built with it on another timing, or
-        it holds a token or minted on another, whose lifetime that clock measures.
+        it holds a token or minted on another, whose lifetime that clock measures; and when a shared object does.
     """
+    for what, clock in shared:
+        if clock != timing.clock:
+            msg = (
+                f"the {what} runs on another timing than this client is built on, so the two would measure one quota "
+                "or cooldown on two clocks: build it inside the same timing_override() or TestClock.install() block "
+                "as its clients"
+            )
+            raise TypeError(msg)
     state = _existing_state(auth) if isinstance(auth, CachedTokenAuth) else None
     if state is None or state.clock == timing.clock:
         return

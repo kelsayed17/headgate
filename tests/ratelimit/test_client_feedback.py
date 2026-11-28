@@ -50,20 +50,30 @@ class _Server:
         return httpx2.Response(200, content=b"{}")
 
 
+#: The timing each budget :func:`_budget` built runs on, which the clients sharing it are built on too.
+_TIMINGS: dict[RateBudget, Timing] = {}
+
+
 def _budget(clock: TestClock) -> RateBudget:
     """Return a generous budget on *clock*."""
-    return built_on(Timing(clock=clock, sleep=clock.sleep, wall_clock=clock), lambda: RateBudget(Rate.per_second(100)))
+    timing = Timing(clock=clock, sleep=clock.sleep, wall_clock=clock)
+    budget = built_on(timing, lambda: RateBudget(Rate.per_second(100)))
+    _TIMINGS[budget] = timing
+    return budget
 
 
 def _client(
     budget: RateBudget, server: _Server, *, cache: HttpCache | None = None, recorder: Recorder | None = None
 ) -> Client:
-    """Return a client spending *budget* against *server*, sending each call once."""
-    return Client(
-        base_url=f"https://{_HOST}",
-        policy=CallPolicy(rate=budget, retry=None, cache=cache),
-        http=HttpOptions(transport=httpx2.MockTransport(server)),
-        observers=() if recorder is None else (recorder,),
+    """Return a client spending *budget* against *server*, sending each call once, on the budget's timing."""
+    return built_on(
+        _TIMINGS[budget],
+        lambda: Client(
+            base_url=f"https://{_HOST}",
+            policy=CallPolicy(rate=budget, retry=None, cache=cache),
+            http=HttpOptions(transport=httpx2.MockTransport(server)),
+            observers=() if recorder is None else (recorder,),
+        ),
     )
 
 

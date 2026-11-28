@@ -24,14 +24,16 @@ from headgate import (
     Rate,
     RateBudget,
     RetryPolicy,
+    Route,
     UpstreamStatusError,
     nothing,
 )
 from headgate._core import Timing as CoreTiming
 from headgate._core import current_timing
 from headgate.breaker import BreakerRegistry, CircuitBreaker
+from headgate.policy import policy_disabled
 from headgate.retry import Backoff, RetryBudget, RetryShare
-from headgate.testing import FakeTransport, FaultyTransport, Slow, TestClock, instant_retries
+from headgate.testing import FakeTransport, FaultyTransport, Slow, TestClock, budget_for, instant_retries
 from headgate.testing._time import _SETTLE_TURNS
 from headgate.timing import Timing
 
@@ -388,3 +390,38 @@ async def test_a_wait_the_server_asks_for_draws_no_random_number() -> None:
     await client.get("x", expect=nothing)
     assert len(draws) == 1, "the second retry backs off; the first waits the second the server asked"
     assert clock.sleeps == [1.0, 4.0]
+
+
+@pytest.mark.parametrize(
+    ("policy", "what"),
+    [
+        (lambda shared, _registry: CallPolicy(rate=shared), "RateBudget given as rate="),
+        (lambda shared, _registry: CallPolicy(routes=(Route("/x", rate=shared),)), "RateBudget given as rate="),
+        (lambda _shared, registry: CallPolicy(breaker=registry), "BreakerRegistry given as breaker="),
+    ],
+    ids=["rate", "route-rate", "breaker"],
+)
+def test_a_shared_object_on_another_timing_is_refused(
+    policy: Callable[[RateBudget, BreakerRegistry], CallPolicy], what: str
+) -> None:
+    """Refuse a client built on one timing given a budget or registry built on another, as a token auth is refused."""
+    shared, registry = RateBudget(Rate.per_second(1)), BreakerRegistry()
+    with TestClock().install(), pytest.raises(TypeError, match=rf"^the {what} runs on another timing than this client"):
+        Client(base_url="https://h.test", policy=policy(shared, registry))
+
+
+def test_a_shared_object_on_the_clients_timing_is_taken() -> None:
+    """Take a budget and a registry built in the block the client is built in."""
+    clock = TestClock()
+    with clock.install():
+        shared, registry = RateBudget(Rate.per_second(1)), BreakerRegistry()
+        client = Client(base_url="https://h.test", policy=CallPolicy(rate=shared, breaker=registry))
+    assert budget_for(client) is shared
+
+
+def test_a_client_built_with_its_policy_off_ignores_a_shared_object_on_another_timing() -> None:
+    """Build a client under ``policy_disabled()`` whatever timing its shared objects run on: it uses neither."""
+    shared, registry = RateBudget(Rate.per_second(1)), BreakerRegistry()
+    with TestClock().install(), policy_disabled():
+        client = Client(base_url="https://h.test", policy=CallPolicy(rate=shared, breaker=registry))
+    assert budget_for(client) is not shared

@@ -31,7 +31,7 @@ import contextlib
 import copy
 import functools
 import math
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
@@ -107,7 +107,7 @@ from headgate._url import CallUrl, render_path, route_template, sanitize_url
 from headgate._view import KEEP, ROOT_DEFAULTS, VIEW_KEYS, ViewOptions
 from headgate.breaker import BreakerRegistry, CircuitBreaker
 from headgate.breaker._breaker import BreakerOpenError, Transition, Verdict
-from headgate.breaker._registry import NO_BREAKER, Breaker
+from headgate.breaker._registry import NO_BREAKER, Breaker, clock_of
 from headgate.cache._policy import HttpCache
 from headgate.cache._transport import (
     HAS_BODY,
@@ -123,13 +123,13 @@ from headgate.errors import CircuitOpenError, DecodeError, ForbiddenDestinationE
 from headgate.events import BreakerChanged, CallFinished, CallInfo, CallStarted
 from headgate.pagination import Pager, PageRequest, WritingPager
 from headgate.pagination._paginated import PageWalk, Paginated, check_page_budget
-from headgate.ratelimit._budget import BudgetPausedError, RateBudget
+from headgate.ratelimit._budget import BudgetPausedError, RateBudget, pacer_of
 from headgate.ratelimit._budgets import CALL_BUDGET, Lane, PathBudgets
 from headgate.ratelimit._rate import Rate
 from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE, RetryPolicy
 from headgate.streaming import Stream
 from headgate.streaming._stream import OpenStream
-from headgate.timing import current_timing, timing_override
+from headgate.timing import Clock, current_timing, timing_override
 
 __all__ = ["Built", "Client", "Method", "built_with"]
 
@@ -326,7 +326,7 @@ class Client:
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
         self._source = httpx2.URL(base_url).netloc.decode("ascii")  # host, and a port other than the default
         self._timing = current_timing()
-        check_timing(auth, self._timing)
+        check_timing(auth, self._timing, () if self._policy_off else _shared_clocks(policy))
         self._breakers = _registry_of(policy, self._timing)
         self._response_check = http.response_check
         self._max_response_bytes = http.max_response_bytes
@@ -1243,6 +1243,16 @@ def _check_auth(auth: object) -> None:
             "super().__init_subclass__(**kwargs) there"
         )
         raise TypeError(msg)
+
+
+def _shared_clocks(policy: CallPolicy) -> Iterator[tuple[str, Clock]]:
+    """Yield what *policy* shares with other clients, named by the option it was given as, with the clock it runs on."""
+    rates = [policy.rate, *(route.options.get("rate") for route in policy.routes)]
+    for rate in rates:
+        if isinstance(rate, RateBudget):
+            yield "RateBudget given as rate=", pacer_of(rate).clock
+    if isinstance(policy.breaker, BreakerRegistry):
+        yield "BreakerRegistry given as breaker=", clock_of(policy.breaker)
 
 
 def _layered_timeout(over: Timeouts | None, under: Timeouts | None) -> Timeouts | None:

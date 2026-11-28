@@ -21,6 +21,7 @@ loops in different threads can share a registry; each breaker guards its own sta
 """
 
 import threading
+import weakref
 from collections import OrderedDict
 from collections.abc import Generator, Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -28,11 +29,11 @@ from typing import Final, Protocol, override
 
 import httpx2
 
-from headgate._core import BreakerState, check_kind, current_timing, origin_of, origin_text, timing_override
+from headgate._core import BreakerState, Clock, check_kind, current_timing, origin_of, origin_text, timing_override
 from headgate.breaker._breaker import CircuitBreaker, TransitionListener, Verdict
 from headgate.breaker._policy import BreakerPolicy
 
-__all__ = ["DEFAULT_MAX_HOSTS", "NO_BREAKER", "Breaker", "BreakerRegistry"]
+__all__ = ["DEFAULT_MAX_HOSTS", "NO_BREAKER", "Breaker", "BreakerRegistry", "clock_of"]
 
 #: How many breakers a registry holds by default before it drops the least recently used closed one.
 DEFAULT_MAX_HOSTS: Final = 1024
@@ -80,7 +81,7 @@ class BreakerRegistry:
     on the timing current when the registry is built (:func:`headgate.timing.current_timing`), whenever it builds it.
     """
 
-    __slots__ = ("_breakers", "_lock", "_max_hosts", "_policy", "_timing")
+    __slots__ = ("__weakref__", "_breakers", "_lock", "_max_hosts", "_policy", "_timing")
 
     def __init__(
         self,
@@ -100,6 +101,7 @@ class BreakerRegistry:
         self._policy = policy
         self._max_hosts = max_hosts
         self._timing = current_timing()
+        _CLOCKS[self] = self._timing.clock
         self._lock = threading.Lock()
         self._breakers: OrderedDict[_Key, CircuitBreaker] = OrderedDict()
 
@@ -167,3 +169,12 @@ class BreakerRegistry:
     def __repr__(self) -> str:
         states = {breaker.name: str(breaker.state) for breaker in self.breakers()}
         return f"BreakerRegistry({states!r})"
+
+
+#: The clock each registry's breakers run on, read without reaching into the registry.
+_CLOCKS: Final[weakref.WeakKeyDictionary[BreakerRegistry, Clock]] = weakref.WeakKeyDictionary()
+
+
+def clock_of(registry: BreakerRegistry) -> Clock:
+    """Return the clock *registry*'s breakers run on: the timing's current when it was built."""
+    return _CLOCKS[registry]

@@ -60,14 +60,16 @@ def _client(
     *,
     policy: CallPolicy | None = None,
     recorder: Recorder | None = None,
+    clock: TestClock | None = None,
 ) -> Client:
-    """Return a client against *handler*, sending each call once, on a default breaker of its own."""
-    return Client(
-        base_url=_ORIGIN,
-        policy=dataclasses.replace(policy or CallPolicy(retry=None), rate=_RATE),
-        http=HttpOptions(transport=httpx2.MockTransport(handler)),
-        observers=() if recorder is None else (recorder,),
-    )
+    """Return a client against *handler*, sending each call once, on a default breaker of its own, on *clock*."""
+    with clock.install() if clock is not None else contextlib.nullcontext():
+        return Client(
+            base_url=_ORIGIN,
+            policy=dataclasses.replace(policy or CallPolicy(retry=None), rate=_RATE),
+            http=HttpOptions(transport=httpx2.MockTransport(handler)),
+            observers=() if recorder is None else (recorder,),
+        )
 
 
 def _raising(exc: type[httpx2.TransportError]) -> Callable[[httpx2.Request], httpx2.Response]:
@@ -133,6 +135,7 @@ async def test_every_transition_is_reported_once_by_the_call_that_caused_it() ->
         lambda _request: httpx2.Response(next(statuses), content=b"{}"),
         policy=CallPolicy(retry=None, breaker=breaker),
         recorder=recorder,
+        clock=clock,
     )
 
     for _ in range(_THRESHOLD):
@@ -190,9 +193,12 @@ class _GateReader(httpx2.AsyncBaseTransport):
         return httpx2.Response(self._status, content=b"{}")
 
 
-def _gated_client(wire: _GateReader, policy: CallPolicy) -> Client:
-    """Return a client over *wire* with *policy*."""
-    return Client(base_url=_ORIGIN, policy=dataclasses.replace(policy, rate=_RATE), http=HttpOptions(transport=wire))
+def _gated_client(wire: _GateReader, policy: CallPolicy, clock: TestClock | None = None) -> Client:
+    """Return a client over *wire* with *policy*, built on *clock* (as its breaker registry is) when given one."""
+    with clock.install() if clock is not None else contextlib.nullcontext():
+        return Client(
+            base_url=_ORIGIN, policy=dataclasses.replace(policy, rate=_RATE), http=HttpOptions(transport=wire)
+        )
 
 
 async def test_the_gate_opens_when_another_call_trips_the_breaker_mid_call() -> None:
@@ -209,9 +215,9 @@ async def test_the_gate_opens_when_another_call_trips_the_breaker_mid_call() -> 
             raise RuntimeError
 
     healthy = _GateReader(200)
-    await _gated_client(healthy, CallPolicy(retry=None, breaker=breaker)).get("x", expect=RESPONSE)
+    await _gated_client(healthy, CallPolicy(retry=None, breaker=breaker), clock).get("x", expect=RESPONSE)
     tripping = _GateReader(200, before=trip)
-    await _gated_client(tripping, CallPolicy(retry=None, breaker=breaker)).get("x", expect=RESPONSE)
+    await _gated_client(tripping, CallPolicy(retry=None, breaker=breaker), clock).get("x", expect=RESPONSE)
 
     assert (healthy.readings, tripping.readings) == ([False], [True])
 
@@ -234,7 +240,7 @@ async def test_the_gate_stays_shut_for_a_call_from_before_the_trip() -> None:
         clock.advance(_COOLDOWN)
 
     stale = _GateReader(200, before=trip_and_cool_down)
-    await _gated_client(stale, CallPolicy(retry=None, breaker=breaker)).get("x", expect=RESPONSE)
+    await _gated_client(stale, CallPolicy(retry=None, breaker=breaker), clock).get("x", expect=RESPONSE)
 
     assert stale.readings == [True]
 
@@ -245,13 +251,13 @@ async def test_the_probe_is_not_stopped_by_its_own_probe_slot() -> None:
     breaker = built_on(
         Timing(clock=clock), lambda: BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN))
     )
-    failing = _gated_client(_GateReader(503), CallPolicy(retry=None, breaker=breaker))
+    failing = _gated_client(_GateReader(503), CallPolicy(retry=None, breaker=breaker), clock)
     with pytest.raises(UpstreamStatusError):
         await failing.get("x", expect=RESPONSE)
     clock.advance(_COOLDOWN)
 
     probe = _GateReader(200)
-    await _gated_client(probe, CallPolicy(retry=None, breaker=breaker)).get("x", expect=RESPONSE)
+    await _gated_client(probe, CallPolicy(retry=None, breaker=breaker), clock).get("x", expect=RESPONSE)
 
     assert probe.readings == [False]
 
