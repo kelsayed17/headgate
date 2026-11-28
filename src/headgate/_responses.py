@@ -22,7 +22,6 @@ from code over ``response.json()``, or nesting too deep to parse) become ``Respo
 """
 
 import codecs
-import enum
 import functools
 import json
 import math
@@ -136,21 +135,30 @@ def reader_hint(value: object) -> str | None:
     return f"write reader({type_text(value)}) with a flavor's reader, from headgate.msgspec or headgate.pydantic"
 
 
-#: Builtins that take bytes but misread every body: ``bool`` reads any as ``True``, the others hold its byte values.
-_MISREADING: Final = frozenset({bool, tuple, set, frozenset})
+#: The builtins whose own constructor misreads a body's bytes: ``str`` returns their ``repr``, ``bool`` reads any body
+#: but an empty one as ``True``, and the containers hold the byte values, which ``dict`` cannot take.
+_MISREADING: Final = (str, bool, list, tuple, set, frozenset, dict)
 
 
-def _is_trap(decode: object) -> bool:
-    """Return whether *decode*, a class or a type given as a function of a body's bytes, would misread every body.
+def _misreading_hint(decode: object) -> str | None:
+    """Return what to write for *decode*, given as a function of a body's bytes, when it would misread every body.
 
-    A builtin with a reader of its own (``str`` returned the bytes' ``repr``), a builtin that misreads every body
-    (``bool``, ``tuple``, ``set``, ``frozenset``), a model class (which takes its fields, not bytes), an enum and a type
-    expression (``list[Row]``) are; a class built from bytes (``io.BytesIO``, ``bytearray``) decodes the body as it is
-    written to.
+    A type expression (``list[Row]``) and a model class (which takes its fields, not bytes) take a flavor's reader,
+    and so do ``bool``, ``tuple``, ``set`` and ``frozenset``; ``str``, ``bytes``, ``dict`` and ``list`` have readers of
+    their own. A class of one's own that keeps a misreading builtin's constructor (``class Symbol(str)``) is built
+    from the text or the JSON the bytes hold. Any other class (``io.BytesIO``, ``int``, an enum of bytes, a ``str``
+    whose ``__new__`` decodes them) is built from the bytes as it is written to: ``None``.
     """
-    if not isinstance(decode, type):
-        return True
-    return decode in _READERS_FOR or decode in _MISREADING or is_model_class(decode) or issubclass(decode, enum.Enum)
+    hint = reader_hint(decode)
+    if hint is None or not isinstance(decode, type) or is_model_class(decode) or decode is bytes:
+        return hint
+    for base in _MISREADING:
+        if issubclass(decode, base) and decode.__new__ is base.__new__ and decode.__init__ is base.__init__:
+            if decode is base:
+                return hint
+            built_from = "content.decode()" if base is str else "json.loads(content)"
+            return f"write body_reader(lambda content: {decode.__name__}({built_from}))"
+    return None
 
 
 def _name_of(read: object) -> str:
@@ -416,8 +424,11 @@ def body_reader[T](
     code about the subject (an unknown instrument, a rejected order) in the value for the caller.
 
     :raises TypeError: for a *decode* or a ``refuse`` that cannot be called, an ``empty`` that is not ``bytes``, and a
-        *decode* that is a class or a type, saying which reader to write: ``body_reader(str)`` would return the body's
-        ``repr``, and a model class would hold the bytes.
+        *decode* that is a class or a type that would misread every body, saying which reader to write:
+        ``body_reader(str)`` would return the body's ``repr``, a model class would hold the bytes, and ``bool``,
+        ``tuple``, ``set`` and ``frozenset``, and a class of your own that keeps a builtin's constructor
+        (``class Symbol(str)``), would read the bytes as those builtins do. A class built from the bytes, such as
+        ``io.BytesIO``, ``int`` or an enum of bytes, is taken.
     """
     return _body_reader(decode, empty=empty, refuse=refuse, name=_name_of(decode))
 
@@ -435,7 +446,7 @@ def _body_reader[T](
     :raises TypeError: as :func:`body_reader` documents.
     """
     check_callable("body_reader(decode)", decode, "a function of the body's bytes")
-    if (hint := reader_hint(decode)) is not None and _is_trap(decode):
+    if (hint := _misreading_hint(decode)) is not None:
         if decode is bytes and refuse is not None:
             # as_bytes takes no refuse=, so the bytes are read with a function that hands them on as they are.
             hint = "write body_reader(lambda content: content, refuse=...) to check the body's bytes"

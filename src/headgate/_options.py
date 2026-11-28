@@ -508,12 +508,13 @@ def _normalized_origin(text: str) -> str:
     except httpx2.InvalidURL:
         url = None
     if url is None or not _is_bare_origin(url):
-        msg = f"trusted origin must be an http(s) origin such as 'https://host[:port]' (got {text!r})"
+        shown = repr(shorten(_AFTER_QUERY.sub("…", hide_userinfo(text), count=1)))
+        msg = f"trusted origin must be an http(s) origin such as 'https://host[:port]' (got {shown})"
         raise ValueError(msg)
     return origin_text(origin_of(url))
 
 
-#: What a proxy URL's error calls a URL httpx2 cannot parse, or one with no scheme.
+#: What a proxy URL's error calls a URL httpx2 cannot parse, or one with no scheme, or a scheme without its ``//``.
 _MALFORMED = "malformed"
 
 
@@ -523,7 +524,10 @@ def _check_proxy(proxy: str) -> None:
         url = httpx2.URL(proxy)
     except httpx2.InvalidURL:
         url = None
-    scheme = _MALFORMED if url is None else url.scheme or _MALFORMED
+    scheme = _MALFORMED
+    # A scheme counts with its "//": in "token:x@host" httpx2 reads the user, a secret, as one, which no message shows.
+    if url is not None and url.scheme and proxy[len(url.scheme) :].startswith("://"):
+        scheme = url.scheme
     if scheme not in _PROXY_SCHEMES:
         msg = f"proxy must be an http, https or socks5 URL (got a {scheme} URL)"
         raise ValueError(msg)

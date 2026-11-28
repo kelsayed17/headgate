@@ -37,7 +37,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `resolver=`), and `check=None` is a `TypeError` naming the default: leave it out. A cached response is served
   without its address being vetted again, so a guarded client keeps cache entries apart by its check and resolver: a
   client whose check refuses a host is never served what a client with a laxer check fetched from it, even once that
-  client and its check are gone.
+  client and its check are gone. Guards are told apart by their objects, a bound method by its object and its function
+  (`resolver=dns.resolve` given to two clients is one resolver), so clients share entries when they are given the same
+  check and resolver objects, and two equal but separate ones keep apart: build each once, and pass that object.
 - `headgate.CallUrl`, `headgate.RawContent`, `headgate.UploadFiles` and `headgate.UploadFile`, the types of a verb's
   URL, of `Raw(content)`, of `Multipart(files)` and of one file in it, which their signatures named but nothing
   exported: a wrapper writes
@@ -424,11 +426,14 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `'<Response [200 OK]>'`. Write `expect=as_text` for `Reader(str)`, `as_bytes` for `Reader(bytes)`, `as_json` for
   `Reader(dict)` or `Reader(list)`, and `Reader(lambda r: Cls(r))` for a class that is built from a response.
   `body_reader(decode)` refuses the classes that misread every body the same way, where `body_reader(str)` returned
-  the body's `repr` (`"b'...'"`), `body_reader(bool)` `True` for any body, `body_reader(tuple)` its byte values and
-  `body_reader(Order)` an `Order` holding the bytes: write `as_text`, `as_bytes` or `as_json` for a builtin with a
-  reader of its own, and a flavor's `reader(Order)` for any other builtin (`bool`, `tuple`, `set`, `frozenset`), a
-  model (a dataclass, a `NamedTuple`, a `TypedDict`, a msgspec `Struct`, a pydantic model, an attrs class), an enum or
-  a type expression. A class that is built from the bytes, such as `io.BytesIO`, is taken as before.
+  the body's `repr` (`"b'...'"`), `body_reader(bool)` `True` for any body but an empty one, `body_reader(tuple)` its
+  byte values and `body_reader(Order)` an `Order` holding the bytes: write `as_text`, `as_bytes` or `as_json` for a
+  builtin with a reader of its own, and a flavor's `reader(Order)` for any other builtin (`bool`, `tuple`, `set`,
+  `frozenset`), a model (a dataclass, a `NamedTuple`, a `TypedDict`, a msgspec `Struct`, a pydantic model, an attrs
+  class) or a type expression. A class of your own that keeps such a builtin's constructor, `class Symbol(str)` or
+  `class Rows(list)`, is refused alike: write `body_reader(lambda content: Symbol(content.decode()))`, or
+  `json.loads(content)` for the containers. A class that is built from the bytes, such as `io.BytesIO`, `int`, an enum
+  of bytes or a `str` of your own whose `__new__` decodes them, is taken as before.
 - A codec's `decoder()` raises `TypeError` for a type it cannot decode, and `check_codec` asks it to, so a reader of
   such a type fails where it is built. `headgate.msgspec.reader(Model)` of a pydantic model, or of a plain class
   anywhere in the type (`list[Plain]`, `dict[str, Plain] | None`), built, and every 200 then raised
@@ -901,12 +906,15 @@ change the public API; such changes are listed under **Changed** and **Removed**
   guard pins a host on the URL's port, so on another port curl looked the name up itself. Leave the socket out of a
   guarded client's transport, and put a port in the URL. `CurlOpt.URL` and `CURLU` are refused on any curl transport:
   curl sent every request to that URL, past every hook and the guard. Give the URL as `base_url=` or the call's URL.
-- `headgate.curl.AsyncCurlTransport` refuses `curl_options` that put a header or a credential on every request,
-  `CurlOpt.HTTPHEADER`, `HTTP3_HTTPHEADER`, `COOKIE`, `USERPWD`, `USERNAME`, `PASSWORD` and `XOAUTH2_BEARER`, with
-  `ValueError` where it is built. curl added it below every hook, so it went to every origin a redirect led to, past
-  the credential guard that withholds a credential there and the redaction of secrets, and a header list replaced each
-  request's own headers, the auth's among them. Set a header with `HttpOptions(headers=...)` and a credential with an
-  auth (`BearerAuth`, `StaticHeaderAuth`); a proxy's own credential (`CurlOpt.PROXYUSERPWD`) is taken as before.
+- `headgate.curl.AsyncCurlTransport` refuses `curl_options` that put a header or a credential on requests,
+  `CurlOpt.HTTPHEADER`, `HTTP3_HTTPHEADER`, `COOKIE`, `USERPWD`, `USERNAME`, `PASSWORD`, `XOAUTH2_BEARER` and a truthy
+  `NETRC`, with `ValueError` where it is built. curl added it below every hook, so it went to the other origins a
+  redirect led to (a `.netrc`'s `default` entry to any host), past the credential guard that withholds a credential
+  there and the redaction of secrets, and a header list added its lines to each request's own, a second
+  `Authorization` beside the auth's. `CurlOpt.HEADEROPT` set to `CURLHEADER_UNIFIED` (0) is refused too: curl sent each
+  request's headers, an auth's token among them, to the proxy as well, in the `CONNECT` that opens the tunnel. Set a
+  header with `HttpOptions(headers=...)` and a credential with an auth (`BearerAuth`, `StaticHeaderAuth`), and leave
+  `HEADEROPT` out; a proxy's own credential (`CurlOpt.PROXYUSERPWD`) is taken as before.
 - A header no request can carry is refused where it is given: a name that is not an HTTP token (a space, a colon or a
   line break in it), and a value holding CR, LF or NUL, raise `ValueError` naming the option and the header, not the
   value, in `HttpOptions(headers=)`, `with_options(headers=)`, `Expect(headers=)`, `StaticHeaderAuth(headers=)` (and so
@@ -922,6 +930,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   (`headers={'X-Api-Key': '***'}`), and an `HttpOptions`' proxy URL with its user and password as `***`: a default
   header may carry a key, and a proxy URL a password, which the repr printed in clear, in a log line or a traceback's
   locals. Read a value from `.headers` or `.proxy`, which hold it as given.
+- The `ValueError` for a `SecurityOptions(trusted_origins=)` entry that is no origin, and for an `HttpOptions(proxy=)`
+  of another scheme, shows no secret: the first quoted the entry whole, a password in its userinfo and a key in its
+  query included, and the second named, as the URL's scheme, the user of a URL written without one
+  (`token:x@proxy.example:8080`), which may be a token. The entry is shown as `base_url=`'s refusal shows a URL, with
+  its userinfo as `***` and nothing after its `?` or `#`, and such a proxy URL is called malformed. Nothing to write
+  differently.
 
 ## [0.12.1] - 2026-11-16
 

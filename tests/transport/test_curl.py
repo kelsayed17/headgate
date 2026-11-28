@@ -215,7 +215,8 @@ def test_curl_sending_a_header_or_credential_with_every_request_is_refused(
     """Refuse a header list or a credential in ``curl_options``: curl adds it to every request below every hook.
 
     It reached every origin a redirect led to, past the credential guard that drops a credential there, and the
-    redaction of secrets; a header list also replaced each request's own headers, the auth's among them.
+    redaction of secrets; a header list also added its lines to each request's own, a second ``Authorization`` beside
+    the auth's.
     """
     with pytest.raises(
         ValueError, match=rf"must not set CurlOpt\.{option.name}: .* HttpOptions\(headers=\.\.\.\)"
@@ -223,6 +224,38 @@ def test_curl_sending_a_header_or_credential_with_every_request_is_refused(
         _transport(sessions, curl_options={option: value})
     assert "s3cret" not in str(caught.value)
     assert sessions == []
+
+
+@pytest.mark.parametrize("value", [1, 2, True], ids=["optional", "required", "true"])
+def test_curl_reading_a_netrc_is_refused(sessions: list[_Session], value: object) -> None:
+    """Refuse ``CurlOpt.NETRC``: curl adds a ``.netrc`` password below every hook, a ``default`` entry's anywhere."""
+    with pytest.raises(ValueError, match=r"must not set CurlOpt\.NETRC: .* HttpOptions\(headers=\.\.\.\)"):
+        _transport(sessions, curl_options={CurlOpt.NETRC: value, CurlOpt.NETRC_FILE: "/dev/null"})
+    assert sessions == []
+
+
+def test_curl_ignoring_a_netrc_is_taken(sessions: list[_Session]) -> None:
+    """Take ``CurlOpt.NETRC`` set to 0, ``CURL_NETRC_IGNORED``, which reads no ``.netrc``: curl's own default."""
+    _, session = _transport(sessions, curl_options={CurlOpt.NETRC: 0})
+    assert session.init["curl_options"][CurlOpt.NETRC] == 0
+
+
+@pytest.mark.parametrize("value", [0, False], ids=["unified", "false"])
+def test_curl_sending_a_requests_headers_to_its_proxy_is_refused(sessions: list[_Session], value: object) -> None:
+    """Refuse ``CurlOpt.HEADEROPT`` set to ``CURLHEADER_UNIFIED``: curl sends each request's headers to the proxy too.
+
+    Its credentials, an auth's ``Authorization`` among them, then went in the ``CONNECT`` that opens the tunnel, which
+    the proxy, and anyone between, reads.
+    """
+    with pytest.raises(ValueError, match=r"must not set CurlOpt\.HEADEROPT to CURLHEADER_UNIFIED \(0\): .* proxy"):
+        _transport(sessions, curl_options={CurlOpt.PROXY: _PROXY, CurlOpt.HEADEROPT: value})
+    assert sessions == []
+
+
+def test_curl_keeping_a_requests_headers_from_its_proxy_is_taken(sessions: list[_Session]) -> None:
+    """Take ``CurlOpt.HEADEROPT`` set to 1, ``CURLHEADER_SEPARATE``, which keeps them from the proxy: curl's default."""
+    _, session = _transport(sessions, curl_options={CurlOpt.PROXY: _PROXY, CurlOpt.HEADEROPT: 1})
+    assert session.init["curl_options"][CurlOpt.HEADEROPT] == 1
 
 
 def test_a_proxy_credential_is_taken(sessions: list[_Session]) -> None:

@@ -386,21 +386,78 @@ async def test_a_guards_cache_label_keeps_its_resolver_no_longer_than_its_client
     tenant = _Tenant()
     alive = weakref.ref(tenant)
     labels = len(_GUARD_LABELS)
-    resolver = tenant.resolve
     client = stub_client(
         transport=Network(),
         cache=HttpCache(storage=storage, ttl=None),
-        http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=resolver)),
+        http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=tenant.resolve)),
     )
     async with client:
         assert await client.get("series", expect=as_bytes) == NETWORK_BODY
-    (_, finalizers, _) = next(entry for key, entry in _GUARD_LABELS.items() if key[1] == id(resolver))
-    del client, tenant, resolver
+    assert len(_GUARD_LABELS) == labels + 1
+    del client, tenant
     gc.collect()
 
     assert alive() is None
-    assert len(_GUARD_LABELS) == labels, "the guard's label went with its resolver"
-    assert not any(finalizer.alive for finalizer in finalizers), "the default check's finalizer went with the entry"
+    assert len(_GUARD_LABELS) == labels, "the guard's label went with its last client"
+
+
+async def test_clients_given_one_objects_method_share_their_cache_entries(storage: AsyncSqliteStorage) -> None:
+    """Serve a client the entry another fetched when each was given ``tenant.resolve``: one object, one function.
+
+    Each read of the method builds a new one, so a guard told by its resolver's identity alone gave each client a
+    label of its own, and the second client fetched again what the first had stored.
+    """
+    cache = HttpCache(storage=storage, ttl=None)
+    tenant = _Tenant()
+    network = Network()
+    first, second = (
+        stub_client(
+            transport=network,
+            cache=cache,
+            http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=tenant.resolve)),
+        )
+        for _ in "ab"
+    )
+    async with first, second:
+        assert await first.get("series", expect=as_bytes) == NETWORK_BODY
+        assert await second.get("series", expect=as_bytes) == NETWORK_BODY
+
+    assert network.calls == 1, "the second client was served the first one's entry"
+
+
+@dataclass(frozen=True, slots=True)
+class _SlottedNames:
+    """A resolver that takes no weak reference, as a slotted dataclass does: every name has a public address."""
+
+    address: str = "8.8.8.8"
+
+    async def __call__(self, host: str, port: int) -> Sequence[str]:
+        """Answer every name with the public address."""
+        del host, port
+        return (self.address,)
+
+
+async def test_a_guards_label_goes_with_its_last_client_though_its_resolver_takes_no_weak_reference(
+    storage: AsyncSqliteStorage,
+) -> None:
+    """Drop the label of a guard whose resolver takes no weak reference once its last client is gone.
+
+    The entry held such a resolver for the whole process beside the default check, which is never collected, so the
+    table grew by a resolver, and all it held, with every client built and closed.
+    """
+    labels = len(_GUARD_LABELS)
+    for _ in range(3):
+        client = stub_client(
+            transport=Network(),
+            cache=HttpCache(storage=storage, ttl=None),
+            http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=_SlottedNames())),
+        )
+        async with client:
+            assert await client.get("series", expect=as_bytes) == NETWORK_BODY
+        del client
+        gc.collect()
+
+    assert len(_GUARD_LABELS) == labels
 
 
 @dataclass(frozen=True, slots=True)

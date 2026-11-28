@@ -79,10 +79,11 @@ below the rate budget, and the guard runs once more after it, so its signature i
 same way.
 
 A credential set below every hop's guard would go wherever a hop goes, so the curl transport refuses one where it is
-built: a `CurlOpt.HTTPHEADER`, `HTTP3_HTTPHEADER`, `COOKIE`, `USERPWD`, `USERNAME`, `PASSWORD` or `XOAUTH2_BEARER` in
-`AsyncCurlTransport(curl_options=...)` raises `ValueError`, since curl would add it to every request, whatever its
-origin. Set a header with `HttpOptions(headers=...)` and a credential with an auth. A proxy's own credential
-(`CurlOpt.PROXYUSERPWD`) goes to the one proxy, and is taken.
+built: a `CurlOpt.HTTPHEADER`, `HTTP3_HTTPHEADER`, `COOKIE`, `USERPWD`, `USERNAME`, `PASSWORD`, `XOAUTH2_BEARER` or a
+truthy `NETRC` in `AsyncCurlTransport(curl_options=...)` raises `ValueError`, since curl would add it to requests
+whatever their origin, and so does a `HEADEROPT` of `CURLHEADER_UNIFIED` (0), with which curl sends each request's
+headers to the proxy too. Set a header with `HttpOptions(headers=...)` and a credential with an auth. A proxy's own
+credential (`CurlOpt.PROXYUSERPWD`) goes to the one proxy, and is taken.
 
 ## Redirects
 

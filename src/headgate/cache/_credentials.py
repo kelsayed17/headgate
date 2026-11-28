@@ -46,6 +46,7 @@ import hmac
 import itertools
 import secrets
 import threading
+import types
 import weakref
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, override
@@ -143,6 +144,7 @@ class CredentialScope:
     """One client's rule for what the cache may store of a request and whose entry it is. See the module docstring."""
 
     __slots__ = (
+        "__weakref__",
         "_client_headers",
         "_dropped_headers",
         "_dropped_params",
@@ -196,7 +198,7 @@ class CredentialScope:
         self._represented_params = frozenset(represented_params)
         self._client_headers = frozenset(name.lower() for name in client_headers) - self._dropped_headers
         self._partitioned = partition is Partition.CREDENTIAL
-        self._guarded = () if guard is None else (b"guarded", _guard_label(guard))
+        self._guarded = () if guard is None else (b"guarded", _lease_guard_label(self, guard))
 
     def view(self, request: httpx2.Request) -> tuple[httpx2.URL, httpx2.Headers]:
         """Return the URL and headers hishel gets for *request*: no credential, and its partition label if any."""
@@ -270,45 +272,65 @@ def credential_scope(
 #: What decides which hosts a guarded client reaches: its SSRF guard's address check and its resolver.
 type Guard = tuple[object, object]
 
-#: What drops a guard's entry when one of its parts is collected; ``weakref.finalize`` is generic to the checker only.
-type _Finalizer = weakref.finalize[[tuple[int, int]], object]
+#: A guard's key: for its check and for its resolver, the identities of the objects that decide it.
+type _GuardKey = tuple[tuple[int, ...], ...]
 
-#: Each live guard's entry, by the identities of its check and resolver: its label, the finalizers that drop the entry
-#: when a part is collected, and the parts that take no weak reference, held so no later object takes their identity.
-_GUARD_LABELS: Final[dict[tuple[int, int], tuple[bytes, tuple[_Finalizer, ...], tuple[object, ...]]]] = {}
-#: Reentrant: a collection run while the table is locked may finalize a check or a resolver, whose entry then goes.
+
+@dataclass(slots=True)
+class _GuardEntry:
+    """A guard in use: its label, the objects that decide it, and how many credential scopes use it."""
+
+    #: The label its entries carry, drawn once from the serial.
+    label: bytes
+    #: The objects whose identities key it, held so that no other object can take one while the entry lives.
+    deciders: tuple[object, ...]
+    #: The credential scopes using it: the entry goes with the last of them.
+    scopes: int = 0
+
+
+#: Each guard in use, by its key: an entry goes when the last credential scope using it is collected.
+_GUARD_LABELS: Final[dict[_GuardKey, _GuardEntry]] = {}
+#: Reentrant: a collection run while the table is locked may finalize a scope, whose release then takes the lock.
 _GUARD_LABELS_LOCK: Final = threading.RLock()
 #: Where the next label is drawn from: a count, so a label is never handed out twice, even after its entry went.
 _GUARD_SERIAL: Final = itertools.count()
 
 
-def _guard_label(guard: Guard) -> bytes:
-    """Return the label of *guard*'s entries: one per check and resolver, so two guards that differ never share one.
+def _deciders(part: object) -> tuple[object, ...]:
+    """Return what decides *part*, a check or a resolver: a bound method's object and function, else *part* itself.
 
-    Labels are per process, as the partition key is. They are keyed by identity, since a check or a resolver need not
-    be hashable (a bound method of a mutable object), and two of them that compare equal may still decide differently.
-    An identity is only ever a live object's: a part that takes a weak reference is not held, and its entry goes when
-    it is collected, so a guard's closure is not kept alive; one that takes none (``None``, a slotted object) is held
-    by the entry, so no other object can take its identity, and with it the label, while the entry lives.
+    Each read of ``tenant.resolve`` builds a new method, equal to the last: its object and its function are what stay.
     """
-    key = (id(guard[0]), id(guard[1]))
+    if isinstance(part, types.MethodType):
+        return (part.__self__, part.__func__)
+    return (part,)
+
+
+def _lease_guard_label(scope: object, guard: Guard) -> bytes:
+    """Return the label of *guard*'s entries, held for *scope* until it is collected: one per check and resolver.
+
+    Labels are per process, as the partition key is. A guard is told by the identities of the objects that decide it,
+    not by equality: a check or a resolver need not be hashable, and two that compare equal may still decide
+    differently. A bound method counts as its object and its function, so ``tenant.resolve`` read for each client is
+    one resolver; separate objects, however equal, are separate guards. The entry holds those objects while a scope
+    uses it, so no other object takes one of their identities, and with it the label; it goes with its last scope,
+    and a guard built later draws a new label.
+    """
+    deciders = [_deciders(part) for part in guard]
+    key = tuple(tuple(map(id, objects)) for objects in deciders)
     with _GUARD_LABELS_LOCK:
         entry = _GUARD_LABELS.get(key)
         if entry is None:
-            finalizers: list[_Finalizer] = []
-            held: list[object] = []
-            for part in guard:
-                try:
-                    finalizers.append(weakref.finalize(part, _forget_guard, key))
-                except TypeError:
-                    held.append(part)
-            entry = _GUARD_LABELS[key] = (str(next(_GUARD_SERIAL)).encode(), tuple(finalizers), tuple(held))
-    return entry[0]
+            held = tuple(itertools.chain.from_iterable(deciders))
+            entry = _GUARD_LABELS[key] = _GuardEntry(str(next(_GUARD_SERIAL)).encode(), held)
+        entry.scopes += 1
+    weakref.finalize(scope, _release_guard, key, entry)
+    return entry.label
 
 
-def _forget_guard(key: tuple[int, int]) -> None:
-    """Drop the entry of a guard whose check or resolver was collected, and the finalizer its other part still has."""
+def _release_guard(key: _GuardKey, entry: _GuardEntry) -> None:
+    """Let a collected scope go of *entry*, which leaves the table with its last scope, and never takes a newer one."""
     with _GUARD_LABELS_LOCK:
-        _, finalizers, _ = _GUARD_LABELS.pop(key, (b"", (), ()))
-    for finalizer in finalizers:
-        finalizer.detach()
+        entry.scopes -= 1
+        if not entry.scopes and _GUARD_LABELS.get(key) is entry:
+            del _GUARD_LABELS[key]

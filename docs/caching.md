@@ -103,7 +103,10 @@ the auth does not declare, by its value, since `/config?key=theme` and `?key=loc
 
 Under either partition, a client that refuses private hosts (`SecurityOptions(block_private_hosts=True)`) has entries
 of its own, so it is never served what a client allowed private hosts fetched from an internal address on the same
-storage.
+storage. Guarded clients share entries when their guards are one: given the same `check=` and `resolver=` objects. A
+bound method counts as its object and its function, so `resolver=dns.resolve` given to two clients is one resolver;
+two equal but separate objects (two `functools.partial` built alike, say) keep apart, so build each once and pass that
+object to every client.
 
 ## Credentials are never stored
 

@@ -173,9 +173,10 @@ _ADDRESS_OPTIONS = (
     CurlOpt.PORT,
 )
 
-#: The curl options that put a header or a credential on every request below every hook, where it would reach any
-#: origin a redirect leads to, past the credential guard and the redaction of secrets; a header list would also replace
-#: each request's own headers. A proxy's credential goes to the one proxy, and is taken.
+#: The curl options that put a header or a credential on requests below every hook, where it would reach the other
+#: origins a redirect leads to, past the credential guard and the redaction of secrets; a header list adds its lines to
+#: each request's own (a second ``Authorization``, say). A truthy ``CurlOpt.NETRC`` is refused with them, since curl
+#: then adds a ``.netrc`` password, a ``default`` entry's to any host. A proxy's credential goes to the one proxy.
 _HEADER_OPTIONS = (
     CurlOpt.HTTPHEADER,
     CurlOpt.HTTP3_HTTPHEADER,
@@ -394,8 +395,9 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
         annotates them as ``str``, which is narrower than what it accepts). ``CurlOpt.FOLLOWLOCATION``, ``URL`` and
         ``CURLU`` are refused, since curl would follow a redirect or send every request to one URL below every hook,
         and so are a header list and a credential (``HTTPHEADER``, ``HTTP3_HTTPHEADER``, ``COOKIE``, ``USERPWD``,
-        ``USERNAME``, ``PASSWORD``, ``XOAUTH2_BEARER``), which curl would add to every request, whatever its origin:
-        headgate follows redirects itself, and sets each request's URL and headers.
+        ``USERNAME``, ``PASSWORD``, ``XOAUTH2_BEARER``, a truthy ``NETRC``), which curl would add to requests whatever
+        their origin, and a ``HEADEROPT`` of ``CURLHEADER_UNIFIED``, which would send each request's headers to the
+        proxy too: headgate follows redirects itself, and sets each request's URL and headers.
     :param max_connections: concurrent curl handles; a request beyond them waits for one, with no pool timeout.
     :raises TypeError: for an option of the wrong kind: an *impersonate* that is not a ``str``, a *default_headers*
         that is not a ``bool``, *curl_options* that are not a mapping or have a key that is not a ``CurlOpt`` (its name
@@ -440,11 +442,22 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
                 "past every hook and the SSRF guard; headgate sets each request's URL"
             )
             raise ValueError(msg)
-        if refused := [f"CurlOpt.{option.name}" for option in _HEADER_OPTIONS if option in given]:
+        refused = [f"CurlOpt.{option.name}" for option in _HEADER_OPTIONS if option in given]
+        if given.get(CurlOpt.NETRC):
+            refused.append("CurlOpt.NETRC")
+        if refused:
             msg = (
-                f"curl_options must not set {', '.join(refused)}: curl would add it to every request below every hook, "
-                "past the credential guard and the redaction of secrets, so it would reach any origin a redirect leads "
-                "to; set a header with HttpOptions(headers=...) and a credential with an auth, such as BearerAuth"
+                f"curl_options must not set {', '.join(refused)}: curl would add the header or the credential below "
+                "every hook, past the credential guard and the redaction of secrets, so it would reach the other "
+                "origins a redirect leads to; set a header with HttpOptions(headers=...) and a credential with an "
+                "auth, such as BearerAuth"
+            )
+            raise ValueError(msg)
+        if given.get(CurlOpt.HEADEROPT) == 0:
+            msg = (
+                "curl_options must not set CurlOpt.HEADEROPT to CURLHEADER_UNIFIED (0): curl would send each "
+                "request's headers, its credentials among them, to the proxy too, in the CONNECT that opens the "
+                "tunnel; leave it out, and curl keeps them apart"
             )
             raise ValueError(msg)
         options: dict[CurlOpt, Any] = {

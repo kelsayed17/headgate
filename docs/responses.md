@@ -42,9 +42,12 @@ STATEMENTS: Final = body_reader(partial(decode_statements, table=Statement))
 
 It hands `decode` an empty body as it is, unless `empty=` names the bytes to decode instead: `body_reader(decode,
 empty=b"[]")` reads an empty body as the empty JSON array. Its `refuse=` runs on the decoded value, as a codec reader's
-does (see [a refusal inside the body](#a-refusal-inside-the-body)). A class or a type as `decode` raises `TypeError`
-naming the reader to write: `as_text` for `body_reader(str)`, which would return the body's `repr`, and a flavor's
-`reader(Order)` for `body_reader(Order)`, which would hold the bytes.
+does (see [a refusal inside the body](#a-refusal-inside-the-body)). A class or a type that would misread every body
+raises `TypeError` naming the reader to write: `as_text` for `body_reader(str)`, which would return the body's `repr`,
+a flavor's `reader(Order)` for `body_reader(Order)`, which would hold the bytes, and for `bool`, `tuple`, `set` and
+`frozenset`, which read the bytes as `True` or as their values; a class of your own that keeps such a builtin's
+constructor (`class Symbol(str)`) is told to convert the bytes first. A class built from the bytes, such as
+`io.BytesIO`, `int` or an enum of bytes, is taken.
 
 `as_json` reads JSON into builtins with the standard library's `json.loads`, so a core-only install can read JSON
 without a codec. It is typed `object`, the honest type of `json.loads`: narrow it with `isinstance` or a `match`. It

@@ -155,7 +155,11 @@ def _ok(request: httpx2.Request) -> httpx2.Response:
         ),
         (
             lambda: HttpOptions(proxy="http:user:s3cret@proxy.example.test:8080"),
-            "proxy must name the host to connect to, such as 'http://proxy.example:3128' (got a URL with no host)",
+            "proxy must be an http, https or socks5 URL (got a malformed URL)",
+        ),
+        (
+            lambda: HttpOptions(proxy="s3cret-token:x@proxy.example.test:8080"),
+            "proxy must be an http, https or socks5 URL (got a malformed URL)",
         ),
         (
             lambda: HttpOptions(proxy="socks5://:1080"),
@@ -172,7 +176,8 @@ def _ok(request: httpx2.Request) -> httpx2.Response:
         "other-scheme",
         "unparsable",
         "no-scheme",
-        "no-slashes-no-host",
+        "no-slashes",
+        "token-as-user",
         "no-host",
         "empty-route",
         "route-deadline",
@@ -806,9 +811,12 @@ _BAD_BASE_URLS: Final = [
     ("https://user:s3cret@api.example/v1", _NO_USER + r"\(got 'https://\*\*\*@api\.example/v1'\)" + _USE_AUTH),
     # A token as the user, holding a raw "#": redacted whole before the URL is cut at its first "#".
     ("https://s3cret#x@api.example/v1", _NO_QUERY + r"\(got 'https://\*\*\*@api\.example/v1'\)" + _USE_PARAMS),
-    # A password in a URL written without its scheme, or without the "//" after it, is hidden as well.
+    # A password in a URL written without its scheme, or without the "//" after it, is hidden as well, and so is a
+    # user name that looks like a scheme, a token's included.
     ("api_user:s3cret@api.example.com/v1", _ABSOLUTE + r"\(got '\*\*\*@api\.example\.com/v1'\)" + _ADD_SCHEME),
-    ("http:u:s3cret@api.example:8080", _ABSOLUTE + r"\(got 'http:\*\*\*@api\.example:8080'\)" + _ADD_SCHEME),
+    ("http:u:s3cret@api.example:8080", _ABSOLUTE + r"\(got '\*\*\*@api\.example:8080'\)" + _ADD_SCHEME),
+    ("svc:s3cret@api.example.com/v1", _ABSOLUTE + r"\(got '\*\*\*@api\.example\.com/v1'\)" + _ADD_SCHEME),
+    ("s3cret-token:x@git.example/api/v4", _ABSOLUTE + r"\(got '\*\*\*@git\.example/api/v4'\)" + _ADD_SCHEME),
 ]
 
 
@@ -826,6 +834,24 @@ def test_a_base_url_httpx2_cannot_read_is_refused_without_quoting_it() -> None:
         Client(base_url="https://user:s3cret#x@api.example/v1")
 
     assert "s3cret" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("origin", "shown"),
+    [
+        ("https://user:s3cret@cdn.example", "'https://***@cdn.example'"),
+        ("https://cdn.example/?api_key=s3cret", "'https://cdn.example/?…'"),
+    ],
+    ids=["password", "query-key"],
+)
+def test_a_trusted_origin_that_is_no_origin_is_refused_without_its_secret(origin: str, shown: str) -> None:
+    """Refuse a trusted origin with a user or a query, showing it as ``base_url``'s refusal does: with no secret."""
+    message = (
+        rf"^trusted origin must be an http\(s\) origin such as 'https://host\[:port\]' \(got {re.escape(shown)}\)$"
+    )
+    with pytest.raises(ValueError, match=message) as caught:
+        SecurityOptions(trusted_origins=frozenset({origin}))
+    assert "s3cret" not in str(caught.value)
 
 
 def test_the_options_repr_shows_no_proxy_password() -> None:
