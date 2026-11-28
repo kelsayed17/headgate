@@ -215,7 +215,7 @@ async def test_instant_retries_retries_without_waiting() -> None:
     assert len(fake.calls) == len(("503", "200"))
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_install_reaches_a_rate_budget_two_clients_share() -> None:
     """Pace two clients that share a budget built in the block on the test clock: their waits are its sleeps."""
     clock = TestClock()

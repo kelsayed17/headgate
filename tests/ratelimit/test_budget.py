@@ -4,7 +4,7 @@
 """``RateBudget`` on its own: pacing, pauses, adaptive throttling, sharing, and the budgets a client resolves.
 
 Every test drives the budget on a fake clock, so the assertions are exact; one smoke test checks real pacing. The
-module keeps the real ``Pacer.wait`` (``transport_policy``), since that wait is the subject.
+module keeps the real ``Pacer.wait`` (``call_policy``), since that wait is the subject.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
     from headgate._core import Clock
 
-pytestmark = pytest.mark.transport_policy
+pytestmark = pytest.mark.call_policy
 
 #: A burst size, and the rate whose burst it is.
 _BURST = 5

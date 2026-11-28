@@ -4,7 +4,7 @@
 """A 429 reaches both the rate budget, which pauses every call sharing it, and the retry layer, which waits it.
 
 Both read the response's ``Retry-After`` the same way, so the retry's wait and the budget's pause end together and
-the call waits once. The budget's real wait is kept (``transport_policy``) and runs on a test clock.
+the call waits once. The budget's real wait is kept (``call_policy``) and runs on a test clock.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from tests.integration._support import client
 from tests.support.events import Recorder
 from tests.support.timing import built_on
 
-pytestmark = pytest.mark.transport_policy
+pytestmark = pytest.mark.call_policy
 
 #: The seconds the server asks for, in whole seconds and in milliseconds.
 _ASKED = 2.0

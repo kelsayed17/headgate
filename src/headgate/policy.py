@@ -7,7 +7,7 @@
 three are right in production and wrong where the network is a fake (a mocked transport under a test) or where the job
 is to report the first failure (a connectivity probe).
 
-The knobs exist on ``Client.__init__`` (``CallPolicy(retry=..., breaker=...)``, ``rate``), but an SDK usually
+The knobs exist on ``Client.__init__`` (``CallPolicy(rate=..., retry=..., breaker=...)``), but an SDK usually
 fixes its own policy where it builds its ``Client`` and exposes none of it. So the switch is read at
 construction from a context variable instead::
 
@@ -18,7 +18,7 @@ construction from a context variable instead::
 
     # or, for a whole test directory, in that directory's own conftest.py:
     @pytest.fixture(autouse=True)
-    def _no_transport_policy():
+    def _no_call_policy():
         with policy_disabled():
             yield
 

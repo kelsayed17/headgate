@@ -4,7 +4,7 @@
 """Server rate-limit feedback through ``Client``: a pause every sharer honors, or raises past a deadline.
 
 The budgets here run on a fake clock and sleep, so a pause of minutes costs nothing; the module keeps the real
-``RateBudget.wait`` (``transport_policy``), which is where the pause is enforced.
+``RateBudget.wait`` (``call_policy``), which is where the pause is enforced.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from tests.support.timing import built_on
 if TYPE_CHECKING:
     from hishel import AsyncSqliteStorage
 
-pytestmark = pytest.mark.transport_policy
+pytestmark = pytest.mark.call_policy
 
 _HOST = "limited.example"
 

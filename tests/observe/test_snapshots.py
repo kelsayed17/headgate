@@ -79,7 +79,7 @@ async def _retried(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage
 async def _rate_limited(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) -> None:
     """Make one call the server rate-limits, then a second call that waits out the pause it put on the budget.
 
-    The budget is real and runs on a test clock (the scenario is marked ``transport_policy``), so the pause shows as
+    The budget is real and runs on a test clock (the scenario is marked ``call_policy``), so the pause shows as
     the first call's ``pushback`` and the second call's ``paused`` wait.
     """
     clock = TestClock()
@@ -148,7 +148,7 @@ _SCENARIOS: dict[str, _Scenario] = {
 _REAL_BUDGET = frozenset({"rate_limited"})
 
 _PARAMS = [
-    pytest.param(name, marks=pytest.mark.transport_policy) if name in _REAL_BUDGET else pytest.param(name)
+    pytest.param(name, marks=pytest.mark.call_policy) if name in _REAL_BUDGET else pytest.param(name)
     for name in sorted(_SCENARIOS)
 ]
 

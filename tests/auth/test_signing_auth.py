@@ -440,7 +440,7 @@ class _ClockSigner(SigningAuth):
         request.headers["X-Signed-At"] = repr(now)
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_a_request_waiting_in_the_rate_queue_is_signed_when_it_leaves_it() -> None:
     """Sign after the rate wait, so a call queued behind a tight budget does not go out with a stale signature."""
     clock = TestClock()

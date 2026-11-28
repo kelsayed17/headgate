@@ -928,7 +928,7 @@ async def test_a_declared_403_in_an_unrecognized_shape_raises_auth_error() -> No
     assert ei.value.status_code == httpx2.codes.FORBIDDEN
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_a_client_without_a_rate_paces_nothing_but_obeys_a_server_pause() -> None:
     """Send back to back without ``rate=``, and wait out the pause a 429's ``Retry-After`` asks for."""
     fake = FakeTransport().reply("GET", "/x", 200, 200, httpx2.Response(429, headers={"Retry-After": "2"}), 200)

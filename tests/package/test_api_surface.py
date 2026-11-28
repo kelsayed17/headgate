@@ -177,8 +177,8 @@ def _render(module_name: str) -> str:
     return "\n".join(lines)
 
 
-# transport_policy: keep the real ``RateBudget.wait``, which the suite's autouse fixture otherwise patches.
-@pytest.mark.transport_policy
+# call_policy: keep the real ``RateBudget.wait``, which the suite's autouse fixture otherwise patches.
+@pytest.mark.call_policy
 @pytest.mark.parametrize("module_name", _PUBLIC_MODULES)
 def test_the_public_surface_matches_the_snapshot(module_name: str, snapshot: SnapshotAssertion) -> None:
     """Check that the module's public names, signatures, fields and defaults are exactly the reviewed ones."""
