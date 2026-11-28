@@ -24,7 +24,7 @@ from headgate.pagination import BodyCursor, BodyOffset, Cursor, LinkHeader, Next
 from headgate.testing import FakeTransport
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import AsyncIterator, Callable, Sequence
 
     from headgate.pagination import Pager
 
@@ -1061,3 +1061,18 @@ async def test_paginate_returns_a_paginated() -> None:
         await cast("Any", paginated)
     with pytest.raises(TypeError, match=r"^'Paginated' object is not iterable$"):
         iter(cast("Any", paginated))
+
+
+async def test_a_test_double_builds_a_paginated_from_its_pages() -> None:
+    """Build a ``Paginated`` from what starts its pages and what lists a page's items, as a fake SDK does."""
+
+    async def pages() -> AsyncIterator[list[int]]:
+        yield [1, 2]
+        yield [3]
+
+    walk: Paginated[int] = Paginated(pages, lambda page: page)
+
+    assert [item async for item in walk] == [1, 2, 3]
+    assert [page async for page in walk.pages()] == [[1, 2], [3]]
+    assert await walk.collect(max_items=2) == [1, 2]
+    assert await walk.collect() == [1, 2, 3], "each iteration starts the pages again"

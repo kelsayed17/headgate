@@ -4,10 +4,10 @@
 """The lazy sequence of pages and items :meth:`Client.paginate <headgate.Client.paginate>` returns."""
 
 import hashlib
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from contextlib import aclosing
 from dataclasses import replace
-from typing import Final, Literal, final
+from typing import Final, Literal, cast, final
 
 import httpx2
 
@@ -81,17 +81,20 @@ class Paginated[I, P = object]:
     ``I`` is the item type and ``P`` the page type, which defaults to ``object``: ``Paginated[Issue]`` is a walk of
     issues, and ``Paginated[Issue, IssuePage]`` names the pages :meth:`pages` yields too.
 
-    It is what :meth:`Client.paginate <headgate.Client.paginate>` returns, and is not built otherwise: its
-    constructor takes the function that starts an iteration of the pages, and the one that starts an iteration of the
-    items.
+    :meth:`Client.paginate <headgate.Client.paginate>` builds one from its walk. A test double of an SDK builds one
+    from its own pages: ``Paginated(pages, items_of)``, where *pages* is a function of no arguments that starts a fresh
+    iteration of the pages each time it is called, and *items_of* returns the items on one page, so the items always
+    come from the pages.
     """
 
-    __slots__ = ("_items", "_pages")
+    __slots__ = ("_items_of", "_pages")
 
-    def __init__(self, pages: Callable[[], AsyncIterator[P]], items: Callable[[], AsyncGenerator[I]], /) -> None:
-        """Start each iteration of the pages with *pages*, and each iteration of the items with *items*."""
+    def __init__(self, pages: Callable[[], AsyncIterator[P]], items_of: Callable[[P], Iterable[I]], /) -> None:
+        """Start each iteration with *pages*, and read each page's items with *items_of*."""
         self._pages: Final = pages
-        self._items: Final = items
+        # Read only with pages this walk yielded, so it is held as taking any object: P stays covariant, and a
+        # Paginated[Issue, IssuePage] is a Paginated[Issue].
+        self._items_of: Final = cast("Callable[[object], Iterable[I]]", items_of)
 
     def __aiter__(self) -> AsyncIterator[I]:
         """Iterate the items of every page, in order."""
@@ -120,6 +123,12 @@ class Paginated[I, P = object]:
                 if len(collected) == max_items:
                     break
         return collected
+
+    async def _items(self) -> AsyncGenerator[I]:
+        """Iterate the items of every page, in order."""
+        async for page in self._pages():
+            for item in self._items_of(page):
+                yield item
 
 
 @final
@@ -187,12 +196,6 @@ class PageWalk[I, P, B]:
                 raise self._invalid_error(request, fetched, exc) from exc
             del response
             yield page
-
-    async def items(self) -> AsyncGenerator[I]:
-        """Iterate the items of every page, in order."""
-        async for page in self.pages():
-            for item in self._pager.page_items(page):
-                yield item
 
     def _limit_error(self, request: PageRequest[B], fetched: int) -> PageLimitError:
         """Build the error for *request*, the page after the *fetched* pages the budget allowed."""

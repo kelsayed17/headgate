@@ -145,7 +145,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `Paginated` is the class of the walk `paginate()` returns, a final class rather than a protocol, so a mistake names
   it: `await client.paginate(...)` raises `TypeError: 'Paginated' object can't be awaited`, where it named a private
   `PageWalk`. Iterate with `async for`, or `await walk.collect()`. Annotations are unchanged: `Paginated[Issue]` and
-  `Paginated[Issue, IssuePage]`.
+  `Paginated[Issue, IssuePage]`. A test double that stood in for a walk by the protocol's shape (a class with
+  `__aiter__`, `pages()` and `collect()`) no longer type-checks as one: build the real class from its pages, write
+  `Paginated(pages, lambda page: page.items)`, where `pages` is a function of no arguments that starts the pages afresh
+  (see the testing guide's "A fake walk").
 
 - Breakers take the shape a rate does: a policy's `breaker=` is a `BreakerPolicy`, from which the client builds
   breakers of its own, or a shared `BreakerRegistry`, built from one, whose breakers every client given it shares
