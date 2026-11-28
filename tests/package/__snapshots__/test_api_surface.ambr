@@ -277,13 +277,6 @@
   def parse_link_header(value: 'str') -> 'list[Link]'
   '''
 # ---
-# name: test_the_public_surface_matches_the_snapshot[headgate.policy]
-  '''
-  module headgate.policy
-  __all__ = ['policy_disabled']
-  def policy_disabled() -> 'Generator[None]'
-  '''
-# ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.pydantic]
   '''
   module headgate.pydantic
@@ -379,7 +372,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.testing]
   '''
   module headgate.testing
-  __all__ = ['CassetteFilter', 'ConnectFail', 'DropMidBody', 'FakeTransport', 'FaultCall', 'FaultyTransport', 'PoolFull', 'RecordedRequest', 'RefusedStream', 'Reply', 'Respond', 'Slow', 'Step', 'TestClock', 'UnmatchedRequestError', 'breakers_of', 'budget_for', 'cache_of', 'check_codec', 'fake_network', 'instant_retries']
+  __all__ = ['CassetteFilter', 'ConnectFail', 'DropMidBody', 'FakeTransport', 'FaultCall', 'FaultyTransport', 'PoolFull', 'RecordedRequest', 'RefusedStream', 'Reply', 'Respond', 'Slow', 'Step', 'TestClock', 'UnmatchedRequestError', 'breakers_of', 'budget_for', 'cache_of', 'check_codec', 'fake_network', 'instant_retries', 'policy_disabled']
   class CassetteFilter(object)(*, auths: 'Iterable[CredentialCarrier]' = (), headers: 'Collection[str]' = (), params: 'Collection[str]' = (), replaying: 'bool' = False) -> 'None'
       def __call__(self, request: 'httpx2.Request', call_next: 'Next') -> 'httpx2.Response'
       def before_record_request(self, request: 'R') -> 'R | None'
@@ -436,6 +429,7 @@
   def check_codec(codec: 'Codec', *, record: 'TypeForm[object] | None' = None) -> 'None'
   def fake_network(transport: 'T') -> 'Generator[T]'
   def instant_retries() -> 'Generator[None]'
+  def policy_disabled() -> 'Generator[None]'
   '''
 # ---
 # name: test_the_public_surface_matches_the_snapshot[headgate.timing]

@@ -43,7 +43,7 @@ src/headgate/
   security/          the credential guard, the https-downgrade refusal, the SSRF guard
   streaming/         Stream
   pagination/        Pager, its strategies, Paginated
-  errors.py, events.py, health.py, policy.py, otel.py, curl.py, msgspec.py, pydantic.py, testing/
+  errors.py, events.py, health.py, otel.py, curl.py, msgspec.py, pydantic.py, testing/
 ```
 
 `retry`, `breaker` and `ratelimit` may import only the standard library, `httpx2`, their own subpackage and

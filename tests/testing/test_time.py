@@ -33,10 +33,17 @@ from headgate._core import current_timing
 from headgate.breaker import BreakerRegistry
 from headgate.breaker._breaker import CircuitBreaker
 from headgate.breaker._registry import table_of
-from headgate.policy import policy_disabled
 from headgate.retry import Backoff, RetryBudget, RetryShare
 from headgate.retry._policy import ledger_of
-from headgate.testing import FakeTransport, FaultyTransport, Slow, TestClock, budget_for, instant_retries
+from headgate.testing import (
+    FakeTransport,
+    FaultyTransport,
+    Slow,
+    TestClock,
+    budget_for,
+    instant_retries,
+    policy_disabled,
+)
 from headgate.testing._time import _SETTLE_TURNS
 from headgate.timing import Timing
 

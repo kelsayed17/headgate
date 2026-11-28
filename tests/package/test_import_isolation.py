@@ -32,7 +32,7 @@ def _import_with_blocked(monkeypatch: pytest.MonkeyPatch, module: str, *blocked:
         "headgate",
         "headgate.msgspec",
         "headgate.health",
-        "headgate.policy",
+        "headgate.testing",
         "headgate.events",
         "headgate.retry",
         "headgate.breaker",

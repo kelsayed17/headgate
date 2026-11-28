@@ -21,13 +21,12 @@ import pytest
 
 from headgate import Rate, RateBudget
 from headgate._core import BudgetBacklogError, CallContext, CallInfo, Emitter, RateLimited, Timing
-from headgate.policy import policy_disabled
 from headgate.ratelimit import Adaptive
 from headgate.ratelimit._budget import MAX_PAUSE, BudgetPausedError, Pacer, pacer_of
 from headgate.ratelimit._budgets import Lane, PathBudgets
 from headgate.ratelimit._rate import UNPACED
 from headgate.ratelimit._transport import RateLimitTransport
-from headgate.testing import TestClock
+from headgate.testing import TestClock, policy_disabled
 from tests.support.events import Recorder
 from tests.support.timing import built_on
 

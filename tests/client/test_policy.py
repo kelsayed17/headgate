@@ -20,10 +20,9 @@ from headgate import CallPolicy, HttpOptions, Rate, RetryPolicy, Route, Upstream
 from headgate._client import Client
 from headgate._core import policy_is_disabled
 from headgate._responses import nothing
-from headgate.policy import policy_disabled
 from headgate.ratelimit._budget import Pacer
 from headgate.ratelimit._rate import UNPACED
-from headgate.testing import breakers_of
+from headgate.testing import breakers_of, policy_disabled
 
 if TYPE_CHECKING:
     from collections.abc import Callable

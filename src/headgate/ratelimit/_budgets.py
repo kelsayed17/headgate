@@ -36,7 +36,7 @@ def as_budget(rate: Rate | RateBudget | None, timing: Timing = SYSTEM_TIMING) ->
     """Return the budget *rate* names: a shared :class:`RateBudget` as it is, or a new one paced on *timing*.
 
     ``None`` is a budget that paces nothing of its own, but still waits out the server's pauses. Built with transport
-    policy off (:func:`headgate.policy.policy_disabled`), it is a private budget that paces nothing, with no
+    policy off (:func:`headgate.testing.policy_disabled`), it is a private budget that paces nothing, with no
     concurrency cap and no throttling, whatever was asked for, a shared budget included.
     """
     # A budget reads the current timing when it is built: each one built here is built on *timing*.
