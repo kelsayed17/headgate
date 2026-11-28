@@ -227,7 +227,9 @@ endpoint. The API host's breaker records nothing for it.
 - `attach(request, token)` decides how a token is put on a request (`Authorization: Bearer` by default). A subclass
   that overrides it declares the headers it sets in `credential_headers` and the query parameters in
   `credential_params` (for a provider that takes `?access_token=`), not both empty, or the class definition fails: an
-  undeclared credential would follow a request anywhere. The default declares `frozenset({"authorization"})`. The parameters are withheld from untrusted origins like the headers, a 401 to a request
+  undeclared credential would follow a request anywhere. The default declares `frozenset({"authorization"})`, and a
+  class that keeps the default `attach` must keep `authorization` in its declaration, or the class definition fails:
+  a 401 re-mints only for a request that carried a declared name. The parameters are withheld from untrusted origins like the headers, a 401 to a request
   carrying one re-mints, and error messages redact them.
 - `skips(request)` says a request needs no token (by default, one that already carries a token header or parameter).
 - `mint`, `attach` and `skips` are the hooks. The flow, `async_auth_flow`, and `reject_credential_rotation` are final:

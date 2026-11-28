@@ -769,7 +769,8 @@ class CachedTokenAuth[TokenT = str](Auth):
         """Refuse a subclass with no mint, or whose :meth:`attach` sets a credential it has not declared.
 
         When a subclass overrides :meth:`attach`, that class or one below it must declare :attr:`credential_headers` or
-        :attr:`credential_params`, not both empty. Its parameters are registered as secret, and its
+        :attr:`credential_params`, not both empty; when it keeps the default, :attr:`credential_headers` must name
+        ``authorization``. Its parameters are registered as secret, and its
         :attr:`refresh_margin` is checked.
         """
         super().__init_subclass__(**kwargs)
@@ -780,6 +781,14 @@ class CachedTokenAuth[TokenT = str](Auth):
         _check_margin(cls)
         mro = cls.__mro__
         attaching = next(klass for klass in mro if "attach" in vars(klass))
+        # The default attach sets Authorization, and a 401 re-mints only for a request that carried a declared name.
+        if attaching is CachedTokenAuth and "authorization" not in {name.lower() for name in cls.credential_headers}:
+            msg = (
+                f"{cls.__name__} keeps the default attach, which sets Authorization, so credential_headers must name "
+                f"authorization (got {sorted(cls.credential_headers)}): add it, or override attach to put the token "
+                "where the declaration says"
+            )
+            raise TypeError(msg)
         below = [vars(klass) for klass in mro[: mro.index(attaching) + 1]]
         redeclared = any(name in names for names in below for name in _DECLARATIONS)
         if not (redeclared and declared):

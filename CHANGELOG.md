@@ -121,6 +121,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
   defined, and the default `attach` raises `TypeError` for a token that is not a `str`, before anything is sent, where
   the type is bound further down, or may be text (`CachedTokenAuth[Any]`, `CachedTokenAuth[str | None]`). Override
   `attach` to put the token on the request.
+- A `CachedTokenAuth` that keeps the default `attach`, which sets `Authorization`, must name `authorization`
+  (in any case) in `credential_headers`: a narrowed declaration (`credential_headers = frozenset({"x-other"})`) raises
+  `TypeError` when the class is defined. It sent the bearer undeclared, and its 401s never re-minted, since a 401
+  re-mints only for a request that carried a declared name. Keep `authorization` in the declaration, or override
+  `attach` to put the token where the declaration says.
 
 ### Security
 

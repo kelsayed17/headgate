@@ -328,3 +328,17 @@ def test_a_client_refuses_an_auth_whose_declaration_is_not_a_frozenset_of_names(
     """Refuse, when the client is built, an auth whose declarations would withhold the wrong names."""
     with pytest.raises(TypeError, match="frozenset of names"):
         Client(base_url="https://api.example", auth=cast("Any", _StrStamper)())
+
+
+@pytest.mark.parametrize("headers", [frozenset({"x-other"}), frozenset[str]()], ids=["narrowed", "params-only"])
+def test_the_default_attach_needs_authorization_declared(headers: frozenset[str]) -> None:
+    """Refuse a declaration without ``authorization`` over the default ``attach`` (R7): its 401s never re-minted."""
+    with pytest.raises(TypeError, match=r"_Narrowed keeps the default attach, which sets Authorization"):
+        type("_Narrowed", (_Bearer,), {"credential_headers": headers, "credential_params": frozenset({"access_token"})})
+
+
+def test_the_default_attach_accepts_authorization_in_any_case() -> None:
+    """Accept ``Authorization`` beside other names, compared case-insensitively."""
+    declared = type("_Wider", (_Bearer,), {"credential_headers": frozenset({"Authorization", "x-extra"})})
+
+    assert declared.credential_headers == {"Authorization", "x-extra"}
