@@ -43,11 +43,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   broken. An observer that took one `CacheChecked` per call as given may now see two; one that matches every outcome
   adds a case for it.
 - `headgate.testing.FakeNetwork`, what `fake_network` yields: `net.transport`, the transport the clients built in the
-  block send on, and `net.clients`, those clients in order. A test reads an SDK's configuration back through them,
+  block send on, and `net.clients`, those clients in order. Only `fake_network` builds one: `FakeNetwork(...)` raises
+  `TypeError`. A test reads an SDK's configuration back through them,
   `budget_for(net.clients[0])`, without reaching into the SDK's private `Client`.
 - `FakeTransport.resolve(host, *addresses)`: inside `fake_network`, the SSRF guard resolves `host` to `addresses`, so a
   test can exercise a refusal (`resolve("api.example.com", "10.0.0.1")`) or a name that does not resolve
-  (`resolve("api.example.com")`).
+  (`resolve("api.example.com")`). Each address is an IP address as text; anything else raises naming it.
 
 ### Changed
 
@@ -346,8 +347,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `with fake_network(fake) as net:` binds a `FakeNetwork`, where it bound the transport given: write `net.transport`
   for the old `net`, or keep the `FakeTransport` in a name of its own, as `with fake_network(fake):` already does.
 - Inside `fake_network`, a client's SSRF guard resolves names through the fake network, in place of the system
-  resolver and of a `SecurityOptions(resolver=)` of the SDK's own: every name resolves to one public address unless
-  `FakeTransport.resolve` says otherwise. A guarded SDK's test made real DNS queries, and failed offline or on a host
+  resolver and of a `SecurityOptions(resolver=)` of the SDK's own (test that resolver directly): every name resolves to
+  one public address, and `localhost` and the names under it to loopback, which the guard refuses as in production,
+  unless `FakeTransport.resolve` says otherwise. A guarded SDK's test made real DNS queries, and failed offline or on a host
   that does not exist; it now makes none. The guard's checks still run, so a private IP literal is still refused.
 
 ### Removed

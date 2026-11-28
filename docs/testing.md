@@ -63,7 +63,9 @@ fake = (
 A client with the SSRF guard on (`SecurityOptions(block_private_hosts=True)`) resolves each host before it sends.
 Inside `fake_network`, the guard resolves through the fake network instead of the system's resolver, and instead of a
 `resolver=` the SDK set itself: every name resolves to one public address, so the test makes no DNS query and passes
-offline. `FakeTransport.resolve(host, *addresses)` gives a host the answer a test needs, so the guard's refusals can
+offline, but `localhost` and every name under it, which resolve to loopback (`127.0.0.1` and `::1`, as RFC 6761 has
+resolvers answer them) and are refused as in production. Since the fake network replaces an SDK's own `resolver=`,
+test a resolver of your own directly, by calling it. `FakeTransport.resolve(host, *addresses)` gives a host the answer a test needs, so the guard's refusals can
 be tested too: a private address among them is refused with `ForbiddenDestinationError`, and no address at all is a
 name that does not resolve, a `TransportError`. The guard's checks still run, so a private IP literal is refused
 without any lookup.
