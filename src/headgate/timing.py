@@ -14,9 +14,9 @@ own. :func:`timing_override` sets it for a block, the one way in, which is how
 ``asyncio.sleep``, ``time.time`` and ``random.random`` satisfy them as they are.
 """
 
-from headgate._core import rehome
+from headgate._core import rehome as _rehome
 from headgate._core._time import Clock, RandomSource, Sleep, Timing, current_timing, timing_override
 
 __all__ = ["Clock", "RandomSource", "Sleep", "Timing", "current_timing", "timing_override"]
 
-rehome(__name__, globals())
+_rehome(__name__, globals())

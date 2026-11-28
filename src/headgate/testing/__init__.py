@@ -25,7 +25,7 @@ a test clock, and :func:`instant_retries` makes their retries not wait::
             yield MySdk(api_key="test")
 """
 
-from headgate._core import rehome
+from headgate._core import rehome as _rehome
 from headgate.testing._codec import check_codec
 from headgate.testing._faults import (
     ConnectFail,
@@ -67,4 +67,4 @@ __all__ = [
     "instant_retries",
 ]
 
-rehome(__name__, globals())
+_rehome(__name__, globals())

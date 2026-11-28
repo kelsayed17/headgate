@@ -205,6 +205,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `AuthError` and `RateLimitError`) have one home, `headgate`: `from headgate.errors import ClientError` raises
   `ImportError`, so write `from headgate import ClientError`. `headgate.errors` keeps every other error,
   `ErrorDetails` and `Problem`.
+- A public module binds only what it exports and its public submodules, so no name has a second home:
+  `headgate.health`, `headgate.msgspec`, `headgate.pydantic` and `headgate.otel` re-export what private modules
+  define, as every other public module does, and the names they imported to do their work are gone from them. Import
+  each from its own home: `from headgate.breaker import BreakerState` for `from headgate.health import BreakerState`,
+  `import msgspec` for `headgate.msgspec.msgspec`, and `from headgate import reader_for` for
+  `headgate.msgspec.reader_for`.
 
 ### Removed
 

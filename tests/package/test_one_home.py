@@ -245,3 +245,17 @@ def test_msgspec_converts_into_an_option(kind: type, data: dict[str, object]) ->
     itself, a union of two classes, so it is not converted here.
     """
     assert msgspec.convert(data, kind) == kind(**data)
+
+
+@pytest.mark.parametrize("module_name", _public_modules())
+def test_a_public_module_binds_only_what_it_exports(module_name: str) -> None:
+    """Bind no public name but those in ``__all__`` and the public submodules, so nothing else has a second home."""
+    module = importlib.import_module(module_name)
+    public = {name: value for name, value in vars(module).items() if not name.startswith("_")}
+    submodules = {
+        name
+        for name, value in public.items()
+        if isinstance(value, types.ModuleType) and value.__name__ == f"{module_name}.{name}"
+    }
+
+    assert set(public) == set(module.__all__) | submodules

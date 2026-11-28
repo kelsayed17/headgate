@@ -33,7 +33,7 @@ Every ``ClientError`` pickles, so it can cross a process or a durable-workflow b
 prefix the message a second time. :meth:`ClientError.__reduce__` rebuilds the instance without ``__init__`` instead.
 """
 
-from headgate._core import rehome
+from headgate._core import rehome as _rehome
 from headgate._errors import (
     CircuitOpenError,
     ClientConfigurationError,
@@ -60,4 +60,4 @@ __all__ = [
     "ResponseTooLargeError",
 ]
 
-rehome(__name__, globals())
+_rehome(__name__, globals())

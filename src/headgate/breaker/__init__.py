@@ -9,10 +9,11 @@ registry of its own; clients given one registry pool their failures in it.
 Self-contained: it imports only ``httpx2``, the standard library and :mod:`headgate._core`.
 """
 
-from headgate._core import BreakerState, rehome
+from headgate._core import BreakerState
+from headgate._core import rehome as _rehome
 from headgate.breaker._breaker import CircuitBreaker
 from headgate.breaker._registry import BreakerRegistry
 
 __all__ = ["BreakerRegistry", "BreakerState", "CircuitBreaker"]
 
-rehome(__name__, globals())
+_rehome(__name__, globals())
