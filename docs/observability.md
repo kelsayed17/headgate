@@ -17,7 +17,7 @@ class Metrics:
     def notify(self, event: Event) -> None:
         match event:
             case CallFinished(call=call, status_code=status, error=error, elapsed=elapsed):
-                record_call(call.method, call.route or call.url, status, error, elapsed)
+                record_call(call.method, call.template or call.url, status, error, elapsed)
             case RateLimited(delay=delay, reason=reason):
                 record_wait(reason, delay)
             case _:
@@ -42,8 +42,8 @@ coroutine function: its events would be dropped. Hand slow work (a network sink)
 | `CallFinished` | a call ends, either way | `status_code`, `error` (the exception type's name; not that of a non-`ClientError` a `stream()` block raised itself), `attempts`, `elapsed` |
 
 Every call event is a `CallEvent` and carries `call`, a `CallInfo`: the `method`, the `url` as given (sanitized), the
-`route` (the t-string template, `"series/{series_id}"`, or `None` for a literal string or an `httpx2.URL`), the
-absolute `full_url` (sanitized), and a process-unique `call_id` that groups the events of one call among many concurrent
+`template` (the t-string template, `"series/{series_id}"`, OpenTelemetry's `url.template`, or `None` for a literal
+string or an `httpx2.URL`), the absolute `full_url` (sanitized, and filled with or without observers), and a process-unique `call_id` that groups the events of one call among many concurrent
 ones. Durations are seconds on the client's clock.
 
 Events carry **sanitized data only**: no header, no body, no credential. They are frozen dataclasses, so an observer can

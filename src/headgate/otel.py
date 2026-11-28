@@ -136,9 +136,9 @@ def _request_attributes(info: CallInfo) -> tuple[str, _Attributes]:
         if port is not None:
             attributes[_SERVER_PORT] = port
     name = "HTTP" if method not in _KNOWN_METHODS else method
-    if info.route is not None:
-        attributes[_URL_TEMPLATE] = info.route
-        name = f"{name} {info.route}"
+    if info.template is not None:
+        attributes[_URL_TEMPLATE] = info.template
+        name = f"{name} {info.template}"
     return name, attributes
 
 

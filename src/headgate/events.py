@@ -9,7 +9,7 @@ add :class:`RetryScheduled`, :class:`RateLimited`, :class:`BreakerChanged`, :cla
 :class:`Deprecated`. Every event is frozen and carries sanitized data only: no header, body or credential. An
 observer's exception never reaches the call; it is counted in :func:`headgate.health.observer_failures`.
 
-:class:`CallView` is what :func:`headgate.call_info` returns: the call's :class:`CallInfo`, with its attempt and the
+:class:`CallView` is what :func:`headgate.call_view` returns: the call's :class:`CallInfo`, with its attempt and the
 time left, read when asked, for a middleware.
 """
 

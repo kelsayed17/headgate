@@ -46,7 +46,7 @@ async def test_a_url_object_is_sent_verbatim() -> None:
 
     assert sent[0].url.raw_path == b"/items/a%2Fb?x=1"
     (finished,) = recorder.of(CallFinished)
-    assert finished.call.route is None
+    assert finished.call.template is None
 
 
 async def test_an_absolute_url_object_is_sent_as_given() -> None:
