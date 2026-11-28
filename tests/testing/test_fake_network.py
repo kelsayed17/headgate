@@ -5,18 +5,18 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Final, cast
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Final, cast, override
 
+import httpx2
 import pytest
 
 from headgate import CallPolicy, Client, HttpOptions, Rate, SecurityOptions, TransportError, nothing
 from headgate.curl import AsyncCurlTransport
 from headgate.errors import ForbiddenDestinationError
-from headgate.testing import FakeTransport, TestClock, budget_for, fake_network
+from headgate.testing import FakeNetwork, FakeTransport, TestClock, budget_for, fake_network
 
 if TYPE_CHECKING:
-    import httpx2
-
     from headgate.security import Resolver
 
 _RATE: Final = Rate.per_second(50)
@@ -159,9 +159,85 @@ async def test_the_ssrf_guard_still_refuses_a_private_address() -> None:
     assert not fake.calls
 
 
-def test_a_fake_resolves_only_ip_addresses() -> None:
-    """Refuse an address that is no IP address, and a host that is no ``str``, where the test writes them."""
-    with pytest.raises(ValueError, match="does not appear to be an IPv4 or IPv6 address"):
-        FakeTransport().resolve("api.example.test", "localhost")
+@pytest.mark.parametrize(
+    ("addresses", "error", "message"),
+    [
+        (
+            ("localhost",),
+            ValueError,
+            r"^resolve\(\) takes IP addresses as text, such as '10\.0\.0\.1' \(got 'localhost'\)$",
+        ),
+        ((167772161,), TypeError, r"^addresses= takes IP addresses as text, such as '10\.0\.0\.1' \(got int\)$"),
+    ],
+    ids=["name", "int"],
+)
+def test_a_fake_resolves_only_ip_addresses(addresses: tuple[object, ...], error: type[Exception], message: str) -> None:
+    """Refuse an address that is no IP address, naming it, where the test writes it."""
+    with pytest.raises(error, match=message):
+        FakeTransport().resolve("api.example.test", *cast("tuple[str, ...]", addresses))
+
+
+def test_a_fake_resolves_a_host_given_as_text() -> None:
+    """Refuse a host that is no ``str``."""
     with pytest.raises(TypeError, match=r"^host= takes a host name, a str \(got bytes\)$"):
         FakeTransport().resolve(cast("Any", b"api.example.test"), "8.8.4.4")
+
+
+@dataclass
+class _Recording(httpx2.AsyncBaseTransport):
+    """A transport of the test's own, a dataclass, so unhashable."""
+
+    seen: list[httpx2.URL] = field(default_factory=list)
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        self.seen.append(request.url)
+        return httpx2.Response(200)
+
+
+async def test_a_guarded_client_on_an_unhashable_transport_resolves_inside_the_fake_network() -> None:
+    """Resolve names over a transport that is no ``FakeTransport``, and cannot be hashed, to the public fake address."""
+    transport = _Recording()
+    with fake_network(transport):
+        client = _guarded()
+    await client.get("ping", expect=nothing)
+
+    assert len(transport.seen) == 1
+
+
+@pytest.mark.parametrize("host", ["localhost", "api.localhost", "LOCALHOST"])
+async def test_localhost_resolves_to_loopback_inside_the_fake_network(host: str) -> None:
+    """Resolve ``localhost`` and its subdomains to loopback (RFC 6761), so the guard refuses them as in production."""
+    fake = FakeTransport().reply("GET", "/v1/ping", 200)
+    with fake_network(fake):
+        client = Client(
+            base_url=f"https://{host}/v1",
+            policy=CallPolicy(rate=_RATE),
+            http=HttpOptions(security=SecurityOptions(block_private_hosts=True)),
+        )
+
+    with pytest.raises(ForbiddenDestinationError, match=r"resolves to 127\.0\.0\.1, which is a loopback address"):
+        await client.get("ping", expect=nothing)
+    assert not fake.calls
+
+
+async def test_a_localhost_the_test_resolved_takes_its_answer() -> None:
+    """Take the test's own answer for a ``localhost`` name, as for any other."""
+    fake = FakeTransport().reply("GET", "/v1/ping", 200).resolve("api.localhost", "8.8.4.4")
+    with fake_network(fake):
+        client = Client(
+            base_url="https://api.localhost/v1",
+            policy=CallPolicy(rate=_RATE),
+            http=HttpOptions(security=SecurityOptions(block_private_hosts=True)),
+        )
+    await client.get("ping", expect=nothing)
+
+    assert len(fake.calls) == 1
+
+
+def test_a_fake_network_comes_only_from_fake_network() -> None:
+    """Refuse to build the handle directly: ``fake_network`` yields it."""
+    with pytest.raises(TypeError, match=r"^FakeNetwork is yielded by fake_network\(transport\): write with "):
+        FakeNetwork()
+    with pytest.raises(TypeError, match=r"^FakeNetwork is yielded by fake_network\(transport\)"):
+        FakeNetwork(cast("Any", FakeTransport()))

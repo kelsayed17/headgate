@@ -275,7 +275,10 @@ plan.)
 fixed, globally routable address; `FakeTransport.resolve(host, *addresses)` sets a host's answer, so a test can
 exercise a refusal. The guard's checks keep running; a private IP literal is still refused. The fake resolver
 replaces an SDK's own `resolver=` too, as the fake transport replaces its own transport, and `resolve(host)` with no
-addresses is a name that does not resolve. (Amended with the phase 5 plan.)
+addresses is a name that does not resolve. (Amended with the phase 5 plan.) `localhost` and every name under it
+resolve to `127.0.0.1` and `::1`, as RFC 6761 has resolvers answer them, so the guard refuses them as in production;
+the answers live on the `FakeTransport`, and any other transport has none of its own. (Amended with the phase 5
+review.)
 
 ### 7. Docs that run
 
