@@ -18,8 +18,11 @@ _PRELUDE = dedent(
     import httpx2
 
     from headgate import nothing
-    from headgate.pagination import PageRequest
+    from headgate.pagination import LinkHeader, PageRequest
     from headgate import Client
+
+
+    PAGES = LinkHeader(nothing, items=lambda _page: ())
 
 
     async def probe(c: Client, uid: str, next_url: str) -> None:
@@ -46,7 +49,7 @@ async def test_a_computed_string_url_does_not_type_check(tmp_path: Path) -> None
         await c.get(f"items/{uid}", expect=nothing)
         async with c.stream(f"items/{uid}"):
             pass
-        c.paginate(f"items/{uid}", expect=nothing, pages=nothing)
+        c.paginate(f"items/{uid}", pager=PAGES)
         PageRequest(f"items/{uid}")
         """,
     )

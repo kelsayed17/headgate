@@ -166,10 +166,10 @@ async def test_a_walk_past_its_page_limit_is_not_retryable_and_sent_nothing_of_i
     """Say a page budget's refusal is not retryable, and leave ``sent`` unknown: no send of it failed."""
     transport = httpx2.MockTransport(lambda _request: httpx2.Response(200, json=[1]))
     client = Client(base_url=_BASE, http=HttpOptions(transport=transport))
-    pages = Offset(items=lambda page: page, page_size=1)
+    pages = Offset(body_reader(lambda body: [body]), items=lambda page: page, page_size=1)
 
     with pytest.raises(PageLimitError) as raised:
-        await client.paginate("orders", expect=body_reader(lambda body: [body]), pages=pages, max_pages=1).collect()
+        await client.paginate("orders", pager=pages, max_pages=1).collect()
 
     assert (raised.value.retryable, raised.value.sent) == (False, None)
 

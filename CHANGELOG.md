@@ -118,6 +118,19 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `request.with_payload(...)` in a pager for `request.body` and `request.with_body(...)`. `paginate(query=)` raises
   `TypeError` naming `payload=`.
 
+- A pager carries its page reader, as its first argument, so a type checker knows the page type before it reads the
+  lambdas after it: `Cursor(reader(Page), items=lambda p: p.items, next=lambda p: p.next, param="cursor")` is a
+  `Cursor[Item, Page]`, and `lambda p: p.itemz` is a type error where it was an `Unknown` that reached every item.
+  `paginate()` takes no `expect=` and names the pager `pager=`, not `pages=` (which `Paginated.pages()` uses for the
+  pages): write `paginate(url, pager=LinkHeader(reader(list[Issue]), items=lambda page: page))` for
+  `paginate(url, expect=reader(list[Issue]), pages=LinkHeader(items=lambda page: page))`. The reader may be an
+  `Expect`, so declared answers, `accept=` and `headers=` reach every page as before. Every pager's generic parameters
+  read item first, as `Paginated[I, P]` does: `Pager[I, P, B]`, `WritingPager[I, P, B]`, `Cursor[Item, Page, Query]`
+  for `Cursor[Page, Item, Query]`, and the reader and writer usually bind them, so the subscript can go. The `Pager`
+  protocol and `WritingPager` gain `read`: give a pager of your own a `read` attribute, such as a dataclass field
+  `read: Reader[Page]`. `paginate()` raises `TypeError` for a pager whose `read` is missing or is not a `Reader` or an
+  `Expect`, before the pager runs.
+
 ### Removed
 
 - The cache's `ClientConfigurationError` for an auth that does not declare its credentials, which no auth can now

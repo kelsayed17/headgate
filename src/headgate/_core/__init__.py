@@ -35,6 +35,7 @@ from headgate._core._kinds import (
     check_kind,
     check_names,
     check_not_letters,
+    named,
     type_text,
 )
 from headgate._core._origin import origin_of, origin_text
@@ -107,6 +108,7 @@ __all__ = [
     "check_names",
     "check_not_letters",
     "current_timing",
+    "named",
     "origin_of",
     "origin_text",
     "parse_retry_after",

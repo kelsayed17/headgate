@@ -20,7 +20,7 @@ from headgate.testing import FakeTransport
 from tests.integration._support import Page, carried, client, items_of, next_of, real_auths
 
 _FOREIGN = "https://cdn.other.test"
-_PAGES = NextUrl(items=items_of, next=next_of)
+_PAGES = NextUrl(reader(Page), items=items_of, next=next_of)
 _AUTHS = real_auths()
 
 
@@ -38,7 +38,7 @@ async def test_a_next_url_on_another_origin_carries_no_credential(name: str) -> 
     fake = _pages(f"{_FOREIGN}/v1/page2")
     built = client(fake, auth=auth)
 
-    items = [item async for item in built.paginate("items", expect=reader(Page), pages=_PAGES)]
+    items = [item async for item in built.paginate("items", pager=_PAGES)]
 
     first, second = fake.calls
     assert items == [1, 2]
@@ -54,7 +54,7 @@ async def test_a_next_url_on_a_trusted_origin_keeps_the_credentials(name: str) -
     fake = _pages(f"{_FOREIGN}/v1/page2")
     built = client(fake, auth=auth, http=HttpOptions(security=SecurityOptions(trusted_origins=frozenset({_FOREIGN}))))
 
-    _ = [item async for item in built.paginate("items", expect=reader(Page), pages=_PAGES)]
+    _ = [item async for item in built.paginate("items", pager=_PAGES)]
 
     first, second = fake.calls
     assert carried(second, auth) == carried(first, auth) != set()

@@ -100,7 +100,7 @@ class Paginated[I, P = object](Protocol):
 
 
 @final
-class PageWalk[P, I, B]:
+class PageWalk[I, P, B]:
     """The :class:`Paginated` :meth:`Client.paginate <headgate.Client.paginate>` builds."""
 
     __slots__ = ("_fetch", "_first", "_items_of", "_max_pages", "_on_limit", "_pager", "_source", "_write")
@@ -108,7 +108,7 @@ class PageWalk[P, I, B]:
     def __init__(
         self,
         fetch: Fetch[P, B],
-        pager: Pager[P, I, B],
+        pager: Pager[I, P, B],
         first: PageRequest[B],
         *,
         source: str,

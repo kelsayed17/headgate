@@ -3,8 +3,11 @@
 
 """How a paginated endpoint links its pages: the :class:`Pager` protocol and its strategies.
 
-A pager is a frozen value that knows two things about a page ``P`` it never fetches itself: the items ``I`` on it, and
-the request for the page after it. The client does the fetching (:meth:`Client.paginate
+A pager is a frozen value that knows three things about a page ``P`` it never fetches itself: how it is read (its
+``read``, a :class:`~headgate.Reader` or :class:`~headgate.Expect`, the pager's first argument), the items ``I`` on it,
+and the request for the page after it. Since the reader comes first, a type checker knows ``P`` before it reads the
+lambdas after it: ``Cursor(reader(Page), items=lambda p: p.items, ...)`` is a ``Cursor[Item, Page]``, and a typo in a
+lambda is a type error. The client does the fetching (:meth:`Client.paginate
 <headgate.Client.paginate>`), so every page goes through the whole stack.
 
 * :class:`Cursor`: the page names an opaque cursor, sent back as a query parameter on the same URL.
@@ -24,7 +27,7 @@ as a redirect would be. Both are the walk's, so they hold for every pager.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, replace
+from dataclasses import KW_ONLY, dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, override
 
@@ -36,6 +39,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
 
     from headgate._request_body import Writer
+    from headgate._responses import Expect, Reader
     from headgate._url import CallUrl
 
 __all__ = [
@@ -81,8 +85,10 @@ class PageRequest[B = None]:
         return replace(self, payload=payload)
 
 
-class Pager[P, I, B = None](Protocol):
+class Pager[I, P, B = None](Protocol):
     """How pages of type ``P`` holding items of type ``I``, fetched with request bodies of type ``B``, link up.
+
+    ``read`` reads each page. The item type comes first, as in :class:`~headgate.Paginated`.
 
     ``B`` is the type of the walk's body, ``None`` for a pager that only walks GETs. A pager typed with a body may walk
     GETs too, when ``paginate`` is given no payload (``payload=None``): the first request's ``payload`` is then
@@ -90,6 +96,11 @@ class Pager[P, I, B = None](Protocol):
     """
 
     __slots__ = ()
+
+    @property
+    def read(self) -> Reader[P] | Expect[P]:
+        """The reader of every page: a :class:`~headgate.Reader`, or an :class:`~headgate.Expect` of its answers."""
+        ...
 
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
         """Return the request for the first page, given the one the caller wrote.
@@ -109,7 +120,7 @@ class Pager[P, I, B = None](Protocol):
         ...
 
 
-class WritingPager[P, I, B](Pager[P, I, B], ABC):
+class WritingPager[I, P, B](Pager[I, P, B], ABC):
     """A :class:`Pager` that writes the walk's request bodies: ``write`` encodes the walk's ``payload=`` for every page.
 
     The body is the caller's own value, which ``write`` encodes; with ``write`` ``None``, the value is builtins, sent as
@@ -121,6 +132,12 @@ class WritingPager[P, I, B](Pager[P, I, B], ABC):
     """
 
     __slots__ = ()
+
+    @property
+    @override
+    @abstractmethod
+    def read(self) -> Reader[P] | Expect[P]:
+        """The reader of every page (see :attr:`Pager.read`)."""
 
     @property
     @abstractmethod
@@ -199,17 +216,20 @@ def _posted[B](request: PageRequest[B], pager: str) -> B:
     return request.payload
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class Cursor[P, I, B = None](WritingPager[P, I, B]):
+@dataclass(frozen=True, slots=True)
+class Cursor[I, P, B = None](WritingPager[I, P, B]):
     """Pages linked by an opaque cursor: ``next`` reads it from a page, and it is sent back as the query ``param``.
 
     The last page is the one whose ``next`` returns ``None`` or ``""``, or one with no items: a cursor that advances
     while returning nothing makes no progress. Set ``stop_on_empty=False`` for an endpoint that sends empty pages
-    mid-walk. ``B`` is the type of the request body for a walk of POSTs (``Cursor[Page, Item, Query]``), and
+    mid-walk. ``B`` is the type of the request body for a walk of POSTs (``Cursor[Item, Page, Query]``), and
     ``None`` for a walk of GETs. ``write`` encodes the walk's ``payload=`` on each page (a flavor's ``writer``); a walk
     of POSTs without one sends it as JSON, and a walk of GETs leaves it unused.
     """
 
+    # field(): a bare annotation would take the inherited abstract property as its default.
+    read: Reader[P] | Expect[P] = field()
+    _: KW_ONLY
     items: Callable[[P], Sequence[I]]
     next: Callable[[P], str | None]
     param: str
@@ -240,8 +260,8 @@ class Cursor[P, I, B = None](WritingPager[P, I, B]):
         return request.with_param(self.param, cursor) if bool(cursor) else None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class Offset[P, I, B = None](WritingPager[P, I, B]):
+@dataclass(frozen=True, slots=True)
+class Offset[I, P, B = None](WritingPager[I, P, B]):
     """Pages of at most ``page_size`` items, addressed by the offset of their first item, sent as the query ``param``.
 
     ``start`` is the offset of the collection's first item (0, or 1 for a 1-based API). The walk starts at the offset
@@ -260,6 +280,9 @@ class Offset[P, I, B = None](WritingPager[P, I, B]):
     and the walk steps by ``page_size``.
     """
 
+    # field(): a bare annotation would take the inherited abstract property as its default.
+    read: Reader[P] | Expect[P] = field()
+    _: KW_ONLY
     items: Callable[[P], Sequence[I]]
     page_size: int
     param: str = "offset"
@@ -315,8 +338,8 @@ class Offset[P, I, B = None](WritingPager[P, I, B]):
         return _position(request, self.size_param, self.page_size, "a page size", minimum=1)
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PageNumber[P, I, B = None](WritingPager[P, I, B]):
+@dataclass(frozen=True, slots=True)
+class PageNumber[I, P, B = None](WritingPager[I, P, B]):
     """Pages addressed by number, sent as the query ``param``: page *n* + 1 follows page *n* while ``more`` says so.
 
     The walk starts at the page number the caller's own ``params=`` give under ``param`` (an int, or a string of
@@ -328,6 +351,9 @@ class PageNumber[P, I, B = None](WritingPager[P, I, B]):
     the type of the request body for a walk of POSTs, and ``write`` its writer, as on :class:`Cursor`.
     """
 
+    # field(): a bare annotation would take the inherited abstract property as its default.
+    read: Reader[P] | Expect[P] = field()
+    _: KW_ONLY
     items: Callable[[P], Sequence[I]]
     more: Callable[[P], bool]
     param: str = "page"
@@ -363,14 +389,16 @@ class PageNumber[P, I, B = None](WritingPager[P, I, B]):
         return request.with_param(self.param, _position(request, self.param, self.start, "a page number") + 1)
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class LinkHeader[P, I]:
+@dataclass(frozen=True, slots=True)
+class LinkHeader[I, P]:
     """Pages linked by the response's ``Link`` header: the target of its ``rel="next"`` link is the next page.
 
     The last page is the one with no ``rel="next"`` link, or one with no items (``stop_on_empty=False`` follows the
     link past an empty page).
     """
 
+    read: Reader[P] | Expect[P]
+    _: KW_ONLY
     items: Callable[[P], Sequence[I]]
     stop_on_empty: bool = True
 
@@ -392,14 +420,16 @@ class LinkHeader[P, I]:
         return None if target is None else _wire_url(target)
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class NextUrl[P, I]:
+@dataclass(frozen=True, slots=True)
+class NextUrl[I, P]:
     """Pages linked by a URL in the body: ``next`` reads the next page's URL (absolute or relative) from a page.
 
     The last page is the one whose ``next`` returns ``None`` or ``""``, or one with no items (``stop_on_empty=False``
     follows the URL past an empty page).
     """
 
+    read: Reader[P] | Expect[P]
+    _: KW_ONLY
     items: Callable[[P], Sequence[I]]
     next: Callable[[P], str | None]
     stop_on_empty: bool = True
@@ -422,8 +452,8 @@ class NextUrl[P, I]:
         return _wire_url(target) if bool(target) else None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class BodyCursor[P, I, B](WritingPager[P, I, B]):
+@dataclass(frozen=True, slots=True)
+class BodyCursor[I, P, B](WritingPager[I, P, B]):
     """Pages linked by an opaque cursor carried in the POSTed body: ``put`` writes it into the next page's body.
 
     For an endpoint that takes its search as a request body (a search API, a JSON-RPC call): the walk POSTs the
@@ -434,6 +464,9 @@ class BodyCursor[P, I, B](WritingPager[P, I, B]):
     follows the cursor past an empty page).
     """
 
+    # field(): a bare annotation would take the inherited abstract property as its default.
+    read: Reader[P] | Expect[P] = field()
+    _: KW_ONLY
     items: Callable[[P], Sequence[I]]
     next: Callable[[P], str | None]
     put: Callable[[B, str], B]
@@ -463,8 +496,8 @@ class BodyCursor[P, I, B](WritingPager[P, I, B]):
         return request.with_payload(self.put(_posted(request, "BodyCursor"), cursor))
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class BodyOffset[P, I, B](WritingPager[P, I, B]):
+@dataclass(frozen=True, slots=True)
+class BodyOffset[I, P, B](WritingPager[I, P, B]):
     """Pages of at most ``page_size`` items, addressed by the offset of their first item, carried in the POSTed body.
 
     ``offset`` reads the offset from a body and ``put`` returns a new body at another one. The walk starts at the
@@ -475,6 +508,9 @@ class BodyOffset[P, I, B](WritingPager[P, I, B]):
     ``write`` encodes each page's body, as for :class:`BodyCursor`.
     """
 
+    # field(): a bare annotation would take the inherited abstract property as its default.
+    read: Reader[P] | Expect[P] = field()
+    _: KW_ONLY
     items: Callable[[P], Sequence[I]]
     page_size: int
     offset: Callable[[B], int]

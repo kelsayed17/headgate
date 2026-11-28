@@ -56,7 +56,7 @@ def _issues(page: list[Issue]) -> list[Issue]:
 REPOSITORY = reader(Repository)
 REPOSITORY_OR_NONE = Expect(REPOSITORY).on(HTTPStatus.NOT_FOUND, nothing)  # a missing or hidden repository
 ISSUES = reader(list[Issue])
-ISSUE_PAGES = LinkHeader(items=_issues)
+ISSUE_PAGES = LinkHeader(ISSUES, items=_issues)
 
 
 class GitHub:
@@ -93,4 +93,4 @@ class GitHub:
     def open_issues(self, owner: str, name: str) -> Paginated[Issue]:
         """Return the open issues (and pull requests) of *owner*/*name*, 100 a page, fetched as they are iterated."""
         params = {"state": "open", "per_page": 100}
-        return self._http.paginate(t"repos/{owner}/{name}/issues", expect=ISSUES, pages=ISSUE_PAGES, params=params)
+        return self._http.paginate(t"repos/{owner}/{name}/issues", pager=ISSUE_PAGES, params=params)
