@@ -246,10 +246,7 @@ class Page(msgspec.Struct, frozen=True):
 
 
 _PAGE = msgspec_flavor.reader(Page)
-#: Each page's body, encoded once: twenty items, distinct from every other page's, as a server that pages sends them.
-_PAGE_BODIES = {
-    number: msgspec.json.encode(Page(list(range(number * 20, number * 20 + 20)))) for number in range(1, _PAGES + 1)
-}
+_PAGE_BODY = msgspec.json.encode(Page(list(range(20))))
 
 
 def _items_of(page: Page) -> list[int]:
@@ -265,7 +262,7 @@ def _linked_page(request: httpx2.Request) -> httpx2.Response:
         headers["link"] = (
             f'<{_BASE_URL}items?page={number + 1}>; rel="next", <{_BASE_URL}items?page={_PAGES}>; rel="last"'
         )
-    return httpx2.Response(_OK, content=_PAGE_BODIES[number], headers=headers, request=request)
+    return httpx2.Response(_OK, content=_PAGE_BODY, headers=headers, request=request)
 
 
 def test_paginate_link_header(benchmark: BenchmarkFixture, runner: asyncio.Runner) -> None:

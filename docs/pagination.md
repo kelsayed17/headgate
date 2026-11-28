@@ -26,10 +26,12 @@ Nothing is fetched until iteration starts, no page is kept once the iteration mo
 nothing more, and iterating again starts again from the first page. A page that leads back to a request already made
 (a cursor or next URL that repeats) raises `ClientError` instead of looping forever. A request is remembered by its URL,
 as written and as sent, its params and, for a POST, the bytes its body is sent as, so two bodies are one page exactly
-when they are sent alike. A server that ignores the paging parameter answers the same page forever under requests that
-never repeat, since a pager builds each from the last (`Offset`, `PageNumber`) or reads it from the response (a
-`Link` header that counts on): so a page with items whose body repeats an earlier page's raises `ClientError` too,
-whatever the pager, one of your own included. A walk remembers a fixed-size digest of each, for its last 4096 pages.
+when they are sent alike. A pager that computes each next request by counting (`Offset`, `PageNumber`, `BodyOffset`)
+sends requests that never repeat, so a server that ignores its paging parameter would answer the same page forever: a
+page with items whose body repeats an earlier page's raises `ClientError` too. A pager that reads its next request
+from the page or the response (a cursor, a link) needs no such check, since an identical body gives it an identical
+next request, and its pages may hold identical data. A pager of your own that counts says so with one line,
+`counts_pages: ClassVar[bool] = True`, and gets the same check. A walk remembers a fixed-size digest of each, for its last 4096 pages.
 
 `Paginated` is the class of the walk itself, so a traceback names it: `await client.paginate(...)` raises
 `TypeError: 'Paginated' object can't be awaited`, and a plain `for` that it is not iterable. Iterate with `async for`,

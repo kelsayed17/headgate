@@ -28,7 +28,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, replace
 from types import MappingProxyType
-from typing import Final, Protocol, override
+from typing import ClassVar, Final, Protocol, override
 
 import httpx2
 
@@ -89,6 +89,10 @@ class Pager[I, P, B = None](Protocol):
     ``B`` is the type of the walk's body, ``None`` for a pager that only walks GETs. A pager typed with a body may walk
     GETs too, when ``paginate`` is given no payload (``payload=None``): the first request's ``payload`` is then
     ``None``, and a later one has a body only if the pager gives it one.
+
+    A pager whose next request is computed by counting (an offset, a page number) rather than read from the page or
+    the response declares ``counts_pages: ClassVar[bool] = True`` (see :attr:`WritingPager.counts_pages`); it is not a
+    member of this protocol, so a pager that reads its next request needs nothing.
     """
 
     __slots__ = ()
@@ -137,6 +141,14 @@ class WritingPager[I, P, B](ABC):
 
     read: Reader[P] | Expect[P]
     write: Writer[B] | None
+
+    #: Whether the pager's next request is computed without reading the page or the response: by counting, as an
+    #: offset or a page number. A server that ignores such paging answers the same page forever under requests that
+    #: never repeat, so the walk refuses a page with items whose body repeats an earlier page's. A pager that reads its
+    #: next request (a cursor, a link) keeps the default ``False``: an identical body gives it an identical next
+    #: request, which the walk's repeated-request check refuses, and two pages of identical data are walked. The walk
+    #: reads it from any pager, by its shape too, defaulting to ``False``.
+    counts_pages: ClassVar[bool] = False
 
     @abstractmethod
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
@@ -301,6 +313,8 @@ class Offset[I, P, B = None](WritingPager[I, P, B]):
     and the walk steps by ``page_size``.
     """
 
+    counts_pages: ClassVar[bool] = True
+
     read: Reader[P] | Expect[P]
     _: KW_ONLY
     items: Callable[[P], Sequence[I]]
@@ -374,6 +388,8 @@ class PageNumber[I, P, B = None](WritingPager[I, P, B]):
     returns ``False``, or one with no items (``stop_on_empty=False`` asks for the page after an empty one). ``B`` is
     the type of the request body for a walk of POSTs, and ``write`` its writer, as on :class:`Cursor`.
     """
+
+    counts_pages: ClassVar[bool] = True
 
     read: Reader[P] | Expect[P]
     _: KW_ONLY
@@ -542,6 +558,8 @@ class BodyOffset[I, P, B](WritingPager[I, P, B]):
     page size itself is the caller's to put in the body, as it is the caller's to put in :class:`Offset`'s query.
     ``write`` encodes each page's body, as for :class:`BodyCursor`.
     """
+
+    counts_pages: ClassVar[bool] = True
 
     read: Reader[P] | Expect[P]
     _: KW_ONLY
