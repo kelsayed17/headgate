@@ -592,6 +592,13 @@ class Minted[TokenT]:
     token: TokenT
     lifetime: float
 
+    def __post_init__(self) -> None:
+        """Refuse a lifetime that is not a number of seconds above 0; ``math.inf`` is a token that never expires."""
+        lifetime: object = self.lifetime
+        if isinstance(lifetime, bool) or not isinstance(lifetime, int | float) or not lifetime > 0:
+            msg = f"Minted(lifetime=) takes the seconds the token lives, a number above 0 (got {lifetime!r})"
+            raise TypeError(msg)
+
 
 #: What a token type may be read as that does not say it is not text: ``Any``, and a union, which may hold ``str``.
 _MAYBE_TEXT: Final = (Any, UnionType)
@@ -659,11 +666,11 @@ def hold_timing(auth: Auth | None, timing: Timing) -> None:
 
 
 def _check_margin(cls: type[CachedTokenAuth[Any]]) -> None:
-    """Refuse a ``refresh_margin`` that is not a number of seconds, 0 or more, naming *cls*."""
+    """Refuse a ``refresh_margin`` that is not a finite number of seconds, 0 or more, naming *cls*."""
     margin: object = cls.refresh_margin
-    if isinstance(margin, bool) or not isinstance(margin, int | float) or not margin >= 0:
+    if isinstance(margin, bool) or not isinstance(margin, int | float) or not 0 <= margin < math.inf:
         msg = (
-            f"{cls.__name__}.refresh_margin takes the seconds before expiry to refresh, a number of 0 or more "
+            f"{cls.__name__}.refresh_margin takes the seconds before expiry to refresh, a finite number of 0 or more "
             f"(got {margin!r})"
         )
         raise TypeError(msg)
@@ -760,7 +767,7 @@ class CachedTokenAuth[TokenT = str](Auth):
     credential_params: ClassVar[frozenset[str]] = frozenset[str]()
 
     #: Seconds before a token expires that it is re-minted, at half its life when that is shorter. A subclass sets its
-    #: own as a class attribute, a number of 0 or more, checked when the class is defined.
+    #: own as a class attribute, checked when the class is defined (:func:`_check_margin`).
     refresh_margin: ClassVar[float] = 120.0
 
     # -- Subclass contract ---------------------------------------------------
@@ -888,7 +895,8 @@ class CachedTokenAuth[TokenT = str](Auth):
     def _cache(self, token: TokenT, lifetime: float, *, minted_at: float) -> None:
         # A lifetime at or under the margin would read as due the moment it was cached, so every request would mint
         # again: refresh at half-life instead.
-        margin = min(self.refresh_margin, lifetime / 2)
+        # The class's margin, which was checked: an instance's own assignment is not read.
+        margin = min(type(self).refresh_margin, lifetime / 2)
         now = self.__state.clock()
         self.__state.held = _Held(
             token=token, minted_at=minted_at, due_at=now + lifetime - margin, expires_at=now + lifetime

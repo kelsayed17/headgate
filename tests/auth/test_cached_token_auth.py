@@ -626,7 +626,7 @@ class TestAMintThatYieldsRequests:
                 self, request: httpx2.Request
             ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
                 if request.url.path == "/never":
-                    yield Minted("unreachable", 0.0)
+                    yield Minted("unreachable", 1.0)
 
         with pytest.raises(RuntimeError, match=r"_Unfinished\.mint ended without yielding Minted"):
             await anext(_Unfinished().async_auth_flow(_get()))
@@ -827,3 +827,33 @@ def test_an_async_token_hook_is_refused_when_defined(hook: str) -> None:
 
     with pytest.raises(TypeError, match=rf"_Async\.{hook} is a coroutine function, which CachedTokenAuth calls"):
         type("_Async", (_CountingAuth,), {hook: coroutine, "credential_headers": frozenset({"x-token"})})
+
+
+@pytest.mark.parametrize("lifetime", [0.0, -5.0, math.nan, True, "60"], ids=repr)
+def test_a_minted_lifetime_that_is_not_positive_seconds_is_refused(lifetime: object) -> None:
+    """Refuse, when it is built, a lifetime that is not a positive number of seconds (R9)."""
+    with pytest.raises(TypeError, match=r"Minted\(lifetime=\) takes the seconds the token lives, a number above 0"):
+        Minted("tok", cast("float", lifetime))
+
+
+def test_a_minted_lifetime_may_be_infinite() -> None:
+    """Accept ``math.inf``, a token that never expires, as a test's pre-minted bearer is."""
+    assert Minted("tok", math.inf).lifetime == math.inf
+
+
+def test_an_infinite_refresh_margin_is_refused() -> None:
+    """Refuse ``math.inf``: a margin is a finite number of seconds (R9)."""
+    with pytest.raises(TypeError, match=r"_Bad\.refresh_margin takes the seconds before expiry"):
+        type("_Bad", (_CountingAuth,), {"refresh_margin": math.inf})
+
+
+async def test_an_instance_margin_does_not_skip_the_check(client_factory: _Factory, clock: TestClock) -> None:
+    """Read the class's ``refresh_margin``, which was checked, not one an instance assigned itself (R9)."""
+    auth = _CountingAuth()
+    vars(auth)["refresh_margin"] = -100.0
+    client = client_factory(auth, _ok)
+    await client.get("/x")
+    clock.advance(_LIFETIME_S - _MARGIN_S)
+    await client.get("/x")
+
+    assert auth.mints == _MINT_AND_RE_MINT
