@@ -108,6 +108,10 @@ stays retryable. `body=` takes one `Body`, whose class says what it is:
 | `Multipart(files, fields)` | `multipart/form-data`: files as httpx2 takes them, beside form fields | unless a file cannot be rewound |
 | `Raw(content)` | bytes, an async iterable of bytes, or a callable returning one | unless it is an async iterable |
 
+A `Json` is encoded once, where it is built, so a value JSON cannot carry raises there: a `TypeError` for one that is
+not builtins, naming its type, and a `ValueError` for `NaN` or an infinity. Its read-only `value` is what it was built
+from, and a change to that value afterwards is not sent; `copy.replace(body, value=...)` builds another.
+
 `Raw` takes a `RawContent`:
 
 - `bytes`, sent as they are, and retryable;

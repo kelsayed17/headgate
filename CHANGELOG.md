@@ -329,8 +329,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   too, naming `Json`. Write `body=writer(Order)(order)` with a flavor's writer, or `body=Json(to_builtins(order))`. A
   change to the value after the `Json` is built is no longer sent: build the `Json` from the value you mean to send.
   `Json` is a final value class rather than a dataclass: `dataclasses.replace`, `fields` and `asdict` no longer apply
-  to it, so write `copy.replace(body, value=...)` and `body.value`; it compares, hashes, prints and matches
-  (`case Json(value)`) as before, and a subclass raises `TypeError`.
+  to it, so write `copy.replace(body, value=...)` and `body.value`, a read-only property; it compares, hashes, prints
+  and matches (`case Json(value)`) as before, and a subclass raises `TypeError`.
 - `Reader` refuses a class with `TypeError` where it is built: `Reader(str)` type-checked and returned
   `'<Response [200 OK]>'`. Write `expect=as_text` for `Reader(str)`, `as_bytes` for `Reader(bytes)`, `as_json` for
   `Reader(dict)` or `Reader(list)`, and `Reader(lambda r: Cls(r))` for a class that is built from a response.

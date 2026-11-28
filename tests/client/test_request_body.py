@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import importlib
+import inspect
 import io
 import json
 import math
@@ -151,6 +152,7 @@ def test_a_json_body_is_a_value_of_its_value_alone() -> None:
             assert value == {"a": 1}
     assert copy.replace(body, value=[1]) == Json([1])
     assert not dataclasses.is_dataclass(body)
+    assert isinstance(inspect.getattr_static(Json, "value"), property), "value is a read-only property"
     with pytest.raises(AttributeError, match=r"^Json is immutable"):
         cast("Any", body).value = 2
     with pytest.raises(AttributeError, match=r"^Json is immutable"):
