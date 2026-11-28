@@ -46,14 +46,36 @@ async def test_a_wrapper_forwards_the_call_options(tmp_path: Path) -> None:
         """
         async def fetch(**options: Unpack[CallOptions]) -> None:
             await c.get(url, expect=nothing, **options)
-            await c.post(url, expect=nothing, **options)
             c.paginate(url, pager=PAGES, **options)
 
+        async def send(**options: Unpack[RequestOptions]) -> None:
+            await c.post(url, expect=nothing, **options)
+
         await fetch(retry=None, follow_redirects=False, cache_ttl=None)
+        await send(retry=None, follow_redirects=False)
         """,
     )
 
     assert code == 0, out
+
+
+async def test_a_verb_the_cache_never_stores_takes_no_cache_ttl(tmp_path: Path) -> None:
+    """Refuse ``cache_ttl=`` on POST, PUT, PATCH, DELETE and QUERY, which no cache stores, and accept it on GET."""
+    code, out = await _check(
+        tmp_path,
+        """
+        await c.post(url, expect=nothing, cache_ttl=5)
+        await c.put(url, expect=nothing, cache_ttl=5)
+        await c.patch(url, expect=nothing, cache_ttl=5)
+        await c.delete(url, expect=nothing, cache_ttl=5)
+        await c.query(url, expect=nothing, cache_ttl=5)
+        await c.get(url, expect=nothing, cache_ttl=5)
+        await c.head(url, expect=nothing, cache_ttl=5)
+        """,
+    )
+
+    assert code != 0, out
+    assert out.count("unknown-argument") == len(("post", "put", "patch", "delete", "query")), out
 
 
 async def test_stream_options_leave_out_what_a_stream_never_buffers(tmp_path: Path) -> None:
@@ -61,7 +83,7 @@ async def test_stream_options_leave_out_what_a_stream_never_buffers(tmp_path: Pa
     code, out = await _check(
         tmp_path,
         """
-        async def opened(**options: Unpack[RequestOptions]) -> None:
+        async def opened(**options: Unpack[CallOptions]) -> None:
             async with c.stream(url, **options):
                 pass
         """,

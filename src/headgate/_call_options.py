@@ -49,9 +49,8 @@ class _EveryCall(TypedDict, total=False):
 
 
 class _Buffered(_EveryCall, total=False):
-    """The options of a request whose response is read whole: every request's, plus its cache lifetime and size cap."""
+    """The options of a request whose response is read whole: every request's, plus its size cap."""
 
-    cache_ttl: float | None
     max_response_bytes: int
 
 
@@ -62,10 +61,11 @@ class _Bodies(TypedDict, total=False):
 
 
 class CallOptions(_Buffered, total=False, closed=True):
-    """The per-call options of every verb and of :meth:`~headgate.Client.paginate`, beyond the body.
+    """The per-call options of ``get()``, ``head()`` and :meth:`~headgate.Client.paginate`: a read's, with no body.
 
-    They are all ``get()`` and ``head()`` take, since a GET or HEAD has no body. An option left out takes the view's,
-    the route's or the policy's; ``None`` is off.
+    They are all ``get()`` and ``head()`` take, since a GET or HEAD has no body; a verb with a body takes
+    :class:`RequestOptions`, these less ``cache_ttl`` plus ``body``. An option left out takes the view's, the route's
+    or the policy's; ``None`` is off.
 
     * ``params``: the query, ``Mapping[str, object]`` so that a client can pass a TypedDict (a TypedDict is assignable
       to no narrower mapping). A value is a ``str``, number, bool or ``None``; an ``Enum``, sent as its value; a
@@ -80,9 +80,10 @@ class CallOptions(_Buffered, total=False, closed=True):
     * ``follow_redirects``: ``False`` makes a redirect raise as its 3xx; ``True`` follows it.
     * ``cache_ttl``: this response's cache lifetime in seconds, over ``HttpCache.ttl``, or ``None`` for no lifetime
       limit, so the entry is served until its storage evicts it. The cache is TTL-only either way: it never reads the
-      response's own cache headers, ``Cache-Control: max-age`` and ``no-store`` included. On a call that is not
-      cached (a client without a cache, a route with ``cache=None``, a method or path the cache's rules leave out) it
-      raises ``ValueError``, since it would set the lifetime of nothing.
+      response's own cache headers, ``Cache-Control: max-age`` and ``no-store`` included. A cache stores only GETs and
+      HEADs, so no verb with a body takes it. On a call that is not cached (a client without a cache, a route with
+      ``cache=None``, a path the cache's rules leave out, a page of a walk of POSTs) it raises ``ValueError``, since
+      it would set the lifetime of nothing.
     * ``idempotency_key``: the idempotency key this call carries on every attempt, under the policy's
       ``IdempotencyKeys`` header (``Idempotency-Key`` by default).
     * ``max_response_bytes``: the cap on this call's body, counted after decompression, in place of
@@ -91,9 +92,14 @@ class CallOptions(_Buffered, total=False, closed=True):
       undeclared error keeps the client's cap, so it raises as its status.
     """
 
+    cache_ttl: float | None
+
 
 class RequestOptions(_Buffered, _Bodies, total=False, closed=True):
-    """The per-call options a verb takes beyond its URL and ``expect=``: :class:`CallOptions`, plus the body.
+    """The per-call options a verb with a body takes beyond its URL and ``expect=``: a read's, plus the body.
+
+    It takes no ``cache_ttl``: a cache stores only GETs and HEADs, so a POST, PUT, PATCH, DELETE or QUERY is never
+    cached, and the type checker refuses a lifetime for it.
 
     * ``body``: a :data:`~headgate.Body`, whose class says how it is sent: an :class:`~headgate.EncodedBody` a
       flavor's ``writer`` wrote (``body=NEW_ORDER(order)``), :class:`~headgate.Json`, :class:`~headgate.Form`,
@@ -104,9 +110,9 @@ class RequestOptions(_Buffered, _Bodies, total=False, closed=True):
 
 
 class StreamOptions(_EveryCall, _Bodies, total=False, closed=True):
-    """The per-call options of :meth:`~headgate.Client.stream`: :class:`~headgate.RequestOptions` but two.
+    """The per-call options of :meth:`~headgate.Client.stream`: :class:`~headgate.RequestOptions` but one.
 
-    A stream is never buffered, so it takes no ``cache_ttl`` and no ``max_response_bytes``; the rest are a verb's.
+    A stream is never buffered, so it takes no ``max_response_bytes``, nor a ``cache_ttl``; the rest are a verb's.
     """
 
 
