@@ -152,8 +152,8 @@ async def test_every_transition_is_reported_once_by_the_call_that_caused_it() ->
     assert _transitions(recorder) == [
         (closed, opened, _THRESHOLD),
         (opened, probing, _THRESHOLD),
-        (probing, opened, _THRESHOLD),
-        (opened, probing, _THRESHOLD),
+        (probing, opened, _THRESHOLD + 1),
+        (opened, probing, _THRESHOLD + 1),
         (probing, closed, 0),
     ]
     changes = [event for event in recorder.events if isinstance(event, BreakerChanged)]

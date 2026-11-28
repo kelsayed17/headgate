@@ -127,6 +127,35 @@ async def test_half_open_probe_failure_reopens() -> None:
     assert cb.state is BreakerState.OPEN
 
 
+async def test_a_failed_probe_counts_as_a_consecutive_failure() -> None:
+    """Count the probe's failure with the ones that opened the breaker, as no success came between them."""
+    cb = _breaker(_QUICK, _COOLDOWN)
+    _fail(cb, _QUICK)
+    await asyncio.sleep(_PAST_COOLDOWN)
+    transitions: list[Transition] = []
+
+    def probe() -> None:
+        with cb.track(transitions.append) as verdict:
+            verdict.mark_failed()
+            raise _BoomError
+
+    with pytest.raises(_BoomError):
+        probe()
+
+    assert cb.failure_count == _QUICK + 1
+    assert transitions[-1] == Transition(BreakerState.HALF_OPEN, BreakerState.OPEN, _QUICK + 1)
+
+
+async def test_a_reading_takes_the_state_the_refusal_and_the_count_together() -> None:
+    """Read the three a snapshot reports at one instant, under the breaker's lock, so no change lands between them."""
+    cb = _breaker(_QUICK, _COOLDOWN)
+    assert cb.reading() == (BreakerState.CLOSED, False, 0)
+    _fail(cb, _QUICK)
+    assert cb.reading() == (BreakerState.OPEN, True, _QUICK)
+    await asyncio.sleep(_PAST_COOLDOWN)
+    assert cb.reading() == (BreakerState.OPEN, False, _QUICK), "open until a probe is taken, yet admitting one"
+
+
 async def test_half_open_gates_to_a_single_probe() -> None:
     """Refuse concurrent callers while the probe is in flight, rather than letting them race in."""
     cb = _breaker(_QUICK, _COOLDOWN)

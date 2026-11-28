@@ -29,15 +29,21 @@ class BreakerSnapshot:
 
 
 def breaker_states(registry: BreakerRegistry) -> dict[str, BreakerSnapshot]:
-    """Return a snapshot per origin (``scheme://host[:port]``) *registry* holds a breaker for.
+    """Return a snapshot per origin *registry* holds a breaker for, each read at one instant.
+
+    Each key is the origin in its canonical form, ``scheme://host[:port]``: the host lower-cased, an IPv6 host in
+    brackets, and the port left out when it is the scheme's default. A client on ``https://API.example:443/v1`` is
+    keyed ``"https://api.example"``. An origin no client has called yet is absent, so read one with
+    ``.get("https://api.example")``.
 
     Pass the registry the clients to report on share (their ``breaker=BreakerRegistry(...)``); a client given a
-    ``BreakerPolicy`` keeps its breakers to itself. An origin no client has called yet is absent.
+    ``BreakerPolicy`` keeps its breakers to itself.
     """
-    return {
-        breaker.name: BreakerSnapshot(state=breaker.state, refusing=breaker.refusing, failures=breaker.failure_count)
-        for breaker in table_of(registry).breakers()
-    }
+    snapshots: dict[str, BreakerSnapshot] = {}
+    for breaker in table_of(registry).breakers():
+        state, refusing, failures = breaker.reading()
+        snapshots[breaker.name] = BreakerSnapshot(state=state, refusing=refusing, failures=failures)
+    return snapshots
 
 
 def observer_failures() -> dict[str, int]:

@@ -212,8 +212,16 @@ class CircuitBreaker:
 
     @property
     def failure_count(self) -> int:
-        """Consecutive failures recorded since the last success."""
+        """Consecutive failures recorded since the last success, a failed probe included."""
         return self._failures
+
+    def reading(self) -> tuple[BreakerState, bool, int]:
+        """Return :attr:`state`, :attr:`refusing` and :attr:`failure_count` as of one instant, read under the lock.
+
+        Read one by one, a transition landing between them could pair an open state with the count of a closed one.
+        """
+        with self._lock:
+            return self._state, not self._admits(), self._failures
 
     def _cooldown_left(self) -> float | None:
         """Return the seconds until a probe is admitted, or ``None`` while one is out."""
@@ -310,7 +318,8 @@ class CircuitBreaker:
                 self._state = BreakerState.CLOSED
                 self._failures = 0
             elif outcome is _Outcome.FAILURE:
-                # The origin was given its one chance.
+                # The origin was given its one chance; no success came since the failures that opened it.
+                self._failures += 1
                 self._open()
             return self._transition(previous)
 

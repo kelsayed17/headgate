@@ -273,9 +273,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   client instead; one that computed a wait reads `factor` and `max_wait`.
 - `CircuitBreaker` from `headgate.breaker`, and `BreakerRegistry.breaker_for()`, `breakers()` and iteration, which
   handed out the live breakers only the client drives: `headgate.health.breaker_states(registry)` is the one reader
-  of a registry's breakers, building none. Write `breaker_states(registry)[origin].state` for
-  `registry.breaker_for(origin).state`, `.failures` for `.failure_count`, and `for origin, snapshot in
-  breaker_states(registry).items()` for `for breaker in registry`. A registry keeps its constructor, `policy`,
+  of a registry's breakers, building none. Write `breaker_states(registry).get("https://api.example")` for
+  `registry.breaker_for("https://api.example")`, reading `.state`, `.refusing` and `.failures` (for
+  `.failure_count`) from the snapshot, and `for origin, snapshot in breaker_states(registry).items()` for
+  `for breaker in registry`. Each key is the canonical origin, `scheme://host[:port]` with the host lower-cased and
+  the scheme's default port left out, and an origin no client has called yet is absent (`.get()` returns `None`),
+  where `breaker_for()` built a closed breaker for it. A registry keeps its constructor, `policy`,
   `max_hosts`, `len()`, `clear()` and its `repr`.
 - `headgate.health.cache_degradations()` and the process-wide count behind it, which repeated what the
   `CacheChecked` event already reported, without the call: count `CacheChecked(outcome=CacheOutcome.DEGRADED)` events
@@ -296,6 +299,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- A breaker's consecutive-failure count includes a failed half-open probe, so `BreakerSnapshot.failures` and
+  `BreakerChanged.failures` say what they are documented to: a breaker with `failure_threshold=2` whose probe failed
+  reads `failures=3`, where it read `2` and kept reading it until the next success. Nothing to write differently; a
+  test that pinned the old count after a failed probe adds one.
 - A `CachedTokenAuth` whose token type is not `str` no longer sends the token's `repr` as its bearer
   (`Authorization: Bearer {'access': ..., 'refresh': ...}`, the refresh token included). Its class must override
   `attach`: a subclass of `CachedTokenAuth[dict[str, str]]` that keeps the default raises `TypeError` when it is
