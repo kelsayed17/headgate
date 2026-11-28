@@ -12,18 +12,23 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import threading
-from typing import override
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, override
 
 import httpx2
 import pytest
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
 
+import headgate.breaker
 from headgate import BreakerPolicy
-from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
-from headgate.breaker._registry import DEFAULT_MAX_HOSTS
+from headgate.breaker import BreakerRegistry, BreakerState
+from headgate.breaker._registry import DEFAULT_MAX_HOSTS, table_of
 from headgate.timing import Timing
 from tests.support.timing import built_on
+
+if TYPE_CHECKING:
+    from headgate.breaker._breaker import CircuitBreaker
 
 #: A registry small enough for Hypothesis to fill, and more origins than it holds.
 _MAX = 3
@@ -47,37 +52,51 @@ def _trip(breaker: CircuitBreaker) -> None:
             raise RuntimeError
 
 
+def test_a_registry_shows_only_its_settings() -> None:
+    """Leave finding and driving a breaker to the client: a registry shows its settings, its size and ``clear``."""
+    registry: object = BreakerRegistry()
+
+    assert [name for name in dir(BreakerRegistry) if not name.startswith("_")] == ["clear", "max_hosts", "policy"]
+    assert not isinstance(registry, Iterable)
+
+
+def test_circuit_breaker_is_not_exported() -> None:
+    """Keep the breaker itself out of ``headgate.breaker``: it is read through ``headgate.health.breaker_states``."""
+    assert "CircuitBreaker" not in headgate.breaker.__all__
+    assert not hasattr(headgate.breaker, "CircuitBreaker")
+
+
 def test_a_registry_holds_at_most_max_hosts_dropping_the_least_recently_used_closed_one() -> None:
     """Evict the least recently used closed breaker, keeping open ones and recently used ones."""
     registry = BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN), max_hosts=_MAX)
-    first, second, third = (registry.breaker_for(o) for o in _ORIGINS[:3])
+    first, second, third = (table_of(registry).breaker_for(o) for o in _ORIGINS[:3])
     _trip(first)
-    registry.breaker_for(_ORIGINS[1])  # second is now recent
-    fourth = registry.breaker_for(_ORIGINS[3])
+    table_of(registry).breaker_for(_ORIGINS[1])  # second is now recent
+    fourth = table_of(registry).breaker_for(_ORIGINS[3])
 
-    assert registry.breakers() == (first, second, fourth), "the closed, least recently used third was dropped"
-    assert third not in registry.breakers()
+    assert table_of(registry).breakers() == (first, second, fourth), "the closed, least recently used third was dropped"
+    assert third not in table_of(registry).breakers()
     assert registry.max_hosts == _MAX
 
 
 def test_a_registry_of_open_breakers_still_stays_bounded() -> None:
     """Drop the least recently used breaker of all when every one is open, so failing origins cannot grow it."""
     registry = BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN), max_hosts=1)
-    first = registry.breaker_for(_ORIGINS[0])
+    first = table_of(registry).breaker_for(_ORIGINS[0])
     _trip(first)
-    second = registry.breaker_for(_ORIGINS[1])
-    assert registry.breakers() == (second,)
+    second = table_of(registry).breaker_for(_ORIGINS[1])
+    assert table_of(registry).breakers() == (second,)
 
 
 def test_a_registry_takes_an_origin_or_a_url_and_refuses_a_relative_one() -> None:
     """Accept an ``httpx2.Origin``, a URL object or text, and refuse a relative URL, which has no origin."""
     registry = BreakerRegistry()
-    by_origin = registry.breaker_for(httpx2.Origin("https://a.example"))
-    by_url = registry.breaker_for(httpx2.URL("https://a.example/p"))
+    by_origin = table_of(registry).breaker_for(httpx2.Origin("https://a.example"))
+    by_url = table_of(registry).breaker_for(httpx2.URL("https://a.example/p"))
     assert by_origin is by_url
-    assert registry.breakers(httpx2.Origin("https://a.example")) == (by_origin,)
+    assert table_of(registry).breakers(httpx2.Origin("https://a.example")) == (by_origin,)
     with pytest.raises(ValueError, match="absolute"):
-        registry.breaker_for("/relative")
+        table_of(registry).breaker_for("/relative")
 
 
 def test_a_registry_defaults_to_a_thousand_and_twenty_four_breakers_and_refuses_none() -> None:
@@ -103,7 +122,7 @@ def test_one_registry_shared_by_threads_running_their_own_loops_stays_consistent
         ran = 0
         for n in range(_FETCHES):
             origin = _ORIGINS[(n + offset) % _SHARED_ORIGINS]
-            breaker = registry.breaker_for(origin)
+            breaker = table_of(registry).breaker_for(origin)
             with contextlib.suppress(Exception), breaker.track() as verdict:
                 ran += 1
                 await asyncio.sleep(0)
@@ -120,7 +139,7 @@ def test_one_registry_shared_by_threads_running_their_own_loops_stays_consistent
 
     assert len(outcomes) == _THREADS, "every thread finished without an error escaping"
     assert len(registry) == _SHARED_ORIGINS
-    for breaker in registry:
+    for breaker in table_of(registry).breakers():
         assert breaker.state is BreakerState.OPEN
         assert breaker.failure_count == _THRESHOLD, "a failure finishing after the trip changes nothing"
     assert sum(outcomes) < _THREADS * _FETCHES, "open breakers refused the rest"
@@ -144,11 +163,11 @@ class RegistryMachine(RuleBasedStateMachine):
     @rule(origin=st.sampled_from(_ORIGINS))
     def look_up(self, origin: str) -> None:
         """Fetch *origin*'s breaker, building it if new; the same origin always returns the same breaker while held."""
-        held = {b.name: b for b in self.registry}
-        breaker = self.registry.breaker_for(origin)
+        held = {b.name: b for b in table_of(self.registry).breakers()}
+        breaker = table_of(self.registry).breaker_for(origin)
         if origin in held:
             assert breaker is held[origin]
-        assert self.registry.breakers()[-1] is breaker, "a lookup makes the breaker the most recently used"
+        assert table_of(self.registry).breakers()[-1] is breaker, "a lookup makes the breaker the most recently used"
         self.last_built = breaker
 
     @rule()
@@ -170,7 +189,7 @@ class RegistryMachine(RuleBasedStateMachine):
     @invariant()
     def keys_are_unique(self) -> None:
         """Hold one breaker per origin."""
-        keys = [b.name for b in self.registry]
+        keys = [b.name for b in table_of(self.registry).breakers()]
         assert len(keys) == len(set(keys))
 
     @override

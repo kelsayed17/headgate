@@ -9,16 +9,22 @@ call failing against the same origin; here that other call is made from inside t
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import httpx2
 import pytest
 
 from headgate import BreakerPolicy, CallPolicy, HttpOptions, UpstreamStatusError, nothing
-from headgate.breaker import BreakerState, CircuitBreaker
+from headgate.breaker import BreakerState
+from headgate.breaker._registry import table_of
 from headgate.events import BreakerChanged
 from headgate.testing import FakeTransport, TestClock
 from tests.integration._support import BASE, client
 from tests.support.breakers import registry_of
 from tests.support.events import Recorder
+
+if TYPE_CHECKING:
+    from headgate.breaker._breaker import CircuitBreaker
 
 _PATH = "/v1/x"
 _COOLDOWN = 60.0
@@ -42,7 +48,7 @@ async def test_a_breaker_opening_mid_sequence_stops_the_retries() -> None:
     fake = FakeTransport().reply("GET", _PATH, unavailable_while_another_call_fails, 200)
     built = client(fake, policy=_POLICY)
     registry = registry_of(built)
-    breakers.append(registry.breaker_for(BASE))
+    breakers.append(table_of(registry).breaker_for(BASE))
 
     with pytest.raises(UpstreamStatusError) as raised:
         await built.get("x", expect=nothing)
@@ -61,7 +67,7 @@ async def test_a_half_open_probe_keeps_its_retries() -> None:
     with clock.install():
         built = client(fake, policy=_POLICY, http=HttpOptions(), observers=(recorder,))
     registry = registry_of(built)
-    breaker = registry.breaker_for(BASE)
+    breaker = table_of(registry).breaker_for(BASE)
     _fail_once(breaker)
     clock.advance(_COOLDOWN)
 

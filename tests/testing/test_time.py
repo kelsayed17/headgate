@@ -30,7 +30,9 @@ from headgate import (
 )
 from headgate._core import Timing as CoreTiming
 from headgate._core import current_timing
-from headgate.breaker import BreakerRegistry, CircuitBreaker
+from headgate.breaker import BreakerRegistry
+from headgate.breaker._breaker import CircuitBreaker
+from headgate.breaker._registry import table_of
 from headgate.policy import policy_disabled
 from headgate.retry import Backoff, RetryBudget, RetryShare
 from headgate.retry._policy import ledger_of
@@ -269,7 +271,7 @@ def test_what_is_built_outside_the_block_keeps_the_system_clock() -> None:
 
 def _breaker(registry: BreakerRegistry) -> CircuitBreaker:
     """Return *registry*'s breaker for the test origin, which trips after one failure and cools down for 30 s."""
-    return registry.breaker_for("https://h.test")
+    return table_of(registry).breaker_for("https://h.test")
 
 
 def _trip(registry: BreakerRegistry) -> None:

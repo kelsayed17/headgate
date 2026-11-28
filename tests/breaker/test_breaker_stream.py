@@ -35,7 +35,8 @@ from headgate import (
     UpstreamStatusError,
 )
 from headgate._core import BreakerState, CallFinished
-from headgate.breaker import BreakerRegistry, CircuitBreaker
+from headgate.breaker import BreakerRegistry
+from headgate.breaker._registry import table_of
 from headgate.testing import TestClock
 from headgate.timing import Timing, timing_override
 from tests.support.events import Recorder
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
 
     from headgate import Middleware, Next
+    from headgate.breaker._breaker import CircuitBreaker
 
 _ORIGIN = "https://streamed.example"
 _RATE = Rate.per_second(1000)
@@ -66,7 +68,7 @@ class _Breakers:
             self.timing,
             lambda: BreakerRegistry(BreakerPolicy(failure_threshold=threshold, recovery_timeout=_COOLDOWN)),
         )
-        self.breaker: CircuitBreaker = registry.breaker_for(_ORIGIN)
+        self.breaker: CircuitBreaker = table_of(registry).breaker_for(_ORIGIN)
 
     def client(
         self,

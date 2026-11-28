@@ -3,9 +3,8 @@
 
 """The circuit breaker: stop calling an origin that is failing, find out cheaply when it recovers.
 
-There is one breaker per origin and breaker policy, shared by every client that uses the same
-:class:`~headgate.breaker.BreakerRegistry` (by default the process-wide one), so two clients addressing the same
-upstream cannot each spend their own quota of failures against it.
+A :class:`~headgate.breaker.BreakerRegistry` holds one breaker per origin, shared by every client given that registry,
+so two clients addressing the same upstream through it cannot each spend their own quota of failures against it.
 
 Three design choices, each fixing a failure mode of the usual ``with breaker:`` wrapper:
 
