@@ -254,7 +254,8 @@ nor `None` is the same misuse, a `TypeError` naming `response_check=`. (Amended 
 **5.4 Declarations that cannot happen (T10, T18).** An `Expect` that declares a redirect status on a call that follows
 redirects raises `ValueError` saying to pass `follow_redirects=False`. Refused at construction: an empty or blank
 bearer token, one that already starts with `Bearer `, an empty `StaticHeaderAuth` or `QueryParamAuth` mapping, a
-negative `refresh_margin`; at the call, `cache_ttl=` on a client without a cache.
+negative `refresh_margin`; at the call, `cache_ttl=` on a call that is not cached: on a client without a cache, under a
+route with `cache=None`, or for a method or path the cache's rules leave out. (Amended with the phase 5 review.)
 
 **5.5 Every pager gets the loop guard (E17).** The repeated-body check runs for every pager that declares
 `counts_pages = True` (its next request is computed by counting, not read from the page or the response), whose page

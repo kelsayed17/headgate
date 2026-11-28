@@ -110,7 +110,7 @@ from headgate._view import KEEP, ROOT_DEFAULTS, VIEW_KEYS, ViewOptions
 from headgate.breaker import BreakerRegistry
 from headgate.breaker._breaker import BreakerOpenError, CircuitBreaker, Transition, Verdict
 from headgate.breaker._registry import NO_BREAKER, Breaker, table_of
-from headgate.cache._policy import HttpCache
+from headgate.cache._policy import HttpCache, caches_request
 from headgate.cache._transport import (
     HAS_BODY,
     MAX_RESPONSE_BYTES,
@@ -900,16 +900,32 @@ class Client:
         _mark_body(context, body, given=options.get("body") is not None)
         self._stamp_idempotency_key(request, context, options.get("idempotency_key"))
         # The cache transport only setdefaults the client's own TTL, so a per-call TTL stamped here wins.
-        if "cache_ttl" in options and self._policy.cache is None:
-            msg = (
-                f"cache_ttl= sets a cached response's lifetime, but the client of {self._source} has no cache: give it "
-                "CallPolicy(cache=HttpCache(...)), or leave cache_ttl= out"
-            )
-            raise ValueError(msg)
         if "cache_ttl" in options:
+            self._refuse_uncached_ttl(request, route_policy, path)
             stamp_ttl(request, options["cache_ttl"])
         context.attach(request)
         return _Prepared(request, context, follow)
+
+    def _refuse_uncached_ttl(self, request: httpx2.Request, route: Route | None, path: str) -> None:
+        """Refuse a call's ``cache_ttl=`` when the call is not cached, so the lifetime would be of nothing.
+
+        :raises ValueError: for a client without a cache, a call its *route* keeps out of the cache, and a method or
+            path the cache's rules leave out.
+        """
+        cache = self._policy.cache
+        why = None
+        if cache is None:
+            why = f"the client of {self._source} has no cache: give it CallPolicy(cache=HttpCache(...))"
+        elif route is not None and "cache" in route.options:
+            why = f"its route ({route.fragment}) keeps its paths out of the cache"
+        elif not caches_request(cache, request.method, path):
+            why = (
+                f"the client's cache stores no {request.method} {path}: its methods= and paths= leave it out; name it "
+                "there"
+            )
+        if why is not None:
+            msg = f"cache_ttl= sets a cached response's lifetime, but {why}, or leave cache_ttl= out"
+            raise ValueError(msg)
 
     def _stamp_route_timeout(self, request: httpx2.Request, route: RouteOptions, call: Timeouts | None) -> None:
         """Send *request* with its *route*'s timeout, under the view's and the *call*'s own, over the policy's."""

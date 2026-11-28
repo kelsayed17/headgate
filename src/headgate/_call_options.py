@@ -80,8 +80,9 @@ class CallOptions(_Buffered, total=False, closed=True):
     * ``follow_redirects``: ``False`` makes a redirect raise as its 3xx; ``True`` follows it.
     * ``cache_ttl``: this response's cache lifetime in seconds, over ``HttpCache.ttl``, or ``None`` for no lifetime
       limit, so the entry is served until its storage evicts it. The cache is TTL-only either way: it never reads the
-      response's own cache headers, ``Cache-Control: max-age`` and ``no-store`` included. On a client without a cache
-      it raises ``ValueError``, since it would set the lifetime of nothing.
+      response's own cache headers, ``Cache-Control: max-age`` and ``no-store`` included. On a call that is not
+      cached (a client without a cache, a route with ``cache=None``, a method or path the cache's rules leave out) it
+      raises ``ValueError``, since it would set the lifetime of nothing.
     * ``idempotency_key``: the idempotency key this call carries on every attempt, under the policy's
       ``IdempotencyKeys`` header (``Idempotency-Key`` by default).
     * ``max_response_bytes``: the cap on this call's body, counted after decompression, in place of

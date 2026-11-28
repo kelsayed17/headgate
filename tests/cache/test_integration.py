@@ -206,15 +206,26 @@ def test_every_http_verb_takes_a_cache_ttl(verb: str) -> None:
     assert "cache_ttl" in options.__optional_keys__
 
 
-@pytest.mark.parametrize("verb", _VERBS)
-async def test_every_verb_forwards_a_per_call_cache_ttl(verb: str, storage: AsyncSqliteStorage) -> None:
-    """``cache_ttl=`` reaches the request the network sees (in hishel's ``caching`` extension) from every verb."""
+@pytest.mark.parametrize("verb", ["get", "head"])
+async def test_every_cached_verb_forwards_a_per_call_cache_ttl(verb: str, storage: AsyncSqliteStorage) -> None:
+    """``cache_ttl=`` reaches the request the network sees (in hishel's ``caching`` extension) from a GET or HEAD."""
     base = _CountingTransport()
-    client = stub_client(transport=base, cache=HttpCache(storage=storage, statuses=(201,)))
+    client = stub_client(transport=base, cache=HttpCache(storage=storage, methods=("GET", "HEAD"), statuses=(201,)))
 
     await getattr(client, verb)("/thing", expect=RESPONSE, cache_ttl=_CALL_TTL)
 
     assert stamped_ttl(base.extensions[-1]) == _CALL_TTL
+
+
+@pytest.mark.parametrize("verb", ["delete", "patch", "post", "put"])
+async def test_a_verb_the_cache_never_stores_refuses_a_cache_ttl(verb: str, storage: AsyncSqliteStorage) -> None:
+    """Refuse ``cache_ttl=`` on a verb no cache stores, which would set the lifetime of nothing, sending nothing."""
+    base = _CountingTransport()
+    client = stub_client(transport=base, cache=HttpCache(storage=storage))
+
+    with pytest.raises(ValueError, match=rf"the client's cache stores no {verb.upper()} /thing"):
+        await getattr(client, verb)("/thing", expect=RESPONSE, cache_ttl=_CALL_TTL)
+    assert not base.extensions
 
 
 # A shared storage serves every client on it, and outlives them.
