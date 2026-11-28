@@ -85,9 +85,9 @@ A `CachedTokenAuth` partitions by the long-lived credential, not the short-lived
 By default each instance is its own identity; override `credential_identity()` to return the credential's secret
 material (it is hashed, never stored) so two instances holding it share entries. See [auth](auth.md#cachedtokenauth).
 
-`HttpCache(partition=Partition.SHARED)` is the opt-in for public data: every client on the storage sees every entry, whatever its credential. One thing still keeps
-entries apart there: a query parameter with a well-known secret name that the auth does not declare, by its value,
-since `/config?key=theme` and `?key=locale` are different resources.
+`HttpCache(partition=Partition.SHARED)` is the opt-in for public data: every client on the storage sees every entry,
+whatever its credential. One thing still keeps entries apart there: a query parameter with a well-known secret name that
+the auth does not declare, by its value, since `/config?key=theme` and `?key=locale` are different resources.
 
 Under either partition, a client that refuses private hosts (`SecurityOptions(block_private_hosts=True)`) has entries
 of its own, so it is never served what a client allowed private hosts fetched from an internal address on the same

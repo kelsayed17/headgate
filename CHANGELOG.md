@@ -21,8 +21,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   raises `TypeError` when the client is built, since it declares nothing the guard could withhold from another origin:
   subclass `headgate.Auth` and declare what it stamps, or write `StaticHeaderAuth({"Authorization": ...})` for a fixed
   header such as basic auth. Digest auth is `class Digest(Auth, httpx2.DigestAuth)` with the two declarations and a
-  `credential_identity()` (see the auth guide). A virtual subclass made with `Auth.register` is refused too, since registering declares
-  nothing.
+  `credential_identity()` (see the auth guide). A virtual subclass made with `Auth.register` is refused too, since
+  registering declares nothing.
 - `get()` and `head()` take no `body=` (their options are `CallOptions`): a GET's body has no meaning, and the cache
   keyed the entry by its URL alone, so a second GET with another body was served the first one's answer. A body keyword
   on either raises `TypeError` pointing to `query()`, the safe read with a body: write

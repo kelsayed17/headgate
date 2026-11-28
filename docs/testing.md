@@ -160,13 +160,13 @@ middleware = (CASSETTES,)  # the client under test's middleware=
 ```
 
 It filters `Authorization`, `Proxy-Authorization`, `Cookie`, every header and parameter the `auths=` declare (each an
-auth or a middleware; anything that declares nothing raises `TypeError`) and the names given (each a collection, such
-as `("x-partner-signature",)`: a bare `str` raises `TypeError`, since it would be read one letter at a time), redacts secret query values and userinfo before a request is recorded or matched, and drops `Set-Cookie` from
-recorded responses. Installed as middleware, it marks a `CachedTokenAuth` mint's hops so they are not recorded: a token
-response is a credential. When replaying, seed the auth with a token (`auth.seed("test-token", 3600)`). A custom
-transport (`FakeTransport`, the curl transport) is not patched by vcrpy, so it is neither recorded nor replayed.
-`RecordedRequest` is the protocol of the vcrpy request `before_record_request` reads, for a hook of your own that
-calls it first.
+auth or a middleware; anything that declares nothing raises `TypeError`) and the names given (each a collection, such as
+`("x-partner-signature",)`: a bare `str` raises `TypeError`, since it would be read one letter at a time), redacts
+secret query values and userinfo before a request is recorded or matched, and drops `Set-Cookie` from recorded
+responses. Installed as middleware, it marks a `CachedTokenAuth` mint's hops so they are not recorded: a token response
+is a credential. When replaying, seed the auth with a token (`auth.seed("test-token", 3600)`). A custom transport
+(`FakeTransport`, the curl transport) is not patched by vcrpy, so it is neither recorded nor replayed. `RecordedRequest`
+is the protocol of the vcrpy request `before_record_request` reads, for a hook of your own that calls it first.
 
 ## Switching the policy off
 

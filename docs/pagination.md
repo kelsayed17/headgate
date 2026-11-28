@@ -127,11 +127,11 @@ def more(page: FilingsPage) -> bool:
 FILING_PAGES = PageNumber(items=results_of, more=more)
 ```
 
-Asking for the next number on your own request, rather than following the link, keeps every page on your URL with
-your whole query, where a link the server built may drop a filter, or name another host. A next URL from the wire
-(`LinkHeader`, `NextUrl`, or your own pager's) is resolved against the URL that answered, refused when it would take
-an `https` walk to plain `http`, and sent as an absolute URL, under the usual rules: credentials go only to [trusted origins](security.md), and the SSRF
-guard vets it when it is on.
+Asking for the next number on your own request, rather than following the link, keeps every page on your URL with your
+whole query, where a link the server built may drop a filter, or name another host. A next URL from the wire
+(`LinkHeader`, `NextUrl`, or your own pager's) is resolved against the URL that answered, refused when it would take an
+`https` walk to plain `http`, and sent as an absolute URL, under the usual rules: credentials go only to [trusted
+origins](security.md), and the SSRF guard vets it when it is on.
 
 Each strategy is a frozen value: build it once, next to the client, as with readers.
 

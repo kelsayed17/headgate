@@ -254,9 +254,10 @@ without `expect=`, `cache_ttl=` and `max_response_bytes=`, and `paginate()` take
 A `params=` value is a `str`, `int`, `float`, `bool` or `None`; an `Enum` member, sent as its value (a `str` or an
 `int`); a `UUID` or a `Decimal`, sent as its text; a `date`, `datetime` or `time`, sent in ISO 8601
 (`2026-01-02T03:04:00+00:00`); or a list or tuple of them, which repeats the key. `Form` and `Multipart` fields take the
-same values, and a `Multipart` field takes `bytes` too, sent as they are. Any other value raises `TypeError` naming the parameter, before anything is sent (a `Form` or `Multipart`
-when it is built): a mapping, a set, `bytes`, a dataclass or a model, whose text would be its Python `repr`, and a list
-or tuple inside a list or tuple. Encode such a value into text first, with `json.dumps` or the API's own format.
+same values, and a `Multipart` field takes `bytes` too, sent as they are. Any other value raises `TypeError` naming the
+parameter, before anything is sent (a `Form` or `Multipart` when it is built): a mapping, a set, `bytes`, a dataclass or
+a model, whose text would be its Python `repr`, and a list or tuple inside a list or tuple. Encode such a value into
+text first, with `json.dumps` or the API's own format.
 
 `cache_ttl=None` removes headgate's lifetime only: the cache is TTL-only and never reads a response's own cache headers,
 so an entry stored with `cache_ttl=None` is served until its storage evicts it, past any `Cache-Control: max-age` and
@@ -264,9 +265,9 @@ even past `no-store`, as an entry of `HttpCache(ttl=None)` is.
 
 The options are typed, so a wrapper can forward them with every key checked. `CallOptions` is the TypedDict of every
 per-call option but the body, which every verb and `paginate()` take, and all that `get()` and `head()` take;
-`RequestOptions` is a body verb's (`CallOptions` plus the body); `headgate.streaming.StreamOptions` is `stream()`'s (`RequestOptions` less `cache_ttl` and
-`max_response_bytes`); and `ViewOptions` is what `with_options()` takes. A wrapper typed on them forwards every option
-at once:
+`RequestOptions` is a body verb's (`CallOptions` plus the body); `headgate.streaming.StreamOptions` is `stream()`'s
+(`RequestOptions` less `cache_ttl` and `max_response_bytes`); and `ViewOptions` is what `with_options()` takes. A
+wrapper typed on them forwards every option at once:
 
 ```python
 async def fetch(self, url: LiteralString, **options: Unpack[CallOptions]) -> Series:
