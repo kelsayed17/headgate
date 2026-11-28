@@ -226,17 +226,22 @@ class PageWalk[P, I, B]:
 
 
 def _resolved[B](request: PageRequest[B], response: httpx2.Response) -> PageRequest[B]:
-    """Return *request* with an ``httpx2.URL`` resolved against the URL that answered *response*, the page before it.
+    """Return *request* with a wire URL resolved against the URL that answered *response*, the page before it.
 
-    A pager forwards a URL from the wire as an ``httpx2.URL``, absolute or relative; a ``str`` or a template is the
-    caller's own, and the client joins it onto ``base_url`` as it does any call's.
+    A pager forwards a URL from the wire as an ``httpx2.URL``, absolute or relative, which is resolved against the
+    answering URL; or as a ``str`` read from a body, which is checked when it is absolute. A relative ``str`` and a
+    template are the caller's own, and the client joins them onto ``base_url`` as it does any call's.
 
     :raises ForbiddenDestinationError: for a plain ``http`` URL after an ``https`` page, which would send the next
         request (its credentials and cursor) in cleartext.
     """
-    if not isinstance(request.url, httpx2.URL):
+    if isinstance(request.url, httpx2.URL):
+        target = request.url
+    elif isinstance(request.url, str) and (parsed := httpx2.URL(request.url)).is_absolute_url:
+        target = parsed
+    else:
         return request
-    url = response.url.join(request.url)
+    url = response.url.join(target)
     if response.url.scheme == "https" and url.scheme == "http":
         msg = f"refused to follow a next page from https to {loggable_url(str(url))}"
         raise ForbiddenDestinationError(msg)

@@ -56,7 +56,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `https` to plain `http` is refused as `ForbiddenDestinationError` before it is sent, by the walk itself. Only the
   built-in `LinkHeader` and `NextUrl` did this, so a custom pager could take a walk, its cursor and its request, to
   cleartext, and its relative URL resolved against `base_url`. A pager returns the URL it read as
-  `PageRequest(httpx2.URL(target))`, as before, and need not resolve it.
+  `PageRequest(httpx2.URL(target))`, as before, and need not resolve it. An absolute URL a pager forwards as a `str`
+  (read from a JSON body, say) is checked the same way; a relative `str` is still joined onto `base_url`, as a call's
+  own URL is.
 
 ## [0.12.1] - 2026-11-16
 
