@@ -15,6 +15,7 @@ import pytest
 
 from headgate import CallPolicy, Client, HttpOptions, Rate, RetryPolicy, Route, UpstreamStatusError, nothing
 from headgate.retry import Backoff, RetryBudget, RetryShare
+from headgate.retry._policy import ledger_of
 from tests.support.wire import Script
 
 #: One retry per ten-second window.
@@ -80,11 +81,16 @@ def test_a_retry_budget_is_built_from_a_share() -> None:
         RetryPolicy(budget=cast("Any", Backoff()))
 
 
+def test_a_retry_budget_shows_only_its_share() -> None:
+    """Leave spending a budget to the retry layer: its surface is the share it spends, and its ``repr``."""
+    assert [name for name in dir(RetryBudget) if not name.startswith("_")] == ["share"]
+
+
 def test_a_retry_budget_shows_its_state() -> None:
     """Name the share and what the window holds now."""
     budget = RetryBudget(_ONE_RETRY)
-    budget.record_first()
-    assert budget.try_spend()
+    ledger_of(budget).record_first()
+    assert ledger_of(budget).try_spend()
 
     assert repr(budget) == f"RetryBudget({_ONE_RETRY!r}, retries=1, firsts=1)"
     assert budget.share is _ONE_RETRY

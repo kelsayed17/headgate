@@ -30,6 +30,7 @@ from headgate._core import (
     RetryScheduled,
 )
 from headgate.retry import Backoff, Hedge, RetryBudget, RetryShare
+from headgate.retry._policy import backoff_delay
 from headgate.retry._tracking import head_size
 from headgate.retry._transport import RetryTransport
 from headgate.testing import FaultyTransport, Respond, TestClock
@@ -770,7 +771,7 @@ async def test_a_retry_leaving_exactly_min_attempt_time_is_made() -> None:
     response = await retry.handle_async_request(request)
 
     assert response.status_code == httpx2.codes.OK
-    assert clock.sleeps == [_QUARTER.delay(1, 1.0)]
+    assert clock.sleeps == [backoff_delay(_QUARTER, 1, 1.0)]
     await response.aclose()
 
 

@@ -238,6 +238,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `BreakerPolicy.registry`, `BreakerRegistry.bind()` and the `ValueError` for a client whose thresholds differed from
   the ones a shared registry was bound to: a registry carries its own policy, so its clients cannot disagree. Give the
   registry the thresholds, and the clients the registry.
+- `RetryBudget.record_first()`, `try_spend()` and `refund()`, which only the retry layer calls, and
+  `RetryPolicy.wait_after()` and `Backoff.delay()`, the arithmetic it waits by: a budget's surface is its `share` and
+  its `repr`, which shows what its window holds (`RetryBudget(RetryShare(...), retries=3, firsts=40)`), and a policy
+  and a backoff are values, read by their fields. A test that spent a budget by hand sends its retries through a
+  client instead; one that computed a wait reads `factor` and `max_wait`.
 
 ### Fixed
 

@@ -329,15 +329,11 @@
   class Backoff(object)(*, factor: 'float' = 0.5, max_wait: 'float' = 5.0) -> 'None'
       field factor: float = 0.5
       field max_wait: float = 5.0
-      def delay(self, retry: 'int', draw: 'float') -> 'float'
   class Hedge(object)(*, after: 'float' = 0.5, max_extra: 'int' = 1) -> 'None'
       field after: float = 0.5
       field max_extra: int = 1
   class RetryBudget(object)(share: 'RetryShare' = RetryShare(ratio=0.2, min_per_second=10.0, window=10.0)) -> 'None'
-      def record_first(self) -> 'None'
-      def refund(self) -> 'None'
       property share
-      def try_spend(self) -> 'bool'
   class RetryShare(object)(*, ratio: 'float' = 0.2, min_per_second: 'float' = 10.0, window: 'float' = 10.0) -> 'None'
       field ratio: float = 0.2
       field min_per_second: float = 10.0
@@ -643,7 +639,6 @@
       field respect_should_retry: bool = True
       field hedge: Hedge | None = None
       field min_attempt_time: float = 0.05
-      def wait_after(self, retry_after: 'float | None', retry: 'int', draw: 'float') -> 'float'
   class Route(object)(fragment: 'str', /, **options: 'Unpack[RouteOptions]') -> 'None'
       property fragment
       property options

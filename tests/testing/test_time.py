@@ -33,6 +33,7 @@ from headgate._core import current_timing
 from headgate.breaker import BreakerRegistry, CircuitBreaker
 from headgate.policy import policy_disabled
 from headgate.retry import Backoff, RetryBudget, RetryShare
+from headgate.retry._policy import ledger_of
 from headgate.testing import FakeTransport, FaultyTransport, Slow, TestClock, budget_for, instant_retries
 from headgate.testing._time import _SETTLE_TURNS
 from headgate.timing import Timing
@@ -344,11 +345,11 @@ def test_a_retry_budget_built_in_the_block_slides_on_the_test_clock() -> None:
     clock = TestClock()
     with clock.install():
         budget = RetryBudget(RetryShare(ratio=0.0, min_per_second=0.1, window=10.0))
-    assert budget.try_spend()
-    assert not budget.try_spend()
+    assert ledger_of(budget).try_spend()
+    assert not ledger_of(budget).try_spend()
 
     clock.advance(20.0)
-    assert budget.try_spend()
+    assert ledger_of(budget).try_spend()
 
 
 async def test_an_errors_retry_after_date_is_read_against_the_clients_wall_clock() -> None:
