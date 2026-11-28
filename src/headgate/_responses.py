@@ -33,6 +33,7 @@ from typing import Final, NoReturn, cast, final, override
 import httpx2
 
 from headgate._core import check_headers, check_int, check_kind
+from headgate._failures import ReaderMisuseError
 from headgate._sse import EventParser, text_decoder
 from headgate.errors import DecodeError, RefusedError
 
@@ -75,8 +76,15 @@ class Reader[T]:
     def __init__(self, read: Callable[[httpx2.Response], T], /, *, name: str | None = None) -> None:
         """Wrap *read*, the function that turns a response into a value, under *name* or *read*'s own.
 
-        :raises TypeError: for a *read* that cannot be called, here rather than at the first response.
+        :raises TypeError: for a *read* that cannot be called, and for a class, here rather than at the first
+            response: ``Reader(str)`` would return the response's ``repr``.
         """
+        if isinstance(read, type):
+            msg = (
+                f"Reader takes a function of the response (got the class {read.__name__}): for the body as text use "
+                f"as_text, and for a class that is built from a response write Reader(lambda r: {read.__name__}(r))"
+            )
+            raise TypeError(msg)
         if not callable(read):
             # Anything not callable is an instance, so its type's name is what _kinds would print.
             msg = f"Reader takes a function of the response (got {type(read).__name__})"
@@ -347,10 +355,11 @@ def body_reader[T](
     empty array in the body's format. Left ``None``, an empty body is handed over as it is.
 
     ``refuse`` runs on the decoded value and returns a :class:`RefusedError` for a refusal written inside a 2xx
-    body, or ``None``; the reader raises what it returns. Type a check over a small structural ``Protocol`` naming only
-    the envelope fields it reads. Have it refuse only codes every consumer of the endpoint would read as failure (auth,
-    quota, rate limit, server, a malformed request, any undocumented code) and leave a code about the subject (an
-    unknown instrument, a rejected order) in the value for the caller.
+    body, or ``None``; the reader raises what it returns. Anything else it returns is a ``TypeError`` naming
+    ``refuse=``, raised as it is, never read as a body of the wrong shape. Type a check over a small structural
+    ``Protocol`` naming only the envelope fields it reads. Have it refuse only codes every consumer of the endpoint
+    would read as failure (auth, quota, rate limit, server, a malformed request, any undocumented code) and leave a
+    code about the subject (an unknown instrument, a rejected order) in the value for the caller.
     """
     return _body_reader(decode, empty=empty, refuse=refuse, name=_name_of(decode))
 
@@ -371,6 +380,9 @@ def _body_reader[T](
             content = empty
         value = decode(content)
         if refuse is not None and (refused := refuse(value)) is not None:
+            if not isinstance(refused, RefusedError):
+                msg = f"refuse= returns a RefusedError, or None to accept the value (got {type(refused).__name__})"
+                raise ReaderMisuseError(msg)
             raise refused
         return value
 

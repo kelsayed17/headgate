@@ -74,6 +74,7 @@ from headgate._errors import ClientError, ClientTimeoutError, RateLimitError
 from headgate._failures import (
     SHAPE_ERRORS,
     CallSite,
+    ReaderMisuseError,
     is_transient_status,
     loggable_url,
     parse_error,
@@ -1191,6 +1192,9 @@ class Client:
         # The one place a reader's RefusedError is caught: it becomes the ClientError carrying the status the wire sent.
         except RefusedError as refused:
             raise refusal_error(refused, resp, site) from refused
+        # The reader's own hook broke its contract: a TypeError, but the caller's, not the body's.
+        except ReaderMisuseError:
+            raise
         # Neither error is chained to the reader's: a validation library's error may quote the input it refused (a
         # token, say), which a traceback or logger.exception would repeat.
         except SHAPE_ERRORS as exc:
@@ -1409,13 +1413,20 @@ def _cut_off_on_the_wire(context: CallContext) -> bool:
 
 
 def _checked(check: ResponseCheck | None, resp: httpx2.Response) -> RefusedError | None:
-    """Run the client's *check* on *resp*, treating a ``RefusedError`` it raises like one it returns."""
+    """Run the client's *check* on *resp*, treating a ``RefusedError`` it raises like one it returns.
+
+    :raises TypeError: for a check that returns anything but a ``RefusedError`` or ``None``.
+    """
     if check is None:
         return None
     try:
-        return check(resp)
-    except RefusedError as refused:
-        return refused
+        refused: object = check(resp)
+    except RefusedError as raised:
+        return raised
+    if not isinstance(refused, RefusedError | None):
+        msg = f"response_check= returns a RefusedError, or None to accept the response (got {type(refused).__name__})"
+        raise TypeError(msg)
+    return refused
 
 
 def _expectation[T](expect: Reader[T] | Expect[T]) -> Expect[T]:

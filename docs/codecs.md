@@ -27,6 +27,9 @@ path), and pydantic shows `[...]` in its place. The library's own error, which m
 the `DecodeError`, so a traceback or `logger.exception` cannot repeat it either. Each module's `CODEC` is the codec
 itself, for the functions below.
 
+Each also refuses, with `TypeError` where the reader is built, a type it cannot decode: `headgate.msgspec.reader` of a
+pydantic model points to `headgate.pydantic.reader`, and either flavor names a plain class it has no way to build.
+
 ## Any codec, the same way
 
 Three functions work on any codec, the two above included:
@@ -48,7 +51,7 @@ A codec is any object with five members, the `Codec` protocol:
 | --- | --- |
 | `media_type` | what its bytes are: the `Content-Type` a writer sends |
 | `errors` | the exceptions it raises for malformed or mistyped bytes, turned into `DecodeError` |
-| `decoder(Type)` | a function reading bytes into `Type`, built once per type |
+| `decoder(Type)` | a function reading bytes into `Type`, built once per type; `TypeError` for a type it cannot decode |
 | `encoder(Type)` | a function writing a value of `Type` as bytes, built once per type |
 | `describe(error)` | a message for one of `errors` that never quotes the input, which may hold a credential |
 
@@ -118,6 +121,8 @@ def test_the_codec_keeps_headgates_promises() -> None:
 It raises `AssertionError` naming the first promise broken:
 
 - `media_type` is a media type;
+- `decoder()` raises `TypeError` for a class it cannot decode, so a reader of a type the codec does not support fails
+  where it is built, not at its first body as an unreadable response;
 - a value it writes reads back equal;
 - a string where an `int` is declared is refused, not coerced;
 - a body cut short at its middle is refused, so a codec whose bodies end in a newline passes;
