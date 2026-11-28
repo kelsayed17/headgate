@@ -646,7 +646,7 @@
   class SigningAuth(Auth)(*args, **kwargs)
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
       def credential_identity(self) -> 'bytes'
-      def sign(self, request: 'httpx2.Request') -> 'None'
+      def sign(self, request: 'httpx2.Request', now: 'float') -> 'None'
       def skips(self, request: 'httpx2.Request') -> 'bool'
   class StaticHeaderAuth(Auth)(headers: 'Mapping[str, str]') -> 'None'
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'

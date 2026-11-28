@@ -499,11 +499,13 @@ class SigningAuth(Auth):
         return self._identity
 
     @abstractmethod
-    def sign(self, request: httpx2.Request) -> None:
-        """Sign *request* as it stands, at the current time, replacing any signature an earlier attempt set.
+    def sign(self, request: httpx2.Request, now: float) -> None:
+        """Sign *request* as it stands, at *now*, replacing any signature an earlier attempt set.
 
-        It runs once per attempt, so it may run several times on one request. The body is read (``request.content``).
-        Set only the headers and parameters this class declares.
+        *now* is the attempt's wall-clock time in Unix seconds, read from the client's timing (its ``wall_clock``), so
+        a signer under ``TestClock.install()`` signs on the test clock: sign with it rather than ``time.time()``. It
+        runs once per attempt, so it may run several times on one request. The body is read (``request.content``). Set
+        only the headers and parameters this class declares.
         """
 
     def skips(self, request: httpx2.Request) -> bool:

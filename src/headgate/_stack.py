@@ -159,7 +159,9 @@ def build_transport_stack(
     """
     layer = SendTrackingTransport(transport=_network(http))
     if isinstance(signer := credentials.auth, SigningAuth):
-        layer = MiddlewareTransport(transport=layer, middleware=(), guard=credentials.guard, signer=signer)
+        layer = MiddlewareTransport(
+            transport=layer, middleware=(), guard=credentials.guard, signer=signer, wall_clock=timing.wall_clock
+        )
     layer = RateLimitTransport(budgets=budgets, transport=layer)
     if (cache := policy.cache) is not None:
         scope = credential_scope(
@@ -171,7 +173,9 @@ def build_transport_stack(
         )
         layer = ResilientCacheTransport(layer, cache, max_body_bytes=http.max_response_bytes, scope=scope)
     if middleware := credentials.middleware:
-        layer = MiddlewareTransport(transport=layer, middleware=middleware, guard=credentials.guard, signer=None)
+        layer = MiddlewareTransport(
+            transport=layer, middleware=middleware, guard=credentials.guard, signer=None, wall_clock=timing.wall_clock
+        )
     if observed:
         layer = AttemptTransport(transport=layer)
     retry = SEND_ONCE if policy.retry is None else policy.retry

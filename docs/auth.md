@@ -80,8 +80,8 @@ the cache; prefer a header where the provider allows one (see [security](securit
 ## SigningAuth
 
 For a provider that signs every request with a long-lived key: a JWT bound to the method and path, an HMAC or Ed25519
-signature over a timestamp and the body. A subclass supplies the signer, `sign(request)`, and declares what it sets;
-the base class gives it:
+signature over a timestamp and the body. A subclass supplies the signer, `sign(request, now)`, and declares what it
+sets; the base class gives it:
 
 - **every send signed afresh**, inside the retry layer. Each attempt is signed as it leaves the rate budget: after the
   last [middleware](configuration.md#middleware), the cache and the rate-limit wait, just before it goes to the network.
@@ -99,7 +99,6 @@ the base class gives it:
 ```python
 import hashlib
 import hmac
-import time
 from typing import ClassVar, override
 
 import httpx2
@@ -114,8 +113,8 @@ class ExchangeAuth(SigningAuth):
         self._api_key, self._secret = api_key, secret
 
     @override
-    def sign(self, request: httpx2.Request) -> None:
-        timestamp = str(int(time.time()))
+    def sign(self, request: httpx2.Request, now: float) -> None:
+        timestamp = str(int(now))
         message = timestamp.encode() + request.method.encode() + request.url.raw_path + request.content
         request.headers["X-Api-Key"] = self._api_key
         request.headers["X-Timestamp"] = timestamp
@@ -126,6 +125,8 @@ class ExchangeAuth(SigningAuth):
         return self._secret
 ```
 
+- `now` is the attempt's wall-clock time in Unix seconds, read from the client's timing, so a signer built under
+  `TestClock.install()` signs on the test clock. Sign with it, not `time.time()`.
 - `sign` replaces what an earlier call set, since it runs once per attempt, and again on the re-send after a 401. An
   exception it raises surfaces from inside the retry layer as it was raised: the attempt counts (observers see an
   `AttemptFinished` with its type as the error), the request is not sent, and it is not retried. An `httpx2.HTTPError`
