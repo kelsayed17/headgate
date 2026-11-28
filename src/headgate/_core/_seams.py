@@ -59,8 +59,9 @@ class CredentialCarrier(Protocol):
 class CredentialStamper(CredentialCarrier, Protocol):
     """A seam that declares the credentials it stamps on a request, and names the credential they stand for.
 
-    Every :class:`~headgate.Auth` is one, by its bases (``Auth`` is this contract as the base class ``auth=`` takes),
-    and a middleware that has a credential identity of its own implements it, so the cache partitions by it.
+    Every :class:`~headgate.Auth` is one by its shape (``Auth`` is this contract as the base class ``auth=`` takes,
+    with the three members abstract, and does not derive from this protocol), and a middleware that has a credential
+    identity of its own implements it, so the cache partitions by it.
     """
 
     def credential_identity(self) -> bytes:

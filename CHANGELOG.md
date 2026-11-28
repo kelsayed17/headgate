@@ -12,18 +12,18 @@ change the public API; such changes are listed under **Changed** and **Removed**
   it stamps (`credential_headers`, `credential_params`, each a `frozenset` of names, as class attributes or
   properties) and names its credential (`credential_identity()`). A subclass that leaves one out cannot be built.
   `BearerAuth`, `StaticHeaderAuth`, `QueryParamAuth`, `SigningAuth` and `CachedTokenAuth` all derive from it. It is
-  `headgate.security.CredentialStamper` made a base class, and derives from it, so the contract is defined once; the
-  protocol remains for a middleware that has a credential identity of its own. `Auth()`, `SigningAuth()` and
-  `CachedTokenAuth()` read as taking nothing (`inspect.signature`, `help()`), not the protocol base's
-  `(*args, **kwargs)`. A subclass that wraps another `httpx2.Auth` lists the wrapped one first, so its constructor is
-  the one called: `class Digest(httpx2.DigestAuth, Auth)`.
+  `headgate.security.CredentialStamper` made a base class: an `Auth` is a `CredentialStamper` by its shape, which a
+  type check pins, and the protocol remains for a middleware that has a credential identity of its own. `Auth` does
+  not derive from the protocol, so `Auth()`, `SigningAuth()` and `CachedTokenAuth()` read as taking nothing
+  (`inspect.signature`, `help()`), and a base listed after `Auth`, such as `httpx2.DigestAuth` or a cooperative
+  mixin, keeps its own constructor.
 
 ### Changed
 
 - `Client(auth=)` takes a `headgate.Auth`. A plain `httpx2.Auth`, `httpx2.BasicAuth` and `httpx2.DigestAuth` included,
   raises `TypeError` when the client is built, since it declares nothing the guard could withhold from another origin:
   subclass `headgate.Auth` and declare what it stamps, or write `StaticHeaderAuth({"Authorization": ...})` for a fixed
-  header such as basic auth. Digest auth is `class Digest(httpx2.DigestAuth, Auth)` with the two declarations and a
+  header such as basic auth. Digest auth is `class Digest(Auth, httpx2.DigestAuth)` with the two declarations and a
   `credential_identity()` (see the auth guide). A virtual subclass made with `Auth.register` is refused too, since
   registering declares nothing.
 - `get()` and `head()` take no `body=` (their options are `CallOptions`): a GET's body has no meaning, and the cache
