@@ -323,6 +323,14 @@ change the public API; such changes are listed under **Changed** and **Removed**
   the same raises `TypeError` naming `response_check=`, where it raised an `AttributeError`. `RefusedError(kind=)`
   takes an `UpstreamStatusError` subclass, checked when it is built, where `kind=ValueError` was accepted and failed
   when the refusal was raised: write `kind=UpstreamStatusError` or one of its subclasses.
+- A call that follows redirects raises `ValueError` before anything is sent when its `Expect` declares a redirect it
+  would follow (a 301, 302, 303, 307 or 308), naming the status: the client followed the redirect and handed the
+  target's body to the success reader, so the declared answer never ran. A redirect that a one-shot body keeps from
+  being followed may still be declared. Pass `follow_redirects=False` to read the redirect:
+  `client.get(url, expect=Expect(ok).on(302, location), follow_redirects=False)`. A walk whose pager's reader declares
+  one raises from `paginate()`.
+- `cache_ttl=` on a client without a cache raises `ValueError` at the call, where it was silently ignored. Give the
+  client `CallPolicy(cache=HttpCache(...))`, or leave `cache_ttl=` out.
 
 ### Removed
 

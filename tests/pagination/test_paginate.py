@@ -16,7 +16,18 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from headgate import CallPolicy, Client, ClientError, Expect, HttpOptions, Paginated, Rate, Reader, UpstreamStatusError
+from headgate import (
+    CallPolicy,
+    Client,
+    ClientError,
+    Expect,
+    HttpCache,
+    HttpOptions,
+    Paginated,
+    Rate,
+    Reader,
+    UpstreamStatusError,
+)
 from headgate._client import _paired
 from headgate.errors import ForbiddenDestinationError, PageLimitError, ResponseParseError
 from headgate.msgspec import reader
@@ -25,6 +36,8 @@ from headgate.testing import FakeTransport
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Sequence
+
+    from hishel import AsyncSqliteStorage
 
     from headgate.pagination import Pager
 
@@ -389,7 +402,7 @@ async def test_each_page_goes_through_the_stack() -> None:
     assert received == [1, 2, 3]
 
 
-async def test_every_page_carries_the_walks_cache_ttl() -> None:
+async def test_every_page_carries_the_walks_cache_ttl(storage: AsyncSqliteStorage) -> None:
     """Stamp ``cache_ttl=`` on every page's GET, as on one ``get``."""
     ttl = 30.0
     stamped: list[object] = []
@@ -399,7 +412,12 @@ async def test_every_page_carries_the_walks_cache_ttl() -> None:
         return _by_cursor(request)
 
     pages = Cursor(reader(Page), items=items_of, next=cursor_of, param="after")
-    paginated = _Api(answer).client().paginate("items", pager=pages, cache_ttl=ttl)
+    client = Client(
+        base_url=_BASE,
+        policy=CallPolicy(rate=_RATE, cache=HttpCache(storage=storage)),
+        http=HttpOptions(transport=httpx2.MockTransport(answer)),
+    )
+    paginated = client.paginate("items", pager=pages, cache_ttl=ttl)
     assert len([item async for item in paginated]) == len((1, 2, 3, 4))
     assert stamped == [ttl, ttl, ttl]
 

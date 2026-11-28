@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import CallPolicy, Rate, UpstreamStatusError
+from headgate import CallPolicy, HttpCache, Rate, UpstreamStatusError
 from headgate._client import Client
 from headgate._core import CallContext
 from headgate.retry._policy import RETRY_POLICY, SEND_ONCE
@@ -24,6 +24,7 @@ from tests.cache._helpers import stamped_ttl
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
+    from hishel import AsyncSqliteStorage
     from pytest_httpx2 import HTTPXMock
 
 
@@ -80,12 +81,16 @@ async def test_retry_none_wins_over_an_idempotency_key(httpx2_mock: HTTPXMock) -
     assert len(httpx2_mock.get_requests()) == 1
 
 
-async def test_retry_none_and_a_cache_ttl_are_both_stamped(httpx2_mock: HTTPXMock) -> None:
+async def test_retry_none_and_a_cache_ttl_are_both_stamped(httpx2_mock: HTTPXMock, storage: AsyncSqliteStorage) -> None:
     """Check that the two per-call overrides are stamped side by side: ``retry=None`` does not replace a TTL."""
     httpx2_mock.add_response(status_code=httpx2.codes.OK)
     ttl = 5.0
+    cached = Client(
+        base_url="https://example.invalid",
+        policy=CallPolicy(rate=Rate.per_second(2), cache=HttpCache(storage=storage)),
+    )
 
-    async with _probe() as client:
+    async with cached as client:
         await client.post("orders", expect=RESPONSE, retry=None, cache_ttl=ttl)
 
     sent = httpx2_mock.get_requests()[0]

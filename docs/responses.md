@@ -110,7 +110,8 @@ A declared non-2xx whose body its reader cannot read falls through to the ladder
 covers the body shape it names, so a business 403 you declared never swallows a real permission 403.
 
 A redirect the call does not follow (`follow_redirects=False`) is a 3xx like any other: declare it, for example
-`.on(HTTPStatus.FOUND, read_location)`, or it raises.
+`.on(HTTPStatus.FOUND, read_location)`, or it raises. A call that follows redirects never sees a 301, 302, 303, 307 or
+308, so declaring one there raises `ValueError` before anything is sent, saying to pass `follow_redirects=False`.
 
 ## Content negotiation
 

@@ -207,10 +207,10 @@ def test_every_http_verb_takes_a_cache_ttl(verb: str) -> None:
 
 
 @pytest.mark.parametrize("verb", _VERBS)
-async def test_every_verb_forwards_a_per_call_cache_ttl(verb: str) -> None:
+async def test_every_verb_forwards_a_per_call_cache_ttl(verb: str, storage: AsyncSqliteStorage) -> None:
     """``cache_ttl=`` reaches the request the network sees (in hishel's ``caching`` extension) from every verb."""
     base = _CountingTransport()
-    client = stub_client(transport=base)
+    client = stub_client(transport=base, cache=HttpCache(storage=storage, statuses=(201,)))
 
     await getattr(client, verb)("/thing", expect=RESPONSE, cache_ttl=_CALL_TTL)
 
