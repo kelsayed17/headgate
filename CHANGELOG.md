@@ -71,6 +71,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
   it is built, naming `mint`, instead of when it is defined.
 - `CachedTokenAuth.seed()` takes the shape a mint ends with: write `auth.seed(Minted(token, lifetime))` for
   `auth.seed(token, lifetime)`.
+- `CachedTokenAuth` has no constructor: its cache and lock are made on first use, so a subclass whose `__init__`
+  forgets `super().__init__()` works, where it failed at its first call with an `AttributeError` naming private state.
+  `super().__init__()` may stay, and does nothing. `refresh_margin` is a class attribute, a number of seconds of 0 or
+  more checked when the class is defined: write `refresh_margin = 30.0` in the class body for
+  `super().__init__(refresh_margin=30.0)`. `CachedTokenAuth(timing=)` is removed: a token's lifetime runs on the timing
+  of the first client built with the auth, so build it, or the client, inside `timing_override()` or
+  `TestClock.install()`.
 - `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.

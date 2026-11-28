@@ -728,3 +728,65 @@ class TestOneMint:
             "https://login.tasks.example/token",
             "https://api.tasks.example/v2/me",
         ]
+
+
+class TestNoBaseConstructor:
+    """The base keeps its state itself, made on first use, so a subclass need not call ``super().__init__()``."""
+
+    async def test_a_subclass_that_skips_super_init_works(self, client_factory: _Factory) -> None:
+        """Mint and cache for a subclass whose constructor never calls the base's (E14's ``NoSuper``)."""
+
+        class _NoSuper(CachedTokenAuth):
+            def __init__(self, secret: str) -> None:
+                self._secret = secret  # no super().__init__()
+
+            @override
+            async def mint(
+                self, request: httpx2.Request
+            ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+                yield Minted(f"for-{self._secret}", 3600.0)
+
+        auth = _NoSuper("s")
+        client = client_factory(auth, _ok)
+        first, second = await client.get("/x"), await client.get("/x")
+
+        assert first.json() == second.json() == {"seen": "Bearer for-s"}
+        assert auth.credential_identity() == auth.credential_identity()
+
+    async def test_refresh_margin_is_a_class_attribute(self, client_factory: _Factory, clock: TestClock) -> None:
+        """Re-mint ``refresh_margin`` seconds before expiry, as the subclass sets it."""
+
+        class _ShortMargin(_CountingAuth):
+            refresh_margin = 10.0
+
+        auth = _ShortMargin()
+        client = client_factory(auth, _ok)
+        await client.get("/x")
+        clock.advance(_LIFETIME_S - 11)
+        await client.get("/x")
+        assert auth.mints == 1, "outside a 10-second margin"
+
+        clock.advance(1)
+        await client.get("/x")
+        assert auth.mints == _MINT_AND_RE_MINT
+
+    @pytest.mark.parametrize("margin", [-1.0, True, math.nan, "5"], ids=repr)
+    def test_a_refresh_margin_that_is_not_seconds_is_refused(self, margin: object) -> None:
+        """Refuse, when the class is defined, a margin that is negative, NaN or not a number."""
+        with pytest.raises(TypeError, match=r"_Bad\.refresh_margin takes the seconds before expiry"):
+            type("_Bad", (_CountingAuth,), {"refresh_margin": margin})
+
+    async def test_the_token_runs_on_the_timing_the_client_is_built_under(self) -> None:
+        """Keep the test clock for an auth given to a client inside ``install()``, though the calls come after it."""
+        clock = TestClock(1000.0)
+        with clock.install():
+            auth = _CountingAuth()
+            client = Client(
+                base_url="https://api.example", auth=auth, http=HttpOptions(transport=httpx2.MockTransport(_ok))
+            )
+        async with client:
+            await client.get("x", expect=RESPONSE)
+            clock.advance(_LIFETIME_S - _MARGIN_S)
+            await client.get("x", expect=RESPONSE)
+
+        assert auth.mints == _MINT_AND_RE_MINT

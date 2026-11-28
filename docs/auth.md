@@ -150,9 +150,10 @@ it:
 - **one mint at a time.** Concurrent requests that need a token wait for a single mint instead of each firing one.
   When that mint fails, every request that waited for it fails with the same error, rather than each trying again in
   turn; a request that starts later mints afresh;
-- **refresh before expiry**, `refresh_margin` (120 s) before the token expires, or at half its life when that is
-  shorter, because a token expiring mid-flight fails a request that may be a write. A refresh that fails while the
-  held token has not expired yet sends that token instead of failing the call;
+- **refresh before expiry**, `refresh_margin` (120 s, a class attribute a subclass may set, `refresh_margin = 30.0`)
+  before the token expires, or at half its life when that is shorter, because a token expiring mid-flight fails a
+  request that may be a write. A refresh that fails while the held token has not expired yet sends that token instead
+  of failing the call;
 - **one re-mint on a 401**, for a token revoked early, and never a loop. A token minted in the last 60 seconds is not
   re-minted: a 401 on it is a permissions problem, which reaches the caller as the `AuthError` it is. Nor is a token
   re-minted for a 401 to a request sent without it, such as a call to an origin you do not trust, where the credential
@@ -182,7 +183,6 @@ class Token(msgspec.Struct, frozen=True):
 
 class PartnerAuth(CachedTokenAuth):
     def __init__(self, client_id: str, client_secret: str) -> None:
-        super().__init__()
         self._form = {"grant_type": "client_credentials", "client_id": client_id, "client_secret": client_secret}
 
     @override
@@ -193,7 +193,8 @@ class PartnerAuth(CachedTokenAuth):
         yield Minted(token.access_token, token.expires_in)
 ```
 
-A mint that makes no request of its own, such as one that calls a vendor SDK, yields only the `Minted`:
+The base class has no constructor to call: its token cache is made on first use, so `__init__` sets only your
+own state. A mint that makes no request of its own, such as one that calls a vendor SDK, yields only the `Minted`:
 `yield Minted(await vendor.fetch_token(), 3600.0)`. A subclass without a `mint` cannot be built.
 [`examples/orders_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/orders_client.py) has a complete
 one. What the flow can count on:

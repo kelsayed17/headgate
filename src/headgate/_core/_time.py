@@ -7,9 +7,9 @@ Each layer that waits, measures or draws takes them as one :class:`Timing`, so a
 for it, and pins a draw instead of hoping. The shapes are protocols over plain callables, so ``time.monotonic``,
 ``time.time``, ``asyncio.sleep`` and ``random.random`` satisfy them as they are.
 
-Everything that takes a ``timing=`` (a client, a token auth, a shared budget or registry) reads :func:`current_timing`
-when it is built and none is given. An SDK usually fixes its client's options and exposes none of them, so a test
-replaces the timing of everything it builds with :func:`timing_override` instead of reaching into each one.
+A client (and the token auth it is given), and a shared budget or registry given no ``timing=``, read
+:func:`current_timing` when they are built. An SDK usually fixes its client's options and exposes none of them, so a
+test replaces the timing of everything it builds with :func:`timing_override` instead of reaching into each one.
 """
 
 from __future__ import annotations

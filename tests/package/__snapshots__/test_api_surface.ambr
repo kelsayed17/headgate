@@ -477,7 +477,7 @@
       field failure_threshold: int = 5
       field recovery_timeout: float = 60.0
       field registry: BreakerRegistry | None = None
-  class CachedTokenAuth(Auth, Generic)(*, refresh_margin: 'float' = 120.0, timing: 'Timing | None' = None) -> 'None'
+  class CachedTokenAuth(Auth, Generic)(*args, **kwargs)
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
       def attach(self, request: 'httpx2.Request', token: 'TokenT') -> 'None'
       def credential_identity(self) -> 'bytes'
