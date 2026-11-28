@@ -31,6 +31,7 @@ from headgate import (
 )
 from headgate._core import BREAKER_GATE, BreakerChanged, BreakerState, CallContext
 from headgate.breaker import BreakerRegistry
+from headgate.breaker._registry import table_of
 from headgate.testing import TestClock
 from headgate.timing import Timing
 from tests.support.breakers import failures
@@ -209,7 +210,7 @@ async def test_the_gate_opens_when_another_call_trips_the_breaker_mid_call() -> 
     )
 
     def trip() -> None:
-        tripped = registry.breaker_for(_ORIGIN)
+        tripped = table_of(registry).breaker_for(_ORIGIN)
         with contextlib.suppress(RuntimeError), tripped.track() as verdict:
             verdict.mark_failed()
             raise RuntimeError
@@ -233,7 +234,7 @@ async def test_the_gate_stays_shut_for_a_call_from_before_the_trip() -> None:
     )
 
     def trip_and_cool_down() -> None:
-        tripped = registry.breaker_for(_ORIGIN)
+        tripped = table_of(registry).breaker_for(_ORIGIN)
         with contextlib.suppress(RuntimeError), tripped.track() as verdict:
             verdict.mark_failed()
             raise RuntimeError

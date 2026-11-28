@@ -28,7 +28,7 @@ from headgate import pydantic as pydantic_flavor
 from headgate._core import SendProgress, retry_after_of
 from headgate._failures import CallSite, status_error
 from headgate._url import escape_segment, redact_secrets, render_path, sanitize_url
-from headgate.breaker import CircuitBreaker
+from headgate.breaker._breaker import CircuitBreaker
 from headgate.ratelimit._budget import Pacer
 from headgate.ratelimit._budgets import Lane, PathBudgets
 from headgate.retry._classify import Attempted, classify

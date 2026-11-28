@@ -22,9 +22,9 @@ import contextlib
 import pytest
 
 from headgate import BreakerPolicy
-from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
-from headgate.breaker._breaker import BreakerOpenError, Transition
-from headgate.breaker._registry import NO_BREAKER
+from headgate.breaker import BreakerRegistry, BreakerState
+from headgate.breaker._breaker import BreakerOpenError, CircuitBreaker, Transition
+from headgate.breaker._registry import NO_BREAKER, table_of
 from headgate.timing import Timing
 from tests.support.timing import built_on
 
@@ -359,17 +359,17 @@ def test_a_refusal_says_how_long_the_cooldown_has_left() -> None:
 def test_a_registry_keys_a_breaker_by_origin() -> None:
     """Share one breaker per origin, however the URL spells it, with the registry's policy; build none on a read."""
     registry = BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN))
-    first = registry.breaker_for("https://a.example/x")
-    again = registry.breaker_for("HTTPS://A.example:443/y?q")
-    other = registry.breaker_for("https://b.example")
+    first = table_of(registry).breaker_for("https://a.example/x")
+    again = table_of(registry).breaker_for("HTTPS://A.example:443/y?q")
+    other = table_of(registry).breaker_for("https://b.example")
     assert first is again
     assert (first.name, first.failure_threshold, first.recovery_timeout) == ("https://a.example", 1, _LONG_COOLDOWN)
     _fail(first)
     assert (first.state, other.state) == (BreakerState.OPEN, BreakerState.CLOSED)
 
-    assert registry.breakers("http://a.example") == ()
-    assert registry.breakers("https://a.example") == (first,)
-    assert list(registry) == [first, other]
+    assert table_of(registry).breakers("http://a.example") == ()
+    assert table_of(registry).breakers("https://a.example") == (first,)
+    assert table_of(registry).breakers() == (first, other)
     assert len(registry) == len((first, other))
     assert repr(registry) == "BreakerRegistry({'https://a.example': 'open', 'https://b.example': 'closed'})"
 
@@ -384,7 +384,7 @@ def test_a_registry_breakers_read_its_clock() -> None:
         Timing(clock=clock),
         lambda: BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)),
     )
-    cb = registry.breaker_for("https://a.example")
+    cb = table_of(registry).breaker_for("https://a.example")
     _fail(cb)
     assert cb.refusing
     clock.now = _LONG_COOLDOWN

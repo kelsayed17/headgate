@@ -105,9 +105,9 @@ from headgate._responses import Expect, Reader, ResponseCheck, accepts, with_ans
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
 from headgate._view import KEEP, ROOT_DEFAULTS, VIEW_KEYS, ViewOptions
-from headgate.breaker import BreakerRegistry, CircuitBreaker
-from headgate.breaker._breaker import BreakerOpenError, Transition, Verdict
-from headgate.breaker._registry import NO_BREAKER, Breaker, clock_of
+from headgate.breaker import BreakerRegistry
+from headgate.breaker._breaker import BreakerOpenError, CircuitBreaker, Transition, Verdict
+from headgate.breaker._registry import NO_BREAKER, Breaker, table_of
 from headgate.cache._policy import HttpCache
 from headgate.cache._transport import (
     HAS_BODY,
@@ -336,7 +336,8 @@ class Client:
         self._source = httpx2.URL(base_url).netloc.decode("ascii")  # host, and a port other than the default
         self._timing = current_timing()
         check_timing(auth, self._timing, () if self._policy_off else _shared_clocks(policy))
-        self._breakers = _registry_of(policy, self._timing)
+        registry = _registry_of(policy, self._timing)
+        self._breakers = None if registry is None else table_of(registry)
         self._response_check = http.response_check
         self._max_response_bytes = http.max_response_bytes
         self._request_id_headers = http.request_id_headers
@@ -354,7 +355,7 @@ class Client:
         self._http_client = build_http_client(
             base_url=base_url, credentials=credentials, http=http, timeout=policy.timeout, transport=stack
         )
-        vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client, breakers=self._breakers)
+        vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client, breakers=registry)
         # Last, so a client refused above leaves the auth's clock unfixed; check_timing refused a clash before.
         hold_timing(auth, self._timing)
 
@@ -1261,7 +1262,7 @@ def _shared_clocks(policy: CallPolicy) -> Iterator[tuple[str, Clock]]:
         if isinstance(rate, RateBudget):
             yield "RateBudget given as rate=", pacer_of(rate).clock
     if isinstance(policy.breaker, BreakerRegistry):
-        yield "BreakerRegistry given as breaker=", clock_of(policy.breaker)
+        yield "BreakerRegistry given as breaker=", table_of(policy.breaker).clock
     retries = [policy.retry, *(route.options.get("retry") for route in policy.routes)]
     for retry in retries:
         if retry is not None and isinstance(retry.budget, RetryBudget):

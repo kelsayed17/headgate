@@ -40,8 +40,7 @@ def budget_for(client: Client, url: str | None = None) -> RateBudget:
 def breakers_of(client: Client) -> BreakerRegistry | None:
     """Return the :class:`~headgate.breaker.BreakerRegistry` *client*'s breakers live in, or ``None`` without a breaker.
 
-    It is the client's own, built from its ``BreakerPolicy``, or the shared one it was given as ``breaker=``. Read a
-    breaker's state from it (``breakers_of(client).breakers(url)``), or pass it to
-    :func:`headgate.health.breaker_states`.
+    It is the client's own, built from its ``BreakerPolicy``, or the shared one it was given as ``breaker=``. Read its
+    breakers' states with :func:`headgate.health.breaker_states`.
     """
     return built_with(client).breakers

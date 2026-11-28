@@ -17,6 +17,7 @@ import pytest
 
 from headgate import BreakerPolicy, CallPolicy, ClientError, HttpOptions, RetryPolicy, nothing
 from headgate.breaker import BreakerState
+from headgate.breaker._registry import table_of
 from headgate.events import RetryScheduled
 from headgate.retry import Hedge, RetryShare
 from headgate.testing import FakeTransport, TestClock
@@ -84,7 +85,7 @@ async def test_a_hedged_call_is_charged_to_the_breaker_once() -> None:
     with pytest.raises(ClientError, match="hedge"):
         await built.get("x", expect=nothing)
 
-    (breaker,) = registry.breakers(BASE)
+    (breaker,) = table_of(registry).breakers(BASE)
     assert len(fake.calls) == len(("first", "hedge"))
     assert (breaker.state, breaker.failure_count) == (BreakerState.CLOSED, 1)
 
@@ -111,5 +112,5 @@ async def test_a_hedge_losers_failure_is_not_charged_when_the_call_succeeds() ->
 
     await built.get("x", expect=nothing)
 
-    (breaker,) = registry.breakers(BASE)
+    (breaker,) = table_of(registry).breakers(BASE)
     assert (breaker.state, breaker.failure_count) == (BreakerState.CLOSED, 0)

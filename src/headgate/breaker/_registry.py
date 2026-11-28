@@ -15,6 +15,10 @@ dropped (a closed breaker holds at most a few failures, which a fresh one relear
 or half-open is the least recently used of all dropped, so a stream of distinct failing origins cannot grow it without
 bound either.
 
+**Mechanism.** A registry shows its settings, its size and ``clear``; the breakers live in its
+:class:`BreakerTable`, which only the client (and :mod:`headgate.health`) reaches, through :func:`table_of`, as the
+rate layer reaches a ``RateBudget``'s pacer.
+
 **Threads.** The breakers and their recency order are guarded by a ``threading.Lock``, so clients on different event
 loops in different threads can share a registry; each breaker guards its own state (see
 :mod:`headgate.breaker._breaker`).
@@ -23,17 +27,26 @@ loops in different threads can share a registry; each breaker guards its own sta
 import threading
 import weakref
 from collections import OrderedDict
-from collections.abc import Generator, Iterator
+from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager
 from typing import Final, Protocol, override
 
 import httpx2
 
-from headgate._core import BreakerState, Clock, check_kind, current_timing, origin_of, origin_text, timing_override
+from headgate._core import (
+    BreakerState,
+    Clock,
+    Timing,
+    check_kind,
+    current_timing,
+    origin_of,
+    origin_text,
+    timing_override,
+)
 from headgate.breaker._breaker import CircuitBreaker, TransitionListener, Verdict
 from headgate.breaker._policy import BreakerPolicy
 
-__all__ = ["DEFAULT_MAX_HOSTS", "NO_BREAKER", "Breaker", "BreakerRegistry", "clock_of"]
+__all__ = ["DEFAULT_MAX_HOSTS", "NO_BREAKER", "Breaker", "BreakerRegistry", "BreakerTable", "table_of"]
 
 #: How many breakers a registry holds by default before it drops the least recently used closed one.
 DEFAULT_MAX_HOSTS: Final = 1024
@@ -73,50 +86,40 @@ class _NoBreaker:
 NO_BREAKER: Breaker = _NoBreaker()
 
 
-class BreakerRegistry:
-    """The breakers of every origin its clients have called, built on first use with its *policy*. See the module.
+class BreakerTable:
+    """The breakers of a :class:`BreakerRegistry`, by origin, built on first use with its policy. See the module.
 
-    Every client given the same registry as its ``breaker=`` shares its breakers. Reading the registry (``len``,
-    iteration, :meth:`breakers`) never builds one. *max_hosts* bounds how many it holds; every breaker it builds runs
-    on the timing current when the registry is built (:func:`headgate.timing.current_timing`), whenever it builds it.
+    What a client finds its origin's breaker in, through :func:`table_of`. Reading it (``len``, :meth:`breakers`) never
+    builds a breaker.
     """
 
-    __slots__ = ("__weakref__", "_breakers", "_lock", "_max_hosts", "_policy", "_timing")
+    __slots__ = ("_breakers", "_lock", "_max_hosts", "_policy", "_timing")
 
-    def __init__(
-        self,
-        policy: BreakerPolicy = _DEFAULT_POLICY,
-        *,
-        max_hosts: int = DEFAULT_MAX_HOSTS,
-    ) -> None:
-        """Start empty, building each breaker with *policy*'s thresholds.
-
-        :raises TypeError: for a *policy* that is not a :class:`~headgate.BreakerPolicy`.
-        :raises ValueError: for a *max_hosts* below one.
-        """
-        check_kind("policy", policy, BreakerPolicy, "a BreakerPolicy, such as BreakerPolicy(failure_threshold=3)")
-        if max_hosts < 1:
-            msg = f"max_hosts must be >= 1 (got {max_hosts})"
-            raise ValueError(msg)
+    def __init__(self, policy: BreakerPolicy, max_hosts: int, timing: Timing) -> None:
+        """Start empty, building at most *max_hosts* breakers with *policy*'s thresholds, on *timing*."""
         self._policy = policy
         self._max_hosts = max_hosts
-        self._timing = current_timing()
-        _CLOCKS[self] = self._timing.clock
+        self._timing = timing
         self._lock = threading.Lock()
         self._breakers: OrderedDict[_Key, CircuitBreaker] = OrderedDict()
 
     @property
     def policy(self) -> BreakerPolicy:
-        """When the registry's breakers trip and test their origin again."""
+        """The thresholds every breaker is built with."""
         return self._policy
 
     @property
     def max_hosts(self) -> int:
-        """How many breakers the registry holds at most."""
+        """How many breakers the table holds at most."""
         return self._max_hosts
 
+    @property
+    def clock(self) -> Clock:
+        """The clock every breaker's cooldown runs on: the timing's current when the registry was built."""
+        return self._timing.clock
+
     def breaker_for(self, origin: httpx2.Origin | httpx2.URL | str) -> CircuitBreaker:
-        """Return *origin*'s breaker (an origin, or an absolute URL), building it with the registry's policy if new.
+        """Return *origin*'s breaker (an origin, or an absolute URL), building it with the policy if new.
 
         :raises ValueError: for a relative URL, which has no origin.
         """
@@ -152,12 +155,8 @@ class BreakerRegistry:
         name = origin_text(origin if isinstance(origin, httpx2.Origin) else origin_of(origin))
         return tuple(breaker for breaker in found if breaker.name == name)
 
-    def __iter__(self) -> Iterator[CircuitBreaker]:
-        """Iterate over a snapshot of the breakers, least recently used first."""
-        return iter(self.breakers())
-
     def __len__(self) -> int:
-        """Return how many breakers the registry holds."""
+        """Return how many breakers the table holds."""
         return len(self._breakers)
 
     def clear(self) -> None:
@@ -165,16 +164,63 @@ class BreakerRegistry:
         with self._lock:
             self._breakers.clear()
 
+
+class BreakerRegistry:
+    """The breakers of every origin its clients have called, built on first use with its *policy*. See the module.
+
+    Every client given the same registry as its ``breaker=`` shares its breakers; read their states with
+    :func:`headgate.health.breaker_states`, which builds none. *max_hosts* bounds how many it holds; every breaker it
+    builds runs on the timing current when the registry is built (:func:`headgate.timing.current_timing`), whenever it
+    builds it.
+    """
+
+    __slots__ = ("__weakref__", "_table")
+
+    def __init__(
+        self,
+        policy: BreakerPolicy = _DEFAULT_POLICY,
+        *,
+        max_hosts: int = DEFAULT_MAX_HOSTS,
+    ) -> None:
+        """Start empty, building each breaker with *policy*'s thresholds.
+
+        :raises TypeError: for a *policy* that is not a :class:`~headgate.BreakerPolicy`.
+        :raises ValueError: for a *max_hosts* below one.
+        """
+        check_kind("policy", policy, BreakerPolicy, "a BreakerPolicy, such as BreakerPolicy(failure_threshold=3)")
+        if max_hosts < 1:
+            msg = f"max_hosts must be >= 1 (got {max_hosts})"
+            raise ValueError(msg)
+        self._table = _TABLES[self] = BreakerTable(policy, max_hosts, current_timing())
+
+    @property
+    def policy(self) -> BreakerPolicy:
+        """When the registry's breakers trip and test their origin again."""
+        return self._table.policy
+
+    @property
+    def max_hosts(self) -> int:
+        """How many breakers the registry holds at most."""
+        return self._table.max_hosts
+
+    def __len__(self) -> int:
+        """Return how many breakers the registry holds."""
+        return len(self._table)
+
+    def clear(self) -> None:
+        """Forget every breaker, so each origin starts closed again."""
+        self._table.clear()
+
     @override
     def __repr__(self) -> str:
-        states = {breaker.name: str(breaker.state) for breaker in self.breakers()}
+        states = {breaker.name: str(breaker.state) for breaker in self._table.breakers()}
         return f"BreakerRegistry({states!r})"
 
 
-#: The clock each registry's breakers run on, read without reaching into the registry.
-_CLOCKS: Final[weakref.WeakKeyDictionary[BreakerRegistry, Clock]] = weakref.WeakKeyDictionary()
+#: Each live registry's table. Weak, so a registry nobody holds any more goes with its breakers.
+_TABLES: Final[weakref.WeakKeyDictionary[BreakerRegistry, BreakerTable]] = weakref.WeakKeyDictionary()
 
 
-def clock_of(registry: BreakerRegistry) -> Clock:
-    """Return the clock *registry*'s breakers run on: the timing's current when it was built."""
-    return _CLOCKS[registry]
+def table_of(registry: BreakerRegistry) -> BreakerTable:
+    """Return the table *registry*'s breakers live in."""
+    return _TABLES[registry]

@@ -154,8 +154,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   thresholds, given first as a `RateBudget`'s rate is: `BreakerRegistry(BreakerPolicy(failure_threshold=3),
   max_hosts=256)`, read back as `.policy`, and `BreakerPolicy()` when left out. Write
   `breaker=BreakerRegistry(BreakerPolicy(failure_threshold=3))` for
-  `breaker=BreakerPolicy(failure_threshold=3, registry=BreakerRegistry())`, and `registry.breaker_for(origin)` for
-  `registry.breaker_for(origin, failure_threshold=..., recovery_timeout=...)`.
+  `breaker=BreakerPolicy(failure_threshold=3, registry=BreakerRegistry())`. The lookup that took thresholds,
+  `registry.breaker_for(origin, failure_threshold=..., recovery_timeout=...)`, is gone with the lookup itself (see
+  **Removed**).
 - `TransportPolicy` is `CallPolicy`, the pair of `CallOptions`, which override it per call, leaving "transport" to
   the network layer (`HttpOptions(transport=)`, `TransportError`): write `Client(policy=CallPolicy(...))` for
   `Client(policy=TransportPolicy(...))`. It holds the client's rate, beside the routes that override it per path:
@@ -191,8 +192,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   hold them, where `None` stood for them; `None` for either raises `TypeError`, since `None` means off and the cache's
   off is `cache=None`. Leave them out for the defaults. `paths=None` is still the path filter off.
 - Time has one seam, `timing_override()` (and `TestClock.install()`, built on it), as it already was for `Client`:
-  `RateBudget`, `RetryBudget`, `BreakerRegistry` and `CircuitBreaker` take no `timing=`, and `FaultyTransport` no
-  `sleep=`. Each runs on the timing current when it is built, the breakers a registry builds later included. Write
+  `RateBudget`, `RetryBudget` and `BreakerRegistry` take no `timing=`, and `FaultyTransport` no `sleep=`. Each runs
+  on the timing current when it is built, the breakers a registry builds later included. Write
   `with clock.install(): shared = RateBudget(rate)` for `RateBudget(rate, timing=clock.timing)`, and
   `with clock.install(): network = FaultyTransport(schedule=[...])` for
   `FaultyTransport(schedule=[...], sleep=clock.sleep)`.
@@ -217,6 +218,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `headgate.msgspec.reader_for`.
 - `HttpCache(methods=(), paths=(), statuses=())`, an empty rule that made a cache store nothing, raises `ValueError`
   naming `cache=None`: write `CallPolicy(cache=None)` for a client without a cache.
+- `headgate.health.BreakerSnapshot` is a frozen dataclass with `state`, `refusing` and `failures` (the consecutive
+  failures since the last success, which only the live breaker showed), built by keyword, rather than a named tuple:
+  write `snapshot.state, snapshot.refusing` for `state, refusing = snapshot`, and compare a snapshot with
+  `BreakerSnapshot(state=..., refusing=..., failures=...)` rather than a tuple.
 - A client given a shared object that holds time, built on another timing than the client, raises `TypeError` before
   it builds anything, as it does for a `CachedTokenAuth` that runs on another: a `RateBudget` (as its policy's or a
   route's `rate=`), a `BreakerRegistry` (as `breaker=`) or a `RetryBudget` (as the `budget=` of its policy's or a
@@ -243,6 +248,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   its `repr`, which shows what its window holds (`RetryBudget(RetryShare(...), retries=3, firsts=40)`), and a policy
   and a backoff are values, read by their fields. A test that spent a budget by hand sends its retries through a
   client instead; one that computed a wait reads `factor` and `max_wait`.
+- `CircuitBreaker` from `headgate.breaker`, and `BreakerRegistry.breaker_for()`, `breakers()` and iteration, which
+  handed out the live breakers only the client drives: `headgate.health.breaker_states(registry)` is the one reader
+  of a registry's breakers, building none. Write `breaker_states(registry)[origin].state` for
+  `registry.breaker_for(origin).state`, `.failures` for `.failure_count`, and `for origin, snapshot in
+  breaker_states(registry).items()` for `for breaker in registry`. A registry keeps its constructor, `policy`,
+  `max_hosts`, `len()`, `clear()` and its `repr`.
 
 ### Fixed
 

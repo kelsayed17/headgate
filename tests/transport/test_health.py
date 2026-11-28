@@ -20,14 +20,15 @@ from hishel import AsyncSqliteStorage, Entry
 from headgate import BreakerPolicy, HttpCache
 from headgate._core import OBSERVER_FAILURES
 from headgate.breaker import BreakerRegistry, BreakerState
+from headgate.breaker._registry import table_of
 from headgate.cache import _transport
 from headgate.cache._transport import CACHE_DEGRADATIONS, CACHE_DEGRADED_EXT, ResilientCacheTransport
-from headgate.health import breaker_states, cache_degradations, observer_failures
+from headgate.health import BreakerSnapshot, breaker_states, cache_degradations, observer_failures
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from headgate.breaker import CircuitBreaker
+    from headgate.breaker._breaker import CircuitBreaker
 
 _HOST = "health.example.test"
 _ORIGIN = f"https://{_HOST}"
@@ -65,26 +66,52 @@ def _trip(breaker: CircuitBreaker) -> None:
 def test_breaker_states_reports_a_tripped_host_as_open() -> None:
     """Report a host's breaker as closed and admitting, then open and refusing once it trips."""
     registry = BreakerRegistry(BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_LONG_COOLDOWN))
-    breaker = registry.breaker_for(_ORIGIN)
-    assert breaker_states(registry)[_ORIGIN] == (BreakerState.CLOSED, False)
+    breaker = table_of(registry).breaker_for(_ORIGIN)
+    assert breaker_states(registry)[_ORIGIN] == BreakerSnapshot(state=BreakerState.CLOSED, refusing=False, failures=0)
 
     _trip(breaker)
 
-    assert breaker_states(registry)[_ORIGIN] == (BreakerState.OPEN, True)
+    assert breaker_states(registry)[_ORIGIN] == BreakerSnapshot(
+        state=BreakerState.OPEN, refusing=True, failures=_THRESHOLD
+    )
 
 
 def test_a_tripped_breaker_past_its_cooldown_is_open_but_not_refusing() -> None:
     """Report open but not refusing: ``state`` waits for a probe, ``refusing`` follows the cooldown."""
     registry = BreakerRegistry(BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=0.0))
-    _trip(registry.breaker_for(_ORIGIN))
+    _trip(table_of(registry).breaker_for(_ORIGIN))
 
-    assert breaker_states(registry)[_ORIGIN] == (BreakerState.OPEN, False)
+    assert breaker_states(registry)[_ORIGIN] == BreakerSnapshot(
+        state=BreakerState.OPEN, refusing=False, failures=_THRESHOLD
+    )
+
+
+def test_a_snapshot_counts_failures() -> None:
+    """Report the consecutive failures beside the state, in a snapshot that is a value, not a tuple."""
+    registry = BreakerRegistry(BreakerPolicy(failure_threshold=3, recovery_timeout=_LONG_COOLDOWN))
+    breaker = table_of(registry).breaker_for(_ORIGIN)
+    for _ in range(2):
+        with pytest.raises(ConnectionError):
+            _fail_once(breaker)
+
+    snapshot = breaker_states(registry)[_ORIGIN]
+
+    assert snapshot == BreakerSnapshot(state=BreakerState.CLOSED, refusing=False, failures=2)
+    assert not isinstance(snapshot, tuple)
+
+
+@pytest.mark.parametrize("name", ["state", "refusing", "failures"])
+def test_a_snapshot_cannot_be_changed(name: str) -> None:
+    """Refuse to rebind any field of a snapshot: it is what the breaker was at one instant."""
+    snapshot = BreakerSnapshot(state=BreakerState.OPEN, refusing=True, failures=5)
+    with pytest.raises(AttributeError):
+        setattr(snapshot, name, None)
 
 
 def test_breaker_states_is_a_copy() -> None:
     """Return a fresh mapping each call, so clearing a snapshot leaves the registry intact."""
     registry = BreakerRegistry()
-    registry.breaker_for(_ORIGIN)
+    table_of(registry).breaker_for(_ORIGIN)
     breaker_states(registry).clear()
     assert _ORIGIN in breaker_states(registry)
 

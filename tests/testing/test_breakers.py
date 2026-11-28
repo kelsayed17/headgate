@@ -5,19 +5,23 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 import headgate.breaker
 import headgate.testing
 from headgate import BreakerPolicy, CallPolicy, Client, HttpOptions, Rate, RateBudget, UpstreamStatusError, nothing
-from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
+from headgate.breaker import BreakerRegistry, BreakerState
+from headgate.breaker._registry import table_of
 from headgate.errors import CircuitOpenError
 from headgate.health import BreakerSnapshot, breaker_states
 from headgate.retry import RetryBudget, RetryShare
 from headgate.testing import FakeTransport, TestClock, breakers_of
 from tests.support.breakers import registry_of
+
+if TYPE_CHECKING:
+    from headgate.breaker._breaker import CircuitBreaker
 
 _HOST = "flaky.test"
 _ORIGIN = f"https://{_HOST}"
@@ -49,7 +53,9 @@ async def test_two_clients_given_no_registry_keep_a_breaker_each() -> None:
     await second.get("x", expect=nothing)
 
     assert registry_of(first) is not registry_of(second)
-    assert breaker_states(registry_of(first)) == {_ORIGIN: BreakerSnapshot(BreakerState.OPEN, refusing=True)}
+    assert breaker_states(registry_of(first)) == {
+        _ORIGIN: BreakerSnapshot(state=BreakerState.OPEN, refusing=True, failures=1)
+    }
 
 
 async def test_two_clients_given_one_registry_share_its_breakers() -> None:
@@ -67,11 +73,31 @@ async def test_two_clients_given_one_registry_share_its_breakers() -> None:
     assert breaker_states(shared)[_ORIGIN].state is BreakerState.OPEN
 
 
+async def test_a_shared_registry_is_read_through_its_snapshot_and_cleared_whole() -> None:
+    """Read the shared breakers as snapshots, building none for an origin never called, and start afresh on clear."""
+    shared = BreakerRegistry(BreakerPolicy(failure_threshold=2, recovery_timeout=_COOLDOWN))
+    fake = FakeTransport().reply("GET", "/x", 503, 503, 200)
+    first, second = _client(fake, shared), _client(fake, shared)
+    await _fail(first)
+
+    assert breaker_states(shared) == {_ORIGIN: BreakerSnapshot(state=BreakerState.CLOSED, refusing=False, failures=1)}
+    assert "https://never.test" not in breaker_states(shared)
+    assert (len(shared), repr(shared)) == (1, f"BreakerRegistry({{'{_ORIGIN}': 'closed'}})")
+
+    await _fail(second)
+    assert breaker_states(shared)[_ORIGIN].state is BreakerState.OPEN, "the two clients' failures counted together"
+
+    shared.clear()
+    assert (len(shared), breaker_states(shared)) == (0, {})
+    await second.get("x", expect=nothing)
+    assert breaker_states(shared)[_ORIGIN] == BreakerSnapshot(state=BreakerState.CLOSED, refusing=False, failures=0)
+
+
 def test_a_registry_carries_its_thresholds() -> None:
     """Build every breaker with the registry's own policy, so no client or lookup passes the thresholds again."""
     policy = BreakerPolicy(failure_threshold=3, recovery_timeout=_COOLDOWN)
     registry = BreakerRegistry(policy)
-    breaker = registry.breaker_for(_ORIGIN)
+    breaker = table_of(registry).breaker_for(_ORIGIN)
 
     assert registry.policy is policy
     assert (breaker.failure_threshold, breaker.recovery_timeout) == (3, _COOLDOWN)
@@ -118,7 +144,7 @@ def test_there_is_no_process_wide_registry() -> None:
 
 def _only(registry: BreakerRegistry) -> CircuitBreaker:
     """Return the one breaker *registry* holds for the test origin."""
-    (breaker,) = registry.breakers(_ORIGIN)
+    (breaker,) = table_of(registry).breakers(_ORIGIN)
     return breaker
 
 
