@@ -28,7 +28,7 @@ from headgate._core import Slot, check_collection, check_kind, check_names, curr
 from headgate.retry._budget import RetryLedger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Collection
+    from collections.abc import Callable
 
     from headgate._core import CallContext, Timing
 
@@ -251,8 +251,8 @@ class RetryPolicy:
     """
 
     attempts: int = 3
-    methods: Collection[str] = IDEMPOTENT_METHODS
-    statuses: Collection[int] = RETRY_STATUSES
+    methods: frozenset[str] = IDEMPOTENT_METHODS
+    statuses: frozenset[int] = RETRY_STATUSES
     backoff: Backoff = field(default_factory=Backoff)
     max_retry_after: float = 30.0
     budget: RetryShare | RetryBudget | None = field(default_factory=RetryShare)

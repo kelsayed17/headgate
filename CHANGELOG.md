@@ -43,11 +43,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
     into text first, with `json.dumps` or the API's own format.
 - `Form.fields` and `Multipart.fields` hold the encoded values, a copy of the mapping given: `Form({"s": Status.OPEN})`
   has `fields == {"s": "open"}`. Read the values you built the body from, not the body's.
-- Parameters that take names or codes take a collection of them: `CassetteFilter(headers=, params=)`,
-  `HttpCache(methods=, paths=, statuses=)` and `RetryPolicy(methods=, statuses=)`. A bare `str` (read one letter at a
-  time), a number or a one-shot iterator (a generator, which checking would empty) raises `TypeError` naming the
-  option: write `methods=("GET",)` or `statuses=(503,)`, and turn a generator into a tuple. `RetryPolicy(methods="GET")`
-  retried no GET, and `HttpCache(methods="GET")` raised a `ValueError` that named the letters.
+- Parameters that take names or codes take a collection of them: `CassetteFilter(headers=, params=)` and
+  `HttpCache(methods=, paths=, statuses=)` are typed `Collection[...]`, and `RetryPolicy(methods=, statuses=)` stays
+  typed `frozenset[...]`. A bare `str` (read one letter at a time), a number or a one-shot iterator (a generator, which
+  checking would empty) raises `TypeError` naming the option: write `methods=("GET",)` (`frozenset({"GET"})` for a
+  `RetryPolicy`) or `statuses=(503,)`, and turn a generator into a tuple. `RetryPolicy(methods="GET")` retried no GET,
+  and `HttpCache(methods="GET")` raised a `ValueError` that named the letters.
 - `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.
