@@ -67,7 +67,7 @@ async def test_open_issues_follow_the_link_header() -> None:
     assert second_sent.headers["authorization"] == "Bearer t0ken", "the next page is on GitHub, so it is authenticated"
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_a_spent_hourly_limit_pauses_every_call_until_the_reset() -> None:
     """Stop sending once GitHub reports the hourly limit spent: a call that cannot wait for the reset fails at once."""
     spent = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(time.time()) + _RESET_IN)}

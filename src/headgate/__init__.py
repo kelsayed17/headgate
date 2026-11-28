@@ -3,8 +3,8 @@
 
 """headgate: an async HTTP client with retry, rate limiting, circuit breaking and declared responses.
 
-Built on ``httpx2``; Python 3.14 or newer. An SDK holds a :class:`Client`, configures it with a :class:`Rate` (or a
-shared :class:`RateBudget`) and optionally :class:`CallPolicy` and :class:`HttpOptions`, and picks a codec:
+Built on ``httpx2``; Python 3.14 or newer. An SDK holds a :class:`Client`, configures it with a :class:`CallPolicy`
+(its :class:`Rate`, or a shared :class:`RateBudget`, among the rest) and :class:`HttpOptions`, and picks a codec:
 ``headgate.msgspec``, ``headgate.pydantic``, or any library as a :class:`Codec` of its own. Exported here is what a
 client is written with, and each name only here:
 

@@ -93,7 +93,7 @@ asyncio_mode = "auto"
 asyncio_default_test_loop_scope = "session"
 asyncio_default_fixture_loop_scope = "session"
 addopts = "--import-mode=importlib --strict-markers"
-markers = ["transport_policy: the test's subject is the retry/breaker/throttle, so it keeps the real rate-limiter wait"]
+markers = ["call_policy: the test's subject is the retry/breaker/throttle, so it keeps the real rate-limiter wait"]
 testpaths = ["tests"]
 pythonpath = ["examples"]
 

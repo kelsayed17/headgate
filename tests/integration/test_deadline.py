@@ -44,7 +44,7 @@ def _full_jitter() -> float:
     return 1.0
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_a_pause_a_backoff_and_attempts_stay_inside_the_deadline() -> None:
     """Wait the pause and send, then stop rather than start a backoff the deadline cannot cover."""
     clock = TestClock(random=_full_jitter)
@@ -100,7 +100,7 @@ _ADMITTED = 3
 _QUEUE_DEADLINE = 0.25
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_a_call_whose_budget_turn_is_past_the_deadline_fails_at_once_unsent() -> None:
     """Fail a call at once, saying it was never sent, when its turn in the rate budget comes after its deadline.
 

@@ -85,9 +85,10 @@ mocked failure is retried exactly as production retries it, without the backoff.
 
 ## Breakers
 
-Each client keeps its breakers in a `BreakerRegistry` of its own, unless its `BreakerPolicy` names one to share, so
-failures in one test open no breaker in the next. `breakers_of(client)` returns that registry (or `None` for a client
-without a breaker); assert on it with `headgate.health.breaker_states(registry)`.
+Each client keeps its breakers in a `BreakerRegistry` of its own, unless it is given one to share
+(`CallPolicy(breaker=BreakerRegistry(...))`), so failures in one test open no breaker in the next. `breakers_of(client)`
+returns that registry (or `None` for a client without a breaker); assert on it with
+`headgate.health.breaker_states(registry)`.
 
 ## What a client was built with
 
@@ -189,7 +190,7 @@ from headgate.policy import policy_disabled
 
 
 @pytest.fixture(autouse=True)
-def _no_transport_policy() -> Iterator[None]:
+def _no_call_policy() -> Iterator[None]:
     with policy_disabled():
         yield
 ```

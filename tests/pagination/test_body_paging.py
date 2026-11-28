@@ -453,7 +453,7 @@ async def test_a_post_page_is_resent_under_a_policy_that_treats_post_as_idempote
     assert len(api.sent) == len(("the 503", "page 1", "page 2", "page 3"))
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_each_post_page_gets_its_own_idempotency_key() -> None:
     """Stamp a fresh key on each page under ``IdempotencyKeys``, so a page is re-sent with its own key."""
     api = _Api(_flaky(), policy=CallPolicy(breaker=None, idempotency=IdempotencyKeys()))

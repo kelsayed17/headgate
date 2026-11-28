@@ -12,7 +12,7 @@ Every call (a verb, :meth:`~Client.stream`, each page of :meth:`~Client.paginate
 :class:`_Call` and runs through the same steps:
 
 1. :meth:`~Client._prepare` renders the URL, builds the ``httpx2.Request`` once, and stamps the call's
-   :class:`~headgate._core.CallContext` on it: method, sanitized URL, route template, deadline, retry override, body
+   :class:`~headgate._core.CallContext` on it: method, sanitized URL, template, deadline, retry override, body
    replayability, idempotency key and redirect choice;
 2. :meth:`~Client._reported` emits ``CallStarted`` and ``CallFinished`` around the call and adds its notes to
    the error it raises; :meth:`~Client._deadline` bounds it by its deadline;
@@ -276,15 +276,16 @@ class Client:
     :meth:`with_options` makes a view whose calls take other defaults for headers, timeouts, deadline, retry and
     redirects.
 
-    **URLs.** A t-string URL (``t"series/{series_id}"``) is rendered by :func:`headgate._url.render_path`, which
-    escapes every interpolation as one path segment and raises ``ValueError`` for a value no segment can hold (as
+    **URLs.** A t-string URL (``t"series/{series_id}"``) is rendered by :func:`headgate._url.render_path`, which escapes
+    every interpolation as one path segment and raises ``ValueError`` for a value no segment can hold (as
     :func:`~headgate._url.escape_segment` does): that is a programming error at the call site. Its template is the
-    call's route in events. An absolute ``httpx2.URL`` is passed through verbatim, so a paginator can forward a cursor
-    URL from a response body; a literal ``str`` is passed through the same way. A relative ``httpx2.URL`` raises
-    ``TypeError``, since its only use would be to skip escaping, and so does a URL of any other kind. A computed
-    ``str``, such as an f-string, does not type-check, because it skipped escaping. A URL httpx2 cannot parse raises the
-    root ``ClientError``, since such a URL often comes from the wire rather than the code; a redirect to one is the
-    host's failure, a ``TransportError``. Every message names a URL redacted and cut to a few hundred characters.
+    call's ``CallInfo.template`` in events. An absolute ``httpx2.URL`` is passed through verbatim, so a paginator can
+    forward a cursor URL from a response body; a literal ``str`` is passed through the same way. A relative
+    ``httpx2.URL`` raises ``TypeError``, since its only use would be to skip escaping, and so does a URL of any other
+    kind. A computed ``str``, such as an f-string, does not type-check, because it skipped escaping. A URL httpx2 cannot
+    parse raises the root ``ClientError``, since such a URL often comes from the wire rather than the code; a redirect
+    to one is the host's failure, a ``TransportError``. Every message names a URL redacted and cut to a few hundred
+    characters.
 
     **Time.** The client takes its timing from :func:`headgate.timing.current_timing` when it is built.
     """

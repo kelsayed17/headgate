@@ -4,7 +4,7 @@
 """``examples/quickstart.py`` and ``examples/boundary.py``, the README's samples, run against a fake network.
 
 The first two tests are the README's "Testing your client" sample, verbatim. The module runs with the real rate-budget
-wait (``transport_policy``), as a client's own suite would.
+wait (``call_policy``), as a client's own suite would.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from headgate import AuthError, ClientError, ClientTimeoutError, RateLimitError,
 from headgate.errors import CircuitOpenError, ClientConfigurationError, ResponseParseError
 from headgate.testing import FakeTransport, Respond, TestClock, fake_network
 
-pytestmark = pytest.mark.transport_policy
+pytestmark = pytest.mark.call_policy
 
 GDP = {"id": "GDP", "title": "Gross domestic product", "values": [27.4, 28.1]}
 

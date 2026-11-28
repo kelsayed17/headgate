@@ -8,7 +8,7 @@ httpx2 hands a request's extensions to every redirect hop, and the cache layer r
 layer from the auth flow down to the network transport finds the same object with :meth:`CallContext.find`. Layers
 read and write it through its methods, never through extension keys of their own:
 
-* what the call is: :attr:`~CallContext.info` (method, sanitized URL, route template, call id);
+* what the call is: :attr:`~CallContext.info` (method, sanitized URL, template, call id);
 * when it must end: :attr:`~CallContext.deadline`, absolute on the client's clock, :meth:`~CallContext.remaining`,
   and :meth:`~CallContext.fit_timeouts`, which cuts a request's timeouts to it;
 * its sends: :meth:`~CallContext.begin_attempt`, :attr:`~CallContext.attempt` and the current attempt's
@@ -321,7 +321,7 @@ class CallView:
 def call_view(request: httpx2.Request) -> CallView | None:
     """Return a view of the call *request* belongs to, now, or ``None`` for a request no client call built.
 
-    A middleware reads it to tell its call apart (by route template), to know a re-send from a first send, and to
+    A middleware reads it to tell its call apart (by its template), to know a re-send from a first send, and to
     leave a slow step out when the deadline is near. Every reading is fresh: the attempt and the time left are the
     call's as they stand.
     """

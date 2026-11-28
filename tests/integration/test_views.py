@@ -54,7 +54,7 @@ async def test_a_view_spends_its_clients_retry_budget() -> None:
     assert "retry budget exhausted" in raised.value.__notes__
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_a_view_waits_out_a_pause_its_client_was_asked_for() -> None:
     """Make the view wait the pause the client's 429 put on the shared rate budget, before it sends."""
     clock = TestClock()

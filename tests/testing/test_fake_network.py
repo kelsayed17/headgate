@@ -58,7 +58,7 @@ async def test_an_sdk_built_outside_the_block_keeps_its_own_transport() -> None:
     assert (len(own.calls), len(fake.calls)) == (1, 0)
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_the_sdks_retries_and_rate_budget_run_over_the_fake() -> None:
     """Replace the network only: the client still retries a 503, and paces its sends at its own rate."""
     fake = FakeTransport().reply("GET", "/v1/ping", 503, 200)
