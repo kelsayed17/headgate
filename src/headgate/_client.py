@@ -100,7 +100,7 @@ from headgate._options import (
     match_route,
     reject_upstream_httpx,
 )
-from headgate._request_body import Json, Lowered, WireValue, lowered, wire_value
+from headgate._request_body import Json, Lowered, WireValue, Writer, lowered, wire_value
 from headgate._responses import Expect, Reader, ResponseCheck, accepts, with_answers
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
@@ -649,7 +649,7 @@ class Client:
         spec: Expect[P] = _expectation(_page_reader(pager))
         call_options = options.copy()
         # How a body is sent is the walk's: the pager's writer encodes every page's, whatever request the pager returns.
-        write = pager.write if isinstance(pager, WritingPager) else None
+        write = _page_writer(pager)
         first = pager.first(PageRequest(url, call_options.pop("params", None), payload))
         # A page's body cannot carry one fixed key: refused for the first page here, and for a later one (a pager that
         # turns GETs into POSTs) before it is sent.
@@ -1405,6 +1405,23 @@ def _page_reader[I, P, B](pager: Pager[I, P, B]) -> Reader[P] | Expect[P]:
         )
         raise TypeError(msg)
     return cast("Reader[P] | Expect[P]", read)
+
+
+def _page_writer[I, P, B](pager: Pager[I, P, B]) -> Writer[B] | None:
+    """Return the writer *pager* encodes each page's body with: a writing pager's ``write``, else ``None``.
+
+    :raises TypeError: for a :class:`~headgate.pagination.WritingPager` with no ``write``.
+    """
+    if not isinstance(pager, WritingPager):
+        return None
+    if not hasattr(pager, "write"):
+        msg = (
+            f"paginate()'s pager is a WritingPager, so it encodes each page's body with its write (the "
+            f"{type(pager).__name__} has none): give it write, a flavor's writer, or None for a body of builtins sent "
+            "as JSON"
+        )
+        raise TypeError(msg)
+    return pager.write
 
 
 def _paired[T](read: Reader[T]) -> Reader[tuple[T, httpx2.Response]]:

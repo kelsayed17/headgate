@@ -134,9 +134,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `Expect`, so declared answers, `accept=` and `headers=` reach every page as before. Every pager's generic parameters
   read item first, as `Paginated[I, P]` does: `Pager[I, P, B]`, `WritingPager[I, P, B]`, `Cursor[Item, Page, Query]`
   for `Cursor[Page, Item, Query]`, and the reader and writer usually bind them, so the subscript can go. The `Pager`
-  protocol and `WritingPager` gain `read`: give a pager of your own a `read` attribute, such as a dataclass field
-  `read: Reader[Page]`. `paginate()` raises `TypeError` for a pager whose `read` is missing or is not a `Reader` or an
-  `Expect`, before the pager runs.
+  protocol gains a `read` property: give a pager of your own a `read`, such as a dataclass field `read: Reader[Page]`.
+  `WritingPager` declares `read` and `write` for its subclass to give, as fields or properties, rather than making
+  `write` an abstract property, and no longer subclasses the `Pager` protocol (it is one by its shape), so a plain
+  `@dataclass(frozen=True)` subclass with `read` and `write` fields builds: write `read: Reader[Page]` and
+  `write: Writer[Query]` as fields, where a `write` property was required. Its methods stay abstract. `paginate()`
+  raises `TypeError`, before the pager runs, for a pager whose `read` is missing or is not a `Reader` or an `Expect`,
+  and for a writing pager with no `write`.
 
 - `Paginated` is the class of the walk `paginate()` returns, a final class rather than a protocol, so a mistake names
   it: `await client.paginate(...)` raises `TypeError: 'Paginated' object can't be awaited`, where it named a private
