@@ -69,7 +69,7 @@ followed unsigned: the hop's own headers and form body (a client secret) are cre
 and httpx2 sends the body again on a 307 or 308.
 
 Every [middleware](configuration.md#middleware) declares the credentials it stamps (a key, a token) the
-same way, with `credential_headers` and `credential_params`, each empty when it stamps none; `HttpOptions` refuses one
+same way, with `credential_headers` and `credential_params`, each empty when it stamps none; `Client()` refuses one
 that does not. A middleware runs inside the transport stack, after the request hook, so
 the guard runs a second time below the last middleware, on every attempt of every hop, and removes what it declares
 from any hop not addressed to `base_url`'s origin or a trusted one. An auth flow's token host is not trusted for a
