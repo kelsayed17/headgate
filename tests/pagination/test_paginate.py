@@ -16,7 +16,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from headgate import Client, ClientError, Expect, HttpOptions, Rate, Reader, UpstreamStatusError
+from headgate import Client, ClientError, Expect, HttpOptions, Paginated, Rate, Reader, UpstreamStatusError
 from headgate._client import _paired
 from headgate.errors import ForbiddenDestinationError, PageLimitError, ResponseParseError
 from headgate.msgspec import reader
@@ -1047,3 +1047,15 @@ def test_a_pager_cannot_be_built_without_its_reader(pager: Callable[..., object]
     """Refuse a pager built without its reader, rather than default ``read`` to something that reads nothing."""
     with pytest.raises(TypeError, match="missing 1 required positional argument: 'read'"):
         pager(**options)
+
+
+async def test_paginate_returns_a_paginated() -> None:
+    """Return a ``Paginated``, the final class the walk is, whose name a misuse's message shows."""
+    paginated = _Api(_by_cursor).client().paginate("items", pager=_cursor())
+
+    assert type(paginated) is Paginated
+    assert getattr(Paginated, "__final__", False)
+    with pytest.raises(TypeError, match=r"^'Paginated' object can't be awaited$"):
+        await cast("Any", paginated)
+    with pytest.raises(TypeError, match=r"^'Paginated' object is not iterable$"):
+        iter(cast("Any", paginated))

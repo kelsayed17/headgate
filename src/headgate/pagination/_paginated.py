@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 from contextlib import aclosing
 from dataclasses import replace
-from typing import TYPE_CHECKING, Final, Literal, Protocol, final
+from typing import TYPE_CHECKING, Final, Literal, final
 
 import httpx2
 
@@ -64,7 +64,8 @@ type Fetch[P, B] = Callable[[PageRequest[B]], Awaitable[tuple[P, httpx2.Response
 """Fetches one page through the client, returning what the call's reader read and the response it read it from."""
 
 
-class Paginated[I, P = object](Protocol):
+@final
+class Paginated[I, P = object]:
     """The pages of a paginated endpoint and the items on them, fetched one page at a time as iteration reaches them.
 
     ``async for item in paginated`` yields every item; :meth:`pages` yields the pages themselves; :meth:`collect`
@@ -84,24 +85,51 @@ class Paginated[I, P = object](Protocol):
 
     ``I`` is the item type and ``P`` the page type, which defaults to ``object``: ``Paginated[Issue]`` is a walk of
     issues, and ``Paginated[Issue, IssuePage]`` names the pages :meth:`pages` yields too.
+
+    It is what :meth:`Client.paginate <headgate.Client.paginate>` returns, and is not built otherwise: its
+    constructor takes the function that starts an iteration of the pages, and the one that starts an iteration of the
+    items.
     """
+
+    __slots__ = ("_items", "_pages")
+
+    def __init__(self, pages: Callable[[], AsyncIterator[P]], items: Callable[[], AsyncGenerator[I]], /) -> None:
+        """Start each iteration of the pages with *pages*, and each iteration of the items with *items*."""
+        self._pages: Final = pages
+        self._items: Final = items
 
     def __aiter__(self) -> AsyncIterator[I]:
         """Iterate the items of every page, in order."""
-        ...
+        return self._items()
 
     def pages(self) -> AsyncIterator[P]:
         """Iterate the pages, in order."""
-        ...
+        return self._pages()
 
     async def collect(self, *, max_items: int | None = None) -> list[I]:
-        """Return every item of the walk, in order; with *max_items*, at most that many."""
-        ...
+        """Return every item of the walk, in order; with *max_items*, at most that many.
+
+        The walk stops as soon as it has *max_items* items, so no page past the one that filled it is fetched, and
+        ``max_items=0`` sends no request. A page budget (``max_pages=``) applies as it does to iteration: a walk it cuts
+        short raises ``PageLimitError`` unless the items were all collected first.
+        """
+        if max_items is not None and (isinstance(max_items, bool) or max_items < 0):
+            msg = f"max_items must be None or >= 0 (got {max_items!r})"
+            raise ValueError(msg)
+        collected: list[I] = []
+        if max_items == 0:
+            return collected
+        async with aclosing(self._items()) as items:
+            async for item in items:
+                collected.append(item)
+                if len(collected) == max_items:
+                    break
+        return collected
 
 
 @final
 class PageWalk[I, P, B]:
-    """The :class:`Paginated` :meth:`Client.paginate <headgate.Client.paginate>` builds."""
+    """The pages of one walk, and the items on them: what the :class:`Paginated` ``paginate`` returns iterates."""
 
     __slots__ = ("_fetch", "_first", "_items_of", "_max_pages", "_on_limit", "_pager", "_source", "_write")
 
@@ -137,10 +165,6 @@ class PageWalk[I, P, B]:
             pager.items if isinstance(pager, Offset | PageNumber | BodyOffset) else None
         )
 
-    def __aiter__(self) -> AsyncIterator[I]:
-        """Iterate the items of every page, in order."""
-        return self._items()
-
     async def pages(self) -> AsyncIterator[P]:
         """Iterate the pages, in order."""
         request: PageRequest[B] | None = self._first
@@ -169,27 +193,7 @@ class PageWalk[I, P, B]:
             del response
             yield page
 
-    async def collect(self, *, max_items: int | None = None) -> list[I]:
-        """Return every item of the walk, in order; with *max_items*, at most that many.
-
-        The walk stops as soon as it has *max_items* items, so no page past the one that filled it is fetched, and
-        ``max_items=0`` sends no request. A page budget (``max_pages=``) applies as it does to iteration: a walk it cuts
-        short raises ``PageLimitError`` unless the items were all collected first.
-        """
-        if max_items is not None and (isinstance(max_items, bool) or max_items < 0):
-            msg = f"max_items must be None or >= 0 (got {max_items!r})"
-            raise ValueError(msg)
-        collected: list[I] = []
-        if max_items == 0:
-            return collected
-        async with aclosing(self._items()) as items:
-            async for item in items:
-                collected.append(item)
-                if len(collected) == max_items:
-                    break
-        return collected
-
-    async def _items(self) -> AsyncGenerator[I]:
+    async def items(self) -> AsyncGenerator[I]:
         """Iterate the items of every page, in order."""
         async for page in self.pages():
             for item in self._pager.page_items(page):
