@@ -354,15 +354,13 @@ def test_a_refusal_says_how_long_the_cooldown_has_left() -> None:
 
 
 def test_a_registry_keys_a_breaker_by_origin() -> None:
-    """Share one breaker per origin, however the URL spells it; refuse other thresholds; never build on a read."""
-    registry = BreakerRegistry()
-    first = registry.breaker_for("https://a.example/x", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
-    again = registry.breaker_for("HTTPS://A.example:443/y?q", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
-    other = registry.breaker_for("https://b.example", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
+    """Share one breaker per origin, however the URL spells it, with the registry's policy; build none on a read."""
+    registry = BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN))
+    first = registry.breaker_for("https://a.example/x")
+    again = registry.breaker_for("HTTPS://A.example:443/y?q")
+    other = registry.breaker_for("https://b.example")
     assert first is again
     assert (first.name, first.failure_threshold, first.recovery_timeout) == ("https://a.example", 1, _LONG_COOLDOWN)
-    with pytest.raises(ValueError, match="trip after 1 failures"):
-        registry.breaker_for("https://a.example", failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
     _fail(first)
     assert (first.state, other.state) == (BreakerState.OPEN, BreakerState.CLOSED)
 
@@ -379,8 +377,10 @@ def test_a_registry_keys_a_breaker_by_origin() -> None:
 def test_a_registry_breakers_read_its_clock() -> None:
     """Hand the registry's clock to every breaker it builds, so a test can drive their cooldowns."""
     clock = _Clock()
-    registry = BreakerRegistry(timing=Timing(clock=clock))
-    cb = registry.breaker_for("https://a.example", failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)
+    registry = BreakerRegistry(
+        BreakerPolicy(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN), timing=Timing(clock=clock)
+    )
+    cb = registry.breaker_for("https://a.example")
     _fail(cb)
     assert cb.refusing
     clock.now = _LONG_COOLDOWN
@@ -400,11 +400,6 @@ def test_a_breaker_policy_refuses_a_nonsense_value(threshold: int, cooldown: flo
     """Refuse a threshold below one and a cooldown that is negative, NaN or infinite."""
     with pytest.raises(ValueError, match=match):
         BreakerPolicy(failure_threshold=threshold, recovery_timeout=cooldown)
-
-
-def test_a_breaker_policy_names_no_registry_by_default() -> None:
-    """Leave the registry unnamed, so each client builds one of its own."""
-    assert BreakerPolicy().registry is None
 
 
 def test_a_marked_failure_counts_even_when_the_block_exits_cleanly() -> None:

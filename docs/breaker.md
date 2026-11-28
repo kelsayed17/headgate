@@ -50,25 +50,18 @@ mint), or while the auth waits for or makes a token mint (a re-mint after a 401 
 
 ## Sharing and keying
 
-Breakers live in a `BreakerRegistry`. A client builds one of its own, so its failures open no other client's breakers;
-there is no process-wide registry. Clients that should pool their failures against an upstream, so that two clients of
-it cannot each spend a full quota of failures, are given one registry: `BreakerPolicy(registry=shared)`. A registry
-keys a breaker by origin and fixes its thresholds the first time a client binds it, so every breaker it holds trips as
-each client sharing it expects. A client whose policy asks for other thresholds is refused with `ValueError` when it is
-built:
-
-```text
-this BreakerRegistry's breakers trip after 3 failures with a 30s cooldown, so a client with
-BreakerPolicy(failure_threshold=5, recovery_timeout=60) cannot share it: give that client the same thresholds, or a
-registry of its own
-```
+Breakers live in a `BreakerRegistry`. A client given a `BreakerPolicy` builds one of its own from it, so its failures
+open no other client's breakers; there is no process-wide registry. Clients that should pool their failures against an
+upstream, so that two clients of it cannot each spend a full quota of failures, are given one registry in its place, as
+clients share a `RateBudget` in place of a `Rate`: `breaker=BreakerRegistry(policy)`. A registry keys a breaker by
+origin and builds every breaker with its own policy, so every breaker it holds trips as each client sharing it expects.
 
 ```python
 from headgate import BreakerPolicy, TransportPolicy
 from headgate.breaker import BreakerRegistry
 
-critical = BreakerRegistry(max_hosts=256)
-policy = TransportPolicy(breaker=BreakerPolicy(failure_threshold=3, recovery_timeout=30.0, registry=critical))
+critical = BreakerRegistry(BreakerPolicy(failure_threshold=3, recovery_timeout=30.0), max_hosts=256)
+policy = TransportPolicy(breaker=critical)
 no_breaker = TransportPolicy(breaker=None)
 ```
 

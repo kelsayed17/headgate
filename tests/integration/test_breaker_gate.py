@@ -42,7 +42,7 @@ async def test_a_breaker_opening_mid_sequence_stops_the_retries() -> None:
     fake = FakeTransport().reply("GET", _PATH, unavailable_while_another_call_fails, 200)
     built = client(fake, policy=_POLICY)
     registry = registry_of(built)
-    breakers.append(registry.breaker_for(BASE, failure_threshold=1, recovery_timeout=_COOLDOWN))
+    breakers.append(registry.breaker_for(BASE))
 
     with pytest.raises(UpstreamStatusError) as raised:
         await built.get("x", expect=nothing)
@@ -61,7 +61,7 @@ async def test_a_half_open_probe_keeps_its_retries() -> None:
     with clock.install():
         built = client(fake, policy=_POLICY, http=HttpOptions(), observers=(recorder,))
     registry = registry_of(built)
-    breaker = registry.breaker_for(BASE, failure_threshold=1, recovery_timeout=_COOLDOWN)
+    breaker = registry.breaker_for(BASE)
     _fail_once(breaker)
     clock.advance(_COOLDOWN)
 

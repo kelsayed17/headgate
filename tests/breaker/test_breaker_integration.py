@@ -112,10 +112,10 @@ class _TruncatedBodyTransport(httpx2.AsyncBaseTransport):
 
 
 #: The registry every client below but the last test's shares, so the fixture breaker is theirs.
-_SHARED = BreakerRegistry()
+_SHARED = BreakerRegistry(BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN))
 
 #: The policy of every client below but the last test's: the fixture breaker's threshold, cooldown and registry.
-_FAST_BREAKER = BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN, registry=_SHARED)
+_FAST_BREAKER = _SHARED
 
 
 @pytest.fixture
@@ -127,7 +127,7 @@ def breaker() -> CircuitBreaker:
     breaker that opened and whose cooldown already elapsed, admitting the request as a probe.
     """
     _SHARED.clear()
-    return _SHARED.breaker_for(_URL, failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
+    return _SHARED.breaker_for(_URL)
 
 
 async def _fail(client: Client, times: int) -> None:
@@ -444,7 +444,7 @@ async def test_an_opted_out_client_is_not_refused_by_a_breaker_another_client_op
     fixture: a 50ms cooldown could elapse mid-test and admit the control below as a probe.
     """
     shared = BreakerRegistry()
-    policy = TransportPolicy(retry=RetryPolicy(attempts=1), breaker=BreakerPolicy(registry=shared))
+    policy = TransportPolicy(retry=RetryPolicy(attempts=1), breaker=shared)
     await _fail(
         Client(
             rate=Rate.per_second(2),

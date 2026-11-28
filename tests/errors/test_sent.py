@@ -54,7 +54,7 @@ def _client(
     *,
     retry: RetryPolicy | None = None,
     auth: Auth | None = None,
-    breaker: BreakerPolicy | None = None,
+    breaker: BreakerPolicy | BreakerRegistry | None = None,
 ) -> Client:
     """Return a client over *handler* that sends each call once unless *retry* says otherwise."""
     return Client(
@@ -166,7 +166,7 @@ async def test_a_parse_error_after_a_retried_503_was_sent() -> None:
 
 async def test_a_post_an_open_breaker_refused_sent_nothing() -> None:
     """Record nothing sent for a call the breaker refused before it was sent."""
-    breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=3600.0, registry=BreakerRegistry())
+    breaker = BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=3600.0))
     client = _client(lambda _request: httpx2.Response(503), breaker=breaker)
     await _raised(client)
 

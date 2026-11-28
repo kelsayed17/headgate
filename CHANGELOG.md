@@ -136,6 +136,14 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `PageWalk`. Iterate with `async for`, or `await walk.collect()`. Annotations are unchanged: `Paginated[Issue]` and
   `Paginated[Issue, IssuePage]`.
 
+- Breakers take the shape a rate does: a policy's `breaker=` is a `BreakerPolicy`, from which the client builds
+  breakers of its own, or a shared `BreakerRegistry`, built from one, whose breakers every client given it shares
+  (`breaker: BreakerPolicy | BreakerRegistry | None`, as `rate: Rate | RateBudget | None`). The registry holds the
+  thresholds: `BreakerRegistry(policy=BreakerPolicy(), /, *, max_hosts=1024)`, read back as `.policy`. Write
+  `breaker=BreakerRegistry(BreakerPolicy(failure_threshold=3))` for
+  `breaker=BreakerPolicy(failure_threshold=3, registry=BreakerRegistry())`, and `registry.breaker_for(origin)` for
+  `registry.breaker_for(origin, failure_threshold=..., recovery_timeout=...)`.
+
 ### Removed
 
 - The cache's `ClientConfigurationError` for an auth that does not declare its credentials, which no auth can now
@@ -145,6 +153,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `fake_network`, so a test sent its client secret to the real token host. Yield the exchange's request from `mint`
   instead (see the auth guide), or, for a mint that is not an HTTP request, yield only the `Minted`. The guide's recipe
   for it, and the testing guide's note that it does not reach the fake, are gone with it.
+
+- `BreakerPolicy.registry`, `BreakerRegistry.bind()` and the `ValueError` for a client whose thresholds differed from
+  the ones a shared registry was bound to: a registry carries its own policy, so its clients cannot disagree. Give the
+  registry the thresholds, and the clients the registry.
 
 ### Fixed
 

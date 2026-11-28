@@ -43,9 +43,7 @@ def _redirecting_to(location: str) -> httpx2.MockTransport:
 def _open_breaker(client: Client) -> None:
     """Trip *client*'s breaker for the test host, built for the default policy: its threshold's worth of failures."""
     policy = BreakerPolicy()
-    breaker = registry_of(client).breaker_for(
-        f"https://{_HOST}", failure_threshold=policy.failure_threshold, recovery_timeout=policy.recovery_timeout
-    )
+    breaker = registry_of(client).breaker_for(f"https://{_HOST}")
     for _ in range(policy.failure_threshold):
         with contextlib.suppress(RuntimeError), breaker.track() as verdict:
             verdict.mark_failed()

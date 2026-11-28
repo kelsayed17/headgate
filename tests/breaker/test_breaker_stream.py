@@ -60,11 +60,10 @@ class _Breakers:
     def __init__(self, threshold: int) -> None:
         """Trip after *threshold* failures; admit a probe a minute later."""
         self.clock = TestClock()
-        registry = BreakerRegistry(timing=Timing(clock=self.clock))
-        self.policy = BreakerPolicy(failure_threshold=threshold, recovery_timeout=_COOLDOWN, registry=registry)
-        self.breaker: CircuitBreaker = registry.breaker_for(
-            _ORIGIN, failure_threshold=threshold, recovery_timeout=_COOLDOWN
+        self.policy = registry = BreakerRegistry(
+            BreakerPolicy(failure_threshold=threshold, recovery_timeout=_COOLDOWN), timing=Timing(clock=self.clock)
         )
+        self.breaker: CircuitBreaker = registry.breaker_for(_ORIGIN)
 
     def client(
         self,
