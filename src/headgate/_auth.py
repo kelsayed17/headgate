@@ -375,8 +375,7 @@ def _refuse_async_hooks(cls: type, base: type, *hooks: str) -> None:
         if inspect.iscoroutinefunction(getattr(cls, hook)):
             msg = (
                 f"{cls.__name__}.{hook} is a coroutine function, which {base.__name__} calls without awaiting, so it "
-                f"would never run: write {_SYNC_HOOKS[hook]}, and fetch what it needs (a key from a KMS) before the "
-                "call"
+                f"would never run: write {_SYNC_HOOKS[hook]}, and fetch anything slow it needs before the call"
             )
             raise TypeError(msg)
 
