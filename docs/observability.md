@@ -27,6 +27,9 @@ class Metrics:
 client = Client(base_url="https://api.example", observers=(Metrics(),))
 ```
 
+`notify` is a plain method, called in line and never awaited, so `Client()` refuses an observer whose `notify` is a
+coroutine function: its events would be dropped. Hand slow work (a network sink) to a queue or a task.
+
 | Event | When | Carries |
 | --- | --- | --- |
 | `CallStarted` | a call's request is built | `call` |

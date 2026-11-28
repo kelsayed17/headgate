@@ -92,6 +92,7 @@ from headgate._options import (
     check_deadline,
     check_hooks,
     check_middleware,
+    check_observers,
     check_timeout_fits,
     httpx_timeout,
     match_route,
@@ -336,8 +337,8 @@ class Client:
         :raises TypeError: for an argument of the wrong kind: an *auth* that is not a :class:`~headgate.Auth` (a plain
             ``httpx2.Auth`` declares nothing it stamps) or is an upstream ``httpx`` one, a *rate* that is neither
             a ``Rate``, a ``RateBudget`` nor ``None``, such as a bare number, *observers* or *middleware* that are not
-            a sequence, a middleware that does not declare its credentials, and a *base_url*, *policy* or *http* that
-            is not the kind it names.
+            a sequence, a middleware that does not declare its credentials or is not async, an observer whose
+            ``notify`` is, and a *base_url*, *policy* or *http* that is not the kind it names.
         """
         check_kind("base_url", base_url, str, "the API root, such as 'https://api.example.com/v1'")
         check_kind("policy", policy, TransportPolicy, "TransportPolicy(...)")
@@ -349,6 +350,7 @@ class Client:
         )
         observers, middleware = _stack_parts("observers", observers), _stack_parts("middleware", middleware)
         check_middleware(middleware)
+        check_observers(observers)
         self._policy_off = policy_is_disabled()
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
         self._source = httpx2.URL(base_url).netloc.decode("ascii")  # host, and a port other than the default
