@@ -95,11 +95,22 @@ def test_a_bearer_token_is_not_empty(token: str) -> None:
         BearerAuth(token)
 
 
-@pytest.mark.parametrize("token", ["Bearer abc", "bearer abc", "BEARER abc"])
+@pytest.mark.parametrize("token", ["Bearer abc", "bearer abc", "BEARER abc", "Bearer", " Bearer abc", "bearerabc"])
 def test_a_bearer_token_does_not_repeat_the_scheme(token: str) -> None:
-    """Refuse a token that already starts with the scheme, which would send ``Bearer Bearer abc``."""
-    with pytest.raises(ValueError, match=r"^BearerAuth\(token=\) takes the token alone, without its 'Bearer ' scheme"):
+    """Refuse a token that starts with the scheme, in any case, which would send ``Bearer Bearer abc``."""
+    with pytest.raises(
+        ValueError, match=r"^BearerAuth\(token=\) takes the token alone, without its 'Bearer' scheme"
+    ) as raised:
         BearerAuth(token)
+    assert "abc" not in str(raised.value), "the token's value is never shown"
+
+
+@pytest.mark.parametrize("token", [" abc", "abc\n", "abc "], ids=["leading", "newline", "trailing"])
+def test_a_bearer_token_has_no_surrounding_whitespace(token: str) -> None:
+    """Refuse a token with whitespace around it, a copy-paste or a file read without stripping, never naming it."""
+    with pytest.raises(ValueError, match=r"^BearerAuth\(token=\) takes a token without whitespace around it") as raised:
+        BearerAuth(token)
+    assert "abc" not in str(raised.value)
 
 
 def test_a_bearer_token_is_text() -> None:

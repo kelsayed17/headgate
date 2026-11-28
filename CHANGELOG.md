@@ -305,8 +305,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `page_items` and `next_page`, naming the first it lacks, where `pager=None` raised an `AttributeError`. Pass the
   page reader first: `Cursor(reader(Page), items=..., next=..., param=...)`.
 - `BearerAuth(token)` refuses an empty or blank token with `ValueError`, where it sent `Authorization: Bearer ` (the
-  unset environment variable), and a token that already starts with `Bearer `, in any case, where it sent
-  `Bearer Bearer abc`; a token that is not a `str` is a `TypeError`. Pass the token alone: `BearerAuth(token)`.
+  unset environment variable); a token that starts with `bearer`, in any case and after any whitespace, where it sent
+  `Bearer Bearer abc`; and a token with whitespace around it, which went into the header as it was. A token that is
+  not a `str` is a `TypeError`. No message shows the token. Pass the token alone and stripped:
+  `BearerAuth(token.strip())`.
 - `StaticHeaderAuth` and `QueryParamAuth` take a mapping of names to `str` values with at least one entry. An empty
   mapping, which stamped nothing, raises `ValueError`: build a client with no key with `auth=None` for
   `StaticHeaderAuth({})`. A value of the wrong kind, a list of pairs, a bare `str` (`QueryParamAuth("key")` raised a

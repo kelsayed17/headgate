@@ -445,8 +445,8 @@ def _carries(auth: Auth, request: httpx2.Request) -> bool:
     )
 
 
-#: The scheme :class:`BearerAuth` sends its token under, with the space after it.
-_BEARER: Final = "Bearer "
+#: The scheme :class:`BearerAuth` sends its token under.
+_SCHEME: Final = "Bearer"
 
 
 def _refuse_empty(auth: Auth, stamped: Mapping[str, str], what: str) -> None:
@@ -505,16 +505,21 @@ class BearerAuth(StaticHeaderAuth):
 
         :raises TypeError: for a *token* that is not a ``str``.
         :raises ValueError: for an empty or blank *token* (an unset environment variable, say), which would send
-            ``Bearer `` alone, and for one that already starts with ``Bearer ``, which would send the scheme twice.
+            ``Bearer `` alone; for one that starts with ``bearer`` in any case, the scheme it adds itself; and for one
+            with whitespace around it. No message shows the token.
         """
         check_kind("token", token, str, "the token, a str")
-        if not token.strip():
+        stripped = token.strip()
+        if not stripped:
             msg = "BearerAuth(token=) takes a token that is not empty or blank: is the variable holding it set?"
             raise ValueError(msg)
-        if token[: len(_BEARER)].lower() == _BEARER.lower():
-            msg = "BearerAuth(token=) takes the token alone, without its 'Bearer ' scheme, which it adds itself"
+        if stripped[: len(_SCHEME)].lower() == _SCHEME.lower():
+            msg = "BearerAuth(token=) takes the token alone, without its 'Bearer' scheme, which it adds itself"
             raise ValueError(msg)
-        super().__init__({"Authorization": f"{_BEARER}{token}"})
+        if stripped != token:
+            msg = "BearerAuth(token=) takes a token without whitespace around it: strip the value it was read from"
+            raise ValueError(msg)
+        super().__init__({"Authorization": f"{_SCHEME} {token}"})
 
 
 class QueryParamAuth(Auth):
