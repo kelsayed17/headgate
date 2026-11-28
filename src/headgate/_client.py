@@ -1247,9 +1247,11 @@ def _check_url(url: object) -> None:
 def _check_auth(auth: object) -> None:
     """Refuse an *auth* that is not a :class:`~headgate.Auth`, whose credentials the guard could not know to withhold.
 
+    A subclass is required, not ``isinstance``: ``Auth.register`` makes a virtual subclass that declares nothing.
+
     :raises TypeError: naming its class and what to write instead.
     """
-    if auth is not None and not isinstance(auth, Auth):
+    if auth is not None and Auth not in type(auth).__mro__:
         msg = (
             f"auth= takes a headgate.Auth, which declares what it stamps (got {type(auth).__qualname__}): subclass "
             "headgate.Auth, or use StaticHeaderAuth, and declare the headers and query parameters it sets in "

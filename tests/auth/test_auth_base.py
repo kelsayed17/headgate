@@ -124,3 +124,15 @@ def test_an_auth_missing_a_member_cannot_be_built() -> None:
 def test_every_headgate_auth_is_an_auth(auth_class: type) -> None:
     """Derive every auth headgate ships from the one base an auth is."""
     assert issubclass(auth_class, headgate.Auth)
+
+
+def test_a_virtual_subclass_is_refused() -> None:
+    """Refuse an auth only registered as an ``Auth``: registering declares nothing it stamps."""
+
+    class Registered(httpx2.Auth):
+        """A plain auth made to pass ``isinstance(..., Auth)``."""
+
+    headgate.Auth.register(Registered)
+
+    with pytest.raises(TypeError, match=r"auth= takes a headgate\.Auth, .*Registered\)"):
+        Client(base_url="https://api.example", auth=cast("Any", Registered()))
