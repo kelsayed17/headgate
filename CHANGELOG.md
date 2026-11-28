@@ -11,7 +11,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `headgate.Auth`, the one type `Client(auth=)` takes: an `httpx2.Auth` that declares the headers and query parameters
   it stamps (`credential_headers`, `credential_params`, each a `frozenset` of names, as class attributes or
   properties) and names its credential (`credential_identity()`). A subclass that leaves one out cannot be built.
-  `BearerAuth`, `StaticHeaderAuth`, `QueryParamAuth`, `SigningAuth` and `CachedTokenAuth` all derive from it.
+  `BearerAuth`, `StaticHeaderAuth`, `QueryParamAuth`, `SigningAuth` and `CachedTokenAuth` all derive from it. It is
+  `headgate.security.CredentialStamper` made a base class, and derives from it, so the contract is defined once; the
+  protocol remains for a middleware that has a credential identity of its own.
 
 ### Changed
 

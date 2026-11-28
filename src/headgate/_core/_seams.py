@@ -3,9 +3,11 @@
 
 """Seams two policy areas meet at, defined once so neither has to import the other.
 
-* :class:`CredentialStamper`: what an auth declares about the credentials it puts on a request. The credential guard
-  uses it to keep them on trusted origins; the cache uses it to partition entries by credential and to keep
-  credentials out of storage. Its first two members, :class:`CredentialCarrier`, are what every middleware declares.
+* :class:`CredentialStamper`: what a seam declares about the credentials it puts on a request, and whose they are.
+  Every :class:`~headgate.Auth` is one, by its bases, and a middleware with a credential identity of its own
+  implements it. The credential guard uses it to keep them on trusted origins; the cache uses it to partition entries
+  by credential and to keep credentials out of storage. Its first two members, :class:`CredentialCarrier`, are what
+  every middleware declares.
 * :data:`EXPLICIT_HEADERS`: set by the client on every request whose call or view sets ``headers=``. The credential
   guard keeps those headers off untrusted origins; the cache partitions entries by the view's.
 * :data:`BREAKER_GATE`: set by the client on every call, read by the retry layer, so a retry sequence stops as soon as
@@ -55,7 +57,11 @@ class CredentialCarrier(Protocol):
 
 @runtime_checkable
 class CredentialStamper(CredentialCarrier, Protocol):
-    """An auth that declares the credentials it stamps on a request, and names the credential they stand for."""
+    """A seam that declares the credentials it stamps on a request, and names the credential they stand for.
+
+    Every :class:`~headgate.Auth` is one, by its bases (``Auth`` is this contract as the base class ``auth=`` takes),
+    and a middleware that has a credential identity of its own implements it, so the cache partitions by it.
+    """
 
     def credential_identity(self) -> bytes:
         """Return stable bytes identifying the credential (its secret material); never stored, only hashed."""

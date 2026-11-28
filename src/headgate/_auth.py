@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, get_args, get_origin, ov
 import httpx2
 
 from headgate._body import read_capped
-from headgate._core import CallContext, Slot, current_timing, origin_text, type_text
+from headgate._core import CallContext, CredentialStamper, Slot, current_timing, origin_text, type_text
 from headgate._failures import CallSite, loggable_url, mint_error, shorten, transport_error
 from headgate._url import redact_secrets, register_secret_params
 from headgate.errors import ClientConfigurationError, ClientError
@@ -253,8 +253,11 @@ def _prepare_hop(hop: httpx2.Request, call: httpx2.Request, source: str) -> None
         context.fit_timeouts(hop)
 
 
-class Auth(httpx2.Auth, ABC):
+class Auth(httpx2.Auth, CredentialStamper, ABC):
     """An ``httpx2.Auth`` that declares what it stamps: the one type ``Client(auth=)`` takes.
+
+    It is the :class:`~headgate.security.CredentialStamper` contract made a base class, so its three members are
+    abstract here.
 
     A subclass declares the headers and query parameters its flow sets, in :attr:`credential_headers` and
     :attr:`credential_params` (a ``frozenset`` of names each, as class attributes or properties, empty when it stamps
@@ -276,15 +279,18 @@ class Auth(httpx2.Auth, ABC):
 
     @property
     @abstractmethod
+    @override
     def credential_headers(self) -> frozenset[str]:
         """The headers this auth sets (compared case-insensitively)."""
 
     @property
     @abstractmethod
+    @override
     def credential_params(self) -> frozenset[str]:
         """The query parameters this auth sets."""
 
     @abstractmethod
+    @override
     def credential_identity(self) -> bytes:
         """Return stable bytes naming the credential (its secret material); never stored, only hashed."""
 

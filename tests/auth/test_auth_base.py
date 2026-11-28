@@ -25,6 +25,7 @@ from headgate import (
     StaticHeaderAuth,
     as_json,
 )
+from headgate.security import CredentialStamper
 from headgate.testing import FakeTransport, Respond
 
 if TYPE_CHECKING:
@@ -136,3 +137,8 @@ def test_a_virtual_subclass_is_refused() -> None:
 
     with pytest.raises(TypeError, match=r"auth= takes a headgate\.Auth, .*Registered\)"):
         Client(base_url="https://api.example", auth=cast("Any", Registered()))
+
+
+def test_an_auth_is_a_credential_stamper_by_its_bases() -> None:
+    """Define the contract once: ``Auth`` derives from ``CredentialStamper``, the protocol the guard and cache read."""
+    assert CredentialStamper in headgate.Auth.__mro__
