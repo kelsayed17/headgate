@@ -102,7 +102,7 @@ from headgate._options import (
     reject_upstream_httpx,
 )
 from headgate._redirects import redirect_method
-from headgate._request_body import Json, Lowered, WireValue, Writer, lowered, wire_value
+from headgate._request_body import EncodedBody, Lowered, WireValue, Writer, encoded_json, lowered, wire_value
 from headgate._responses import Expect, Reader, ResponseCheck, accepts, with_answers
 from headgate._stack import NETWORK_OVERRIDE, Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
@@ -651,7 +651,8 @@ class Client:
         :class:`~headgate.pagination.BodyCursor` or :class:`~headgate.pagination.BodyOffset` needs the value, not its
         bytes), ``None`` for none. The pager's ``write`` (a flavor's ``writer``, see
         :class:`~headgate.pagination.WritingPager`) encodes it for each page, since the writer belongs to the endpoint,
-        like the reader and the pager; a pager without one sends the value as JSON, so it must be builtins. A page
+        like the reader and the pager; a pager without one sends the value as JSON, so it must be builtins, which
+        ``paginate`` checks of the first page's. A page
         with a body is then a :meth:`post` in every respect: in particular it is re-sent only when that is safe,
         unless ``retry=`` says otherwise.
 
@@ -687,6 +688,8 @@ class Client:
         fixed_key = self._one_key_for_every_page(call_options)
         if first.payload is not None and fixed_key:
             raise ValueError(_ONE_KEY_FOR_EVERY_PAGE)
+        if first.payload is not None and write is None:
+            _walk_json(first.payload)
         answers = {status: _paired(read) for status, read in spec.answers.items()}
         paired = with_answers(Expect(_paired(spec.ok), headers=spec.headers, accept=spec.accept), answers)
 
@@ -710,7 +713,7 @@ class Client:
                 return await self.get(request.url, expect=paired, **page_options)
             if fixed_key:
                 raise ValueError(_ONE_KEY_FOR_EVERY_PAGE)
-            body = Json(request.payload) if write is None else write(request.payload)
+            body = _walk_json(request.payload) if write is None else write(request.payload)
             return await self.post(request.url, expect=paired, body=body, **page_options)
 
         walk = PageWalk(fetch, pager, first, source=self._source, max_pages=max_pages, on_limit=on_limit)
@@ -1520,6 +1523,23 @@ def _page_writer[I, P, B](pager: Pager[I, P, B]) -> Writer[B] | None:
         )
         raise TypeError(msg)
     return pager.write
+
+
+def _walk_json(payload: object) -> EncodedBody:
+    """Return a walk's *payload*, which its pager has no writer for, as JSON, refused in a walk's words.
+
+    :raises TypeError: for a payload that is not builtins: what a ``Json`` says to write names ``body=``, which a walk
+        does not take.
+    :raises ValueError: for one holding ``NaN`` or an infinity.
+    """
+    return EncodedBody(
+        encoded_json(
+            payload,
+            subject="paginate()'s payload=",
+            takes="paginate() sends payload= as JSON, since its pager has no write, so it takes builtins",
+            instead="write payload=to_builtins(value), or give the pager write=writer(Type)",
+        )
+    )
 
 
 def _paired[T](read: Reader[T]) -> Reader[tuple[T, httpx2.Response]]:

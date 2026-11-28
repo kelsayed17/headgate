@@ -38,6 +38,7 @@ from headgate.errors import PageLimitError
 from headgate.msgspec import reader, writer
 from headgate.pagination import BodyCursor, BodyOffset, Cursor, LinkHeader, NextUrl, Offset, PageRequest, WritingPager
 from headgate.retry import IDEMPOTENT_METHODS
+from headgate.testing import FakeTransport
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -972,3 +973,31 @@ def test_paginate_refuses_a_writing_pager_without_write() -> None:
         TypeError, match=r"^paginate\(\)'s pager is a WritingPager, so it encodes each page's body with"
     ):
         _Api(_by_body_cursor).client().paginate("search", payload=Query(kind="a", limit=2), pager=_NoWriter())
+
+
+@dataclass(frozen=True)
+class _Search:
+    """A search body of a class JSON's encoder does not know."""
+
+    kind: str
+    cursor: str | None = None
+
+
+def _with_cursor(search: _Search, cursor: str) -> _Search:
+    return _Search(search.kind, cursor)
+
+
+_NOT_BUILTINS: Final = (
+    r"^paginate\(\) sends payload= as JSON, since its pager has no write, so it takes builtins \(got _Search\): "
+    r"write payload=to_builtins\(value\), or give the pager write=writer\(Type\)$"
+)
+
+
+async def test_a_payload_that_is_not_builtins_is_refused_where_the_walk_is_made() -> None:
+    """Refuse a payload JSON cannot encode in ``paginate()``, when its pager has no writer, with the walk's spelling."""
+    pager = BodyCursor[Item, Page, _Search](reader(Page), items=items_of, next=cursor_of, put=_with_cursor)
+    fake = FakeTransport()
+    async with Client(base_url="https://api.test", http=HttpOptions(transport=fake)) as client:
+        with pytest.raises(TypeError, match=_NOT_BUILTINS):
+            client.paginate("search", payload=_Search("open"), pager=pager)
+    assert not fake.calls
