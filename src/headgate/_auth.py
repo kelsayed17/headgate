@@ -505,15 +505,16 @@ class BearerAuth(StaticHeaderAuth):
 
         :raises TypeError: for a *token* that is not a ``str``.
         :raises ValueError: for an empty or blank *token* (an unset environment variable, say), which would send
-            ``Bearer `` alone; for one that starts with ``bearer`` in any case, the scheme it adds itself; and for one
-            with whitespace around it. No message shows the token.
+            ``Bearer `` alone; for one that is ``bearer``, in any case, or starts with it and whitespace, the scheme it
+            adds itself; and for one with whitespace around it. No message shows the token.
         """
         check_kind("token", token, str, "the token, a str")
         stripped = token.strip()
         if not stripped:
             msg = "BearerAuth(token=) takes a token that is not empty or blank: is the variable holding it set?"
             raise ValueError(msg)
-        if stripped[: len(_SCHEME)].lower() == _SCHEME.lower():
+        # The scheme as a word: alone, or before whitespace; "bearertoken" is a token of its own.
+        if stripped.split(maxsplit=1)[0].lower() == _SCHEME.lower():
             msg = "BearerAuth(token=) takes the token alone, without its 'Bearer' scheme, which it adds itself"
             raise ValueError(msg)
         if stripped != token:

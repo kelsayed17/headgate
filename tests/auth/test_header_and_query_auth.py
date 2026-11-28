@@ -95,7 +95,9 @@ def test_a_bearer_token_is_not_empty(token: str) -> None:
         BearerAuth(token)
 
 
-@pytest.mark.parametrize("token", ["Bearer abc", "bearer abc", "BEARER abc", "Bearer", " Bearer abc", "bearerabc"])
+@pytest.mark.parametrize(
+    "token", ["Bearer abc", "bearer abc", "BEARER abc", "bearer\tabc", "Bearer", "BEARER", " Bearer abc", " bearer "]
+)
 def test_a_bearer_token_does_not_repeat_the_scheme(token: str) -> None:
     """Refuse a token that starts with the scheme, in any case, which would send ``Bearer Bearer abc``."""
     with pytest.raises(
@@ -103,6 +105,11 @@ def test_a_bearer_token_does_not_repeat_the_scheme(token: str) -> None:
     ) as raised:
         BearerAuth(token)
     assert "abc" not in str(raised.value), "the token's value is never shown"
+
+
+def test_a_token_that_only_begins_with_the_letters_of_the_scheme_is_accepted() -> None:
+    """Accept ``bearertoken``: only the scheme as a word, alone or followed by whitespace, is the doubled scheme."""
+    assert b"Bearer bearertoken" in BearerAuth("bearertoken").credential_identity()
 
 
 @pytest.mark.parametrize("token", [" abc", "abc\n", "abc "], ids=["leading", "newline", "trailing"])
