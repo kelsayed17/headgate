@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Final, Protocol, override
 
 import httpx2
 
-from headgate._core import BreakerState, check_kind, current_timing, origin_of, origin_text
+from headgate._core import BreakerState, check_kind, current_timing, origin_of, origin_text, timing_override
 from headgate.breaker._breaker import CircuitBreaker, Verdict
 from headgate.breaker._policy import BreakerPolicy
 
@@ -37,7 +37,6 @@ if TYPE_CHECKING:
     from collections.abc import Generator, Iterator
     from contextlib import AbstractContextManager
 
-    from headgate._core import Timing
     from headgate.breaker._breaker import TransitionListener
 
 __all__ = ["DEFAULT_MAX_HOSTS", "NO_BREAKER", "Breaker", "BreakerRegistry"]
@@ -85,7 +84,7 @@ class BreakerRegistry:
 
     Every client given the same registry as its ``breaker=`` shares its breakers. Reading the registry (``len``,
     iteration, :meth:`breakers`) never builds one. *max_hosts* bounds how many it holds; every breaker it builds runs
-    on *timing*, or, without one, on the timing current when the registry is built.
+    on the timing current when the registry is built (:func:`headgate.timing.current_timing`), whenever it builds it.
     """
 
     __slots__ = ("_breakers", "_lock", "_max_hosts", "_policy", "_timing")
@@ -96,7 +95,6 @@ class BreakerRegistry:
         /,
         *,
         max_hosts: int = DEFAULT_MAX_HOSTS,
-        timing: Timing | None = None,
     ) -> None:
         """Start empty, building each breaker with *policy*'s thresholds.
 
@@ -109,7 +107,7 @@ class BreakerRegistry:
             raise ValueError(msg)
         self._policy = policy
         self._max_hosts = max_hosts
-        self._timing = current_timing() if timing is None else timing
+        self._timing = current_timing()
         self._lock = threading.Lock()
         self._breakers: OrderedDict[_Key, CircuitBreaker] = OrderedDict()
 
@@ -134,12 +132,13 @@ class BreakerRegistry:
             if breaker is not None:
                 self._breakers.move_to_end(key)
                 return breaker
-            breaker = self._breakers[key] = CircuitBreaker(
-                failure_threshold=self._policy.failure_threshold,
-                recovery_timeout=self._policy.recovery_timeout,
-                name=name,
-                timing=self._timing,
-            )
+            # A breaker reads the current timing when it is built: this one is built on the registry's.
+            with timing_override(self._timing):
+                breaker = self._breakers[key] = CircuitBreaker(
+                    failure_threshold=self._policy.failure_threshold,
+                    recovery_timeout=self._policy.recovery_timeout,
+                    name=name,
+                )
             if len(self._breakers) > self._max_hosts:
                 self._evict(keep=key)
             return breaker

@@ -181,6 +181,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `HttpCache(methods=, statuses=)` default to the values themselves, `frozenset({"GET"})` and `frozenset({200})`, and
   hold them, where `None` stood for them; `None` for either raises `TypeError`, since `None` means off and the cache's
   off is `cache=None`. Leave them out for the defaults. `paths=None` is still the path filter off.
+- Time has one seam, `timing_override()` (and `TestClock.install()`, built on it), as it already was for `Client`:
+  `RateBudget`, `RetryBudget`, `BreakerRegistry` and `CircuitBreaker` take no `timing=`, and `FaultyTransport` no
+  `sleep=`. Each runs on the timing current when it is built, the breakers a registry builds later included. Write
+  `with clock.install(): shared = RateBudget(rate)` for `RateBudget(rate, timing=clock.timing)`, and
+  `with clock.install(): network = FaultyTransport(schedule=[...])` for
+  `FaultyTransport(schedule=[...], sleep=clock.sleep)`.
 
 ### Removed
 

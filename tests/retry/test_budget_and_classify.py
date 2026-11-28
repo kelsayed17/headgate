@@ -18,6 +18,7 @@ from headgate.retry._budget import RetryLedger
 from headgate.retry._classify import Attempted, classify, refused_stream
 from headgate.testing import TestClock
 from headgate.timing import Timing
+from tests.support.timing import built_on
 
 #: A window, in seconds, for the budget tests.
 _WINDOW = 10.0
@@ -78,7 +79,7 @@ def test_a_refunded_retry_stops_counting() -> None:
 def test_a_shared_budget_measures_its_window_on_its_own_timing() -> None:
     """Slide a live budget's window on the timing it was built with, whichever client spends it."""
     own = TestClock()
-    budget = RetryBudget(RetryShare(ratio=0.0, min_per_second=0.1, window=_WINDOW), timing=Timing(clock=own))
+    budget = built_on(Timing(clock=own), lambda: RetryBudget(RetryShare(ratio=0.0, min_per_second=0.1, window=_WINDOW)))
     assert budget.try_spend() is True
     assert budget.try_spend() is False
 

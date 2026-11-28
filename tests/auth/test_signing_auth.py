@@ -34,6 +34,7 @@ from headgate._url import is_secret_param
 from headgate.retry import Hedge
 from headgate.testing import TestClock, instant_retries
 from tests.support.responses import RESPONSE
+from tests.support.timing import built_on
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -449,7 +450,7 @@ async def test_a_request_waiting_in_the_rate_queue_is_signed_when_it_leaves_it()
         ages.append(clock.wall_clock() - float(request.headers["X-Signed-At"]))
         return httpx2.Response(200)
 
-    budget = RateBudget(Rate.per_second(1), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
+    budget = built_on(Timing(clock=clock, sleep=clock.sleep, wall_clock=clock), lambda: RateBudget(Rate.per_second(1)))
     with clock.install():
         client = Client(
             base_url=_BASE,

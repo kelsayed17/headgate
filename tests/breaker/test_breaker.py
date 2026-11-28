@@ -26,6 +26,7 @@ from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
 from headgate.breaker._breaker import BreakerOpenError, Transition
 from headgate.breaker._registry import NO_BREAKER
 from headgate.timing import Timing
+from tests.support.timing import built_on
 
 #: The half-open tests' cooldown, and a sleep that outlasts it.
 _COOLDOWN = 0.001
@@ -333,7 +334,9 @@ class _Clock:
 def test_a_refusal_says_how_long_the_cooldown_has_left() -> None:
     """Carry the seconds until a probe is admitted, and ``None`` while the probe is out."""
     clock = _Clock()
-    cb = CircuitBreaker(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN, name="t", timing=Timing(clock=clock))
+    cb = built_on(
+        Timing(clock=clock), lambda: CircuitBreaker(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN, name="t")
+    )
     _fail(cb)
     elapsed = 4.0
     clock.now = elapsed
@@ -377,8 +380,9 @@ def test_a_registry_keys_a_breaker_by_origin() -> None:
 def test_a_registry_breakers_read_its_clock() -> None:
     """Hand the registry's clock to every breaker it builds, so a test can drive their cooldowns."""
     clock = _Clock()
-    registry = BreakerRegistry(
-        BreakerPolicy(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN), timing=Timing(clock=clock)
+    registry = built_on(
+        Timing(clock=clock),
+        lambda: BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN)),
     )
     cb = registry.breaker_for("https://a.example")
     _fail(cb)
@@ -417,7 +421,7 @@ def test_a_marked_failure_counts_even_when_the_block_exits_cleanly() -> None:
 def test_a_probe_whose_failure_was_caught_reopens_the_breaker() -> None:
     """Re-open on a probe that marked a failure and exited cleanly, rather than closing on it."""
     clock = _Clock()
-    cb = CircuitBreaker(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN, timing=Timing(clock=clock))
+    cb = built_on(Timing(clock=clock), lambda: CircuitBreaker(failure_threshold=1, recovery_timeout=_LONG_COOLDOWN))
     _fail(cb)
     clock.now = _LONG_COOLDOWN
     with cb.track() as verdict:
@@ -428,8 +432,9 @@ def test_a_probe_whose_failure_was_caught_reopens_the_breaker() -> None:
 def _clocked(threshold: int = 1) -> tuple[CircuitBreaker, _Clock]:
     """Build a breaker for ``t`` whose cooldown a test elapses by hand."""
     clock = _Clock()
-    return CircuitBreaker(
-        failure_threshold=threshold, recovery_timeout=_LONG_COOLDOWN, name="t", timing=Timing(clock=clock)
+    return built_on(
+        Timing(clock=clock),
+        lambda: CircuitBreaker(failure_threshold=threshold, recovery_timeout=_LONG_COOLDOWN, name="t"),
     ), clock
 
 

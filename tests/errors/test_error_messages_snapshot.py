@@ -42,6 +42,7 @@ from headgate.breaker import BreakerRegistry
 from headgate.errors import Problem, RefusedError
 from headgate.testing import TestClock
 from headgate.timing import Timing, current_timing, timing_override
+from tests.support.timing import built_on
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
@@ -265,8 +266,9 @@ async def _deadline_exceeded() -> None:
 
 async def _open_breaker() -> None:
     """Call an origin whose breaker a 503 opened: ``CircuitOpenError`` with the whole cooldown left."""
-    registry = BreakerRegistry(
-        BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN), timing=Timing(clock=lambda: 0.0)
+    registry = built_on(
+        Timing(clock=lambda: 0.0),
+        lambda: BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN)),
     )
     policy = CallPolicy(retry=None, breaker=registry)
     async with _client(503, policy=policy) as client:

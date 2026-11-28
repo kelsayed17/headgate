@@ -121,7 +121,7 @@ class TestClock:
 
     @contextmanager
     def install(self) -> Generator[Self]:
-        """Build everything constructed inside the block with no ``timing=`` of its own on this clock; yield it."""
+        """Build everything constructed inside the block on this clock; yield it."""
         with timing_override(self.timing):
             yield self
 

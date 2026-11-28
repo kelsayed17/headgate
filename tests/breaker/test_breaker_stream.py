@@ -40,6 +40,7 @@ from headgate.testing import TestClock
 from headgate.timing import Timing
 from tests.support.events import Recorder
 from tests.support.responses import RESPONSE
+from tests.support.timing import built_on
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
@@ -60,8 +61,9 @@ class _Breakers:
     def __init__(self, threshold: int) -> None:
         """Trip after *threshold* failures; admit a probe a minute later."""
         self.clock = TestClock()
-        self.policy = registry = BreakerRegistry(
-            BreakerPolicy(failure_threshold=threshold, recovery_timeout=_COOLDOWN), timing=Timing(clock=self.clock)
+        self.policy = registry = built_on(
+            Timing(clock=self.clock),
+            lambda: BreakerRegistry(BreakerPolicy(failure_threshold=threshold, recovery_timeout=_COOLDOWN)),
         )
         self.breaker: CircuitBreaker = registry.breaker_for(_ORIGIN)
 

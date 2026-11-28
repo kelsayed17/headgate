@@ -35,6 +35,7 @@ from headgate.retry._transport import RetryTransport
 from headgate.testing import FaultyTransport, Respond, TestClock
 from headgate.timing import Timing
 from tests.support.responses import RESPONSE
+from tests.support.timing import built_on
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -674,7 +675,7 @@ async def test_a_hedge_refused_after_the_first_send_failed_ends_with_that_failur
 
 def _one_retry(clock: TestClock) -> RetryBudget:
     """Return a budget on *clock* that admits one retry at a time over its window."""
-    return RetryBudget(RetryShare(ratio=0.0, min_per_second=0.1, window=10.0), timing=Timing(clock=clock))
+    return built_on(Timing(clock=clock), lambda: RetryBudget(RetryShare(ratio=0.0, min_per_second=0.1, window=10.0)))
 
 
 #: The send :class:`_RefusesTheSecondSend` refuses: the first call's hedge.
@@ -742,7 +743,7 @@ async def test_a_hedged_retry_the_budget_cannot_admit_gives_its_retry_back() -> 
 async def test_a_retry_after_exactly_at_the_cap_is_waited() -> None:
     """Wait a ``Retry-After`` equal to ``max_retry_after``; only a longer one stops the call."""
     clock = TestClock()
-    network = FaultyTransport(schedule=[Respond(503, retry_after=2.0), Respond(200)], sleep=clock.sleep)
+    network = built_on(clock.timing, lambda: FaultyTransport(schedule=[Respond(503, retry_after=2.0), Respond(200)]))
     policy = RetryPolicy(budget=None, max_retry_after=2.0)
     retry = RetryTransport(
         transport=network, policy=policy, timing=Timing(clock=clock, sleep=clock.sleep, random=_full_draw)
@@ -759,7 +760,7 @@ async def test_a_retry_after_exactly_at_the_cap_is_waited() -> None:
 async def test_a_retry_leaving_exactly_min_attempt_time_is_made() -> None:
     """Retry when the wait leaves exactly ``min_attempt_time`` before the deadline, both before and after it."""
     clock = TestClock()
-    network = FaultyTransport(schedule=[Respond(503), Respond(200)], sleep=clock.sleep)
+    network = built_on(clock.timing, lambda: FaultyTransport(schedule=[Respond(503), Respond(200)]))
     policy = RetryPolicy(budget=None, backoff=_QUARTER, min_attempt_time=0.5)
     retry = RetryTransport(
         transport=network, policy=policy, timing=Timing(clock=clock, sleep=clock.sleep, random=_full_draw)
@@ -797,7 +798,7 @@ async def test_a_status_the_server_says_to_retry_keeps_its_retry_after_and_is_na
     """Judge a 503 marked ``x-should-retry: true`` with its ``Retry-After``, naming the status as the reason."""
     clock = TestClock()
     marked = Respond(503, headers={"x-should-retry": "true"}, retry_after=2.0)
-    network = FaultyTransport(schedule=[marked, Respond(200)], sleep=clock.sleep)
+    network = built_on(clock.timing, lambda: FaultyTransport(schedule=[marked, Respond(200)]))
     retry = RetryTransport(
         transport=network,
         policy=RetryPolicy(budget=None),

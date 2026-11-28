@@ -40,7 +40,6 @@ from headgate._core import BreakerState, current_timing
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
-    from headgate._core import Timing
 
 __all__ = ["BreakerOpenError", "CircuitBreaker", "Transition", "Verdict"]
 
@@ -168,15 +167,14 @@ class CircuitBreaker:
         failure_threshold: int = 5,
         recovery_timeout: float = 60.0,
         name: str = "",
-        timing: Timing | None = None,
     ) -> None:
         """Trip after *failure_threshold* consecutive failures; admit a probe *recovery_timeout* seconds later.
 
-        *name* (the origin) appears in the :class:`BreakerOpenError` message. The cooldown runs on *timing*'s clock, or,
-        without one, on the timing current when the breaker is built (:func:`headgate.timing.current_timing`), so a
-        test drives it without waiting.
+        *name* (the origin) appears in the :class:`BreakerOpenError` message. The cooldown runs on the clock of the
+        timing current when the breaker is built (:func:`headgate.timing.current_timing`), so a test drives it without
+        waiting.
         """
-        self._clock = (current_timing() if timing is None else timing).clock
+        self._clock = current_timing().clock
         self._failure_threshold = failure_threshold
         self._recovery_timeout = recovery_timeout
         self._name = name

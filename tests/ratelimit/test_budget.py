@@ -29,6 +29,7 @@ from headgate.ratelimit._rate import UNPACED
 from headgate.ratelimit._transport import RateLimitTransport
 from headgate.testing import TestClock
 from tests.support.events import Recorder
+from tests.support.timing import built_on
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Coroutine
@@ -312,7 +313,9 @@ async def test_a_send_marks_its_own_attempt_dispatched_when_a_hedge_begins_durin
     """Mark the progress of the attempt that waited, not of a hedge begun meanwhile, which has not been sent."""
     clock = TestClock()
     blocked = asyncio.Event()
-    budget = RateBudget(Rate.per_second(1), timing=Timing(clock=clock, sleep=_blocking_sleep(clock, [], blocked)))
+    budget = built_on(
+        Timing(clock=clock, sleep=_blocking_sleep(clock, [], blocked)), lambda: RateBudget(Rate.per_second(1))
+    )
     transport = RateLimitTransport(
         budgets=PathBudgets(default=budget), transport=httpx2.MockTransport(lambda _: httpx2.Response(200))
     )
@@ -364,7 +367,7 @@ async def test_real_pacing_waits_on_the_system_clock() -> None:
 def test_a_budget_reads_out_what_its_pacer_saw() -> None:
     """Report, through the public budget, the pause and the lowered rate a 429 left on the pacer it spends through."""
     clock = TestClock()
-    budget = RateBudget(_RATE, timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
+    budget = built_on(Timing(clock=clock, sleep=clock.sleep, wall_clock=clock), lambda: RateBudget(_RATE))
     assert (budget.pause_remaining, budget.effective_rate) == (0, _RATE)
 
     pacer_of(budget).observe(_response(429, {"Retry-After": str(int(_PAUSE))}), sent_at=clock())
@@ -634,7 +637,7 @@ async def _send_all(budget: RateBudget, wire: _Wire, timeline: _Timeline, calls:
 async def test_a_call_waiting_for_a_slot_waits_out_a_pause_set_meanwhile() -> None:
     """Hold the calls a freed slot lets through behind the pause the first answer asked for."""
     timeline = _Timeline()
-    budget = RateBudget(Rate.per_second(100), max_in_flight=2, adaptive=None, timing=timeline.timing)
+    budget = built_on(timeline.timing, lambda: RateBudget(Rate.per_second(100), max_in_flight=2, adaptive=None))
     wire = _Wire(timeline, [0.1] * 6, pause=1.0)
 
     await _send_all(budget, wire, timeline, 6)
@@ -646,7 +649,7 @@ async def test_a_call_waiting_for_a_slot_waits_out_a_pause_set_meanwhile() -> No
 async def test_calls_freed_together_by_slots_still_go_out_at_the_rate() -> None:
     """Pace the calls that slots freed at one instant let through, rather than sending them all at once."""
     timeline = _Timeline()
-    budget = RateBudget(Rate(requests=1, period=1.0), max_in_flight=2, adaptive=None, timing=timeline.timing)
+    budget = built_on(timeline.timing, lambda: RateBudget(Rate(requests=1, period=1.0), max_in_flight=2, adaptive=None))
     wire = _Wire(timeline, [10.0, 9.0, 1.0, 1.0])
 
     await _send_all(budget, wire, timeline, 4)
@@ -978,7 +981,7 @@ async def test_recovery_never_lifts_the_rate_past_the_configured_one() -> None:
 
 def test_a_budget_shows_its_state() -> None:
     """Name the rate, the rate pacing runs at now, what is in flight and the pause left."""
-    budget = RateBudget(Rate.per_second(10), timing=Timing(clock=TestClock()))
+    budget = built_on(Timing(clock=TestClock()), lambda: RateBudget(Rate.per_second(10)))
 
     assert repr(budget) == (
         "RateBudget(Rate(requests=10, period=1.0), effective=Rate(requests=10.0, period=1.0), in_flight=0, "

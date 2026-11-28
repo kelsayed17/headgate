@@ -21,6 +21,7 @@ from headgate.testing import TestClock
 from tests.support.breakers import failures
 from tests.support.events import Recorder
 from tests.support.responses import RESPONSE
+from tests.support.timing import built_on
 
 if TYPE_CHECKING:
     from hishel import AsyncSqliteStorage
@@ -51,7 +52,7 @@ class _Server:
 
 def _budget(clock: TestClock) -> RateBudget:
     """Return a generous budget on *clock*."""
-    return RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
+    return built_on(Timing(clock=clock, sleep=clock.sleep, wall_clock=clock), lambda: RateBudget(Rate.per_second(100)))
 
 
 def _client(
