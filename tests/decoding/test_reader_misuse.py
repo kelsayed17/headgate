@@ -20,7 +20,7 @@ import pytest
 import headgate.msgspec
 import headgate.pydantic
 from headgate import Client, HttpOptions, Reader, UpstreamStatusError, body_reader
-from headgate._failures import ReaderMisuseError, mint_error
+from headgate._failures import mint_error, reader_misuse
 from headgate.errors import RefusedError, ResponseParseError
 from headgate.msgspec import MsgspecCodec
 from headgate.testing import FakeTransport, check_codec
@@ -49,12 +49,23 @@ class _Row(msgspec.Struct, frozen=True):
     value: int
 
 
-@pytest.mark.parametrize("cls", [str, int, _Plain], ids=["str", "int", "plain"])
-def test_a_reader_refuses_a_class(cls: type) -> None:
-    """Refuse a class, whose call on the response is no reading of it, pointing to ``as_text`` and a lambda."""
-    with pytest.raises(TypeError, match=rf"^Reader takes a function of the response \(got the class {cls.__name__}\)"):
-        Reader(cast("Callable[[httpx2.Response], object]", cls))
-    with pytest.raises(TypeError, match=r"as_text.*Reader\(lambda r: "):
+@pytest.mark.parametrize(
+    ("cls", "advice"),
+    [
+        (str, r"for the body as text, use as_text"),
+        (bytes, r"for the body as bytes, use as_bytes"),
+        (dict, r"for the body as JSON, use as_json"),
+        (list, r"for the body as JSON, use as_json"),
+        (int, r"for a class built from a response, write Reader\(lambda r: int\(r\)\)"),
+        (_Plain, r"for a class built from a response, write Reader\(lambda r: _Plain\(r\)\)"),
+    ],
+    ids=["str", "bytes", "dict", "list", "int", "plain"],
+)
+def test_a_reader_refuses_a_class(cls: type, advice: str) -> None:
+    """Refuse a class, whose call on the response is no reading of it, pointing to the reader it stands for."""
+    with pytest.raises(
+        TypeError, match=rf"^Reader takes a function of the response \(got the class {cls.__name__}\): {advice}$"
+    ):
         Reader(cast("Callable[[httpx2.Response], object]", cls))
 
 
@@ -164,7 +175,20 @@ async def test_a_refuse_that_returns_no_refusal_is_the_callers_bug() -> None:
     async with _client(httpx2.Response(200, content=b"x")) as client:
         with pytest.raises(
             TypeError, match=r"^refuse= returns a RefusedError, or None to accept the value \(got str\)"
-        ):
+        ) as raised:
+            await client.get("x", expect=read)
+    assert type(raised.value) is TypeError, "no private class reaches the caller"
+
+
+async def test_a_refuse_that_returns_a_class_names_it() -> None:
+    """Name a class a check returned, as the class it is."""
+    def returns_the_class(body: bytes) -> object:
+        del body
+        return RefusedError
+
+    read = body_reader(bytes, refuse=cast("Callable[[bytes], RefusedError | None]", returns_the_class))
+    async with _client(httpx2.Response(200, content=b"x")) as client:
+        with pytest.raises(TypeError, match=r"\(got the class RefusedError\)$"):
             await client.get("x", expect=read)
 
 
@@ -189,7 +213,7 @@ async def test_a_response_check_that_returns_no_refusal_is_the_callers_bug() -> 
 
 def test_a_token_mint_raises_a_readers_misuse_as_it_is() -> None:
     """Leave a reader's misuse in a token mint unmapped, where any other ``TypeError`` reads as an unreadable token."""
-    misuse = ReaderMisuseError("refuse= returns a RefusedError, or None to accept the value (got str)")
+    misuse = reader_misuse("refuse= returns a RefusedError, or None to accept the value (got str)")
 
     assert mint_error(misuse, source="tokens") is misuse
     assert isinstance(mint_error(TypeError("shape"), source="tokens"), ResponseParseError)

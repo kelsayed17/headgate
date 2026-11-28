@@ -477,6 +477,16 @@ def check_hooks(name: str, values: Iterable[object]) -> None:
         reject_upstream_httpx(value, what=f"an entry of {name}")
 
 
+def _refuse_class(option: str, item: object, wanted: str) -> None:
+    """Refuse a hook given as its class, whose methods would be called unbound, saying to build one.
+
+    :raises TypeError: naming *option*, what it takes (*wanted*) and the class.
+    """
+    if isinstance(item, type):
+        msg = f"{option}= takes {wanted} (got the class {item.__name__}): write {item.__name__}()"
+        raise TypeError(msg)
+
+
 def check_middleware(middleware: Iterable[object]) -> None:
     """Refuse a middleware that does not declare the credentials it stamps as two frozensets, or splits a name.
 
@@ -484,6 +494,7 @@ def check_middleware(middleware: Iterable[object]) -> None:
     only at the first call.
     """
     for item in middleware:
+        _refuse_class("middleware", item, "middleware instances")
         name = getattr(item, "__qualname__", type(item).__qualname__)
         for attribute in ("credential_headers", "credential_params"):
             names = getattr(item, attribute, None)
@@ -510,6 +521,7 @@ def check_observers(observers: Iterable[object]) -> None:
     since the client calls ``notify`` and never awaits it.
     """
     for item in observers:
+        _refuse_class("observers", item, "Observer instances")
         if not callable(getattr(item, "notify", None)):
             name = getattr(item, "__qualname__", type(item).__qualname__)
             msg = f"observers= takes Observers, each with a notify(event) method (got {name}, which has none)"

@@ -10,7 +10,7 @@ takes and what it got, rather than a comparison error from inside the constructo
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 import pytest
 
@@ -210,3 +210,42 @@ def test_a_retry_policy_refuses_an_informational_status(status: int) -> None:
     """Refuse a 1xx, which httpx2 never hands back as a response's status, so it would never match."""
     with pytest.raises(ValueError, match=rf"^statuses= may not name a 1xx \(got {status}\): httpx2 never answers with"):
         RetryPolicy(statuses=frozenset({status, 503}))
+
+
+class _Observer:
+    """An observer, given as its class rather than an instance."""
+
+    def notify(self, event: object) -> None:
+        """Never called."""
+        del event
+
+
+class _Middleware:
+    """A middleware, given as its class rather than an instance."""
+
+    credential_headers: ClassVar = frozenset[str]()
+    credential_params: ClassVar = frozenset[str]()
+
+    async def __call__(self, request: object, call_next: object) -> object:
+        """Never called."""
+        raise AssertionError((request, call_next))
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        (
+            {"observers": [_Observer]},
+            r"^observers= takes Observer instances \(got the class _Observer\): write _Observer\(\)$",
+        ),
+        (
+            {"middleware": [_Middleware]},
+            r"^middleware= takes middleware instances \(got the class _Middleware\): write _Middleware\(\)$",
+        ),
+    ],
+    ids=["observer", "middleware"],
+)
+def test_a_hook_given_as_its_class_is_refused(options: dict[str, Any], message: str) -> None:
+    """Refuse an observer or a middleware given as its class, whose methods would be called unbound."""
+    with pytest.raises(TypeError, match=message):
+        Client(base_url="https://api.example.test/", **options)
