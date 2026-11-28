@@ -69,6 +69,9 @@ a public module exports, and the six top-level errors move to a private module t
    alias (`type Body = ...`) cannot take a `__module__` (`TypeAliasType` refuses it) and is not a class or function,
    so the rule leaves it. The cache's credential identity reads an auth's `__module__.__qualname__`, so its key bytes
    change with the homes, which makes old entries misses and nothing else.
+   A public module's names are rehomed when it is imported, so the client imports what it hands out, its events and
+   timing, from `headgate.events` and `headgate.timing` (added during implementation), and a bare `import headgate`
+   reports their homes; a test pins it.
 
 ## Review Focus
 

@@ -28,6 +28,7 @@ from headgate._core import (
     Observer,
     RateLimited,
     RetryScheduled,
+    rehome,
 )
 
 __all__ = [
@@ -46,3 +47,5 @@ __all__ = [
     "RateLimited",
     "RetryScheduled",
 ]
+
+rehome(__name__, globals())

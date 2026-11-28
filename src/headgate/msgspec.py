@@ -30,6 +30,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, ClassVar, Final, cast, overload
 
+from headgate._core import rehome
+
 try:
     import msgspec
 except ImportError as exc:
@@ -173,3 +175,6 @@ def to_builtins(value: object, *, drop_none: bool = False) -> object:
     """
     out = msgspec.to_builtins(value)
     return _drop_none(out) if drop_none else out
+
+
+rehome(__name__, globals())

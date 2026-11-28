@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 
     import httpx2
 
+    from headgate._errors import ClientError
     from headgate._failures import CallSite
-    from headgate.errors import ClientError
 
 __all__ = ["DEFAULT_MAX_EVENT_SIZE", "NetworkFailure", "OpenStream", "Stream"]
 

@@ -22,7 +22,7 @@ pinning transport (``AddressGuard(check=...)``). :func:`forbidden_reason` is the
 Importing headgate also redacts the URL in httpx2's own ``HTTP Request:`` log line (:mod:`headgate.security._logging`).
 """
 
-from headgate._core import CredentialCarrier, CredentialStamper
+from headgate._core import CredentialCarrier, CredentialStamper, rehome
 from headgate.security._addresses import AddressCheck, AddressGuard, Resolver, forbidden_reason, resolve_with_loop
 from headgate.security._logging import redact_httpx2_log
 from headgate.security._transport import PinnedHTTPTransport
@@ -40,3 +40,5 @@ __all__ = [
     "forbidden_reason",
     "resolve_with_loop",
 ]
+
+rehome(__name__, globals())

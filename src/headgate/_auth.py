@@ -37,9 +37,10 @@ import httpx2
 
 from headgate._body import read_capped
 from headgate._core import CallContext, Slot, current_timing, origin_text, type_text
+from headgate._errors import ClientError
 from headgate._failures import CallSite, loggable_url, mint_error, shorten, transport_error
 from headgate._url import redact_secrets, register_secret_params
-from headgate.errors import ClientConfigurationError, ClientError
+from headgate.errors import ClientConfigurationError
 from headgate.retry._policy import REPLAYABLE_BODY
 from headgate.security._credentials import CHAIN_ORIGIN, check_declarations
 

@@ -79,7 +79,7 @@
       field detail: str | None = None
       field instance: str | None = None
       field extensions: Mapping[str, object] = <factory>
-  class RefusedError(Exception)(message: 'str', *, code: 'str | None' = None, kind: 'type[UpstreamStatusError]' = <class 'headgate.errors.UpstreamStatusError'>) -> 'None'
+  class RefusedError(Exception)(message: 'str', *, code: 'str | None' = None, kind: 'type[UpstreamStatusError]' = <class 'headgate.UpstreamStatusError'>) -> 'None'
       property code
       property kind
       property message

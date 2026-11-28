@@ -29,19 +29,16 @@ from typing import TYPE_CHECKING, Final
 import httpx2
 
 from headgate._core import retry_after_of
-from headgate._url import redact_secrets, sanitize_url
-from headgate.errors import (
+from headgate._errors import (
     AuthError,
     ClientError,
     ClientTimeoutError,
-    DecodeError,
-    ErrorDetails,
-    Problem,
     RateLimitError,
-    ResponseParseError,
     TransportError,
     UpstreamStatusError,
 )
+from headgate._url import redact_secrets, sanitize_url
+from headgate.errors import DecodeError, ErrorDetails, Problem, ResponseParseError
 from headgate.retry._policy import UNRETRYABLE_ERRORS
 
 if TYPE_CHECKING:

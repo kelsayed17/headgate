@@ -29,7 +29,7 @@ def _auths() -> list[type[httpx2.Auth]]:
     while pending:
         cls = pending.pop()
         pending.extend(cls.__subclasses__())
-        if cls.__module__.startswith("headgate.") and cls is not Auth:
+        if cls.__module__.partition(".")[0] == "headgate" and cls is not Auth:
             found.add(cls)
     return sorted(found, key=lambda c: c.__qualname__)
 

@@ -33,6 +33,7 @@ src/headgate/
   _codec.py          the Codec protocol, and the readers and writers built on one
   _body.py, _request_body.py, _redirects.py, _middleware.py, _attempts.py, _deprecation.py, _view.py, _url.py,
   _user_agent.py, _curl.py
+  _errors.py         every error class, exported from headgate (the six) and headgate.errors (the rest)
   _core/             shared seams only: time, origins, CallContext, events, the policy switch
   retry/             RetryPolicy and its values, RetryTransport, send tracking, the budget ledger
   breaker/           BreakerPolicy, BreakerRegistry, CircuitBreaker

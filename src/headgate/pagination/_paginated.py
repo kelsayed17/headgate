@@ -13,9 +13,10 @@ from typing import TYPE_CHECKING, Final, Literal, final
 import httpx2
 
 from headgate._core import check_int
+from headgate._errors import ClientError
 from headgate._failures import loggable_url, shorten
 from headgate._url import redact_secrets
-from headgate.errors import ClientError, ForbiddenDestinationError, PageLimitError
+from headgate.errors import ForbiddenDestinationError, PageLimitError
 from headgate.pagination._pager import BodyOffset, Offset, PageNumber, WritingPager
 
 if TYPE_CHECKING:
