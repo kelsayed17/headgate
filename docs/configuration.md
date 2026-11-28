@@ -18,6 +18,11 @@ observers). It holds the client rather than inheriting from it (`Client` is fina
 
 <!-- docs-test: run -->
 ```python
+from typing import Self
+
+from headgate import BearerAuth, CallPolicy, Client, Rate
+
+
 class GitHub:
     def __init__(self, token: str) -> None:
         self._http = Client(
@@ -244,6 +249,8 @@ for its status alone is `head(url, expect=nothing)`. An option left out takes th
 
 <!-- docs-test: check -->
 ```python
+from headgate import RetryPolicy, Timeouts
+
 await client.get(
     url,  # a literal, a t-string (escaped, and the call's route) or an absolute httpx2.URL (sent as it is)
     expect=reader_or_expect,

@@ -156,6 +156,7 @@ representation, or `NotModified(validator)` for a 304. headgate stores nothing; 
 
 <!-- docs-test: run -->
 ```python
+from headgate import Client
 from headgate.cache import Fresh, NotModified, Validator, conditional
 from headgate.msgspec import reader
 
