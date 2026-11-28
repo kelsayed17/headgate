@@ -75,8 +75,8 @@ class _GatedNetwork(httpx2.AsyncBaseTransport):
 
 
 def _store_nothing() -> CacheRules:
-    """Look every GET up but store no status, so no GET in a test is stored."""
-    return {"statuses": ()}
+    """Look every GET up but store only a 203, which no test answers, so no GET in a test is stored."""
+    return {"statuses": (httpx2.codes.NON_AUTHORITATIVE_INFORMATION,)}
 
 
 async def _get(transport: ResilientCacheTransport, url: str = _URL) -> bytes:

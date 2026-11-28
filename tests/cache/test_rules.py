@@ -80,14 +80,12 @@ async def test_a_cache_stores_the_paths_its_patterns_match(storage: AsyncSqliteS
     assert cache.paths == (archive, "series")
 
 
-async def test_empty_methods_paths_or_statuses_store_nothing(storage: AsyncSqliteStorage) -> None:
-    """Store nothing for an empty ``methods``, ``paths`` or ``statuses``: empty is not the default."""
-    for cache in (
-        HttpCache(storage=storage, methods=()),
-        HttpCache(storage=storage, statuses=()),
-        HttpCache(storage=storage, paths=()),
-    ):
-        assert not _keeps(cache, "GET", "/any/path", 200)
+@pytest.mark.parametrize("option", ["methods", "paths", "statuses"])
+async def test_an_empty_rule_is_refused(storage: AsyncSqliteStorage, option: str) -> None:
+    """Refuse an empty ``methods``, ``paths`` or ``statuses``, which would store nothing: ``cache=None`` is no cache."""
+    message = rf"^{option}= is empty, so the cache would store nothing: write cache=None for a client without a cache$"
+    with pytest.raises(ValueError, match=message):
+        HttpCache(storage=storage, **cast("Any", {option: ()}))
 
 
 @pytest.mark.parametrize(

@@ -27,7 +27,7 @@ statuses=frozenset({200}))`:
 
 - **What is stored**: a request whose method is in `methods` (`{"GET"}` by default) and whose path matches one of
   `paths` (every path by default), answered with a status in `statuses` (`{200}` by default). It is stored **even past a `no-store`**, which is the point for a provider that sends no cache
-  headers, or wrong ones. An empty collection matches nothing, so `methods=()` stores nothing. Each is a collection:
+  headers, or wrong ones. An empty collection, which would store nothing, raises `ValueError`: write `cache=None` for no cache. Each is a collection:
   a bare `str` (`methods="GET"`), a number or a one-shot iterator raises `TypeError`, and so does `None` for
   `methods` or `statuses`, whose defaults are values: leave them out, or turn the cache off with `cache=None`.
   `paths=None` is the path filter off.
