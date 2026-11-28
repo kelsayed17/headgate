@@ -218,6 +218,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `headgate.msgspec.reader_for`.
 - `HttpCache(methods=(), paths=(), statuses=())`, an empty rule that made a cache store nothing, raises `ValueError`
   naming `cache=None`: write `CallPolicy(cache=None)` for a client without a cache.
+- A cache write that fails, or outlasts its call's deadline, after the call accepted a miss is reported as a
+  `CacheChecked` event with outcome `DEGRADED`, after that call's `MISS`, where it was only counted: a call whose
+  answer was not stored says so. An observer that took one `CacheChecked` per call as given may now see two.
 - `headgate.health.BreakerSnapshot` is a frozen dataclass with `state`, `refusing` and `failures` (the consecutive
   failures since the last success, which only the live breaker showed), built by keyword, rather than a named tuple:
   write `snapshot.state, snapshot.refusing` for `state, refusing = snapshot`, and compare a snapshot with
@@ -254,6 +257,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `registry.breaker_for(origin).state`, `.failures` for `.failure_count`, and `for origin, snapshot in
   breaker_states(registry).items()` for `for breaker in registry`. A registry keeps its constructor, `policy`,
   `max_hosts`, `len()`, `clear()` and its `repr`.
+- `headgate.health.cache_degradations()` and the process-wide count behind it, which repeated what the
+  `CacheChecked` event already reported, without the call: count `CacheChecked(outcome=CacheOutcome.DEGRADED)` events
+  in an observer (per `event.call.url`'s host, for the old shape). `observer_failures()` stays, since an observer that
+  raises cannot be reported through observers.
 
 ### Fixed
 

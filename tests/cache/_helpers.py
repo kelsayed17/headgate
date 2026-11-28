@@ -12,7 +12,10 @@ import httpx2
 from hishel import AsyncBaseStorage, AsyncSqliteStorage, Entry, Request, Response
 
 from headgate import CallPolicy, Client, HttpCache, HttpOptions
+from headgate._core import CallContext, Emitter
 from headgate.cache._transport import ResilientCacheTransport, store_accepted
+from headgate.events import CacheChecked, CacheOutcome, CallInfo
+from tests.support.events import Recorder
 
 if TYPE_CHECKING:
     import re
@@ -23,6 +26,7 @@ if TYPE_CHECKING:
 
     from headgate import Rate
     from headgate.cache._credentials import CredentialScope
+    from headgate.events import Observer
 
 #: A body cap no test body reaches.
 GENEROUS_CAP = 1024 * 1024
@@ -62,8 +66,9 @@ def stub_client(
     rate: Rate | None = None,
     http: HttpOptions | None = None,
     policy: CallPolicy | None = None,
+    observers: tuple[Observer, ...] = (),
 ) -> Client:
-    """Build a client for ``https://x`` over *transport*, caching through *cache* when given.
+    """Build a client for ``https://x`` over *transport*, caching through *cache* when given, told to *observers*.
 
     *http* carries any other HTTP setting; its ``transport`` is replaced by the one given here. *policy* carries any
     other policy setting; its ``cache`` is replaced by *cache*.
@@ -72,6 +77,7 @@ def stub_client(
         base_url="https://x",
         policy=dataclasses.replace(policy or CallPolicy(), cache=cache, rate=rate),
         http=dataclasses.replace(http or HttpOptions(), transport=transport),
+        observers=observers,
     )
 
 
@@ -80,6 +86,19 @@ async def accept(response: httpx2.Response) -> bytes:
     body = await response.aread()
     await store_accepted(response)
     return body
+
+
+def observed(request: httpx2.Request) -> Recorder:
+    """Make *request* a call whose events a fresh recorder keeps, as a client with an observer does; return it."""
+    recorder = Recorder()
+    info = CallInfo(method=request.method, url=str(request.url), full_url=str(request.url))
+    CallContext(info, emitter=Emitter((recorder,))).attach(request)
+    return recorder
+
+
+def outcomes(recorder: Recorder) -> list[CacheOutcome]:
+    """Return the cache outcomes *recorder* kept, in order."""
+    return [event.outcome for event in recorder.of(CacheChecked)]
 
 
 def cache_transport(
