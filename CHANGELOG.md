@@ -337,12 +337,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   one raises from `paginate()`.
 - `cache_ttl=` on a client without a cache raises `ValueError` at the call, where it was silently ignored. Give the
   client `CallPolicy(cache=HttpCache(...))`, or leave `cache_ttl=` out.
-- Every walk raises `ClientError` ("repeats an earlier page's body") when a page with items repeats an earlier page's
-  body, whatever its pager: a `Cursor`, `LinkHeader`, `NextUrl` or `BodyCursor` walk, and a pager of your own, where
-  only `Offset`, `PageNumber` and `BodyOffset` walks were checked, so a server that ignored the paging while its
-  `Link` header counted on, or a custom pager's, was walked until `max_pages=` or forever. A walk whose distinct pages
-  are byte for byte alike is now refused at its second page: such pages carry nothing new, so stop at the first, or
-  give the walk a pager that ends there.
+- The repeated-body loop guard runs for any pager that declares `counts_pages = True` (a class attribute: its next
+  request is computed by counting, as an offset or a page number, not read from the page), where only `Offset`,
+  `PageNumber` and `BodyOffset` walks were checked, by their class. Those three declare it; a counting pager of your
+  own, which was walked until `max_pages=` or forever when its server ignored the paging, opts in with
+  `counts_pages: ClassVar[bool] = True`. A pager that reads its next request (a cursor, a link) is unchanged: an
+  identical body gives it an identical next request, which the repeated-request check refuses.
 - `with fake_network(fake) as net:` binds a `FakeNetwork`, where it bound the transport given: write `net.transport`
   for the old `net`, or keep the `FakeTransport` in a name of its own, as `with fake_network(fake):` already does.
 - Inside `fake_network`, a client's SSRF guard resolves names through the fake network, in place of the system

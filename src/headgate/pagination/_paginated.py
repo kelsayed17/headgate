@@ -4,7 +4,8 @@
 """The lazy sequence of pages and items :meth:`Client.paginate <headgate.Client.paginate>` returns."""
 
 import hashlib
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable
+import itertools
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Iterator
 from contextlib import aclosing
 from dataclasses import replace
 from typing import Final, Literal, cast, final
@@ -71,11 +72,11 @@ class Paginated[I, P = object]:
     A page that leads back to a request already made (a cursor or next URL that repeats) raises ``ClientError``
     instead of looping forever; the requests made are remembered for that, as a digest per page of its URL (as written
     and as sent), params and, for a POST, the bytes its pager's ``write`` encodes the body to, or the ``repr`` of a body
-    of builtins sent as JSON. A server that ignores its paging would send the same page forever under requests that
-    never repeat, built from the last or read from the response, so a page with items whose body repeats an earlier
-    page's raises ``ClientError`` too, whatever the pager. At most :data:`REMEMBERED_PAGES` of each are remembered,
-    the oldest forgotten first. A walk with ``max_pages=`` fetches at most that many pages, then raises
-    ``PageLimitError`` or, with ``on_limit="stop"``, stops.
+    of builtins sent as JSON. A pager that counts its pages (``counts_pages``: an offset, a page number) sends requests
+    that never repeat, so a server that ignores its paging would send the same page forever: under such a pager, a page
+    with items whose body repeats an earlier page's raises ``ClientError`` too. At most :data:`REMEMBERED_PAGES` of
+    each are remembered, the oldest forgotten first. A walk with ``max_pages=`` fetches at most that many pages, then
+    raises ``PageLimitError`` or, with ``on_limit="stop"``, stops.
 
     ``I`` is the item type and ``P`` the page type, which defaults to ``object``: ``Paginated[Issue]`` is a walk of
     issues, and ``Paginated[Issue, IssuePage]`` names the pages :meth:`pages` yields too.
@@ -134,7 +135,7 @@ class Paginated[I, P = object]:
 class PageWalk[I, P, B]:
     """The pages of one walk, and the items on them: what the :class:`Paginated` ``paginate`` returns iterates."""
 
-    __slots__ = ("_fetch", "_first", "_max_pages", "_on_limit", "_pager", "_source", "_write")
+    __slots__ = ("_counts", "_fetch", "_first", "_held", "_max_pages", "_on_limit", "_pager", "_source", "_write")
 
     def __init__(
         self,
@@ -162,6 +163,24 @@ class PageWalk[I, P, B]:
         self._on_limit = on_limit
         # A page is remembered by the body it sends: the bytes the writer encodes, as the walk's fetch encodes them.
         self._write = pager.write if isinstance(pager, WritingPager) else None
+        self._counts = getattr(pager, "counts_pages", False) is True
+        # The items of a page the loop guard looked into, by the page's id, until the walk moves past the page.
+        self._held: dict[int, Iterator[I]] = {}
+
+    def items_of(self, page: P) -> Iterable[I]:
+        """Return the items on *page*: the ones the loop guard already read, else the pager's, read once either way."""
+        held = self._held.pop(id(page), None)
+        return self._pager.page_items(page) if held is None else held
+
+    def _held_items(self, page: P) -> bool:
+        """Read *page*'s items once, keep them for :meth:`items_of`, and return whether there is one."""
+        items = iter(self._pager.page_items(page))
+        first = next(items, _NO_ITEM)
+        if first is _NO_ITEM:
+            self._held[id(page)] = items
+            return False
+        self._held[id(page)] = itertools.chain((cast("I", first),), items)
+        return True
 
     async def pages(self) -> AsyncIterator[P]:
         """Iterate the pages, in order."""
@@ -180,19 +199,23 @@ class PageWalk[I, P, B]:
             if request.payload is None:
                 # A next URL from the wire is absolute, so the page is remembered as it was sent too.
                 requests.add(_sent_key(response))
-            # A server that ignores the paging sends one page forever, under requests that never repeat when the pager
-            # builds each from the last or reads it from the response: only a page's body tells. An empty page proves
-            # nothing, so it is not remembered.
-            if _has_items(self._pager.page_items(page)) and not bodies.add(response.content):
-                raise self._repeat_error(request, fetched, response)
             try:
-                request = self._pager.next_page(page, request, response)
-                if request is not None:
-                    request = _resolved(request, response)
-            except httpx2.InvalidURL as exc:
-                raise self._invalid_error(request, fetched, exc) from exc
-            del response
-            yield page
+                # A server that ignores counted paging sends one page forever under requests that never repeat: only
+                # a page's body tells. An empty page proves nothing, so it is not remembered. The items read to see
+                # that are held for the item walk, so page_items runs once per page.
+                if self._counts and self._held_items(page) and not bodies.add(response.content):
+                    raise self._repeat_error(request, fetched, response)
+                try:
+                    request = self._pager.next_page(page, request, response)
+                    if request is not None:
+                        request = _resolved(request, response)
+                except httpx2.InvalidURL as exc:
+                    raise self._invalid_error(request, fetched, exc) from exc
+                del response
+                yield page
+            finally:
+                # Held until the walk moves past the page, as no page is held after that.
+                self._held.pop(id(page), None)
 
     def _limit_error(self, request: PageRequest[B], fetched: int) -> PageLimitError:
         """Build the error for *request*, the page after the *fetched* pages the budget allowed."""
@@ -224,12 +247,7 @@ class PageWalk[I, P, B]:
         return ClientError(msg, source=self._source, method=_method(request), url=url)
 
 
-def _has_items(items: Iterable[object]) -> bool:
-    """Return whether *items* holds an item, reading at most one: an iterator is read again for the walk's items."""
-    return next(iter(items), _NO_ITEM) is not _NO_ITEM
-
-
-#: What :func:`_has_items` reads from an empty page: no item a page can hold.
+#: What :meth:`PageWalk._held_items` reads from a page with no items: no item a page can hold.
 _NO_ITEM: Final = object()
 
 

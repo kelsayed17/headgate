@@ -9,7 +9,7 @@ import asyncio
 import itertools
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, assert_type, cast
+from typing import TYPE_CHECKING, Any, ClassVar, assert_type, cast, override
 
 import httpx2
 import msgspec
@@ -884,37 +884,39 @@ async def test_empty_pages_that_repeat_are_walked_past() -> None:
     assert items == [1, 4]
 
 
-async def test_link_header_pages_that_repeat_a_body_are_a_loop() -> None:
-    """Raise when a ``Link`` page repeats an earlier page's body: a server that ignores the page it is asked for.
+async def test_link_header_pages_with_the_same_body_are_walked() -> None:
+    """Walk ``Link`` pages whose bodies are alike: the next page is read from the response, so a repeat is no loop.
 
-    The ``Link`` header names a new page each time, so the requests never repeat; only the bodies show the loop.
+    A sparse series can answer two pages with the same zeros; a server that ignores the page it is asked for repeats
+    its ``Link`` too, which the repeated-request check catches.
     """
+    last = 3
 
     def answer(request: httpx2.Request) -> httpx2.Response:
         page = int(request.url.params.get("page", "1"))
-        link = f'</items?page={page + 1}>; rel="next"'
-        return httpx2.Response(200, json={"data": [{"id": 1}]}, headers={"link": link}, request=request)
+        link = f'</items?page={page + 1}>; rel="next"' if page < last else ""
+        return httpx2.Response(200, json={"data": [{"id": 0}, {"id": 0}]}, headers={"link": link}, request=request)
 
-    api = _Api(answer)
-    paginated = api.client().paginate("items", pager=LinkHeader(reader(Page), items=items_of), max_pages=_BACKSTOP)
-    with pytest.raises(ClientError, match="page 2 repeats an earlier page's body"):
-        _ = [item async for item in paginated]
+    paginated = _Api(answer).client().paginate("items", pager=LinkHeader(reader(Page), items=items_of))
 
-    assert len(api.sent) == len(("first", "repeated"))
+    assert [item.id async for item in paginated] == [0] * 6
 
 
 @dataclass(frozen=True)
 class _OwnOffset:
-    """A pager of its own, by its shape: an offset walk whose items come back as an iterator."""
+    """A pager of its own, by its shape: an offset walk that says it counts, whose items come back as an iterator."""
 
+    counts_pages: ClassVar[bool] = True
     read: Reader[Page]
+    calls: list[Page] = field(default_factory=list, compare=False)
 
     def first(self, request: PageRequest[None]) -> PageRequest[None]:
         """Start at offset 0."""
         return request.with_param("offset", 0)
 
     def page_items(self, page: Page) -> Iterator[Item]:
-        """Return *page*'s items as an iterator, which can be read only once."""
+        """Return *page*'s items as an iterator, which can be read only once, recording the call."""
+        self.calls.append(page)
         return iter(page.data)
 
     def next_page(self, page: Page, request: PageRequest[None], response: httpx2.Response) -> PageRequest[None] | None:
@@ -925,8 +927,15 @@ class _OwnOffset:
         return request.with_param("offset", int(str((request.params or {})["offset"])) + len(page.data))
 
 
-async def test_a_pager_of_its_own_gets_the_loop_guard() -> None:
-    """Raise at the second page when the server ignores the offset of a pager the client does not ship."""
+@dataclass(frozen=True)
+class _UncountedOffset(_OwnOffset):
+    """The same walk, without saying it counts: the walk cannot tell its pages from the server's, so it trusts them."""
+
+    counts_pages: ClassVar[bool] = False
+
+
+async def test_a_counting_pager_of_its_own_gets_the_loop_guard() -> None:
+    """Raise at the second page when the server ignores the offset of a pager that says it counts its pages."""
     api = _Api(lambda request: _page(request, [0, 1]))
     paginated = api.client().paginate("items", pager=_OwnOffset(reader(Page)), max_pages=_BACKSTOP)
     with pytest.raises(ClientError, match="page 2 repeats an earlier page's body"):
@@ -935,17 +944,54 @@ async def test_a_pager_of_its_own_gets_the_loop_guard() -> None:
     assert len(api.sent) == len(("first", "repeated"))
 
 
-async def test_a_pager_whose_items_are_an_iterator_yields_them_all() -> None:
-    """Yield every item of a page whose items are an iterator, though the loop guard looked at it first."""
+async def test_a_pager_that_does_not_say_it_counts_is_not_body_checked() -> None:
+    """Walk to the page budget a pager that does not declare ``counts_pages``, as the server answers it."""
+    api = _Api(lambda request: _page(request, [0, 1]))
+    paginated = api.client().paginate("items", pager=_UncountedOffset(reader(Page)), max_pages=3, on_limit="stop")
+
+    assert len([item async for item in paginated]) == len((0, 1)) * 3
+
+
+async def test_a_pager_whose_items_are_one_iterator_yields_them_all_from_one_call() -> None:
+    """Read a page's items once, though the loop guard looked at the first: every item comes through."""
     end = 4
 
     def answer(request: httpx2.Request) -> httpx2.Response:
         offset = int(request.url.params["offset"])
         return _page(request, [offset, offset + 1] if offset < end else [])
 
-    paginated = _Api(answer).client().paginate("items", pager=_OwnOffset(reader(Page)))
+    pager = _OwnOffset(reader(Page))
+    paginated = _Api(answer).client().paginate("items", pager=pager)
 
     assert [item.id async for item in paginated] == [0, 1, 2, 3]
+    assert len(pager.calls) == len(("0-1", "2-3", "empty")), "page_items is called once per page"
+
+
+@dataclass(frozen=True)
+class _SharedItems(_OwnOffset):
+    """A counting pager whose ``page_items`` hands out one iterator per page, however often it is asked."""
+
+    shared: dict[int, Iterator[Item]] = field(default_factory=dict, compare=False)
+
+    @override
+    def page_items(self, page: Page) -> Iterator[Item]:
+        """Return the one iterator over *page*'s items."""
+        return self.shared.setdefault(id(page), iter(page.data))
+
+
+async def test_a_page_whose_items_are_one_shared_iterator_loses_none_to_the_loop_guard() -> None:
+    """Yield the first item too, which the loop guard reads to see whether the page holds any."""
+    api = _Api(lambda request: _page(request, [1, 2, 3] if request.url.params["offset"] == "0" else []))
+    paginated = api.client().paginate("items", pager=_SharedItems(reader(Page)))
+
+    assert [item.id async for item in paginated] == [1, 2, 3]
+
+
+def test_the_counting_strategies_say_they_count() -> None:
+    """Declare ``counts_pages`` on the strategies that compute the next request, and only on them."""
+    counting = {Offset, PageNumber, BodyOffset}
+    for strategy in (Cursor, Offset, PageNumber, LinkHeader, NextUrl, BodyCursor, BodyOffset):
+        assert getattr(strategy, "counts_pages", False) is (strategy in counting), strategy
 
 
 async def test_an_offset_walk_starts_at_the_callers_own_offset() -> None:

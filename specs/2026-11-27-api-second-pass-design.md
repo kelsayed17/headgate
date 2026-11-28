@@ -256,8 +256,12 @@ redirects raises `ValueError` saying to pass `follow_redirects=False`. Refused a
 bearer token, one that already starts with `Bearer `, an empty `StaticHeaderAuth` or `QueryParamAuth` mapping, a
 negative `refresh_margin`; at the call, `cache_ttl=` on a client without a cache.
 
-**5.5 Every pager gets the loop guard (E17).** The repeated-request check runs for every pager whose page had items,
-not only for the three built-in offset strategies, and the `isinstance` on concrete classes is removed.
+**5.5 Every pager gets the loop guard (E17).** The repeated-body check runs for every pager that declares
+`counts_pages = True` (its next request is computed by counting, not read from the page or the response), whose page
+had items: the three built-in counting strategies declare it, and a pager of your own opts in with that one line. The
+`isinstance` on concrete classes is removed. A pager that reads its next request needs no body check, since an
+identical body gives it an identical next request, which the repeated-request check refuses, and a body check there
+would refuse two pages of identical data. (Amended with the phase 5 review.)
 
 ### 6. Testing an SDK through its front door
 
