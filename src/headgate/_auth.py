@@ -671,6 +671,8 @@ class _TokenState[T]:
     """
 
     clock: Clock
+    #: The ``id()`` of the auth this state belongs to: a copy of the auth shares the attribute, not the state.
+    owner: int
     identity: bytes = field(default_factory=lambda: secrets.token_bytes(32))
     held: _Held[T] | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -690,12 +692,15 @@ def _state_of[T](auth: CachedTokenAuth[T], timing: Timing | None = None) -> _Tok
 
     The base class has no constructor for a subclass to forget, so the state is made on first use: when a client is
     built with the auth (:func:`hold_timing`), or at its first call or :meth:`~CachedTokenAuth.seed` if that comes
-    first.
+    first. A copy of the auth (``copy.copy``) starts with a state of its own: two copies sharing one cache, lock and
+    identity would be one auth under two names.
     """
     attributes = vars(auth)
-    if _STATE not in attributes:
-        attributes[_STATE] = _TokenState[T](clock=(current_timing() if timing is None else timing).clock)
-    return cast("_TokenState[T]", attributes[_STATE])
+    state = attributes.get(_STATE)
+    if not (isinstance(state, _TokenState) and state.owner == id(auth)):
+        clock = (current_timing() if timing is None else timing).clock
+        state = attributes[_STATE] = _TokenState[T](clock=clock, owner=id(auth))
+    return cast("_TokenState[T]", state)
 
 
 def hold_timing(auth: Auth | None, timing: Timing) -> None:
@@ -772,7 +777,8 @@ class CachedTokenAuth[TokenT = str](Auth):
     only its own state. A token's lifetime runs on the timing of the clients built with the auth
     (:func:`headgate.timing.current_timing` when each is built), so one given to a client built inside
     ``TestClock.install()`` expires on the test clock. Its clients share that one timing: a client built on another,
-    or on another than a token was seeded or minted on, raises ``TypeError`` (see :func:`hold_timing`).
+    or on another than a token was seeded or minted on, raises ``TypeError`` (see :func:`hold_timing`). A copy
+    (``copy.copy``) starts with an empty cache of its own.
 
     **What it stamps is declared**, in :attr:`credential_headers` and :attr:`credential_params`, the names every
     :class:`Auth` and middleware declares with: the headers :meth:`attach` sets (``authorization`` by default) and the
