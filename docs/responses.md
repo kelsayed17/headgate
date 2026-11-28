@@ -74,8 +74,9 @@ repr(location)  # 'Reader(location)'
 
 A reader's `repr` names its function, or the `name=` it was given. `Reader` raises `TypeError` for something that
 cannot be called, and for a class, where it is written rather than at the first response: `Reader(str)` would return
-the response's `repr`, so read text with `as_text`, and wrap a class that is built from a response in a function,
-`Reader(lambda r: Cls(r))`. `expect=`, `Expect` and `conditional` take
+the response's `repr`. Its message names the reader the class stands for: `as_text` for `str`, `as_bytes` for
+`bytes`, `as_json` for `dict` and `list`, and a function, `Reader(lambda r: Cls(r))`, for a class built from a
+response. `expect=`, `Expect` and `conditional` take
 only a `Reader` (or, for `expect=`, an `Expect`) and raise `TypeError` for anything else, such as a model class (`expect=Order`
 where `expect=reader(Order)` was meant) or a bare function, which are callable too.
 

@@ -32,8 +32,8 @@ from typing import Final, NoReturn, cast, final, override
 
 import httpx2
 
-from headgate._core import check_headers, check_int, check_kind
-from headgate._failures import ReaderMisuseError
+from headgate._core import check_headers, check_int, check_kind, named
+from headgate._failures import reader_misuse
 from headgate._sse import EventParser, text_decoder
 from headgate.errors import DecodeError, RefusedError
 
@@ -80,11 +80,9 @@ class Reader[T]:
             response: ``Reader(str)`` would return the response's ``repr``.
         """
         if isinstance(read, type):
-            msg = (
-                f"Reader takes a function of the response (got the class {read.__name__}): for the body as text use "
-                f"as_text, and for a class that is built from a response write Reader(lambda r: {read.__name__}(r))"
-            )
-            raise TypeError(msg)
+            fallback = f"for a class built from a response, write Reader(lambda r: {read.__name__}(r))"
+            msg = f"Reader takes a function of the response (got the class {read.__name__}): "
+            raise TypeError(msg + _READERS_FOR.get(read, fallback))
         if not callable(read):
             # Anything not callable is an instance, so its type's name is what _kinds would print.
             msg = f"Reader takes a function of the response (got {type(read).__name__})"
@@ -101,6 +99,15 @@ class Reader[T]:
     def __repr__(self) -> str:
         """Return ``Reader(<name>)``."""
         return f"Reader({self._name})"
+
+
+#: The reader each builtin class someone wraps in ``Reader`` stands for.
+_READERS_FOR: Final[Mapping[type, str]] = {
+    str: "for the body as text, use as_text",
+    bytes: "for the body as bytes, use as_bytes",
+    dict: "for the body as JSON, use as_json",
+    list: "for the body as JSON, use as_json",
+}
 
 
 def _name_of(read: object) -> str:
@@ -381,8 +388,8 @@ def _body_reader[T](
         value = decode(content)
         if refuse is not None and (refused := refuse(value)) is not None:
             if not isinstance(refused, RefusedError):
-                msg = f"refuse= returns a RefusedError, or None to accept the value (got {type(refused).__name__})"
-                raise ReaderMisuseError(msg)
+                msg = f"refuse= returns a RefusedError, or None to accept the value (got {named(refused)})"
+                raise reader_misuse(msg)
             raise refused
         return value
 

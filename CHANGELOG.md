@@ -322,8 +322,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   to it, so write `copy.replace(body, value=...)` and `body.value`; it compares, hashes, prints and matches
   (`case Json(value)`) as before, and a subclass raises `TypeError`.
 - `Reader` refuses a class with `TypeError` where it is built: `Reader(str)` type-checked and returned
-  `'<Response [200 OK]>'`. Write `expect=as_text` for the body as text, and `Reader(lambda r: Cls(r))` for a class
-  that is built from a response.
+  `'<Response [200 OK]>'`. Write `expect=as_text` for `Reader(str)`, `as_bytes` for `Reader(bytes)`, `as_json` for
+  `Reader(dict)` or `Reader(list)`, and `Reader(lambda r: Cls(r))` for a class that is built from a response.
 - A codec's `decoder()` raises `TypeError` for a type it cannot decode, and `check_codec` asks it to, so a reader of
   such a type fails where it is built. `headgate.msgspec.reader(Model)` of a pydantic model, or of a plain class
   anywhere in the type (`list[Plain]`, `dict[str, Plain] | None`), built, and every 200 then raised
@@ -365,6 +365,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - A walk's `payload=`, when its pager has no `write`, is encoded as JSON in `paginate()`, which raises `TypeError`
   there for one that is not builtins, in a walk's words: it raised at the first iteration, and advised `body=`, which
   a walk does not take. Write `payload=to_builtins(query)`, or give the pager `write=writer(Query)`.
+- `Client(observers=)` and `Client(middleware=)` refuse an entry given as its class rather than an instance, with a
+  `TypeError` naming it: `observers=[Metrics]` and `middleware=[Signer]` were accepted, and their methods called
+  unbound. Write `observers=[Metrics()]` and `middleware=[Signer()]`.
 
 ### Removed
 

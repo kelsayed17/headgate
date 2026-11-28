@@ -74,7 +74,7 @@ from headgate._errors import ClientError, ClientTimeoutError, RateLimitError
 from headgate._failures import (
     SHAPE_ERRORS,
     CallSite,
-    ReaderMisuseError,
+    is_reader_misuse,
     is_transient_status,
     loggable_url,
     parse_error,
@@ -1226,12 +1226,12 @@ class Client:
         # The one place a reader's RefusedError is caught: it becomes the ClientError carrying the status the wire sent.
         except RefusedError as refused:
             raise refusal_error(refused, resp, site) from refused
-        # The reader's own hook broke its contract: a TypeError, but the caller's, not the body's.
-        except ReaderMisuseError:
-            raise
         # Neither error is chained to the reader's: a validation library's error may quote the input it refused (a
         # token, say), which a traceback or logger.exception would repeat.
         except SHAPE_ERRORS as exc:
+            # The reader's own hook broke its contract: a TypeError, but the caller's, not the body's.
+            if is_reader_misuse(exc):
+                raise
             if resp.is_success:
                 raise parse_error(exc, resp, site) from None
             raise status_error(resp, site) from None
@@ -1458,7 +1458,7 @@ def _checked(check: ResponseCheck | None, resp: httpx2.Response) -> RefusedError
     except RefusedError as raised:
         return raised
     if not isinstance(refused, RefusedError | None):
-        msg = f"response_check= returns a RefusedError, or None to accept the response (got {type(refused).__name__})"
+        msg = f"response_check= returns a RefusedError, or None to accept the response (got {named(refused)})"
         raise TypeError(msg)
     return refused
 
