@@ -254,7 +254,7 @@ without `expect=`, `cache_ttl=` and `max_response_bytes=`, and `paginate()` take
 A `params=` value is a `str`, `int`, `float`, `bool` or `None`; an `Enum` member, sent as its value (a `str` or an
 `int`); a `UUID` or a `Decimal`, sent as its text; a `date`, `datetime` or `time`, sent in ISO 8601
 (`2026-01-02T03:04:00+00:00`); or a list or tuple of them, which repeats the key. `Form` and `Multipart` fields take the
-same values. Any other value raises `TypeError` naming the parameter, before anything is sent (a `Form` or `Multipart`
+same values, and a `Multipart` field takes `bytes` too, sent as they are. Any other value raises `TypeError` naming the parameter, before anything is sent (a `Form` or `Multipart`
 when it is built): a mapping, a set, `bytes`, a dataclass or a model, whose text would be its Python `repr`, and a list
 or tuple inside a list or tuple. Encode such a value into text first, with `json.dumps` or the API's own format.
 

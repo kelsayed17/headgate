@@ -62,7 +62,7 @@ _WIRE_VALUES: Final = (
 )
 
 
-def wire_value(option: str, key: str, value: object) -> WireValue:
+def wire_value(option: str, key: str, value: object, *, wanted: str = _WIRE_VALUES) -> WireValue:
     """Return what *value*, under *key* in *option*, means on the wire: the one allowlist of query and form values.
 
     A ``str``, number, ``bool`` or ``None`` is itself; an ``Enum`` its ``value``, which must be a ``str`` or an
@@ -70,7 +70,7 @@ def wire_value(option: str, key: str, value: object) -> WireValue:
     since any other value's ``str()`` is its Python ``repr``: a dataclass's ``Order(qty=1)``, a plain ``Enum``'s
     ``Status.OPEN``.
 
-    :raises TypeError: for any other value, naming *option*, *key* and the value's type.
+    :raises TypeError: for any other value, naming *option*, what it takes (*wanted*), *key* and the value's type.
     """
     if isinstance(value, enum.Enum):
         if isinstance(value.value, str | int):
@@ -82,18 +82,24 @@ def wire_value(option: str, key: str, value: object) -> WireValue:
     elif isinstance(value, date | time):
         return value.isoformat()
     msg = (
-        f"{option} takes {_WIRE_VALUES} (got {type(value).__name__} under {key!r}): encode any other value into text "
-        "first, such as with json.dumps"
+        f"{option} takes {wanted} (got {type(value).__name__} under {key!r}): encode any other value into text first, "
+        "such as with json.dumps"
     )
     raise TypeError(msg)
 
 
-def wire_fields(option: str, fields: Mapping[str, object]) -> dict[str, object]:
-    """Return *fields* with each value through :func:`wire_value`, a list or tuple of them item by item."""
+def wire_fields(option: str, fields: Mapping[str, object], *, raw: bool = False) -> dict[str, object]:
+    """Return *fields* with each value through :func:`wire_value`, a list or tuple of them item by item.
+
+    With *raw*, ``bytes`` is sent as it is too: a multipart part carries bytes, where a query or a form carries text.
+    """
+    wanted = f"bytes, {_WIRE_VALUES}" if raw else _WIRE_VALUES
+
+    def encoded(key: str, value: object) -> object:
+        return value if raw and isinstance(value, bytes) else wire_value(option, key, value, wanted=wanted)
+
     return {
-        key: [wire_value(option, key, item) for item in value]
-        if isinstance(value, list | tuple)
-        else wire_value(option, key, value)
+        key: [encoded(key, item) for item in value] if isinstance(value, list | tuple) else encoded(key, value)
         for key, value in fields.items()
     }
 
@@ -197,7 +203,7 @@ class Multipart:
 
     A file is ``{"name": file}``, or a ``(filename, file, content_type)`` tuple; ``file`` is bytes, text or a binary
     file object. The body can be sent again (:attr:`replayable`) unless a file object cannot be rewound. The *fields*
-    take the values a :class:`Form` does, and are kept encoded.
+    take the values a :class:`Form` does, and ``bytes`` too, sent as they are; they are kept encoded.
 
     :raises TypeError: for *fields* that are not a mapping, and for a value with no wire meaning.
     :raises ValueError: for no files, which httpx2 would send as a form, not as ``multipart/form-data``: send fields
@@ -210,7 +216,7 @@ class Multipart:
     def __post_init__(self) -> None:
         """Refuse fields that are not a mapping or hold a value with no wire meaning, and a body with no files."""
         check_kind("fields", self.fields, Mapping, "a mapping of field names to values")
-        object.__setattr__(self, "fields", wire_fields("Multipart(fields=)", self.fields))
+        object.__setattr__(self, "fields", wire_fields("Multipart(fields=)", self.fields, raw=True))
         if not self.files:
             msg = "Multipart needs at least one file; send form fields alone as Form(fields)"
             raise ValueError(msg)

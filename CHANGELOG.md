@@ -36,8 +36,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   - a `date`, `datetime` or `time` is sent in ISO 8601, `2026-01-02T03:04:00+00:00`, where `str(datetime)` put a
     space in place of the `T`;
   - every other value raises `TypeError` naming the key and its type, instead of being sent as its Python `repr`: a
-    dataclass, a msgspec `Struct`, a pydantic model, `object()`, a mapping, a set, `bytes`, an `Enum` whose value is
-    neither a `str` nor an `int`, and a list or tuple inside a list or tuple. `params=` refuses it at the call, and a
+    dataclass, a msgspec `Struct`, a pydantic model, `object()`, a mapping, a set, `bytes` (but in a `Multipart`
+    field, which sends it as it is), an `Enum` whose value is neither a `str` nor an `int`, and a list or tuple inside
+    a list or tuple. `params=` refuses it at the call, and a
     `Form` or `Multipart` when it is built (a nested `dict` in a `Form` was sent as its `repr`). Encode such a value
     into text first, with `json.dumps` or the API's own format.
 - `Form.fields` and `Multipart.fields` hold the encoded values, a copy of the mapping given: `Form({"s": Status.OPEN})`

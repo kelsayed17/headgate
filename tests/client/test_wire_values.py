@@ -124,7 +124,7 @@ def test_form_and_multipart_fields_refuse_a_value_with_no_wire_meaning(value: ob
     """Refuse the field when the body is built, naming the key and its type."""
     with pytest.raises(TypeError, match=rf"^Form\(fields=\) takes a str, .* \(got {got} under 'v'\)"):
         Form({"v": value})
-    with pytest.raises(TypeError, match=rf"^Multipart\(fields=\) takes a str, .* \(got {got} under 'v'\)"):
+    with pytest.raises(TypeError, match=rf"^Multipart\(fields=\) takes bytes, a str, .* \(got {got} under 'v'\)"):
         Multipart({"f": b"x"}, fields={"v": value})
 
 
@@ -137,3 +137,18 @@ async def test_multipart_fields_send_an_enum_as_its_value() -> None:
     body = sent[0].content
     assert b'name="v"\r\n\r\nopen\r\n' in body
     assert body.count(b'name="n"') == len((1, 2))
+
+
+async def test_multipart_fields_send_bytes_as_they_are() -> None:
+    """Send a ``bytes`` multipart field raw, as httpx2 does: a part carries bytes, unlike a query or a form."""
+    sent: list[httpx2.Request] = []
+    async with _client(sent) as client:
+        await client.post("x", expect=nothing, body=Multipart({"f": b"x"}, fields={"v": b"\x00raw"}))
+
+    assert b'name="v"\r\n\r\n\x00raw\r\n' in sent[0].content
+
+
+def test_form_fields_refuse_bytes() -> None:
+    """Refuse ``bytes`` in a form field, which a form can carry only as text."""
+    with pytest.raises(TypeError, match=r"^Form\(fields=\) takes a str, .* \(got bytes under 'v'\)"):
+        Form({"v": b"raw"})
