@@ -24,9 +24,9 @@ _POLICY_OFF: ContextVar[bool] = ContextVar("headgate_policy_off", default=False)
 def policy_disabled() -> Generator[None]:
     """Build the clients constructed in the block with retry, the circuit breaker and rate limiting switched off.
 
-    Right in production and wrong where the network is a fake, or where the job is to report the first failure (a
-    connectivity probe). An SDK usually fixes its policy where it builds its ``Client``, so the switch is read when a
-    client is built, not passed to it::
+    For a test: the call policy is right in production and in the way where the network is a fake and the test asserts
+    on the first failure as the fake sends it. An SDK usually fixes its policy where it builds its ``Client``, so the
+    switch is read when a client is built, not passed to it::
 
         with policy_disabled():
             client = ExampleClient(api_key="k")
