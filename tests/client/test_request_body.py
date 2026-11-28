@@ -9,10 +9,16 @@ Whether a body is sent again on a retry, a redirect or a GOAWAY is pinned end to
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import importlib
+import inspect
 import io
+import json
 import math
 import os
+from dataclasses import dataclass
+from datetime import date
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import pytest
@@ -30,6 +36,7 @@ from headgate import (
     UpstreamStatusError,
     nothing,
 )
+from headgate._request_body import lowered
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
@@ -113,14 +120,93 @@ async def test_a_json_content_type_yields_to_the_calls_headers() -> None:
     assert script.sent[0].headers["content-type"] == "application/merge-patch+json"
 
 
-async def test_a_json_value_json_cannot_carry_is_refused() -> None:
-    """Refuse ``NaN`` in a ``Json`` body before sending, as httpx2's ``json=`` did, rather than send invalid JSON."""
+@pytest.mark.parametrize("number", [math.nan, math.inf], ids=["nan", "inf"])
+def test_a_json_value_json_cannot_carry_is_refused_where_it_is_built(number: float) -> None:
+    """Refuse ``NaN`` or an infinity where the body is built, naming ``Json`` and what to write, not send bad JSON."""
+    with pytest.raises(ValueError, match=r"^Json takes a value JSON can carry \(Out of range float values .*\): write"):
+        Json({"x": number})
+
+
+def test_a_json_body_is_encoded_once_where_it_is_built() -> None:
+    """Send the bytes encoded where the body was built: a change to the value afterwards changes nothing sent."""
+    value = {"qty": 1}
+    body = Json(value)
+    value["qty"] = 2
+
+    def encoded_again(obj: object, **options: object) -> str:
+        raise AssertionError((obj, options))
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(json, "dumps", encoded_again)
+        sent = lowered(body)
+
+    assert sent.content == b'{"qty":1}'
+
+
+def test_a_json_body_is_a_value_of_its_value_alone() -> None:
+    """Show only its value: no other field, a match on ``value``, ``copy.replace`` and no attribute to set."""
+    body = Json({"a": 1})
+
+    match body:
+        case Json(value):
+            assert value == {"a": 1}
+    assert copy.replace(body, value=[1]) == Json([1])
+    assert not dataclasses.is_dataclass(body)
+    assert isinstance(inspect.getattr_static(Json, "value"), property), "value is a read-only property"
+    with pytest.raises(AttributeError, match=r"^Json is immutable"):
+        cast("Any", body).value = 2
+    with pytest.raises(AttributeError, match=r"^Json is immutable"):
+        del cast("Any", body).value
+
+
+def test_a_json_body_cannot_be_subclassed() -> None:
+    """Refuse a subclass, whose overrides nothing would call: the body is its encoded value."""
+    with pytest.raises(TypeError, match=r"^_Mine cannot subclass Json, which is final"):
+
+        class _Mine(cast("Any", Json)):
+            pass
+
+
+@dataclass(frozen=True)
+class _Order:
+    """A value of a class JSON's encoder does not know."""
+
+    qty: int
+
+
+@pytest.mark.parametrize(
+    ("value", "got"),
+    [(_Order(1), "_Order"), ({"due": date(2026, 1, 1)}, "date"), ({"ids": {1, 2}}, "set")],
+    ids=["dataclass", "date", "set"],
+)
+def test_a_json_body_of_what_is_not_builtins_is_refused_where_it_is_built(value: object, got: str) -> None:
+    """Refuse a value JSON cannot encode where the ``Json`` is built, naming its type and what to write instead."""
+    with pytest.raises(TypeError, match=rf"^Json takes builtins.*\(got {got}\): .*writer\(.*to_builtins\(value\)"):
+        Json(value)
+
+
+@pytest.mark.parametrize(("value", "sent"), [((1, 2), b"[1,2]"), ({1: "a"}, b'{"1":"a"}')], ids=["tuple", "int-key"])
+async def test_a_json_body_takes_what_the_json_encoder_takes(value: object, sent: bytes) -> None:
+    """Send a tuple as an array and an ``int`` key as a string, as the standard library's encoder does."""
     script = Script()
+    await _client(script).post("orders", expect=nothing, body=Json(value))
 
-    with pytest.raises(ValueError, match="Out of range float values are not JSON compliant"):
-        await _client(script).post("orders", expect=nothing, body=Json({"x": math.nan}))
+    assert script.sent[0].content == sent
 
-    assert script.sent == []
+
+def test_a_json_key_json_cannot_write_is_refused_where_it_is_built() -> None:
+    """Refuse a key JSON cannot write, such as a tuple, in the same words, saying which keys it can."""
+    with pytest.raises(
+        TypeError, match=r"^Json takes builtins.*\(keys must be str, int, float, bool or None, not tuple\)"
+    ):
+        Json({(1, 2): 1})
+
+
+def test_two_json_bodies_of_one_value_are_equal() -> None:
+    """Compare and hash a ``Json`` by its value, whatever it holds besides."""
+    assert Json({"a": 1}) == Json({"a": 1})
+    assert hash(Json((1, "a"))) == hash(Json((1, "a")))
+    assert repr(Json({"a": 1})) == "Json(value={'a': 1})"
 
 
 @pytest.mark.parametrize(

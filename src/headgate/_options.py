@@ -33,10 +33,12 @@ from headgate._core import (
     check_callable,
     check_collection,
     check_fragment,
+    check_headers,
     check_int,
     check_kind,
     check_names,
     check_not_letters,
+    check_number,
     check_options,
     origin_of,
     origin_text,
@@ -148,8 +150,9 @@ class Timeouts:
     pool: float | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a timeout that is not positive."""
+        """Refuse a timeout that is not a number, a ``bool`` included, or not positive."""
         for name, value in _set_phases(self):
+            check_number(name, value, "seconds, a number, or None to inherit")
             _check_positive(name, value)
 
     def over(self, base: Timeouts) -> Timeouts:
@@ -474,6 +477,16 @@ def check_hooks(name: str, values: Iterable[object]) -> None:
         reject_upstream_httpx(value, what=f"an entry of {name}")
 
 
+def _refuse_class(option: str, item: object, wanted: str) -> None:
+    """Refuse a hook given as its class, whose methods would be called unbound, saying to build one.
+
+    :raises TypeError: naming *option*, what it takes (*wanted*) and the class.
+    """
+    if isinstance(item, type):
+        msg = f"{option}= takes {wanted} (got the class {item.__name__}): write {item.__name__}()"
+        raise TypeError(msg)
+
+
 def check_middleware(middleware: Iterable[object]) -> None:
     """Refuse a middleware that does not declare the credentials it stamps as two frozensets, or splits a name.
 
@@ -481,6 +494,7 @@ def check_middleware(middleware: Iterable[object]) -> None:
     only at the first call.
     """
     for item in middleware:
+        _refuse_class("middleware", item, "middleware instances")
         name = getattr(item, "__qualname__", type(item).__qualname__)
         for attribute in ("credential_headers", "credential_params"):
             names = getattr(item, attribute, None)
@@ -501,8 +515,17 @@ def check_middleware(middleware: Iterable[object]) -> None:
 
 
 def check_observers(observers: Iterable[object]) -> None:
-    """Refuse an observer whose ``notify`` is a coroutine function: the client calls it and never awaits it."""
+    """Refuse an observer with no callable ``notify``, or whose ``notify`` is a coroutine function.
+
+    Without one, every event would fail into ``observer_failures()``; a coroutine function's events would be dropped,
+    since the client calls ``notify`` and never awaits it.
+    """
     for item in observers:
+        _refuse_class("observers", item, "Observer instances")
+        if not callable(getattr(item, "notify", None)):
+            name = getattr(item, "__qualname__", type(item).__qualname__)
+            msg = f"observers= takes Observers, each with a notify(event) method (got {name}, which has none)"
+            raise TypeError(msg)
         if inspect.iscoroutinefunction(getattr(item, "notify", None)):
             msg = (
                 f"observer {type(item).__qualname__}'s notify is a coroutine function, so its events would be dropped "
@@ -625,7 +648,7 @@ class HttpOptions:
         if self.transport is not None and not isinstance(self.transport, httpx2.AsyncBaseTransport):
             reject_upstream_httpx(self.transport, what="transport")
             check_kind("transport", self.transport, (), "an httpx2.AsyncBaseTransport, or None")
-        check_kind("headers", self.headers, Mapping, "a mapping of header names to values")
+        check_headers("headers", self.headers)
         check_kind("follow_redirects", self.follow_redirects, bool, "a bool")
         check_int("max_redirects", self.max_redirects, "a number of hops, an int")
         check_int("max_response_bytes", self.max_response_bytes, "a number of bytes, an int")

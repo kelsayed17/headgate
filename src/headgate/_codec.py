@@ -37,7 +37,12 @@ class Codec(Protocol):
       validation error never escapes the ``ClientError`` tree.
     * ``decoder(type_)`` and ``encoder(type_)``: a function reading bytes into the type expression, and one writing a
       value of it back. Each is built once per type, so a library that compiles a type (a msgspec decoder, a pydantic
-      adapter) does so once.
+      adapter) does so once. ``decoder`` raises ``TypeError`` for a type the library cannot decode, so a reader of one
+      fails where it is built rather than at its first body.
+
+    A codec handles the built-in containers (``dict``, ``list`` and the scalars in them) besides its own record types:
+    :func:`reader_for` encodes an empty ``list[object]`` for ``allow_empty_body=True``, and
+    :func:`headgate.testing.check_codec` writes and reads ``dict[str, int]`` and ``dict[str, str]``.
     * ``describe(error)``: a message for one of ``errors`` that never quotes the input, since the body may carry a
       credential. The reader bounds its length.
     """

@@ -5,14 +5,19 @@ with nothing private patched. Two seams make that possible:
 
 - **the network**: `fake_network(transport)` sends every `Client` built in its block on *transport*, in place of the
   network, even one the SDK gave a transport of its own (`HttpOptions(transport=AsyncCurlTransport(...))`). Only the
-  network is replaced: the SDK's rate budget, cache, retries and breaker run over the fake as they would in production,
-  and so do the requests a `CachedTokenAuth` mints with;
+  network is replaced: the SDK's rate budget, cache, retries, breaker and SSRF guard run over the fake as they would in
+  production, and so do the requests a `CachedTokenAuth` mints with. It is the network only: a transport of the SDK's
+  that does more than send (one that adds a header, say) is replaced too, so that behavior belongs in middleware.
+  The guard resolves names inside the fake network, so a guarded SDK needs no DNS (see
+  [names](#names-inside-the-fake-network)). `with fake_network(fake) as net:` yields a `FakeNetwork`: `net.transport`
+  is the fake, and `net.clients` the clients built in the block, in order;
 - **time**: `TestClock.install()` and `instant_retries()` set the timing the clients built in their block run on.
 
 All three are read when a client is **constructed**, so build the SDK inside them; entering one around a client that
 already exists changes nothing, and the block need not stay open while the client is used. Breaker state needs no
 seam: each client keeps its own.
 
+<!-- docs-test: run -->
 ```python
 from collections.abc import Iterator
 
@@ -32,7 +37,12 @@ def catalog() -> Iterator[CatalogClient]:
 
 A route table of canned replies and a log of every request:
 
+<!-- docs-test: run -->
 ```python
+import httpx2
+
+from headgate.testing import FakeTransport
+
 fake = (
     FakeTransport()
     .reply("GET", "/v1/series/GDP", httpx2.Response(503), httpx2.Response(200, json=GDP))
@@ -51,6 +61,23 @@ fake = (
   says whether the client closed it.
 - A request with no route raises `UnmatchedRequestError`, an `AssertionError` the client neither retries nor maps, naming
   the request and the routes there are.
+
+## Names inside the fake network
+
+A client with the SSRF guard on (`SecurityOptions(block_private_hosts=True)`) resolves each host before it sends.
+Inside `fake_network`, the guard resolves through the fake network instead of the system's resolver, and instead of a
+`resolver=` the SDK set itself: every name resolves to one public address, so the test makes no DNS query and passes
+offline, but `localhost` and every name under it, which resolve to loopback (`127.0.0.1` and `::1`, as RFC 6761 has
+resolvers answer them) and are refused as in production. Since the fake network replaces an SDK's own `resolver=`,
+test a resolver of your own directly, by calling it. `FakeTransport.resolve(host, *addresses)` gives a host the answer a test needs, so the guard's refusals can
+be tested too: a private address among them is refused with `ForbiddenDestinationError`, and no address at all is a
+name that does not resolve, a `TransportError`. The guard's checks still run, so a private IP literal is refused
+without any lookup.
+
+<!-- docs-test: run -->
+```python
+fake = FakeTransport().reply("GET", "/v1/ping", 200).resolve("internal.example.com", "10.0.0.7")
+```
 
 ## TestClock and instant retries
 
@@ -95,35 +122,45 @@ returns that registry (or `None` for a client without a breaker); assert on it w
 
 ## What a client was built with
 
-A client fixes its options in its `__init__`, so a test of its configuration reads them back. `cache_of(client)` returns
+A client fixes its options in its `__init__`, so a test of its configuration reads them back, from the `Client` the SDK
+built, which `fake_network`'s handle holds: `net.clients`, so the test never reaches into the SDK. `cache_of(client)` returns
 the `HttpCache` it was built with (or `None`), whose `methods`, `paths` and `statuses` say what it stores.
 `budget_for(client, url)` returns the `RateBudget` a request to `url` spends from: that of the first `Route` that
 matches it, when that route sets `rate=`, or the default; without a `url`, the default budget, built from the policy's
 `rate=`. Neither sends anything. Whether a response is served from the cache shows through the front door too: a
 second call that a fake network never sees.
 
+<!-- docs-test: run -->
 ```python
+import anysqlite
+from hishel import AsyncSqliteStorage
+
+from headgate import Rate
 from headgate.testing import FakeTransport, budget_for, cache_of, fake_network
 
 
 def test_candles_have_a_budget_of_their_own() -> None:
-    client = ExchangeClient(api_key="test")
+    with fake_network(FakeTransport()) as net:
+        ExchangeClient(api_key="test")
+    [client] = net.clients
     assert budget_for(client, "products/BTC-USD/candles") is not budget_for(client)
     assert budget_for(client).rate == Rate.per_second(10)
 
 
-async def test_only_the_archives_are_cached(storage) -> None:
+async def test_only_the_archives_are_cached() -> None:
+    storage = AsyncSqliteStorage(connection=await anysqlite.connect(":memory:"))
     fake = FakeTransport().reply("GET", "/archives/2025.zip", 200).reply("GET", "/status", 200)
-    with fake_network(fake):
-        client = ArchiveClient(cache_storage=storage)
-    async with client:
+    with fake_network(fake) as net:
+        archive = ArchiveClient(cache_storage=storage)
+    async with archive:
         for _ in range(2):
-            await client.archive("2025.zip")
-            await client.status()
+            await archive.archive("2025.zip")
+            await archive.status()
+    await storage.close()
 
     assert len(fake.calls_to("GET", "/archives/2025.zip")) == 1, "the second came from the cache"
     assert len(fake.calls_to("GET", "/status")) == 2, "the status is never cached"
-    cache = cache_of(client)
+    cache = cache_of(net.clients[0])
     assert cache is not None and cache.ttl == 86_400.0
 ```
 
@@ -136,6 +173,7 @@ own: `Paginated(pages, items_of)`, where `pages` is a function of no arguments t
 is called (an async generator function, say), and `items_of` returns the items on one page. It is the class
 `paginate()` returns, so the code under test iterates, collects and reads pages exactly as it does against the SDK:
 
+<!-- docs-test: run -->
 ```python
 from collections.abc import AsyncIterator
 
@@ -169,6 +207,7 @@ response, whether that response was closed, and the error raised.
 | `Slow(seconds, then=Respond())` | waits (honoring the read timeout), then takes `then` |
 | `RefusedStream()` | resets the HTTP/2 stream with `REFUSED_STREAM`, exactly as httpx2 raises it |
 
+<!-- docs-test: run -->
 ```python
 from headgate.testing import ConnectFail, DropMidBody, FaultyTransport, Respond
 
@@ -185,6 +224,7 @@ sent and what it got. A send past the end of the schedule raises `AssertionError
 vcrpy 8.3 and later record httpx2's own transports, so they see what headgate's default network transport sends, once
 per attempt, below the whole stack. `CassetteFilter` keeps credentials out of the cassette:
 
+<!-- docs-test: run -->
 ```python
 import pytest
 
@@ -219,6 +259,7 @@ A test that asserts on the first failure, as the fake network sends it, wants no
 route asks for), no breaker (the client never reads a registry, so it cannot be refused by one another client opened),
 and a budget that paces nothing, also for its routes' `rate=` and a shared `RateBudget` passed in.
 
+<!-- docs-test: run -->
 ```python
 from collections.abc import Iterator
 

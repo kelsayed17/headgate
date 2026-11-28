@@ -16,7 +16,6 @@ from headgate import (
     Client,
     ClientError,
     HttpOptions,
-    Json,
     Rate,
     RetryPolicy,
     TransportError,
@@ -130,11 +129,11 @@ async def test_with_the_breaker_open_a_url_the_join_rejects_is_still_an_invalid_
     assert not isinstance(caught.value, TransportError)
 
 
-async def test_with_the_breaker_open_an_unencodable_body_raises_as_itself() -> None:
-    """Fail to encode a body the same way with the breaker open: encoding is part of building the request."""
+async def test_with_the_breaker_open_an_unencodable_query_raises_as_itself() -> None:
+    """Fail to encode a query the same way with the breaker open: encoding is part of building the request."""
     client = Client(
         base_url=f"https://{_HOST}", policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1))
     )
     _open_breaker(client)
-    with pytest.raises(TypeError, match="JSON serializable"):
-        await client.post("x", expect=nothing, body=Json(object()))
+    with pytest.raises(TypeError, match="params= takes"):
+        await client.post("x", expect=nothing, params={"a": object()})

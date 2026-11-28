@@ -16,7 +16,13 @@ An SDK fixes these where it builds its `Client` and exposes only what its caller
 observers). It holds the client rather than inheriting from it (`Client` is final, and subclassing it raises
 `TypeError`), and forwards `async with` and `aclose()` to it:
 
+<!-- docs-test: run -->
 ```python
+from typing import Self
+
+from headgate import BearerAuth, CallPolicy, Client, Rate
+
+
 class GitHub:
     def __init__(self, token: str) -> None:
         self._http = Client(
@@ -64,6 +70,7 @@ What the stack does with every call; `CallOptions` override it per call, a view'
 A `Route` changes an endpoint's retry policy, timeouts, deadline, rate or caching in configuration, so the endpoint method stays
 one line:
 
+<!-- docs-test: run -->
 ```python
 from headgate import CallPolicy, Rate, Route, Timeouts
 
@@ -125,6 +132,7 @@ passes wider `limits=httpx2.Limits(...)`.
 `pip install 'headgate[curl]'` adds `headgate.curl.AsyncCurlTransport`, which sends through `curl_cffi` with a
 browser's TLS fingerprint, for hosts behind CDNs that refuse other clients:
 
+<!-- docs-test: run -->
 ```python
 from headgate import HttpOptions
 from headgate.curl import AsyncCurlTransport
@@ -142,6 +150,7 @@ bodies itself, so its responses carry no `Content-Encoding`. The SSRF guard vets
 A middleware sees, and may change, every **attempt** of a request: it runs inside the retry layer, once per send, in
 the order given, the first outermost. It calls `call_next(request)` to continue or returns a response of its own:
 
+<!-- docs-test: run -->
 ```python
 import uuid
 
@@ -169,6 +178,7 @@ A signature that must be fresh on every attempt (a timestamp, a nonce) belongs i
 the retry layer too, after the last middleware and the rate-limit wait, and the class refuses a signer that declares
 nothing it stamps.
 
+<!-- docs-test: run -->
 ```python
 import hashlib
 import hmac
@@ -215,6 +225,7 @@ A middleware reads its call through `headgate.call_view(request)`, a `headgate.e
 2 on the first retry or hedge) and the seconds `remaining` before its deadline, or `None` without one. It returns
 `None` for a request no client call built.
 
+<!-- docs-test: run -->
 ```python
 from headgate import call_view
 
@@ -232,17 +243,20 @@ class TracesFirstReportSends:
 
 ## Per-call options
 
-Every verb, `get`, `post`, `put`, `patch`, `delete` and `head`, has the same signature, `expect=` included: a HEAD read
+Every verb, `get`, `post`, `query`, `put`, `patch`, `delete` and `head`, has the same signature, `expect=` included: a HEAD read
 for its status alone is `head(url, expect=nothing)`. An option left out takes the view's, the route's or the client's;
 `None` turns it off:
 
+<!-- docs-test: check -->
 ```python
+from headgate import RetryPolicy, Timeouts
+
 await client.get(
     url,  # a literal, a t-string (escaped, and the call's route) or an absolute httpx2.URL (sent as it is)
     expect=reader_or_expect,
     retry=RetryPolicy(attempts=5),  # replaces the view's, the route's or the client's; None: send once
     follow_redirects=False,  # a 3xx raises as itself; True follows it
-    cache_ttl=60.0,  # this response's cache lifetime, over HttpCache.ttl; None: no lifetime limit
+    cache_ttl=60.0,  # a cached response's lifetime, over HttpCache.ttl; None: no limit; refused if not cached
     params={"q": "gdp"},  # a list or tuple value repeats the key
     headers={"Accept-Language": "en"},
     timeout=Timeouts(read=5.0),  # the phases it sets replace the view's or the client's
@@ -251,8 +265,9 @@ await client.get(
 )
 ```
 
-plus `body=` for a body (a `Body`: what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`, see
-[request bodies](streaming.md#request-bodies)) and `idempotency_key=` for a write. `stream()` takes the same options
+plus, on a verb with a body, `body=` (a `Body`: what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`,
+see [request bodies](streaming.md#request-bodies)) and `idempotency_key=` for a write, but no `cache_ttl=`: a cache
+stores only GETs and HEADs, so the type checker refuses a lifetime on a POST, PUT, PATCH, DELETE or QUERY. `stream()` takes the same options
 without `expect=`, `cache_ttl=` and `max_response_bytes=`, and `paginate()` takes `pager=` (which reads its pages),
 `max_pages=`, `on_limit=` and the same options but the body, applied to each page; a walk of POSTs takes `payload=`
 ([Walks of POSTs](pagination.md#walks-of-posts)).
@@ -269,16 +284,29 @@ text first, with `json.dumps` or the API's own format.
 so an entry stored with `cache_ttl=None` is served until its storage evicts it, past any `Cache-Control: max-age` and
 even past `no-store`, as an entry of `HttpCache(ttl=None)` is.
 
-The options are typed, so a wrapper can forward them with every key checked. `CallOptions` is the TypedDict of every
-per-call option but the body, which every verb and `paginate()` take, and all that `get()` and `head()` take;
-`RequestOptions` is a body verb's (`CallOptions` plus the body); `headgate.streaming.StreamOptions` is `stream()`'s
-(`RequestOptions` less `cache_ttl` and `max_response_bytes`); and `ViewOptions` is what `with_options()` takes.
-`CallUrl` is what a verb takes as its URL: a literal `str`, a t-string or an absolute `httpx2.URL`. A wrapper typed on
-them forwards the URL and every option at once:
+The options are typed, so a wrapper can forward them with every key checked. `CallOptions` is the TypedDict of a
+read's options, all that `get()`, `head()` and `paginate()` take; `RequestOptions` is a body verb's (`CallOptions`
+less `cache_ttl`, plus the body); `headgate.streaming.StreamOptions` is `stream()`'s (`RequestOptions` less
+`max_response_bytes`); and `ViewOptions` is what `with_options()` takes.
+`CallUrl` is what a verb takes as its URL: a literal `str`, a t-string or an absolute `httpx2.URL`. A computed `str`
+is a type error, so a path built from values is a t-string, `t"items/{item_id}"`, each value escaped into its own
+segment; a pre-built fragment goes in as `{fragment:raw}`, and a nested t-string splices as structure
+(`t"{API_PREFIX}/items"`), see [security](security.md#paths-built-from-values). A wrapper typed on them forwards the
+URL and every option at once:
 
+<!-- docs-test: run -->
 ```python
-async def fetch(self, url: CallUrl, **options: Unpack[CallOptions]) -> Series:
-    return await self._http.get(url, expect=SERIES, **options)
+from typing import Unpack
+
+from headgate import CallOptions, CallUrl, Client
+
+
+class Catalog:
+    def __init__(self, http: Client) -> None:
+        self._http = http
+
+    async def fetch(self, url: CallUrl, **options: Unpack[CallOptions]) -> Series:
+        return await self._http.get(url, expect=SERIES, **options)
 ```
 
 Each is closed, so a misspelled keyword is a type error, and the client refuses one at runtime too, with a `TypeError`
@@ -296,6 +324,7 @@ take the view's defaults is made on the client. It shares everything that makes 
 and transport stack (so the rate budget and the retry budget), the breakers, the auth and its cached token, and the
 observers. Options left out keep the client's; a view of a view layers on the outer view.
 
+<!-- docs-test: check -->
 ```python
 patient = client.with_options(timeout=Timeouts(read=120.0), deadline=600.0)
 report = await patient.get(t"reports/{report_id}", expect=REPORT)

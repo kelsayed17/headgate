@@ -11,6 +11,7 @@ endpoint that takes its search as a request body is walked with POSTs instead, g
 A pager's first argument is the reader of its pages, a `Reader` or an `Expect`, so the type checker knows the page type
 before it reads the functions after it: a lambda is checked against `Page`, and the walk's item type is inferred.
 
+<!-- docs-test: check -->
 ```python
 from headgate.pagination import Cursor
 from headgate.msgspec import reader
@@ -25,9 +26,12 @@ Nothing is fetched until iteration starts, no page is kept once the iteration mo
 nothing more, and iterating again starts again from the first page. A page that leads back to a request already made
 (a cursor or next URL that repeats) raises `ClientError` instead of looping forever. A request is remembered by its URL,
 as written and as sent, its params and, for a POST, the bytes its body is sent as, so two bodies are one page exactly
-when they are sent alike. `Offset`, `PageNumber` and `BodyOffset` build each request from the last, so a server that
-ignores the paging parameter would answer the same page forever: a page with items whose body repeats an earlier
-page's raises `ClientError` too. A walk remembers a fixed-size digest of each, for its last 4096 pages.
+when they are sent alike. A pager that computes each next request by counting (`Offset`, `PageNumber`, `BodyOffset`)
+sends requests that never repeat, so a server that ignores its paging parameter would answer the same page forever: a
+page with items whose body repeats an earlier page's raises `ClientError` too. A pager that reads its next request
+from the page or the response (a cursor, a link) needs no such check, since an identical body gives it an identical
+next request, and its pages may hold identical data. A pager of your own that counts says so with one line,
+`counts_pages: ClassVar[bool] = True`, and gets the same check. A walk remembers a fixed-size digest of each, for its last 4096 pages.
 
 `Paginated` is the class of the walk itself, so a traceback names it: `await client.paginate(...)` raises
 `TypeError: 'Paginated' object can't be awaited`, and a plain `for` that it is not iterable. Iterate with `async for`,
@@ -38,6 +42,7 @@ or `await` its `collect()`.
 `await walk.collect()` returns every item as a list. `collect(max_items=n)` returns at most the first `n`, and stops as
 soon as it has them: the page after the one that filled the list is never requested.
 
+<!-- docs-test: check -->
 ```python
 everything = await client.paginate("items", pager=ITEM_PAGES).collect()
 first_250 = await client.paginate("items", pager=ITEM_PAGES).collect(max_items=250)
@@ -52,6 +57,7 @@ both apply, a `PageLimitError` is raised only if the budget runs out before `max
 A walk ends at its last page, but a server bug, an unordered dataset or a too-broad filter can keep naming new pages
 for as long as you keep asking. `max_pages=` bounds the walk:
 
+<!-- docs-test: check -->
 ```python
 from headgate.errors import PageLimitError
 
@@ -78,7 +84,8 @@ A walk of POSTs takes its body as `payload=` (see [Walks of POSTs](#walks-of-pos
 the value its pager rewrites, not one encoded body. Its `params=` are the first page's query parameters, and a pager's
 parameter is added to them. A pager's reader may be an `Expect`: a page can be a declared answer like any other. Every
 other option applies to each page as it does to one `get` (or one `post`, in a walk of POSTs): `follow_redirects=False`
-makes a page's redirect raise as its 3xx, and `cache_ttl=` is each page's cache lifetime.
+makes a page's redirect raise as its 3xx, and `cache_ttl=` is each page's cache lifetime, which a page with a body,
+a POST no cache stores, refuses with `ValueError`.
 
 ## Strategies
 
@@ -104,19 +111,29 @@ send in `params=`, and the walk steps by `page_size`. The walk starts at the off
 passed that many items, or at an empty page: it does not ask for the empty page past a last page that happened to be
 full, and a server that caps its pages below `page_size` is still walked to the end. A `total` that returns `None` (a count the server gives only as "at least", say) leaves the walk to end at a short page:
 
+<!-- docs-test: run -->
 ```python
+from headgate.msgspec import reader
+from headgate.pagination import Offset
+
+
 def exact_total(page: SearchPage) -> int | None:
     return page.total.value if page.total.relation == "eq" else None
 
 
-SEARCH_PAGES = Offset(reader(SearchPage), items=hits_of, page_size=100, param="from", total=exact_total)
+HIT_PAGES = Offset(reader(SearchPage), items=hits_of, page_size=100, param="from", total=exact_total)
 ```
 
 `PageNumber` asks for page 1, 2, 3 and so on, starting at the page the caller's `params=` name (an int, or a string of
 digits) or at `start` when they name none. `more` reads from a page whether another follows: a page count, a
 `has_more` flag, or a `next` link read only as a yes or no:
 
+<!-- docs-test: run -->
 ```python
+from headgate.msgspec import reader
+from headgate.pagination import PageNumber
+
+
 def more(page: FilingsPage) -> bool:
     return page.next is not None
 
@@ -140,6 +157,7 @@ that is a POST, or a JSON-RPC call whose arguments carry a cursor. `paginate` wa
 is encoded by the pager's `write=` (a flavor's `writer`): the writer belongs to the endpoint, like the reader and the
 pager, so it is built once beside them.
 
+<!-- docs-test: check -->
 ```python
 import msgspec
 
@@ -166,14 +184,22 @@ A body of builtins needs no writer: leave out `write=` and have `put` return a n
 JSON. `payload=None` is no body, so a method with an optional body makes one call: under a `Cursor` or `Offset` the walk
 is then GETs, and the writer goes unused. A body of another type than the pager's, and a body on a GET-only pager
 (`LinkHeader`, `NextUrl`), are type errors. A body pager given no body raises `ValueError` from the `paginate` call
-itself, before anything is fetched, and so does `body=` or `json=`, which a walk does not take, with a `TypeError`.
+itself, before anything is fetched, and so does `body=`, which a walk does not take (its body is `payload=`), with a
+`TypeError`.
 
 `BodyCursor` posts the first body as you wrote it, then `put(body, cursor)` with each cursor `next` reads from a page.
 `BodyOffset` reads the offset the body carries with `offset(body)`, starts there, and posts `put(body, offset)` past
 each full page; as with `Offset`, the page size is yours to put in the body, and a page shorter than `page_size` ends
 the walk:
 
+<!-- docs-test: run -->
 ```python
+import msgspec
+
+from headgate.msgspec import reader
+from headgate.pagination import BodyOffset
+
+
 def offset_of(query: Query) -> int:
     return query.offset
 
@@ -206,6 +232,7 @@ bodies are of type `B`), items first as in `Paginated[I, P]`, with a `read` that
 walk's bodies subclasses `WritingPager[I, P, B]` and gives it a `write` too:
 a pager writes bodies because it says so, not because it has an attribute of that name.
 
+<!-- docs-test: run -->
 ```python
 from dataclasses import dataclass
 
@@ -229,15 +256,16 @@ class HeaderTokens:
 
     def next_page(self, page: list[Item], request: PageRequest, response: httpx2.Response) -> PageRequest | None:
         token = response.headers.get("X-Next-Page-Token")
-        return request.with_param("token", token) if token else None
+        return None if token is None else request.with_param("token", token)
 ```
 
 A pager that encodes its walk's bodies subclasses `WritingPager` instead, which makes its methods abstract, so leaving
 one out is an error when the pager is built rather than a `None` mid-walk. It declares `read` and `write`, which the
 subclass gives: frozen dataclass fields named `read` and `write`, as the strategies have, slotted or not, or
 properties. `paginate` refuses a writing pager without either with a `TypeError`. Here the writer has no default, since this endpoint's
-bodies are not builtins (`SearchPages(read=reader(SearchPage), write=writer(Query))`):
+bodies are not builtins (`SearchPages(read=reader(NumberedPage), write=writer(NumberedQuery))`):
 
+<!-- docs-test: run -->
 ```python
 from dataclasses import dataclass
 from typing import override
@@ -249,25 +277,36 @@ from headgate import Reader, Writer
 from headgate.pagination import PageRequest, WritingPager
 
 
+class NumberedQuery(msgspec.Struct, frozen=True):
+    kind: str
+    page: int = 1
+
+
+class NumberedPage(msgspec.Struct, frozen=True):
+    items: list[Item]
+    number: int
+    total_pages: int
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
-class SearchPages(WritingPager[Item, SearchPage, Query]):
+class SearchPages(WritingPager[Item, NumberedPage, NumberedQuery]):
     """Pages of a search whose body carries the page number."""
 
-    read: Reader[SearchPage]
-    write: Writer[Query]
+    read: Reader[NumberedPage]
+    write: Writer[NumberedQuery]
 
     @override
-    def first(self, request: PageRequest[Query]) -> PageRequest[Query]:
+    def first(self, request: PageRequest[NumberedQuery]) -> PageRequest[NumberedQuery]:
         return request
 
     @override
-    def page_items(self, page: SearchPage) -> list[Item]:
+    def page_items(self, page: NumberedPage) -> list[Item]:
         return page.items
 
     @override
     def next_page(
-        self, page: SearchPage, request: PageRequest[Query], response: httpx2.Response
-    ) -> PageRequest[Query] | None:
+        self, page: NumberedPage, request: PageRequest[NumberedQuery], response: httpx2.Response
+    ) -> PageRequest[NumberedQuery] | None:
         if request.payload is None or page.number >= page.total_pages:
             return None
         return request.with_payload(msgspec.structs.replace(request.payload, page=page.number + 1))

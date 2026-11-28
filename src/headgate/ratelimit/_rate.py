@@ -6,6 +6,8 @@
 import math
 from dataclasses import dataclass
 
+from headgate._core import check_number
+
 __all__ = ["UNPACED", "Adaptive", "Rate"]
 
 
@@ -21,7 +23,9 @@ class Rate:
     period: float
 
     def __post_init__(self) -> None:
-        """Reject a rate that cannot pace: non-positive, NaN or infinite, or one whose interval is infinite."""
+        """Reject a rate that cannot pace: not a number, non-positive, NaN or infinite, or with an infinite interval."""
+        check_number("requests", self.requests, "a number of requests")
+        check_number("period", self.period, "seconds, a number")
         if not math.isfinite(self.requests) or self.requests <= 0:
             msg = f"requests must be > 0 and finite (got {self.requests})"
             raise ValueError(msg)
@@ -83,7 +87,13 @@ class Adaptive:
     min_rate: float = 0.1
 
     def __post_init__(self) -> None:
-        """Refuse a ``decrease`` outside ``(0, 1)``, a ``min_rate`` outside ``(0, 1]``, and a non-positive increase."""
+        """Refuse a value that is not a number, and one out of range.
+
+        A ``decrease`` must lie in ``(0, 1)``, a ``min_rate`` in ``(0, 1]``, and an ``increase`` must be positive.
+        """
+        check_number("decrease", self.decrease, "the factor a pushback multiplies the rate by, a number")
+        check_number("increase", self.increase, "the share of the rate restored per second, a number")
+        check_number("min_rate", self.min_rate, "the least share of the rate, a number")
         if not 0 < self.decrease < 1:
             msg = f"decrease must be > 0 and < 1 (got {self.decrease})"
             raise ValueError(msg)

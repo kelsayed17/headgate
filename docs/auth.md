@@ -3,7 +3,8 @@
 A client's `auth=` is a `headgate.Auth`: an `httpx2.Auth` that declares what it stamps, so the
 [credential guard](security.md#credentials-stay-on-your-origin) keeps it on your origin and the
 [cache](caching.md#partitions) keeps each credential's entries apart and the credential itself out of storage. httpx2
-runs its flow once per call, above the transport stack, so a retry re-sends the request already signed. headgate ships
+runs the flow of a static auth or a `CachedTokenAuth` once per call, above the transport stack, so a retry re-sends the
+request with the credential the flow gave it; a `SigningAuth` signs every attempt afresh, below the retries. headgate ships
 five (the three static ones below, `SigningAuth` and `CachedTokenAuth`); a plain `httpx2.Auth`, `httpx2.BasicAuth` and
 `httpx2.DigestAuth` included, declares nothing, and `Client()` refuses it with a `TypeError`.
 
@@ -14,8 +15,10 @@ Every one merges without overriding: a header or parameter the call sets itself 
 An auth of your own subclasses `headgate.Auth` and declares the headers and query parameters its flow sets, each a
 `frozenset` of names (empty when it sets none of that kind), and the credential they stand for:
 
+<!-- docs-test: run -->
 ```python
-from typing import ClassVar
+from collections.abc import AsyncGenerator
+from typing import ClassVar, override
 
 import httpx2
 
@@ -29,10 +32,12 @@ class KeyAuth(Auth):
     def __init__(self, key: str) -> None:
         self._key = key
 
+    @override
     def credential_identity(self) -> bytes:
         return self._key.encode()
 
-    async def async_auth_flow(self, request):
+    @override
+    async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         request.headers.setdefault("x-api-key", self._key)
         yield request
 ```
@@ -46,8 +51,9 @@ For basic auth, `StaticHeaderAuth({"Authorization": "Basic " + base64.b64encode(
 
 Digest auth is httpx2's own flow with the declarations added, since `httpx2.DigestAuth` declares nothing:
 
+<!-- docs-test: run -->
 ```python
-from typing import ClassVar
+from typing import ClassVar, override
 
 import httpx2
 
@@ -58,6 +64,7 @@ class Digest(Auth, httpx2.DigestAuth):
     credential_headers: ClassVar = frozenset({"authorization"})
     credential_params: ClassVar = frozenset[str]()
 
+    @override
     def credential_identity(self) -> bytes:
         return b"user:pass"  # the credential's secret material, hashed for the cache, never stored
 
@@ -67,6 +74,7 @@ auth = Digest("user", "pass")
 
 ## Static credentials
 
+<!-- docs-test: run -->
 ```python
 from headgate import BearerAuth, QueryParamAuth, StaticHeaderAuth
 
@@ -75,7 +83,9 @@ api_key_header = StaticHeaderAuth({"x-api-key": api_key})
 query_key = QueryParamAuth({"api_key": api_key})
 ```
 
-`StaticHeaderAuth({})` is a no-op, so a builder with no key configured can return one rather than `None`.
+Each stamps something: an empty mapping raises `ValueError`, so a builder with no key configured passes `auth=None`.
+`BearerAuth` refuses an empty or blank token (the unset environment variable) and one that already starts with
+`Bearer `, which it adds itself.
 `QueryParamAuth` registers its parameter names as secret, so they are redacted from every error message and kept out of
 the cache; prefer a header where the provider allows one (see [security](security.md#redaction)).
 
@@ -98,6 +108,7 @@ sets; the base class gives it:
 - **one re-send on a 401**, signed afresh, and never a loop. A 401 to a request sent without its signature (to an
   origin the credential guard withheld it from) is not re-sent.
 
+<!-- docs-test: run -->
 ```python
 import hashlib
 import hmac
@@ -173,6 +184,7 @@ The exchange is the subclass's `mint(request)`: an async generator that yields t
 they travel through the owning client's own stack (its transport, rate budget, retries, error mapping and, in a test,
 `fake_network`), and ends by yielding `Minted(token, lifetime)`:
 
+<!-- docs-test: run -->
 ```python
 from collections.abc import AsyncGenerator
 from typing import override

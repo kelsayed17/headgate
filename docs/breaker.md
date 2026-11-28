@@ -56,6 +56,7 @@ upstream, so that two clients of it cannot each spend a full quota of failures, 
 clients share a `RateBudget` in place of a `Rate`: `breaker=BreakerRegistry(policy)`. A registry keys a breaker by
 origin and builds every breaker with its own policy, so every breaker it holds trips as each client sharing it expects.
 
+<!-- docs-test: run -->
 ```python
 from headgate import BreakerPolicy, CallPolicy
 from headgate.breaker import BreakerRegistry

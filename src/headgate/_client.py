@@ -36,7 +36,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
 from types import TracebackType
-from typing import Final, Literal, Self, Unpack, cast, final, overload
+from typing import Final, Literal, Self, Unpack, cast, final, get_args, overload
 
 import httpx2
 
@@ -74,6 +74,7 @@ from headgate._errors import ClientError, ClientTimeoutError, RateLimitError
 from headgate._failures import (
     SHAPE_ERRORS,
     CallSite,
+    is_reader_misuse,
     is_transient_status,
     loggable_url,
     parse_error,
@@ -100,15 +101,26 @@ from headgate._options import (
     match_route,
     reject_upstream_httpx,
 )
-from headgate._request_body import Json, Lowered, WireValue, Writer, lowered, wire_value
+from headgate._redirects import redirect_method
+from headgate._request_body import (
+    Body,
+    EncodedBody,
+    Lowered,
+    WireValue,
+    Writer,
+    encoded_json,
+    lowered,
+    query_values,
+    wire_value,
+)
 from headgate._responses import Expect, Reader, ResponseCheck, accepts, with_answers
-from headgate._stack import Credentials, build_http_client, build_transport_stack
+from headgate._stack import NETWORK_OVERRIDE, Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
 from headgate._view import KEEP, ROOT_DEFAULTS, VIEW_KEYS, ViewOptions
 from headgate.breaker import BreakerRegistry
 from headgate.breaker._breaker import BreakerOpenError, CircuitBreaker, Transition, Verdict
 from headgate.breaker._registry import NO_BREAKER, Breaker, table_of
-from headgate.cache._policy import HttpCache
+from headgate.cache._policy import HttpCache, caches_request
 from headgate.cache._transport import (
     HAS_BODY,
     MAX_RESPONSE_BYTES,
@@ -145,6 +157,12 @@ __all__ = ["Built", "Client", "Method", "built_with"]
 type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "QUERY"]
 """The HTTP methods a client sends: one verb each, and :meth:`Client.stream`'s ``method``."""
 
+#: The methods :data:`Method` names, in its order: what ``stream(method=)`` takes.
+_METHODS: Final = get_args(Method.__value__)
+
+#: What makes an object a :class:`~headgate.pagination.Pager`, besides its ``read``.
+_PAGER_METHODS: Final = ("first", "page_items", "next_page")
+
 #: How much of a refused or failed streamed response is read, for the ``ClientError``'s body snippet.
 _STREAM_ERROR_HEAD_BYTES = 4096
 
@@ -176,9 +194,21 @@ _NO_BODY_HINTS: Final = {
     for method in ("GET", "HEAD")
 }
 
+#: What a verb with a body says of a body keyword, and of ``cache_ttl=``, which only a read takes.
+_BODY_VERB_HINTS: Final = {
+    **BODY_HINTS,
+    "cache_ttl": "a cache stores only GETs and HEADs, so a verb with a body is never cached: leave cache_ttl= out",
+}
+
 #: What ``paginate`` says of a body keyword: a walk's body is the raw value its pager rewrites, ``payload=``.
 _WALK_BODY = "a walk's body is payload=, the value its pager rewrites for each page"
 _WALK_HINTS = dict.fromkeys(("body", "json", "data", "content", "files", "query"), _WALK_BODY)
+
+#: Why a walk's page with a body refuses ``cache_ttl=``.
+_UNCACHED_PAGE = (
+    "cache_ttl= sets a cached response's lifetime, but a page with a body is a POST, which no cache stores: leave "
+    "cache_ttl= out of a walk of POSTs"
+)
 
 #: Why a walk of POSTs refuses one fixed idempotency key.
 _ONE_KEY_FOR_EVERY_PAGE = "an idempotency key would be sent with every page's body; a walk of POSTs takes none"
@@ -358,6 +388,8 @@ class Client:
         vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client, breakers=registry)
         # Last, so a client refused above leaves the auth's clock unfixed; check_timing refused a clash before.
         hold_timing(auth, self._timing)
+        if (network := NETWORK_OVERRIDE.get()) is not None:
+            network.clients.append(self)
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse a subclass: an SDK holds a ``Client`` and calls it."""
@@ -553,6 +585,9 @@ class Client:
         """
         check_options("stream", options, STREAM_KEYS, BODY_HINTS)
         check_overrides(options)
+        if method not in _METHODS:
+            msg = f"method= takes one of {', '.join(map(repr, _METHODS))} (got {method!r})"
+            raise TypeError(msg)
         if method in _NO_BODY_HINTS and options.get("body") is not None:
             msg = (
                 f"stream() takes no body= for a {method}: a {method} has no body, and the cache does not key one: use "
@@ -575,6 +610,9 @@ class Client:
         stream after the last event a previous :class:`~headgate.streaming.Stream` saw (its ``last_event_id``); wait
         its ``reconnect_after`` first.
         """
+        check_kind("last_event_id", last_event_id, (str, type(None)), "the id of the last event seen, a str, or None")
+        # Before the merge below, which would take a list of pairs as headers.
+        check_overrides(options)
         # Merged case-insensitively, so Last-Event-ID replaces one however headers= spelled it.
         headers = httpx2.Headers(options.get("headers"))
         headers.setdefault("Accept", _EVENT_STREAM)
@@ -635,7 +673,8 @@ class Client:
         :class:`~headgate.pagination.BodyCursor` or :class:`~headgate.pagination.BodyOffset` needs the value, not its
         bytes), ``None`` for none. The pager's ``write`` (a flavor's ``writer``, see
         :class:`~headgate.pagination.WritingPager`) encodes it for each page, since the writer belongs to the endpoint,
-        like the reader and the pager; a pager without one sends the value as JSON, so it must be builtins. A page
+        like the reader and the pager; a pager without one sends the value as JSON, so it must be builtins, which
+        ``paginate`` checks of the first page's. A page
         with a body is then a :meth:`post` in every respect: in particular it is re-sent only when that is safe,
         unless ``retry=`` says otherwise.
 
@@ -649,7 +688,8 @@ class Client:
             and for a first page with a body and an idempotency key (``idempotency_key=``, or the policy's header in
             ``headers=``, a view's or the client's), as one key on pages with different bodies would have the server
             replay the first page's answer. A later page with a body is held to the same rule, and raises from the
-            iteration.
+            iteration. Also for a pager whose ``read`` declares a redirect (301, 302, 303, 307 or 308) on a walk that
+            follows redirects, which would never see one.
         :raises TypeError: for a keyword no call option names, ``body=``, ``json=`` and ``limit=`` included (a walk's
             body is ``payload=``, its page budget ``max_pages=``), for a ``max_pages`` that is not an ``int``, and for
             a pager whose ``read`` is not a :class:`~headgate.Reader` or an ``Expect``, before the pager runs.
@@ -658,6 +698,9 @@ class Client:
         check_overrides(options)
         check_page_budget(max_pages, on_limit)
         spec: Expect[P] = _expectation(_page_reader(pager))
+        if self._follows(options):
+            # Every page's body is builtins or a writer's bytes, so a redirect that sends it again is followed too.
+            _refuse_unseen_redirects(spec, "POST" if payload is not None else "GET", replayable=True)
         call_options = options.copy()
         # How a body is sent is the walk's: the pager's writer encodes every page's, whatever request the pager returns.
         write = _page_writer(pager)
@@ -667,6 +710,8 @@ class Client:
         fixed_key = self._one_key_for_every_page(call_options)
         if first.payload is not None and fixed_key:
             raise ValueError(_ONE_KEY_FOR_EVERY_PAGE)
+        if first.payload is not None:
+            _check_first_post(first.payload, call_options, writes=write is not None)
         answers = {status: _paired(read) for status, read in spec.answers.items()}
         paired = with_answers(Expect(_paired(spec.ok), headers=spec.headers, accept=spec.accept), answers)
 
@@ -690,11 +735,11 @@ class Client:
                 return await self.get(request.url, expect=paired, **page_options)
             if fixed_key:
                 raise ValueError(_ONE_KEY_FOR_EVERY_PAGE)
-            body = Json(request.payload) if write is None else write(request.payload)
-            return await self.post(request.url, expect=paired, body=body, **page_options)
+            body = _walk_json(request.payload) if write is None else write(request.payload)
+            return await self._request(_Call("POST", request.url, _posted(page_options, body)), paired)
 
         walk = PageWalk(fetch, pager, first, source=self._source, max_pages=max_pages, on_limit=on_limit)
-        return Paginated(walk.pages, pager.page_items)
+        return Paginated(walk.pages, walk.items_of)
 
     def _one_key_for_every_page(self, options: CallOptions) -> bool:
         """Return whether every call made with *options* sends one fixed idempotency key.
@@ -724,10 +769,12 @@ class Client:
         if call.method in _NO_BODY_HINTS:
             check_options(call.method.lower(), call.options, CALL_KEYS, _NO_BODY_HINTS[call.method])
         else:
-            check_options(call.method.lower(), call.options, REQUEST_KEYS, BODY_HINTS)
+            check_options(call.method.lower(), call.options, REQUEST_KEYS, _BODY_VERB_HINTS)
         check_overrides(call.options)
         spec: Expect[T] = _expectation(expect)
         prepared = self._prepare(call)
+        if prepared.follow_redirects:
+            _refuse_unseen_redirects(spec, call.method, replayable=prepared.context.get(REPLAYABLE_BODY) is not False)
         cap = call.options.get("max_response_bytes")
         if cap is not None:
             prepared.context.put(MAX_RESPONSE_BYTES, cap)
@@ -815,8 +862,8 @@ class Client:
         A stream's own read timeout may be longer than its deadline, which bounds only opening the stream.
 
         Raises ``ValueError`` for a t-string value no path segment can hold, for a call that would follow redirects
-        on a client with a ``response_check``, for a ``deadline=`` that is not positive and finite and for a ``Json``
-        body JSON cannot carry; ``TypeError`` for a URL that is neither a ``str``, a t-string nor an absolute
+        on a client with a ``response_check`` and for a ``deadline=`` that is not positive and finite; ``TypeError``
+        for a URL that is neither a ``str``, a t-string nor an absolute
         ``httpx2.URL``, and for a ``body=`` that is no ``Body``; and ``ClientError`` for a URL httpx2 cannot parse.
         """
         _check_url(call.url)
@@ -876,9 +923,31 @@ class Client:
         self._stamp_idempotency_key(request, context, options.get("idempotency_key"))
         # The cache transport only setdefaults the client's own TTL, so a per-call TTL stamped here wins.
         if "cache_ttl" in options:
+            self._refuse_uncached_ttl(request, route_policy, path)
             stamp_ttl(request, options["cache_ttl"])
         context.attach(request)
         return _Prepared(request, context, follow)
+
+    def _refuse_uncached_ttl(self, request: httpx2.Request, route: Route | None, path: str) -> None:
+        """Refuse a call's ``cache_ttl=`` when the call is not cached, so the lifetime would be of nothing.
+
+        :raises ValueError: for a client without a cache, a call its *route* keeps out of the cache, and a method or
+            path the cache's rules leave out.
+        """
+        cache = self._policy.cache
+        why = None
+        if cache is None:
+            why = f"the client of {self._source} has no cache: give it CallPolicy(cache=HttpCache(...))"
+        elif route is not None and "cache" in route.options:
+            why = f"its route ({route.fragment}) keeps its paths out of the cache"
+        elif not caches_request(cache, request.method, path):
+            why = (
+                f"the client's cache stores no {request.method} {path}: its methods= and paths= leave it out; name it "
+                "there"
+            )
+        if why is not None:
+            msg = f"cache_ttl= sets a cached response's lifetime, but {why}, or leave cache_ttl= out"
+            raise ValueError(msg)
 
     def _stamp_route_timeout(self, request: httpx2.Request, route: RouteOptions, call: Timeouts | None) -> None:
         """Send *request* with its *route*'s timeout, under the view's and the *call*'s own, over the policy's."""
@@ -1182,6 +1251,9 @@ class Client:
         # Neither error is chained to the reader's: a validation library's error may quote the input it refused (a
         # token, say), which a traceback or logger.exception would repeat.
         except SHAPE_ERRORS as exc:
+            # The reader's own hook broke its contract: a TypeError, but the caller's, not the body's.
+            if is_reader_misuse(exc):
+                raise
             if resp.is_success:
                 raise parse_error(exc, resp, site) from None
             raise status_error(resp, site) from None
@@ -1323,7 +1395,7 @@ def _query_pairs(params: Mapping[str, object]) -> list[tuple[str, WireValue]]:
         tuple inside another among them, before anything is sent.
     """
     pairs: list[tuple[str, WireValue]] = []
-    for key, value in params.items():
+    for key, value in query_values(params).items():
         items = value if isinstance(value, list | tuple) else (value,)
         pairs.extend((key, wire_value("params=", key, item)) for item in items)
     return pairs
@@ -1397,13 +1469,48 @@ def _cut_off_on_the_wire(context: CallContext) -> bool:
 
 
 def _checked(check: ResponseCheck | None, resp: httpx2.Response) -> RefusedError | None:
-    """Run the client's *check* on *resp*, treating a ``RefusedError`` it raises like one it returns."""
+    """Run the client's *check* on *resp*, treating a ``RefusedError`` it raises like one it returns.
+
+    :raises TypeError: for a check that returns anything but a ``RefusedError`` or ``None``.
+    """
     if check is None:
         return None
     try:
-        return check(resp)
-    except RefusedError as refused:
-        return refused
+        refused: object = check(resp)
+    except RefusedError as raised:
+        return raised
+    if not isinstance(refused, RefusedError | None):
+        msg = f"response_check= returns a RefusedError, or None to accept the response (got {named(refused)})"
+        raise TypeError(msg)
+    return refused
+
+
+#: The statuses a client follows as redirects, so an ``Expect`` on a call that follows them never reads one.
+_FOLLOWED: Final = frozenset({301, 302, 303, 307, 308})
+
+
+def _refuse_unseen_redirects[T](spec: Expect[T], method: str, *, replayable: bool) -> None:
+    """Refuse *spec*, read by a *method* call that follows redirects, when it declares a redirect that call never sees.
+
+    Every redirect is followed, but one that would send a one-shot body again (a 307 or 308, say, when the body is
+    not *replayable*), which reaches the call as its answer instead (see
+    :func:`~headgate._redirects.refuse_unreplayable_redirect`).
+
+    :raises ValueError: naming the statuses, and saying to pass ``follow_redirects=False``.
+    """
+    followed = (
+        status
+        for status in spec.answers
+        if status in _FOLLOWED and (replayable or redirect_method(method, status) != method)
+    )
+    if unseen := sorted(followed):
+        statuses = ", ".join(map(str, unseen))
+        verb = "is" if len(unseen) == 1 else "are"
+        msg = (
+            f"{statuses} {verb} declared on this Expect, but the call follows redirects, so it never sees one: pass "
+            "follow_redirects=False to read it"
+        )
+        raise ValueError(msg)
 
 
 def _expectation[T](expect: Reader[T] | Expect[T]) -> Expect[T]:
@@ -1418,9 +1525,16 @@ def _expectation[T](expect: Reader[T] | Expect[T]) -> Expect[T]:
 def _page_reader[I, P, B](pager: Pager[I, P, B]) -> Reader[P] | Expect[P]:
     """Return the reader *pager* reads its pages with, its ``read``.
 
-    :raises TypeError: for a pager with no ``read``, or a ``read`` that is neither a :class:`~headgate.Reader` nor an
+    :raises TypeError: for a pager without callable ``first``, ``page_items`` and ``next_page``, naming the first it
+        lacks; and for one with no ``read``, or a ``read`` that is neither a :class:`~headgate.Reader` nor an
         ``Expect``, naming what it got.
     """
+    if missing := next((name for name in _PAGER_METHODS if not callable(getattr(pager, name, None))), None):
+        msg = (
+            f"pager= takes a Pager, such as Cursor(reader(Page), items=..., next=..., param=...) (got "
+            f"{type(pager).__name__}, which has no {missing})"
+        )
+        raise TypeError(msg)
     read: object = getattr(pager, "read", None)
     if not isinstance(read, Reader | Expect):
         got = "no read" if read is None else f"a read of {named(read)}"
@@ -1447,6 +1561,48 @@ def _page_writer[I, P, B](pager: Pager[I, P, B]) -> Writer[B] | None:
         )
         raise TypeError(msg)
     return pager.write
+
+
+def _check_first_post(payload: object, options: CallOptions, *, writes: bool) -> None:
+    """Refuse, where a walk of POSTs is made, what its first page would raise.
+
+    That is a *payload* JSON cannot encode when the pager *writes* none, and a ``cache_ttl``.
+
+    :raises TypeError: for a payload that is not builtins (see :func:`_walk_json`).
+    :raises ValueError: for a ``cache_ttl``, since no cache stores a POST.
+    """
+    if not writes:
+        _walk_json(payload)
+    if "cache_ttl" in options:
+        raise ValueError(_UNCACHED_PAGE)
+
+
+def _posted(options: CallOptions, body: Body) -> RequestOptions:
+    """Return a walk's *options* for a page sent as a POST of *body*: a read's options, less ``cache_ttl``.
+
+    :raises ValueError: for a ``cache_ttl``, since no cache stores a POST.
+    """
+    if "cache_ttl" in options:
+        raise ValueError(_UNCACHED_PAGE)
+    posted: dict[str, object] = {**options, "body": body}
+    return cast("RequestOptions", posted)
+
+
+def _walk_json(payload: object) -> EncodedBody:
+    """Return a walk's *payload*, which its pager has no writer for, as JSON, refused in a walk's words.
+
+    :raises TypeError: for a payload that is not builtins: what a ``Json`` says to write names ``body=``, which a walk
+        does not take.
+    :raises ValueError: for one holding ``NaN`` or an infinity.
+    """
+    return EncodedBody(
+        encoded_json(
+            payload,
+            subject="paginate()'s payload=",
+            takes="paginate() sends payload= as JSON, since its pager has no write, so it takes builtins",
+            instead="write payload=to_builtins(value), or give the pager write=writer(Type)",
+        )
+    )
 
 
 def _paired[T](read: Reader[T]) -> Reader[tuple[T, httpx2.Response]]:

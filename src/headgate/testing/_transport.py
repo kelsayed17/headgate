@@ -3,17 +3,32 @@
 
 """A network transport for tests: a route table of canned replies, and a log of every request it was sent."""
 
+import inspect
+import ipaddress
 from collections.abc import Awaitable, Callable, Generator
 from contextlib import contextmanager
-from typing import Self, cast, override
+from typing import Final, Self, cast, final, override
 
 import httpx2
 
-from headgate._stack import NETWORK_OVERRIDE
+from headgate._client import Client
+from headgate._core import check_kind
+from headgate._stack import NETWORK_OVERRIDE, NetworkOverride
 from headgate._url import sanitize_url
 from headgate.testing._faults import Respond, response_parts
 
-__all__ = ["FakeTransport", "Reply", "UnmatchedRequestError", "fake_network"]
+__all__ = ["FakeNetwork", "FakeTransport", "Reply", "UnmatchedRequestError", "fake_network"]
+
+#: The address every name resolves to inside a fake network, unless the test resolved it: globally routable, so the
+#: SSRF guard admits it, and never connected to, since the fake network answers every request.
+FAKE_ADDRESS: Final = "1.2.3.4"
+
+#: What ``localhost`` and every name under it resolve to inside a fake network, as RFC 6761 has resolvers answer them:
+#: loopback, which the SSRF guard refuses as it does in production.
+LOOPBACK_ADDRESSES: Final = ("127.0.0.1", "::1")
+
+#: What :meth:`FakeTransport.resolve` takes as an address.
+_ADDRESSES_WANTED: Final = "IP addresses as text, such as '10.0.0.1'"
 
 type Reply = Respond | httpx2.Response | int | Callable[[httpx2.Request], httpx2.Response | Awaitable[httpx2.Response]]
 """What a route answers with: a :class:`Respond`, a response, a bare status, or a function of the request."""
@@ -83,14 +98,37 @@ class FakeTransport(httpx2.AsyncBaseTransport):
     """
 
     def __init__(self) -> None:
-        """Start with no routes and an empty log."""
+        """Start with no routes, no names resolved and an empty log."""
         self._routes: dict[tuple[str, str], _Route] = {}
+        self._answers: dict[str, tuple[str, ...]] = {}
         self._calls: list[httpx2.Request] = []
         self.closed = False
 
     def reply(self, method: str, path: str, *replies: Reply) -> Self:
         """Answer *method* requests to *path* with *replies*, replacing any route there; return the transport."""
         self._routes[method.upper(), path] = _Route(replies)
+        return self
+
+    def resolve(self, host: str, *addresses: str) -> Self:
+        """Resolve *host* to *addresses* inside :func:`fake_network`, for a client's SSRF guard; return the transport.
+
+        Every other name resolves to one public address, so a guarded client needs no DNS, but ``localhost`` and every
+        name under it, which resolve to loopback (RFC 6761). A private address among *addresses* is refused by the
+        guard, as on the real network, and no addresses at all is a name that does not resolve. The host is matched
+        case-insensitively.
+
+        :raises TypeError: for a *host* or an address that is not a ``str``.
+        :raises ValueError: for an address that is not an IP address, naming it.
+        """
+        check_kind("host", host, str, "a host name, a str")
+        for address in addresses:
+            check_kind("addresses", address, str, _ADDRESSES_WANTED)
+            try:
+                ipaddress.ip_address(address)
+            except ValueError:
+                msg = f"resolve() takes {_ADDRESSES_WANTED} (got {address!r})"
+                raise ValueError(msg) from None
+        self._answers[host.lower()] = addresses
         return self
 
     @property
@@ -132,18 +170,95 @@ class FakeTransport(httpx2.AsyncBaseTransport):
         self.closed = True
 
 
+@final
+class FakeNetwork[T: httpx2.AsyncBaseTransport]:
+    """What :func:`fake_network` yields: the transport it puts clients on, and the clients built in its block.
+
+    ``with fake_network(fake) as net:`` then ``budget_for(net.clients[0])``, so a test reads back what an SDK built
+    without reaching into the SDK's private attribute.
+    """
+
+    __slots__ = ("_override", "_transport")
+
+    #: What ``inspect`` and ``help()`` show it takes: nothing, since ``fake_network`` builds it.
+    __signature__ = inspect.Signature()
+
+    _transport: T
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        """Refuse to build one, whatever it is given: :func:`fake_network` does, for the block it yields it to.
+
+        :raises TypeError: always.
+        """
+        del args, kwargs
+        msg = "FakeNetwork is yielded by fake_network(transport): write with fake_network(fake) as net"
+        raise TypeError(msg)
+
+    @property
+    def transport(self) -> T:
+        """The transport every client built in the block sends on."""
+        return self._transport
+
+    @property
+    def clients(self) -> tuple[Client, ...]:
+        """The clients whose construction finished in the block, in order; a view of one is not another."""
+        return cast("tuple[Client, ...]", tuple(self._override.clients))
+
+    @override
+    def __repr__(self) -> str:
+        return f"FakeNetwork({type(self._transport).__name__}, clients={len(self._override.clients)})"
+
+
+def _resolver_of(transport: httpx2.AsyncBaseTransport) -> Callable[[str, int], Awaitable[tuple[str, ...]]]:
+    """Return the resolver of a fake network on *transport*.
+
+    A name a :class:`FakeTransport` was told (:meth:`FakeTransport.resolve`) gets its answer; ``localhost`` and the
+    names under it get :data:`LOOPBACK_ADDRESSES`; every other name gets :data:`FAKE_ADDRESS`. Any other transport
+    has no answers of its own.
+    """
+    # Read from the instance itself, as any transport may be given: one that is not a FakeTransport has none.
+    answers = cast(
+        "dict[str, tuple[str, ...]]",
+        vars(transport).get("_answers", {}) if isinstance(transport, FakeTransport) else {},
+    )
+
+    async def resolve(host: str, port: int) -> tuple[str, ...]:
+        del port
+        name = host.lower()
+        if name in answers:
+            return answers[name]
+        if name == "localhost" or name.endswith(".localhost"):
+            return LOOPBACK_ADDRESSES
+        return (FAKE_ADDRESS,)
+
+    return resolve
+
+
 @contextmanager
-def fake_network[T: httpx2.AsyncBaseTransport](transport: T) -> Generator[T]:
-    """Send every client built in the block on *transport*, in place of the network, and yield it.
+def fake_network[T: httpx2.AsyncBaseTransport](transport: T) -> Generator[FakeNetwork[T]]:
+    """Send every client built in the block on *transport*, in place of the network, and yield a :class:`FakeNetwork`.
 
     It replaces even a transport the client was given itself (``HttpOptions(transport=...)``), so an SDK that fixes
     its own transport in its constructor can still be tested over a :class:`FakeTransport`. Only the network is
-    replaced: the rate budget, the cache, the retries, the breaker and the SSRF guard above it are the client's own. A
-    client is read when it is built, so build the SDK inside the block; the block need not stay open while it is used.
-    The requests a :class:`~headgate.CachedTokenAuth` mints with travel the client's stack, so they reach the fake too.
+    replaced: the rate budget, the cache, the retries, the breaker and the SSRF guard above it are the client's own.
+    The guard resolves names inside the fake network, in place of the client's resolver, so a guarded client needs no
+    DNS: every name resolves to one public address, ``localhost`` and the names under it to loopback, unless
+    :meth:`FakeTransport.resolve` said otherwise. It replaces an SDK's own ``SecurityOptions(resolver=)`` too, so
+    test a resolver of your own directly. A client is
+    read when it is built, so build the SDK inside the block; the block need not stay open while it is used. The
+    requests a :class:`~headgate.CachedTokenAuth` mints with travel the client's stack, so they reach the fake too.
+
+    ``with fake_network(fake) as net:`` gives the handle: ``net.transport`` is *transport*, and ``net.clients`` the
+    clients built in the block, for :func:`~headgate.testing.budget_for`, :func:`~headgate.testing.cache_of` and
+    :func:`~headgate.testing.breakers_of`.
     """
-    token = NETWORK_OVERRIDE.set(transport)
+    override = NetworkOverride(transport, _resolver_of(transport))
+    # Built past its constructor, which refuses everyone else: the handle is fake_network's to give.
+    network = cast("FakeNetwork[T]", object.__new__(FakeNetwork))
+    object.__setattr__(network, "_transport", transport)
+    object.__setattr__(network, "_override", override)
+    token = NETWORK_OVERRIDE.set(override)
     try:
-        yield transport
+        yield network
     finally:
         NETWORK_OVERRIDE.reset(token)

@@ -114,7 +114,7 @@ three short methods, shown in the quickstart below.
 - 📄 **Pagination** (instead of a loop per endpoint): [`paginate()`](https://kelsayed17.github.io/headgate/pagination/),
   cursors, offsets, `Link` headers, next URLs.
 - 📡 **Server-sent events** (instead of httpx-sse):
-  [`stream().aiter_events()`](https://kelsayed17.github.io/headgate/streaming/#server-sent-events), with resume.
+  [`events()`](https://kelsayed17.github.io/headgate/streaming/#server-sent-events), with resume.
 - 🧪 **Test doubles** (instead of respx or pytest-httpx):
   [`headgate.testing`](https://kelsayed17.github.io/headgate/testing/), a fake network and a clock that makes waits
   instant.
@@ -160,7 +160,8 @@ an extra, or bring your own (see [codecs](https://kelsayed17.github.io/headgate/
 
 - **Why 3.14:** endpoint paths are [template strings](https://peps.python.org/pep-0750/) (`t"orders/{order_id}"`), so
   each value is escaped into its own path segment by default: `BTC/USD` becomes `BTC%2FUSD` instead of a new path.
-  Template strings exist only from Python 3.14.
+  A computed `str` is a type error; a pre-built fragment goes in as `{fragment:raw}`, and a nested t-string splices
+  as structure (`t"{API_PREFIX}/orders"`). Template strings exist only from Python 3.14.
 - **Why httpx2:** it is pydantic's maintained fork of httpx, and headgate is built and tested on it alone. Its API is
   httpx's, so moving a client over is mostly `import httpx2` where you had `import httpx`. Upstream `httpx` is not
   supported: passing one of its objects raises a `TypeError` naming the mistake. See
@@ -389,7 +390,8 @@ Every option, its validation and the precedence of call, view, route and policy:
 ## Per-call options
 
 Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`, `query`) takes the URL, `expect=` (on `head`, `nothing` unless
-given), and optionally `retry=` (a `RetryPolicy`, or `None` to send once), `follow_redirects=`, `cache_ttl=`,
+given), and optionally `retry=` (a `RetryPolicy`, or `None` to send once), `follow_redirects=`, `cache_ttl=` (on a
+`get` or `head`, the only verbs a cache stores),
 `timeout=`, `deadline=`, `idempotency_key=`, `max_response_bytes=`, and the request options `params=`, `headers=` and
 `body=` (what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`); an option left out takes the view's or
 the client's.
@@ -415,8 +417,8 @@ ClientError                      also: an unparsable URL, a pagination loop
 └── ClientConfigurationError     our own setup is wrong
 ```
 
-Every error carries `method`, `url` (credentials redacted), `request_id`, `attempts`, `retryable`, `retry_after` and a
-note per attempt (`attempt 2/3: 503 Service Unavailable (Retry-After 2.0s) after 0.41s`). An `UpstreamStatusError`
+Every error carries `source` (the client's host), `method`, `url` (credentials redacted), `request_id`, `attempts`,
+`retryable`, `retry_after`, `sent` (whether any byte can have reached the network) and a note per attempt (`attempt 2/3: 503 Service Unavailable (Retry-After 2.0s) after 0.41s`). An `UpstreamStatusError`
 adds `status_code`, the provider's `code` and its RFC 9457 `problem`. All of them pickle.
 
 ```python

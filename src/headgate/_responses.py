@@ -32,7 +32,8 @@ from typing import Final, NoReturn, cast, final, override
 
 import httpx2
 
-from headgate._core import check_kind
+from headgate._core import check_headers, check_int, check_kind, named
+from headgate._failures import reader_misuse
 from headgate._sse import EventParser, text_decoder
 from headgate.errors import DecodeError, RefusedError
 
@@ -75,8 +76,13 @@ class Reader[T]:
     def __init__(self, read: Callable[[httpx2.Response], T], /, *, name: str | None = None) -> None:
         """Wrap *read*, the function that turns a response into a value, under *name* or *read*'s own.
 
-        :raises TypeError: for a *read* that cannot be called, here rather than at the first response.
+        :raises TypeError: for a *read* that cannot be called, and for a class, here rather than at the first
+            response: ``Reader(str)`` would return the response's ``repr``.
         """
+        if isinstance(read, type):
+            fallback = f"for a class built from a response, write Reader(lambda r: {read.__name__}(r))"
+            msg = f"Reader takes a function of the response (got the class {read.__name__}): "
+            raise TypeError(msg + _READERS_FOR.get(read, fallback))
         if not callable(read):
             # Anything not callable is an instance, so its type's name is what _kinds would print.
             msg = f"Reader takes a function of the response (got {type(read).__name__})"
@@ -93,6 +99,15 @@ class Reader[T]:
     def __repr__(self) -> str:
         """Return ``Reader(<name>)``."""
         return f"Reader({self._name})"
+
+
+#: The reader each builtin class someone wraps in ``Reader`` stands for.
+_READERS_FOR: Final[Mapping[type, str]] = {
+    str: "for the body as text, use as_text",
+    bytes: "for the body as bytes, use as_bytes",
+    dict: "for the body as JSON, use as_json",
+    list: "for the body as JSON, use as_json",
+}
 
 
 def _name_of(read: object) -> str:
@@ -179,6 +194,7 @@ class Expect[T]:
         :raises ValueError: for a malformed *accept*.
         """
         check_kind("ok", ok, Reader, "a Reader")
+        check_headers("headers", headers)
         if accept is not None:
             _media_ranges(accept)
         self._ok = ok
@@ -212,11 +228,13 @@ class Expect[T]:
         No ranges and no ``default``: OpenAPI allows ``4XX``, but a range is a claim about statuses nobody documented.
         This ``Expect`` is left as it was.
 
-        :raises TypeError: for a *read* that is not a :class:`Reader`.
+        :raises TypeError: for a *status* that is not an ``int`` (``"404"`` and ``True`` included), and a *read* that is
+            not a :class:`Reader`.
         :raises ValueError: for a status outside 100-599; for 401, 407, 429 or any 5xx, which mean we could not ask
             (the credentials are ours, and the transport owns 429 and 5xx through retry and the breaker); or for a
             status already declared. It is raised where the ``Expect`` is built, usually at import.
         """
+        check_int("status", status, "an HTTP status, an int such as HTTPStatus.NOT_FOUND")
         check_kind("read", read, Reader, "a Reader")
         _refuse_unclaimable(status)
         if status in self._answers:
@@ -344,10 +362,11 @@ def body_reader[T](
     empty array in the body's format. Left ``None``, an empty body is handed over as it is.
 
     ``refuse`` runs on the decoded value and returns a :class:`RefusedError` for a refusal written inside a 2xx
-    body, or ``None``; the reader raises what it returns. Type a check over a small structural ``Protocol`` naming only
-    the envelope fields it reads. Have it refuse only codes every consumer of the endpoint would read as failure (auth,
-    quota, rate limit, server, a malformed request, any undocumented code) and leave a code about the subject (an
-    unknown instrument, a rejected order) in the value for the caller.
+    body, or ``None``; the reader raises what it returns. Anything else it returns is a ``TypeError`` naming
+    ``refuse=``, raised as it is, never read as a body of the wrong shape. Type a check over a small structural
+    ``Protocol`` naming only the envelope fields it reads. Have it refuse only codes every consumer of the endpoint
+    would read as failure (auth, quota, rate limit, server, a malformed request, any undocumented code) and leave a
+    code about the subject (an unknown instrument, a rejected order) in the value for the caller.
     """
     return _body_reader(decode, empty=empty, refuse=refuse, name=_name_of(decode))
 
@@ -368,6 +387,9 @@ def _body_reader[T](
             content = empty
         value = decode(content)
         if refuse is not None and (refused := refuse(value)) is not None:
+            if not isinstance(refused, RefusedError):
+                msg = f"refuse= returns a RefusedError, or None to accept the value (got {named(refused)})"
+                raise reader_misuse(msg)
             raise refused
         return value
 

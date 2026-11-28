@@ -313,7 +313,18 @@ class RefusedError(Exception):
     def __init__(
         self, message: str, *, code: str | None = None, kind: type[UpstreamStatusError] = UpstreamStatusError
     ) -> None:
-        """Record the refusal's *message*, the provider's *code*, and the ``ClientError`` *kind* it becomes."""
+        """Record the refusal's *message*, the provider's *code*, and the ``ClientError`` *kind* it becomes.
+
+        :raises TypeError: for a *kind* that is not an :class:`UpstreamStatusError` subclass, which the client could
+            not raise the refusal as: checked here, not when the refusal is raised.
+        """
+        if not (isinstance(kind, type) and issubclass(kind, UpstreamStatusError)):
+            got = f"the class {kind.__name__}" if isinstance(kind, type) else type(kind).__name__
+            msg = (
+                "kind= takes an UpstreamStatusError subclass, such as AuthError or RateLimitError, that the refusal is "
+                f"raised as (got {got})"
+            )
+            raise TypeError(msg)
         super().__init__(message)
         self._message = message
         self._code = code

@@ -51,11 +51,13 @@ __all__ = [
     "SHAPE_ERRORS",
     "CallSite",
     "body_snippet",
+    "is_reader_misuse",
     "is_transient_status",
     "loggable_url",
     "mint_error",
     "parse_error",
     "problem_of",
+    "reader_misuse",
     "refusal_error",
     "shorten",
     "status_error",
@@ -93,6 +95,28 @@ _AUTH_STATUSES = frozenset({httpx2.codes.UNAUTHORIZED, httpx2.codes.FORBIDDEN})
 #: index past the end, or indexing the wrong container; or nesting too deep to parse, which ``json.loads`` raises as
 #: ``RecursionError``).
 SHAPE_ERRORS: tuple[type[Exception], ...] = (DecodeError, ValueError, LookupError, TypeError, RecursionError)
+
+
+#: The mark on a ``TypeError`` a reader raised for its own hook's broken contract (see :func:`reader_misuse`).
+_READER_MISUSE: Final = "headgate.reader_misuse"
+
+
+def reader_misuse(message: str) -> TypeError:
+    """Return a ``TypeError`` for a reader's own hook that broke its contract: the caller's bug, never the body's.
+
+    A ``TypeError`` is otherwise a shape error (a decode function's ``Model(**data)`` raises one for a body of another
+    shape), so it is marked, and the client and the token mint raise a marked one as it is (:func:`is_reader_misuse`).
+    The class is ``TypeError`` itself, so no private name reaches a traceback.
+    """
+    error = TypeError(message)
+    vars(error)[_READER_MISUSE] = True
+    return error
+
+
+def is_reader_misuse(error: BaseException) -> bool:
+    """Return whether *error* is a reader's misuse, from :func:`reader_misuse`."""
+    return vars(error).get(_READER_MISUSE) is True
+
 
 #: What every reader says of a body nested too deeply for its parser, whichever parser it is and whatever its format: a
 #: ``RecursionError``'s own message reports a stack size that varies by machine.
@@ -441,7 +465,7 @@ def mint_error(exc: Exception, *, source: str) -> Exception:
     if isinstance(exc, httpx2.HTTPError | OSError):
         method, log_url = _request_line(exc)
         return transport_error(exc, CallSite(source, method, f"{log_url} (token mint)"))
-    if isinstance(exc, SHAPE_ERRORS + _MISREAD_RESPONSE_ERRORS):
+    if isinstance(exc, SHAPE_ERRORS + _MISREAD_RESPONSE_ERRORS) and not is_reader_misuse(exc):
         too_deep = isinstance(exc, RecursionError)
         detail = NESTED_TOO_DEEPLY if too_deep else shorten(redact_secrets(str(exc))) or type(exc).__name__
         return ResponseParseError(f"unreadable token response: {detail}", source=source)

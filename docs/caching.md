@@ -4,6 +4,7 @@ A client caches when its policy says so: `CallPolicy(cache=HttpCache(...))`. The
 [hishel](https://hishel.com)'s, made safe to share between credentials and to fail. It sits below the retry layer and
 above the rate budget, so a hit returns before any retry and spends no rate turn.
 
+<!-- docs-test: run -->
 ```python
 from hishel import AsyncSqliteStorage
 
@@ -60,7 +61,9 @@ statuses=frozenset({200}))`:
 - **A `stream()` is never buffered.** It is served from a hit, but a miss goes up as it arrives and is not stored. A
   POST, a request with a `Range`, or any request the rules do not name, goes to the network unread and unshared.
 - **`ttl`** is the client's default lifetime in seconds; a call's `cache_ttl=` overrides it. Either must be a positive
-  finite number: anything else raises before the call is sent.
+  finite number: anything else raises before the call is sent, and so does a `cache_ttl=` on a call that is not
+  cached, which would set the lifetime of nothing: on a client without a cache, under a route with `cache=None`, or
+  for a method or path the cache's rules leave out (a POST, say).
 - **TTL, not revalidation.** An entry is served until its lifetime ends and is never revalidated with the origin. For
   revalidation, use [conditional reads](#conditional-reads).
 - The body is held up to the call's `max_response_bytes=`, else `HttpOptions.max_response_bytes`, and a body past it
@@ -151,12 +154,14 @@ The caller-driven alternative to a cache: keep the `Validator` (`ETag`, `Last-Mo
 back. The call sends `If-None-Match` / `If-Modified-Since` and returns `Fresh(value, validator)` for a new
 representation, or `NotModified(validator)` for a 304. headgate stores nothing; the representation is yours.
 
+<!-- docs-test: run -->
 ```python
+from headgate import Client
 from headgate.cache import Fresh, NotModified, Validator, conditional
 from headgate.msgspec import reader
 
 
-async def refresh(client: CatalogClient, held: Series, validator: Validator | None) -> tuple[Series, Validator]:
+async def refresh(client: Client, held: Series, validator: Validator | None) -> tuple[Series, Validator]:
     result = await client.get("series/GDP", expect=conditional(reader(Series), validator=validator))
     match result:
         case Fresh(value=series, validator=new):

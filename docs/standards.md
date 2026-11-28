@@ -86,6 +86,7 @@ RFCs. headgate reads them so you do not have to, and follows them by default.
 
 | Standard | What it says | What headgate does |
 | --- | --- | --- |
+| :lucide-house: [RFC 6761](https://www.rfc-editor.org/rfc/rfc6761#section-6.3) Special-use names | `localhost` and every name under it are loopback | inside a test's [fake network](testing.md#names-inside-the-fake-network) they resolve to `127.0.0.1` and `::1`, so the SSRF guard refuses them as in production |
 | :lucide-network: [RFC 6052](https://www.rfc-editor.org/rfc/rfc6052) NAT64 | `64:ff9b::/96` carries an IPv4 address inside IPv6 | the [SSRF guard](security.md#the-ssrf-guard) judges such an address by the IPv4 address it reaches |
 | :lucide-ban: [RFC 3879](https://www.rfc-editor.org/rfc/rfc3879) IPv6 site-local | `fec0::/10` is deprecated, though some networks still route it | the [SSRF guard](security.md#the-ssrf-guard) refuses it, although Python's `ipaddress` counts it as global |
 | :lucide-code: [PEP 750](https://peps.python.org/pep-0750/) Template strings | Python 3.14's `t"..."` keeps values apart from the template | each value in a [path](security.md#paths-built-from-values) is percent-encoded as exactly one segment |

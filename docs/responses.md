@@ -29,6 +29,7 @@ client's name.
 `body_reader` turns a hand-written bytes decoder, the kind its tests feed fixture files, into a reader. Name each
 reader once, at module level, and pass a fixed argument with `functools.partial`:
 
+<!-- docs-test: run -->
 ```python
 from functools import partial
 from typing import Final
@@ -54,6 +55,7 @@ such a call as a statement.
 
 A reader of your own wraps its function in `Reader`, or puts `@Reader` over the `def`:
 
+<!-- docs-test: run -->
 ```python
 import httpx2
 
@@ -71,12 +73,16 @@ repr(location)  # 'Reader(location)'
 ```
 
 A reader's `repr` names its function, or the `name=` it was given. `Reader` raises `TypeError` for something that
-cannot be called, where it is written rather than at the first response. `expect=`, `Expect` and `conditional` take
+cannot be called, and for a class, where it is written rather than at the first response: `Reader(str)` would return
+the response's `repr`. Its message names the reader the class stands for: `as_text` for `str`, `as_bytes` for
+`bytes`, `as_json` for `dict` and `list`, and a function, `Reader(lambda r: Cls(r))`, for a class built from a
+response. `expect=`, `Expect` and `conditional` take
 only a `Reader` (or, for `expect=`, an `Expect`) and raise `TypeError` for anything else, such as a model class (`expect=Order`
 where `expect=reader(Order)` was meant) or a bare function, which are callable too.
 
 ## Declared non-2xx answers
 
+<!-- docs-test: run -->
 ```python
 from http import HTTPStatus
 
@@ -108,7 +114,8 @@ A declared non-2xx whose body its reader cannot read falls through to the ladder
 covers the body shape it names, so a business 403 you declared never swallows a real permission 403.
 
 A redirect the call does not follow (`follow_redirects=False`) is a 3xx like any other: declare it, for example
-`.on(HTTPStatus.FOUND, read_location)`, or it raises.
+`.on(HTTPStatus.FOUND, read_location)`, or it raises. A call that follows redirects never sees a 301, 302, 303, 307 or
+308, so declaring one there raises `ValueError` before anything is sent, saying to pass `follow_redirects=False`.
 
 ## Content negotiation
 
@@ -129,6 +136,7 @@ client turns it into the `ClientError` its `kind` names (`UpstreamStatusError` b
 `RateLimitError`), with the status the wire sent and the provider's `code`. The simplest way is a reader's `refuse`,
 which runs on the decoded value and returns a refusal or `None`:
 
+<!-- docs-test: run -->
 ```python
 import msgspec
 
@@ -155,13 +163,15 @@ ROWS = reader(Envelope, refuse=refusal_in)
 Refuse only codes every consumer of the endpoint would read as failure (credentials, quota, a malformed request) and
 leave a code about the subject (an unknown instrument, a rejected order) in the value for the caller. A refusal raised
 inside a 200 bypasses the retry backoff and the breaker, because a 200 looks healthy to both, so retrying it is the
-caller's decision.
+caller's decision. A `refuse` that returns anything but a `RefusedError` or `None` raises `TypeError` naming `refuse=`,
+the caller's bug rather than a body of the wrong shape, and `RefusedError(kind=)` raises `TypeError` where it is built
+for a class that is not an `UpstreamStatusError`.
 
 ## A check of the response
 
 A refusal written in the status line or headers rather than the body (a key-error redirect to a sign-in page) belongs
 to a host-wide `HttpOptions(response_check=...)`: a function of the response that returns a `RefusedError` (from
-`headgate.errors`) or `None` (its type is `ResponseCheck`). It sees only the final response, so it requires
+`headgate.errors`) or `None` (its type is `ResponseCheck`; anything else raises `TypeError` naming `response_check=`). It sees only the final response, so it requires
 `follow_redirects=False`, and a call that asks to follow redirects on such a client raises `ValueError`.
 
 ## Codecs

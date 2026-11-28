@@ -22,7 +22,16 @@ from typing import TYPE_CHECKING, Final, Self, final, override
 
 import httpx2
 
-from headgate._core import Slot, check_collection, check_kind, check_names, current_timing, refuse_subclass
+from headgate._core import (
+    Slot,
+    check_int,
+    check_kind,
+    check_names,
+    check_number,
+    check_statuses,
+    current_timing,
+    refuse_subclass,
+)
 from headgate.retry._budget import RetryLedger
 
 if TYPE_CHECKING:
@@ -83,6 +92,9 @@ UNRETRYABLE_ERRORS: tuple[type[Exception], ...] = (
     httpx2.TooManyRedirects,
 )
 
+#: The lowest final status: httpx2 handles a 1xx itself and never hands one back as a response.
+_FIRST_FINAL_STATUS: Final = 200
+
 #: The methods a hedge may never be configured for: RFC 9110 does not define them as idempotent.
 _UNHEDGEABLE_METHODS: Final = frozenset({"POST", "PATCH"})
 
@@ -92,14 +104,16 @@ _MAX_BACKOFF_EXPONENT = 1023
 
 
 def _check_non_negative(name: str, value: float) -> None:
-    """Raise ``ValueError`` unless *value* is a finite number >= 0."""
+    """Raise ``ValueError`` unless *value* is a finite number >= 0; ``TypeError`` for a ``bool`` or a non-number."""
+    check_number(name, value, "a finite number of 0 or more")
     if not (math.isfinite(value) and value >= 0):
         msg = f"{name} must be >= 0 and finite (got {value})"
         raise ValueError(msg)
 
 
 def _check_positive(name: str, value: float) -> None:
-    """Raise ``ValueError`` unless *value* is a finite number > 0."""
+    """Raise ``ValueError`` unless *value* is a finite number > 0; ``TypeError`` for a ``bool`` or a non-number."""
+    check_number(name, value, "a finite number above 0")
     if not (math.isfinite(value) and value > 0):
         msg = f"{name} must be > 0 and finite (got {value})"
         raise ValueError(msg)
@@ -212,6 +226,7 @@ class Hedge:
     def __post_init__(self) -> None:
         """Refuse a delay that is not positive and fewer than one hedge."""
         _check_positive("after", self.after)
+        check_int("max_extra", self.max_extra, "a number of extra sends, an int of at least 1")
         if self.max_extra < 1:
             msg = f"max_extra must be >= 1 (got {self.max_extra})"
             raise ValueError(msg)
@@ -254,6 +269,7 @@ class RetryPolicy:
 
         A bare ``str`` where a collection goes (``methods="GET"``) is refused, as are a number and a one-shot iterator.
         """
+        check_int("attempts", self.attempts, "a number of sends, an int of at least 1")
         if self.attempts < 1:
             msg = f"attempts must be >= 1 (got {self.attempts})"
             raise ValueError(msg)
@@ -263,7 +279,13 @@ class RetryPolicy:
             "budget", self.budget, (RetryShare, RetryBudget, type(None)), "a RetryShare, a shared RetryBudget, or None"
         )
         check_names("methods", self.methods, "a collection of methods, such as ('GET', 'PUT')")
-        check_collection("statuses", self.statuses, "a collection of statuses, such as (429, 503)")
+        check_statuses("statuses", self.statuses, "a collection of statuses, such as (429, 503)")
+        if informational := sorted(status for status in self.statuses if status < _FIRST_FINAL_STATUS):
+            msg = (
+                f"statuses= may not name a 1xx (got {', '.join(map(str, informational))}): httpx2 never answers with "
+                "one, so it would never match"
+            )
+            raise ValueError(msg)
         methods = frozenset(method.upper() for method in self.methods)
         object.__setattr__(self, "methods", methods)
         object.__setattr__(self, "statuses", frozenset(self.statuses))

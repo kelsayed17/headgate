@@ -28,11 +28,12 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, replace
 from types import MappingProxyType
-from typing import Protocol, override
+from typing import ClassVar, Final, Protocol, override
 
 import httpx2
 
-from headgate._request_body import Writer
+from headgate._core import check_callable, check_int, check_kind
+from headgate._request_body import Writer, query_values
 from headgate._responses import Expect, Reader
 from headgate._url import CallUrl
 from headgate.pagination._link import next_link
@@ -69,7 +70,7 @@ class PageRequest[B = None]:
     def __post_init__(self) -> None:
         """Freeze the params."""
         if self.params is not None:
-            object.__setattr__(self, "params", MappingProxyType(dict(self.params)))
+            object.__setattr__(self, "params", MappingProxyType(dict(query_values(self.params))))
 
     def with_param(self, name: str, value: object) -> PageRequest[B]:
         """Return this request with the query parameter *name* set to *value*."""
@@ -88,6 +89,10 @@ class Pager[I, P, B = None](Protocol):
     ``B`` is the type of the walk's body, ``None`` for a pager that only walks GETs. A pager typed with a body may walk
     GETs too, when ``paginate`` is given no payload (``payload=None``): the first request's ``payload`` is then
     ``None``, and a later one has a body only if the pager gives it one.
+
+    A pager whose next request is computed by counting (an offset, a page number) rather than read from the page or
+    the response declares ``counts_pages: ClassVar[bool] = True`` (see :attr:`WritingPager.counts_pages`); it is not a
+    member of this protocol, so a pager that reads its next request needs nothing.
     """
 
     __slots__ = ()
@@ -137,6 +142,14 @@ class WritingPager[I, P, B](ABC):
     read: Reader[P] | Expect[P]
     write: Writer[B] | None
 
+    #: Whether the pager's next request is computed without reading the page or the response: by counting, as an
+    #: offset or a page number. A server that ignores such paging answers the same page forever under requests that
+    #: never repeat, so the walk refuses a page with items whose body repeats an earlier page's. A pager that reads its
+    #: next request (a cursor, a link) keeps the default ``False``: an identical body gives it an identical next
+    #: request, which the walk's repeated-request check refuses, and two pages of identical data are walked. The walk
+    #: reads it from any pager, by its shape too, defaulting to ``False``.
+    counts_pages: ClassVar[bool] = False
+
     @abstractmethod
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
         """Return the request for the first page, given the one the caller wrote (see :meth:`Pager.first`)."""
@@ -150,8 +163,38 @@ class WritingPager[I, P, B](ABC):
         """Return the request for the page after *page* (fetched by *request*, answered by *response*), or ``None``."""
 
 
+#: What each pager hook takes, for the refusal of one that cannot be called.
+_HOOKS: Final = {
+    "items": "a function returning a page's items",
+    "next": "a function returning a page's cursor or next URL",
+    "more": "a function saying whether a page follows",
+    "total": "a function returning the collection's exact size, or None",
+    "offset": "a function returning a body's offset",
+    "put": "a function returning the body for the next page",
+    "write": "a writer, such as a flavor's writer(Query), or None to send builtins as JSON",
+}
+
+
+def _check_pager(pager: object) -> None:
+    """Refuse a built-in *pager* whose reader, hooks, numbers or names are of the wrong kind, naming the field.
+
+    A pager is a value built at import, so a page reader passed in the wrong place, or a hook that is not a function,
+    fails there rather than at the first page of the first walk.
+    """
+    read: object = getattr(pager, "read", None)
+    check_kind("read", read, (Reader, Expect), "the page reader, a Reader or an Expect, such as reader(Page)")
+    for name, wanted in _HOOKS.items():
+        if (hook := getattr(pager, name, None)) is not None:
+            check_callable(name, hook, wanted)
+    for name in ("page_size", "start"):
+        if hasattr(pager, name):
+            check_int(name, getattr(pager, name), "a number of items or pages, an int")
+    check_kind("stop_on_empty", getattr(pager, "stop_on_empty", True), bool, "a bool")
+
+
 def _check_param(param: str) -> None:
-    """Refuse an empty query parameter name."""
+    """Refuse a query parameter name that is not a ``str``, or is empty."""
+    check_kind("param", param, str, "the name of a query parameter, a str")
     if not param:
         msg = "param must name a query parameter"
         raise ValueError(msg)
@@ -226,7 +269,8 @@ class Cursor[I, P, B = None](WritingPager[I, P, B]):
     stop_on_empty: bool = True
 
     def __post_init__(self) -> None:
-        """Refuse an empty parameter name."""
+        """Refuse a field of the wrong kind and an empty parameter name."""
+        _check_pager(self)
         _check_param(self.param)
 
     @override
@@ -242,8 +286,14 @@ class Cursor[I, P, B = None](WritingPager[I, P, B]):
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* carrying *page*'s cursor, or ``None`` when it has none or (by default) no items."""
+        return self._next_after(page, self.items(page), request, response)
+
+    def _next_after(
+        self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
+    ) -> PageRequest[B] | None:
+        """Return :meth:`next_page`'s answer, given *items*, the items the walk read from *page* once."""
         del response
-        if self.stop_on_empty and not self.items(page):
+        if self.stop_on_empty and not items:
             return None
         cursor = self.next(page)
         return request.with_param(self.param, cursor) if bool(cursor) else None
@@ -269,6 +319,8 @@ class Offset[I, P, B = None](WritingPager[I, P, B]):
     and the walk steps by ``page_size``.
     """
 
+    counts_pages: ClassVar[bool] = True
+
     read: Reader[P] | Expect[P]
     _: KW_ONLY
     items: Callable[[P], Sequence[I]]
@@ -280,7 +332,11 @@ class Offset[I, P, B = None](WritingPager[I, P, B]):
     write: Writer[B] | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a page size below one, a negative start, and a parameter name that is empty or used twice."""
+        """Refuse a field of the wrong kind, a page size below one, a negative start, and a bad parameter name.
+
+        A parameter name is bad when it is empty, or when ``param`` and ``size_param`` name the same one.
+        """
+        _check_pager(self)
         if self.page_size < 1:
             msg = f"page_size must be >= 1 (got {self.page_size})"
             raise ValueError(msg)
@@ -312,8 +368,14 @@ class Offset[I, P, B = None](WritingPager[I, P, B]):
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* at the offset after *page*'s items, or ``None`` after the last page (see the class)."""
+        return self._next_after(page, self.items(page), request, response)
+
+    def _next_after(
+        self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
+    ) -> PageRequest[B] | None:
+        """Return :meth:`next_page`'s answer, given *items*, the items the walk read from *page* once."""
         del response
-        count = len(self.items(page))
+        count = len(items)
         following = _position(request, self.param, self.start, "an offset") + count
         if _last(page, count, self._size(request), self.total, following - self.start):
             return None
@@ -339,6 +401,8 @@ class PageNumber[I, P, B = None](WritingPager[I, P, B]):
     the type of the request body for a walk of POSTs, and ``write`` its writer, as on :class:`Cursor`.
     """
 
+    counts_pages: ClassVar[bool] = True
+
     read: Reader[P] | Expect[P]
     _: KW_ONLY
     items: Callable[[P], Sequence[I]]
@@ -349,7 +413,8 @@ class PageNumber[I, P, B = None](WritingPager[I, P, B]):
     stop_on_empty: bool = True
 
     def __post_init__(self) -> None:
-        """Refuse a negative start and an empty parameter name."""
+        """Refuse a field of the wrong kind, a negative start and an empty parameter name."""
+        _check_pager(self)
         if self.start < 0:
             msg = f"start must be >= 0 (got {self.start})"
             raise ValueError(msg)
@@ -368,8 +433,14 @@ class PageNumber[I, P, B = None](WritingPager[I, P, B]):
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* at the next page number, or ``None`` when ``more`` says none or *page* is empty."""
+        return self._next_after(page, self.items(page), request, response)
+
+    def _next_after(
+        self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
+    ) -> PageRequest[B] | None:
+        """Return :meth:`next_page`'s answer, given *items*, the items the walk read from *page* once."""
         del response
-        if self.stop_on_empty and not self.items(page):
+        if self.stop_on_empty and not items:
             return None
         if not self.more(page):
             return None
@@ -389,6 +460,10 @@ class LinkHeader[I, P]:
     items: Callable[[P], Sequence[I]]
     stop_on_empty: bool = True
 
+    def __post_init__(self) -> None:
+        """Refuse a field of the wrong kind."""
+        _check_pager(self)
+
     def first(self, request: PageRequest) -> PageRequest:
         """Return *request* unchanged, refusing one with a body: a ``Link`` target is fetched with a GET."""
         _check_get(request, "LinkHeader")
@@ -400,8 +475,14 @@ class LinkHeader[I, P]:
 
     def next_page(self, page: P, request: PageRequest, response: httpx2.Response) -> PageRequest | None:
         """Return the request for *response*'s ``rel="next"`` link, or ``None`` when it has none or *page* is empty."""
-        del request
-        if self.stop_on_empty and not self.items(page):
+        return self._next_after(page, self.items(page), request, response)
+
+    def _next_after(
+        self, page: P, items: Sequence[I], request: PageRequest, response: httpx2.Response
+    ) -> PageRequest | None:
+        """Return :meth:`next_page`'s answer, given *items*, the items the walk read from *page* once."""
+        del page, request
+        if self.stop_on_empty and not items:
             return None
         target = next_link(response.headers, response.url)
         return None if target is None else _wire_url(target)
@@ -421,6 +502,10 @@ class NextUrl[I, P]:
     next: Callable[[P], str | None]
     stop_on_empty: bool = True
 
+    def __post_init__(self) -> None:
+        """Refuse a field of the wrong kind."""
+        _check_pager(self)
+
     def first(self, request: PageRequest) -> PageRequest:
         """Return *request* unchanged, refusing one with a body: a next URL is fetched with a GET."""
         _check_get(request, "NextUrl")
@@ -432,8 +517,14 @@ class NextUrl[I, P]:
 
     def next_page(self, page: P, request: PageRequest, response: httpx2.Response) -> PageRequest | None:
         """Return the request for *page*'s next URL, or ``None`` when it names none or (by default) has no items."""
+        return self._next_after(page, self.items(page), request, response)
+
+    def _next_after(
+        self, page: P, items: Sequence[I], request: PageRequest, response: httpx2.Response
+    ) -> PageRequest | None:
+        """Return :meth:`next_page`'s answer, given *items*, the items the walk read from *page* once."""
         del request, response
-        if self.stop_on_empty and not self.items(page):
+        if self.stop_on_empty and not items:
             return None
         target = self.next(page)
         return _wire_url(target) if bool(target) else None
@@ -459,6 +550,10 @@ class BodyCursor[I, P, B](WritingPager[I, P, B]):
     write: Writer[B] | None = None
     stop_on_empty: bool = True
 
+    def __post_init__(self) -> None:
+        """Refuse a field of the wrong kind."""
+        _check_pager(self)
+
     @override
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
         """Return *request* unchanged, refusing one with no body: the first page is POSTed without a cursor."""
@@ -473,8 +568,14 @@ class BodyCursor[I, P, B](WritingPager[I, P, B]):
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* with *page*'s cursor in its body, or ``None`` when it has none or (by default) no items."""
+        return self._next_after(page, self.items(page), request, response)
+
+    def _next_after(
+        self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
+    ) -> PageRequest[B] | None:
+        """Return :meth:`next_page`'s answer, given *items*, the items the walk read from *page* once."""
         del response
-        if self.stop_on_empty and not self.items(page):
+        if self.stop_on_empty and not items:
             return None
         cursor = self.next(page)
         if cursor is None or not cursor:
@@ -494,6 +595,8 @@ class BodyOffset[I, P, B](WritingPager[I, P, B]):
     ``write`` encodes each page's body, as for :class:`BodyCursor`.
     """
 
+    counts_pages: ClassVar[bool] = True
+
     read: Reader[P] | Expect[P]
     _: KW_ONLY
     items: Callable[[P], Sequence[I]]
@@ -504,7 +607,8 @@ class BodyOffset[I, P, B](WritingPager[I, P, B]):
     write: Writer[B] | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a page size below one."""
+        """Refuse a field of the wrong kind and a page size below one."""
+        _check_pager(self)
         if self.page_size < 1:
             msg = f"page_size must be >= 1 (got {self.page_size})"
             raise ValueError(msg)
@@ -526,8 +630,14 @@ class BodyOffset[I, P, B](WritingPager[I, P, B]):
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request*'s body at the offset past *page*'s items, or ``None`` after a short page or at ``total``."""
+        return self._next_after(page, self.items(page), request, response)
+
+    def _next_after(
+        self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
+    ) -> PageRequest[B] | None:
+        """Return :meth:`next_page`'s answer, given *items*, the items the walk read from *page* once."""
         del response
-        count = len(self.items(page))
+        count = len(items)
         body = _posted(request, "BodyOffset")
         following = self.offset(body) + count
         if _last(page, count, self.page_size, self.total, following):

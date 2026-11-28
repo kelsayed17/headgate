@@ -202,6 +202,7 @@ class _ForgetsValues(MsgspecCodec):
 class _IgnoresTypes(MsgspecCodec):
     @override
     def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
+        super().decoder(type_)  # refuses a type it cannot decode, as check_codec asks first
         return cast("Callable[[bytes], T]", super().decoder(object))
 
 
@@ -296,6 +297,7 @@ class _CoercesNumericStrings(MsgspecCodec):
 
     @override
     def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
+        super().decoder(type_)  # refuses a type it cannot decode, as check_codec asks first
         return cast("Callable[[bytes], T]", msgspec.json.Decoder(type_, strict=False).decode)
 
 

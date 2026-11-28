@@ -256,5 +256,10 @@ def test_an_auth_whose_class_escaped_the_checks_is_refused() -> None:
 
 def test_every_auth_headgate_ships_was_checked() -> None:
     """Accept the shipped auths and a well-behaved subclass, each checked when its class was defined."""
-    for auth in (BearerAuth("t"), StaticHeaderAuth({}), QueryParamAuth({}), _Digest("user", "pass")):
+    for auth in (
+        BearerAuth("t"),
+        StaticHeaderAuth({"X-Api-Key": "k"}),
+        QueryParamAuth({"api_key": "v"}),
+        _Digest("u", "p"),
+    ):
         Client(base_url="https://api.example", auth=auth)

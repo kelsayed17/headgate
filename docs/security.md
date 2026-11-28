@@ -52,6 +52,7 @@ first request, each redirect, and each request an auth flow sends. On any hop ad
 The request still goes out, unsigned, so a signed download URL on a CDN works. A credential meant for another origin
 needs that origin in `trusted_origins`, written as a bare origin:
 
+<!-- docs-test: run -->
 ```python
 from headgate import HttpOptions, SecurityOptions
 
@@ -115,7 +116,9 @@ name, so TLS still sends it as SNI and verifies the certificate against it, and 
   it is sent, but the transport's own lookup is not pinned.
 - The guard cannot be combined with `proxy=`, since a proxy resolves the target itself.
 - `HttpOptions(security=SecurityOptions(resolver=...))` replaces the event loop's `getaddrinfo` (an async function of
-  host and port returning addresses as text), and is accepted only with the guard on.
+  host and port returning addresses as text), and is accepted only with the guard on. Inside a test's
+  `fake_network`, the fake network resolves every name in its place (see
+  [testing](testing.md#names-inside-the-fake-network)), so a guarded SDK's tests make no DNS query.
 - `SecurityOptions(check=...)` replaces the judgment of each address, a function of the address as text returning why
   it is refused, or `None` to admit it; one of your own is accepted only with the guard on. Every hop, over every
   transport, is judged by it. The default is `headgate.security.forbidden_reason` itself, which says why an address is
@@ -140,7 +143,10 @@ name, so TLS still sends it as SNI and verifies the certificate against it, and 
 
 A t-string path escapes every interpolated value as exactly one segment:
 
+<!-- docs-test: check -->
 ```python
+from headgate import nothing
+
 await client.delete(t"positions/{symbol}", expect=nothing)  # "BTC/USD" -> positions/BTC%2FUSD
 ```
 

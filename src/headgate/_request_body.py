@@ -24,12 +24,12 @@ from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callab
 from dataclasses import dataclass, field
 from datetime import date, time
 from decimal import Decimal
-from typing import IO, Final, final, override
+from typing import IO, Final, NoReturn, final, override
 from uuid import UUID
 
 import httpx2
 
-from headgate._core import check_kind
+from headgate._core import check_kind, refuse_subclass
 
 __all__ = [
     "Body",
@@ -44,8 +44,10 @@ __all__ = [
     "UploadFiles",
     "WireValue",
     "Writer",
+    "encoded_json",
     "files_replayable",
     "lowered",
+    "query_values",
     "wire_fields",
     "wire_value",
 ]
@@ -84,6 +86,16 @@ def wire_value(option: str, key: str, value: object, *, wanted: str = _WIRE_VALU
         "such as with json.dumps"
     )
     raise TypeError(msg)
+
+
+def query_values(params: Mapping[str, object]) -> Mapping[str, object]:
+    """Return *params* with every value of a repeated key: an ``httpx2.QueryParams`` as a list per repeated key.
+
+    A ``QueryParams`` is a mapping whose items give each key's first value only, so ``a=1&a=2`` would lose ``2``.
+    """
+    if not isinstance(params, httpx2.QueryParams):
+        return params
+    return {key: values if len(values := params.get_list(key)) > 1 else values[0] for key in params}
 
 
 def wire_fields(option: str, fields: Mapping[str, object], *, raw: bool = False) -> dict[str, object]:
@@ -166,16 +178,109 @@ def _as_content(content: RawContent) -> bytes | AsyncIterable[bytes]:
     return _Replayed(content)
 
 
+#: What a :class:`Json` value may hold, and what to write for one that holds anything else.
+_JSON_TAKES: Final = "Json takes builtins: dict, list, tuple, str, int, float, bool and None"
+_JSON_INSTEAD: Final = (
+    "write body=writer(Type)(value) with a flavor's writer, or body=Json(to_builtins(value)) with its to_builtins"
+)
+
+
 @final
-@dataclass(frozen=True, slots=True)
 class Json:
     """A JSON body of builtins, sent with ``Content-Type: application/json``; a codec's ``to_builtins`` builds one.
 
-    It is encoded as httpx2 encodes JSON, so ``Json(None)`` sends ``null``, and ``NaN`` or an infinity raises
-    ``ValueError``. The ``Content-Type`` yields to one the call's ``headers=`` (or its view's) set.
+    It is encoded once, where it is built, as httpx2 encodes JSON: ``Json(None)`` sends ``null``, a tuple an array and
+    an ``int`` key a string. So a value JSON cannot carry fails there, and a change to the value afterwards changes
+    nothing that is sent. The ``Content-Type`` yields to one the call's ``headers=`` (or its view's) set. A ``Json`` is
+    a value of its ``value``: equal, hashed (when the value hashes), shown and matched (``case Json(value)``) by it, and
+    copied with ``copy.replace(body, value=...)``.
+
+    :raises TypeError: for a value that is not builtins (a struct, a dataclass, a model, a ``date``, a ``set``), naming
+        its type: a flavor's ``writer(Type)`` encodes a typed value, and its ``to_builtins`` turns one into builtins.
+    :raises ValueError: for ``NaN`` or an infinity, which JSON cannot carry, and for a value that holds itself.
     """
 
-    value: object
+    __slots__ = ("_encoded", "_value")
+    __match_args__ = ("value",)
+
+    _value: object
+    _encoded: bytes
+
+    def __init__(self, value: object) -> None:
+        """Encode *value*, refusing one that is not builtins or holds what JSON cannot carry."""
+        object.__setattr__(self, "_value", value)
+        object.__setattr__(self, "_encoded", encoded_json(value))
+
+    @property
+    def value(self) -> object:
+        """The builtins the body was built from, as given; what is sent is their encoding when it was built."""
+        return self._value
+
+    @override
+    def __setattr__(self, name: str, value: object) -> None:
+        """Refuse every change: the body was encoded when it was built."""
+        msg = f"Json is immutable: build a new one, or copy.replace(body, value=...), for another {name}"
+        raise AttributeError(msg)
+
+    @override
+    def __delattr__(self, name: str) -> None:
+        """Refuse every change: the body was encoded when it was built."""
+        msg = f"Json is immutable: {name} cannot be deleted"
+        raise AttributeError(msg)
+
+    def __replace__(self, *, value: object) -> Json:
+        """Return a ``Json`` of *value*, for ``copy.replace``."""
+        return Json(value)
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return self.value == other.value if isinstance(other, Json) else NotImplemented
+
+    @override
+    def __hash__(self) -> int:
+        return hash(self.value)
+
+    @override
+    def __repr__(self) -> str:
+        return f"Json(value={self.value!r})"
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a subclass: the body is its encoded value, which nothing overriding a method would change."""
+        del kwargs
+        refuse_subclass(cls, Json, "build a Json of the value, or write a body with a flavor's writer")
+
+
+def encoded_json(
+    value: object, *, subject: str = "Json", takes: str = _JSON_TAKES, instead: str = _JSON_INSTEAD
+) -> bytes:
+    """Return *value* encoded as httpx2 encodes ``json=``, so a body reads the same whichever spelling built it.
+
+    A refusal is worded for where the value was given: *subject* is what takes it, *takes* what it takes and
+    *instead* what to write instead, a ``Json``'s by default.
+
+    :raises TypeError: for a value that is not builtins, naming its type, or a key JSON cannot write.
+    :raises ValueError: for ``NaN`` or an infinity, or a value that holds itself.
+    """
+    refused: list[object] = []
+
+    def not_builtins(item: object) -> NoReturn:
+        refused.append(item)
+        raise TypeError(item)
+
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False, default=not_builtins)
+    except TypeError as exc:
+        # A plain TypeError at the boundary: neither the encoder's error nor not_builtins' adds anything to it.
+        got = f"got {type(refused[0]).__name__}" if refused else str(exc)
+        msg = f"{takes} ({got}): {instead}"
+        raise TypeError(msg) from None
+    except ValueError as exc:
+        msg = (
+            f"{subject} takes a value JSON can carry ({exc}): write None or a string in place of NaN and the "
+            "infinities, and break a value that holds itself"
+        )
+        raise ValueError(msg) from None
+    return encoded.encode()
 
 
 @final
@@ -282,16 +387,13 @@ def lowered(body: Body | None) -> Lowered:
 
     :raises TypeError: for a value that is no :data:`Body`, such as bare ``bytes`` (write ``Raw(...)``) or a ``dict``
         (write ``Json(...)``).
-    :raises ValueError: for a ``Json`` value holding ``NaN`` or an infinity, which JSON cannot carry.
     """
     if body is not None:
         check_kind("body", body, _BODY_KINDS, "a Body: Json, Form, Multipart, Raw or a writer's EncodedBody")
     match body:
         case EncodedBody(content=content, content_type=content_type):
             return Lowered(content, content_type)
-        case Json(value=value):
-            # As httpx2 encodes json=, so a body reads the same whichever spelling built it.
-            encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
+        case Json(_encoded=encoded):
             return Lowered(encoded, "application/json")
         case Form(fields=fields):
             return Lowered(data=fields)

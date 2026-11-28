@@ -4,10 +4,11 @@
 """The implementation of :mod:`headgate.pydantic`, which exports it and documents it."""
 
 import functools
-from typing import Any, ClassVar, Final, cast, overload
+import re
+from typing import Any, ClassVar, Final, Literal, cast, get_origin, overload
 
 try:
-    from pydantic import BaseModel, RootModel, TypeAdapter, ValidationError
+    from pydantic import BaseModel, PydanticSchemaGenerationError, RootModel, TypeAdapter, ValidationError
     from pydantic_core import PydanticKnownError, to_json, to_jsonable_python
 except ImportError as exc:
     msg = "headgate.pydantic needs pydantic: pip install headgate[pydantic]"
@@ -21,12 +22,16 @@ from typing_extensions import TypeForm
 
 from headgate._codec import decode_with, reader_for, writer_for
 from headgate._codec import drop_none as _drop_none
+from headgate._core import type_text
 from headgate._failures import NESTED_TOO_DEEPLY
 from headgate._request_body import Writer
 from headgate._responses import Reader
 from headgate.errors import RefusedError
 
 __all__ = ["CODEC", "PydanticCodec", "decode", "reader", "to_builtins", "writer"]
+
+#: The class pydantic names when it has no schema for one, as ``<class 'module.Name'>``.
+_SCHEMALESS: Final = re.compile(r"<class '([^']+)'>")
 
 #: How many of a validation's failures a ``DecodeError`` message names; the count of the rest follows them.
 _ERRORS_SHOWN = 5
@@ -75,10 +80,35 @@ def _cached_adapter(type_: TypeForm[object]) -> TypeAdapter[Any]:
     return adapter
 
 
-def _adapter[T](type_: TypeForm[T]) -> TypeAdapter[T]:
-    """Return the cached ``TypeAdapter`` for the type expression *type_*, typed by it."""
-    # The cache key is the type expression itself, so the entry it returns was built from exactly ``TypeForm[T]``.
-    return cast("TypeAdapter[T]", _cached_adapter(type_))
+def _adapter[T](type_: TypeForm[T], verb: Literal["decode", "encode"]) -> TypeAdapter[T]:
+    """Return the cached ``TypeAdapter`` for the type expression *type_*, typed by it, to *verb* its values with.
+
+    :raises TypeError: for a type that holds a class pydantic has no schema for (a plain class, a msgspec struct),
+        naming the class, as the msgspec flavor refuses a class it does not know.
+    """
+    try:
+        # The cache key is the type expression itself, so the entry it returns was built from exactly ``TypeForm[T]``.
+        return cast("TypeAdapter[T]", _cached_adapter(type_))
+    except PydanticSchemaGenerationError as exc:
+        builder = "reader" if verb == "decode" else "writer"
+        msg = (
+            f"headgate.pydantic cannot {verb} {_schemaless_name(type_, exc)}, a class pydantic has no schema for: "
+            f"declare it as a pydantic model, a dataclass or a TypedDict, and use headgate.msgspec.{builder} for a "
+            "msgspec.Struct"
+        )
+        raise TypeError(msg) from None
+
+
+def _schemaless_name(type_: object, error: Exception) -> str:
+    """Return the name of the class in *type_* pydantic has no schema for: *type_*'s own when it is that class.
+
+    For a class inside a type expression (``list[Plain]``), pydantic's message is read for it as a last resort, and
+    the expression is named as written when that fails.
+    """
+    if isinstance(type_, type) and get_origin(type_) is None:
+        return type_.__name__
+    found = _SCHEMALESS.search(str(error))
+    return type_text(type_) if found is None else str(found[1]).rpartition(".")[2]
 
 
 class PydanticCodec:
@@ -102,7 +132,7 @@ class PydanticCodec:
 
     def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
         """Return a function validating JSON against *type_*'s cached adapter."""
-        adapter = _adapter(type_)
+        adapter = _adapter(type_, "decode")
         strict = self._strict
 
         def decode(content: bytes) -> T:
@@ -116,7 +146,7 @@ class PydanticCodec:
         With *drop_none*, ``None`` goes from nested dicts too, as :func:`to_builtins` drops it (``exclude_none`` would
         keep a ``dict[str, int | None]``'s), so the bytes match the msgspec flavor's.
         """
-        adapter = _adapter(type_)
+        adapter = _adapter(type_, "encode")
         if not self._drop_none:
             return functools.partial(adapter.dump_json, by_alias=True)
 

@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, assert_type, cast
+from typing import TYPE_CHECKING, Any, ClassVar, assert_type, cast, override
 
 import httpx2
 import msgspec
@@ -16,7 +17,18 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from headgate import CallPolicy, Client, ClientError, Expect, HttpOptions, Paginated, Rate, Reader, UpstreamStatusError
+from headgate import (
+    CallPolicy,
+    Client,
+    ClientError,
+    Expect,
+    HttpCache,
+    HttpOptions,
+    Paginated,
+    Rate,
+    Reader,
+    UpstreamStatusError,
+)
 from headgate._client import _paired
 from headgate.errors import ForbiddenDestinationError, PageLimitError, ResponseParseError
 from headgate.msgspec import reader
@@ -24,7 +36,9 @@ from headgate.pagination import BodyCursor, BodyOffset, Cursor, LinkHeader, Next
 from headgate.testing import FakeTransport
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Sequence
+    from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+
+    from hishel import AsyncSqliteStorage
 
     from headgate.pagination import Pager
 
@@ -344,7 +358,7 @@ async def test_a_next_url_from_the_wire_is_sent_verbatim(kind: str) -> None:
 
     def answer(request: httpx2.Request) -> httpx2.Response:
         if request.url.path != "/start":
-            return _page(request, [1])
+            return _page(request, [2])
         if kind == "body":
             return _page(request, [1], next=following)
         response = _page(request, [1])
@@ -389,7 +403,7 @@ async def test_each_page_goes_through_the_stack() -> None:
     assert received == [1, 2, 3]
 
 
-async def test_every_page_carries_the_walks_cache_ttl() -> None:
+async def test_every_page_carries_the_walks_cache_ttl(storage: AsyncSqliteStorage) -> None:
     """Stamp ``cache_ttl=`` on every page's GET, as on one ``get``."""
     ttl = 30.0
     stamped: list[object] = []
@@ -399,7 +413,12 @@ async def test_every_page_carries_the_walks_cache_ttl() -> None:
         return _by_cursor(request)
 
     pages = Cursor(reader(Page), items=items_of, next=cursor_of, param="after")
-    paginated = _Api(answer).client().paginate("items", pager=pages, cache_ttl=ttl)
+    client = Client(
+        base_url=_BASE,
+        policy=CallPolicy(rate=_RATE, cache=HttpCache(storage=storage)),
+        http=HttpOptions(transport=httpx2.MockTransport(answer)),
+    )
+    paginated = client.paginate("items", pager=pages, cache_ttl=ttl)
     assert len([item async for item in paginated]) == len((1, 2, 3, 4))
     assert stamped == [ttl, ttl, ttl]
 
@@ -484,9 +503,10 @@ async def test_a_page_that_leads_back_raises_instead_of_looping() -> None:
 
 async def test_a_repeating_cursor_on_a_template_url_raises() -> None:
     """Raise when a cursor repeats on a templated URL, without naming the URL."""
+    served = itertools.count()
 
     def answer(request: httpx2.Request) -> httpx2.Response:
-        return _page(request, [1], cursor="same")
+        return _page(request, [next(served)], cursor="same")  # pages that differ, so only the request repeats
 
     pages = Cursor(reader(Page), items=items_of, next=cursor_of, param="after")
     paginated = _Api(answer).client().paginate(t"items/{'x'}", pager=pages)
@@ -865,18 +885,113 @@ async def test_empty_pages_that_repeat_are_walked_past() -> None:
 
 
 async def test_link_header_pages_with_the_same_body_are_walked() -> None:
-    """Follow ``Link`` pages whose bodies are alike: their next page comes from the response, not the request."""
+    """Walk ``Link`` pages whose bodies are alike: the next page is read from the response, so a repeat is no loop.
+
+    A sparse series can answer two pages with the same zeros; a server that ignores the page it is asked for repeats
+    its ``Link`` too, which the repeated-request check catches.
+    """
     last = 3
 
     def answer(request: httpx2.Request) -> httpx2.Response:
         page = int(request.url.params.get("page", "1"))
         link = f'</items?page={page + 1}>; rel="next"' if page < last else ""
-        return httpx2.Response(200, json={"data": [{"id": 1}]}, headers={"link": link}, request=request)
+        return httpx2.Response(200, json={"data": [{"id": 0}, {"id": 0}]}, headers={"link": link}, request=request)
 
-    api = _Api(answer)
-    paginated = api.client().paginate("items", pager=LinkHeader(reader(Page), items=items_of))
+    paginated = _Api(answer).client().paginate("items", pager=LinkHeader(reader(Page), items=items_of))
 
-    assert [item.id async for item in paginated] == [1, 1, 1]
+    assert [item.id async for item in paginated] == [0] * 6
+
+
+@dataclass(frozen=True)
+class _OwnOffset:
+    """A pager of its own, by its shape: an offset walk that says it counts, whose items come back as an iterator."""
+
+    counts_pages: ClassVar[bool] = True
+    read: Reader[Page]
+    calls: list[Page] = field(default_factory=list, compare=False)
+
+    def first(self, request: PageRequest[None]) -> PageRequest[None]:
+        """Start at offset 0."""
+        return request.with_param("offset", 0)
+
+    def page_items(self, page: Page) -> Iterator[Item]:
+        """Return *page*'s items as an iterator, which can be read only once, recording the call."""
+        self.calls.append(page)
+        return iter(page.data)
+
+    def next_page(self, page: Page, request: PageRequest[None], response: httpx2.Response) -> PageRequest[None] | None:
+        """Return the request at the offset past *page*, or ``None`` after an empty page."""
+        del response
+        if not page.data:
+            return None
+        return request.with_param("offset", int(str((request.params or {})["offset"])) + len(page.data))
+
+
+@dataclass(frozen=True)
+class _UncountedOffset(_OwnOffset):
+    """The same walk, without saying it counts: the walk cannot tell its pages from the server's, so it trusts them."""
+
+    counts_pages: ClassVar[bool] = False
+
+
+async def test_a_counting_pager_of_its_own_gets_the_loop_guard() -> None:
+    """Raise at the second page when the server ignores the offset of a pager that says it counts its pages."""
+    api = _Api(lambda request: _page(request, [0, 1]))
+    paginated = api.client().paginate("items", pager=_OwnOffset(reader(Page)), max_pages=_BACKSTOP)
+    with pytest.raises(ClientError, match="page 2 repeats an earlier page's body"):
+        _ = [item async for item in paginated]
+
+    assert len(api.sent) == len(("first", "repeated"))
+
+
+async def test_a_pager_that_does_not_say_it_counts_is_not_body_checked() -> None:
+    """Walk to the page budget a pager that does not declare ``counts_pages``, as the server answers it."""
+    api = _Api(lambda request: _page(request, [0, 1]))
+    paginated = api.client().paginate("items", pager=_UncountedOffset(reader(Page)), max_pages=3, on_limit="stop")
+
+    assert len([item async for item in paginated]) == len((0, 1)) * 3
+
+
+async def test_a_pager_whose_items_are_one_iterator_yields_them_all_from_one_call() -> None:
+    """Read a page's items once, though the loop guard looked at the first: every item comes through."""
+    end = 4
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        offset = int(request.url.params["offset"])
+        return _page(request, [offset, offset + 1] if offset < end else [])
+
+    pager = _OwnOffset(reader(Page))
+    paginated = _Api(answer).client().paginate("items", pager=pager)
+
+    assert [item.id async for item in paginated] == [0, 1, 2, 3]
+    assert len(pager.calls) == len(("0-1", "2-3", "empty")), "page_items is called once per page"
+
+
+@dataclass(frozen=True)
+class _SharedItems(_OwnOffset):
+    """A counting pager whose ``page_items`` hands out one iterator per page, however often it is asked."""
+
+    shared: dict[int, Iterator[Item]] = field(default_factory=dict, compare=False)
+
+    @override
+    def page_items(self, page: Page) -> Iterator[Item]:
+        """Return the one iterator over *page*'s items."""
+        return self.shared.setdefault(id(page), iter(page.data))
+
+
+async def test_a_page_whose_items_are_one_shared_iterator_loses_none_to_the_loop_guard() -> None:
+    """Yield the first item too, which the loop guard reads to see whether the page holds any."""
+    api = _Api(lambda request: _page(request, [1, 2, 3] if request.url.params["offset"] == "0" else []))
+    paginated = api.client().paginate("items", pager=_SharedItems(reader(Page)))
+
+    assert [item.id async for item in paginated] == [1, 2, 3]
+
+
+def test_the_counting_strategies_say_they_count() -> None:
+    """Declare ``counts_pages`` on the strategies that compute the next request, and only on them."""
+    counting = {Offset, PageNumber, BodyOffset}
+    for strategy in (Cursor, Offset, PageNumber, LinkHeader, NextUrl, BodyCursor, BodyOffset):
+        assert getattr(strategy, "counts_pages", False) is (strategy in counting), strategy
 
 
 async def test_an_offset_walk_starts_at_the_callers_own_offset() -> None:
@@ -1002,6 +1117,14 @@ class _NoReader:
         msg = "the pager ran before its read was checked"
         raise AssertionError(msg)
 
+    def page_items(self, page: object) -> list[object]:
+        """Never called, as :meth:`first` is not."""
+        raise AssertionError(page)
+
+    def next_page(self, page: object, request: object, response: object) -> None:
+        """Never called, as :meth:`first` is not."""
+        raise AssertionError(page, request, response)
+
 
 @dataclass(frozen=True)
 class _WrongReader(_NoReader):
@@ -1076,3 +1199,71 @@ async def test_a_test_double_builds_a_paginated_from_its_pages() -> None:
     assert [page async for page in walk.pages()] == [[1, 2], [3]]
     assert await walk.collect(max_items=2) == [1, 2]
     assert await walk.collect() == [1, 2, 3], "each iteration starts the pages again"
+
+
+class _CountedItems:
+    """An ``items=`` hook that counts its calls."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, page: Page) -> list[Item]:
+        self.calls += 1
+        return page.data
+
+
+def _three_pages(request: httpx2.Request) -> httpx2.Response:
+    """Serve two full pages of two items and a short third, by offset, page number, link or next URL."""
+    params = request.url.params
+    index = int(params["offset"]) // 2 if "offset" in params else int(params.get("page", "1")) - 1
+    ids = [[1, 2], [3, 4], [5]][index]
+    following = f"{_BASE}/items?page={index + 2}" if index < len(("1-2", "3-4")) else None
+    response = _page(request, ids, next=following)
+    if following is not None:
+        response.headers["Link"] = f'<{following}>; rel="next"'
+    return response
+
+
+@pytest.mark.parametrize("strategy", ["offset", "page-number", "cursor", "link", "next-url"])
+async def test_a_strategy_calls_its_items_hook_once_per_page(strategy: str) -> None:
+    """Read a page's items once, for the loop guard, the next request and the items yielded alike."""
+    items = _CountedItems()
+    pagers: dict[str, Any] = {
+        "offset": Offset(reader(Page), items=items, page_size=2),
+        "page-number": PageNumber(reader(Page), items=items, more=has_next),
+        "cursor": Cursor(reader(Page), items=items, next=cursor_of, param="after"),
+        "link": LinkHeader(reader(Page), items=items),
+        "next-url": NextUrl(reader(Page), items=items, next=next_of),
+    }
+    api = _Api(_by_cursor if strategy == "cursor" else _three_pages)
+    walked = [item.id async for item in api.client().paginate("items", pager=pagers[strategy])]
+
+    assert walked
+    assert items.calls == len(api.sent), "each page's items are read once"
+
+
+def test_a_strategy_called_directly_reads_its_page_itself() -> None:
+    """Answer ``next_page`` called outside a walk, reading the page's items with its own hook."""
+    page = Page([Item(1)], cursor="c", next=f"{_BASE}/items?page=2")
+    response = httpx2.Response(
+        200, headers={"Link": f'<{_BASE}/items?page=2>; rel="next"'}, request=httpx2.Request("GET", f"{_BASE}/items")
+    )
+    request = PageRequest[None]("items")
+    query: dict[str, object] = {"q": 1}
+    posted = PageRequest[dict[str, object]]("items", payload=query)
+
+    cursor = Cursor(reader(Page), items=items_of, next=cursor_of, param="after").next_page(page, request, response)
+    link = LinkHeader(reader(Page), items=items_of).next_page(page, request, response)
+    next_url = NextUrl(reader(Page), items=items_of, next=next_of).next_page(page, request, response)
+    body = BodyCursor[Item, Page, dict[str, object]](
+        reader(Page), items=items_of, next=cursor_of, put=lambda query, after: {**query, "after": after}
+    ).next_page(page, posted, response)
+
+    assert cursor is not None
+    assert cursor.params == {"after": "c"}
+    assert link is not None
+    assert str(link.url) == f"{_BASE}/items?page=2"
+    assert next_url is not None
+    assert str(next_url.url) == f"{_BASE}/items?page=2"
+    assert body is not None
+    assert body.payload == {"q": 1, "after": "c"}

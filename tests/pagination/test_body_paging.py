@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import itertools
 import json
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Final, assert_type, cast, override
@@ -25,6 +26,7 @@ from headgate import (
     ClientError,
     EncodedBody,
     Expect,
+    HttpCache,
     HttpOptions,
     IdempotencyKeys,
     Rate,
@@ -37,9 +39,12 @@ from headgate.errors import PageLimitError
 from headgate.msgspec import reader, writer
 from headgate.pagination import BodyCursor, BodyOffset, Cursor, LinkHeader, NextUrl, Offset, PageRequest, WritingPager
 from headgate.retry import IDEMPOTENT_METHODS
+from headgate.testing import FakeTransport
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+
+    from hishel import AsyncSqliteStorage
 
     from headgate.pagination import Pager
 
@@ -357,9 +362,10 @@ async def test_a_walk_of_posts_can_stop_quietly_at_its_page_limit() -> None:
 
 async def test_a_repeating_body_cursor_raises_instead_of_looping() -> None:
     """Raise ``ClientError`` for the POST when a cursor leads back to a body already sent."""
+    served = itertools.count()
 
     def answer(request: httpx2.Request) -> httpx2.Response:
-        return _page(request, [1], "same")
+        return _page(request, [next(served)], "same")  # pages that differ, so only the request repeats
 
     first = Query(kind="a", limit=1)
     paginated = _Api(answer).client().paginate("search", payload=first, pager=QUERY_CURSOR)
@@ -821,6 +827,21 @@ async def test_a_body_that_appears_mid_walk_is_held_to_the_same_rules(
     assert [request.method for request in api.sent] == ["GET"]
 
 
+async def test_a_cache_lifetime_on_a_page_that_turns_into_a_post_is_refused(storage: AsyncSqliteStorage) -> None:
+    """Refuse ``cache_ttl=`` on a later page with a body, a POST no cache stores, before sending it."""
+    api = _Api(_by_param_cursor)
+    client = Client(
+        base_url=_BASE,
+        policy=CallPolicy(rate=_RATE, cache=HttpCache(storage=storage)),
+        http=HttpOptions(transport=httpx2.MockTransport(api.handle)),
+    )
+    paginated = client.paginate("search", pager=cast("Any", _WrittenPostsLater()), cache_ttl=60.0)
+
+    with pytest.raises(ValueError, match=r"^cache_ttl= sets a cached response's lifetime, but a page with a body"):
+        _ = [item async for item in paginated]
+    assert [request.method for request in api.sent] == ["GET"]
+
+
 class _Logged:
     """A cursor over JSON bodies whose ``write`` is a log's, not a body writer: it is not a :class:`WritingPager`."""
 
@@ -970,3 +991,60 @@ def test_paginate_refuses_a_writing_pager_without_write() -> None:
         TypeError, match=r"^paginate\(\)'s pager is a WritingPager, so it encodes each page's body with"
     ):
         _Api(_by_body_cursor).client().paginate("search", payload=Query(kind="a", limit=2), pager=_NoWriter())
+
+
+@dataclass(frozen=True)
+class _Search:
+    """A search body of a class JSON's encoder does not know."""
+
+    kind: str
+    cursor: str | None = None
+
+
+def _with_cursor(search: _Search, cursor: str) -> _Search:
+    return _Search(search.kind, cursor)
+
+
+_NOT_BUILTINS: Final = (
+    r"^paginate\(\) sends payload= as JSON, since its pager has no write, so it takes builtins \(got _Search\): "
+    r"write payload=to_builtins\(value\), or give the pager write=writer\(Type\)$"
+)
+
+
+async def test_a_payload_that_is_not_builtins_is_refused_where_the_walk_is_made() -> None:
+    """Refuse a payload JSON cannot encode in ``paginate()``, when its pager has no writer, with the walk's spelling."""
+    pager = BodyCursor[Item, Page, _Search](reader(Page), items=items_of, next=cursor_of, put=_with_cursor)
+    fake = FakeTransport()
+    async with Client(base_url="https://api.test", http=HttpOptions(transport=fake)) as client:
+        with pytest.raises(TypeError, match=_NOT_BUILTINS):
+            client.paginate("search", payload=_Search("open"), pager=pager)
+    assert not fake.calls
+
+
+class _CountedItems:
+    """An ``items=`` hook that counts its calls."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, page: Page) -> list[Item]:
+        self.calls += 1
+        return page.data
+
+
+@pytest.mark.parametrize("strategy", ["offset", "cursor"])
+async def test_a_body_strategy_calls_its_items_hook_once_per_page(strategy: str) -> None:
+    """Read a page's items once, for the loop guard, the next request and the items yielded alike."""
+    items = _CountedItems()
+    if strategy == "offset":
+        pager: Any = BodyOffset[Item, Page, Query](
+            reader(Page), items=items, page_size=2, offset=offset_of, put=at_offset, write=QUERY
+        )
+        api = _Api(_by_body_offset(5))
+    else:
+        pager = BodyCursor[Item, Page, Query](reader(Page), items=items, next=cursor_of, put=with_cursor, write=QUERY)
+        api = _Api(_by_body_cursor)
+    walked = [item async for item in api.client().paginate("search", payload=Query(kind="a", limit=2), pager=pager)]
+
+    assert walked
+    assert items.calls == len(api.sent), "each page's items are read once"

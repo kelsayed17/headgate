@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import inspect
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Unpack, override
+from typing import TYPE_CHECKING, Any, Unpack, cast, override
 
 import anysqlite
 import httpx2
@@ -193,28 +193,40 @@ async def test_a_calls_cache_ttl_none_ignores_the_servers_max_age(storage: Async
 
 # A per-call cache_ttl= is forwarded by every verb that accepts one.
 
-#: The client's HTTP verbs, every one of which takes a per-call ``cache_ttl``.
+#: The client's HTTP verbs: a GET or HEAD takes a per-call ``cache_ttl``, and no other.
 _VERBS = ("delete", "get", "head", "patch", "post", "put")
 
 
 @pytest.mark.parametrize("verb", _VERBS)
-def test_every_http_verb_takes_a_cache_ttl(verb: str) -> None:
-    """Accept ``cache_ttl`` on every verb, through its options, so the forwarding test below covers them all."""
+def test_only_a_read_takes_a_cache_ttl(verb: str) -> None:
+    """Take ``cache_ttl`` on a GET or HEAD, through its options, not on a verb with a body, which is never cached."""
     options = {"get": CallOptions, "head": CallOptions}.get(verb, RequestOptions)
     unpacked = Unpack[CallOptions] if options is CallOptions else Unpack[RequestOptions]
     assert inspect.signature(getattr(Client, verb)).parameters["options"].annotation == unpacked
-    assert "cache_ttl" in options.__optional_keys__
+    assert ("cache_ttl" in options.__optional_keys__) is (options is CallOptions)
 
 
-@pytest.mark.parametrize("verb", _VERBS)
-async def test_every_verb_forwards_a_per_call_cache_ttl(verb: str) -> None:
-    """``cache_ttl=`` reaches the request the network sees (in hishel's ``caching`` extension) from every verb."""
+@pytest.mark.parametrize("verb", ["get", "head"])
+async def test_every_cached_verb_forwards_a_per_call_cache_ttl(verb: str, storage: AsyncSqliteStorage) -> None:
+    """``cache_ttl=`` reaches the request the network sees (in hishel's ``caching`` extension) from a GET or HEAD."""
     base = _CountingTransport()
-    client = stub_client(transport=base)
+    client = stub_client(transport=base, cache=HttpCache(storage=storage, methods=("GET", "HEAD"), statuses=(201,)))
 
     await getattr(client, verb)("/thing", expect=RESPONSE, cache_ttl=_CALL_TTL)
 
     assert stamped_ttl(base.extensions[-1]) == _CALL_TTL
+
+
+@pytest.mark.parametrize("verb", ["delete", "patch", "post", "put"])
+async def test_a_verb_the_cache_never_stores_refuses_a_cache_ttl(verb: str, storage: AsyncSqliteStorage) -> None:
+    """Refuse ``cache_ttl=`` on a verb no cache stores, which would set the lifetime of nothing, sending nothing."""
+    base = _CountingTransport()
+    client = stub_client(transport=base, cache=HttpCache(storage=storage))
+
+    message = rf"^{verb}\(\) got an unexpected keyword argument 'cache_ttl': a cache stores only GETs and HEADs"
+    with pytest.raises(TypeError, match=message):
+        await getattr(client, verb)("/thing", expect=RESPONSE, **cast("dict[str, Any]", {"cache_ttl": _CALL_TTL}))
+    assert not base.extensions
 
 
 # A shared storage serves every client on it, and outlives them.
