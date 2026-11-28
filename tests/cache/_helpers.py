@@ -17,7 +17,7 @@ from headgate.cache._transport import ResilientCacheTransport, store_accepted
 if TYPE_CHECKING:
     import re
     import uuid
-    from collections.abc import AsyncIterator, Iterable, Mapping
+    from collections.abc import AsyncIterator, Collection, Mapping
 
     from hishel import Headers
 
@@ -34,9 +34,9 @@ NETWORK_BODY = b"from-network"
 class CacheRules(TypedDict, total=False):
     """What an :class:`HttpCache` keeps: its ``methods``, ``paths`` and ``statuses``, as ``HttpCache(**rules)``."""
 
-    methods: Iterable[str]
-    paths: Iterable[str | re.Pattern[str]]
-    statuses: Iterable[int]
+    methods: Collection[str]
+    paths: Collection[str | re.Pattern[str]]
+    statuses: Collection[int]
 
 
 def series_rules() -> CacheRules:

@@ -24,11 +24,11 @@ from typing import TYPE_CHECKING, Final, final, override
 
 import httpx2
 
-from headgate._core import Slot, check_kind, current_timing
+from headgate._core import Slot, check_collection, check_kind, check_names, current_timing
 from headgate.retry._budget import RetryLedger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Collection
 
     from headgate._core import CallContext, Timing
 
@@ -251,8 +251,8 @@ class RetryPolicy:
     """
 
     attempts: int = 3
-    methods: frozenset[str] = IDEMPOTENT_METHODS
-    statuses: frozenset[int] = RETRY_STATUSES
+    methods: Collection[str] = IDEMPOTENT_METHODS
+    statuses: Collection[int] = RETRY_STATUSES
     backoff: Backoff = field(default_factory=Backoff)
     max_retry_after: float = 30.0
     budget: RetryShare | RetryBudget | None = field(default_factory=RetryShare)
@@ -261,7 +261,10 @@ class RetryPolicy:
     min_attempt_time: float = 0.05
 
     def __post_init__(self) -> None:
-        """Validate every option, upper-case the methods, and refuse a hedge for a non-idempotent method."""
+        """Validate every option, freeze the methods (upper-cased) and statuses, and refuse an unsafe hedge.
+
+        A bare ``str`` where a collection goes (``methods="GET"``) is refused, as are a number and a one-shot iterator.
+        """
         if self.attempts < 1:
             msg = f"attempts must be >= 1 (got {self.attempts})"
             raise ValueError(msg)
@@ -270,6 +273,8 @@ class RetryPolicy:
         check_kind(
             "budget", self.budget, (RetryShare, RetryBudget, type(None)), "a RetryShare, a shared RetryBudget, or None"
         )
+        check_names("methods", self.methods, "a collection of methods, such as ('GET', 'PUT')")
+        check_collection("statuses", self.statuses, "a collection of statuses, such as (429, 503)")
         methods = frozenset(method.upper() for method in self.methods)
         object.__setattr__(self, "methods", methods)
         object.__setattr__(self, "statuses", frozenset(self.statuses))

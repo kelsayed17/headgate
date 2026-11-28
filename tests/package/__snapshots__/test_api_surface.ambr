@@ -385,7 +385,7 @@
   '''
   module headgate.testing
   __all__ = ['CassetteFilter', 'ConnectFail', 'DropMidBody', 'FakeTransport', 'FaultCall', 'FaultyTransport', 'PoolFull', 'RecordedRequest', 'RefusedStream', 'Reply', 'Respond', 'Slow', 'Step', 'TestClock', 'UnmatchedRequestError', 'breakers_of', 'budget_for', 'cache_of', 'check_codec', 'fake_network', 'instant_retries']
-  class CassetteFilter(object)(*, auths: 'Iterable[object]' = (), headers: 'Iterable[str]' = (), params: 'Iterable[str]' = (), replaying: 'bool' = False) -> 'None'
+  class CassetteFilter(object)(*, auths: 'Iterable[CredentialCarrier]' = (), headers: 'Collection[str]' = (), params: 'Collection[str]' = (), replaying: 'bool' = False) -> 'None'
       def __call__(self, request: 'httpx2.Request', call_next: 'Next') -> 'httpx2.Response'
       def before_record_request(self, request: 'R') -> 'R | None'
       def before_record_response(self, response: 'MutableMapping[str, object]') -> 'MutableMapping[str, object]'
@@ -541,13 +541,13 @@
       def on(self, status: 'int', read: 'Reader[E]') -> 'Expect[T | E]'
   class Form(object)(fields: 'Mapping[str, object]') -> 'None'
       field fields: Mapping[str, object]
-  class HttpCache(object)(*, storage: 'AsyncBaseStorage', ttl: 'float | None' = None, partition: 'Partition' = <Partition.CREDENTIAL: 'credential'>, methods: 'Iterable[str] | None' = None, paths: 'Iterable[str | re.Pattern[str]] | None' = None, statuses: 'Iterable[int] | None' = None) -> 'None'
+  class HttpCache(object)(*, storage: 'AsyncBaseStorage', ttl: 'float | None' = None, partition: 'Partition' = <Partition.CREDENTIAL: 'credential'>, methods: 'Collection[str] | None' = None, paths: 'Collection[str | re.Pattern[str]] | None' = None, statuses: 'Collection[int] | None' = None) -> 'None'
       field storage: AsyncBaseStorage
       field ttl: float | None = None
       field partition: Partition = <Partition.CREDENTIAL: 'credential'>
-      field methods: Iterable[str] | None = None
-      field paths: Iterable[str | re.Pattern[str]] | None = None
-      field statuses: Iterable[int] | None = None
+      field methods: Collection[str] | None = None
+      field paths: Collection[str | re.Pattern[str]] | None = None
+      field statuses: Collection[int] | None = None
       def caches_request(self, method: 'str', path: 'str') -> 'bool'
       def stores_status(self, status: 'int') -> 'bool'
   class HttpOptions(object)(*, transport: 'httpx2.AsyncBaseTransport | None' = None, headers: 'Mapping[str, str]' = <factory>, follow_redirects: 'bool' = True, max_redirects: 'int' = 5, max_response_bytes: 'int' = 33554432, response_check: 'ResponseCheck | None' = None, security: 'SecurityOptions' = <factory>, ssl_context: 'ssl.SSLContext | None' = None, limits: 'httpx2.Limits' = <factory>, proxy: 'str | None' = None, user_agent: 'str | None' = None, cookies: 'bool' = False, request_id_headers: 'tuple[str, ...]' = ('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')) -> 'None'
@@ -622,10 +622,10 @@
       key max_response_bytes: int (optional)
       key body: Body | None (optional)
   type ResponseCheck = Callable[[httpx2.Response], RefusedError | None]
-  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'frozenset[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses: 'frozenset[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryShare | RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
+  class RetryPolicy(object)(*, attempts: 'int' = 3, methods: 'Collection[str]' = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses: 'Collection[int]' = frozenset({408, 425, 429, 500, 502, 503, 504}), backoff: 'Backoff' = <factory>, max_retry_after: 'float' = 30.0, budget: 'RetryShare | RetryBudget | None' = <factory>, respect_should_retry: 'bool' = True, hedge: 'Hedge | None' = None, min_attempt_time: 'float' = 0.05) -> 'None'
       field attempts: int = 3
-      field methods: frozenset[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'})
-      field statuses: frozenset[int] = frozenset({408, 425, 429, 500, 502, 503, 504})
+      field methods: Collection[str] = frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'})
+      field statuses: Collection[int] = frozenset({408, 425, 429, 500, 502, 503, 504})
       field backoff: Backoff = <factory>
       field max_retry_after: float = 30.0
       field budget: RetryShare | RetryBudget | None = <factory>

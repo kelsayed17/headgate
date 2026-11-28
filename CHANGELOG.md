@@ -50,6 +50,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `CassetteFilter(headers=, params=)` and its auths' declarations when the filter is built.
 - The cache never looks up, stores or shares a request with a body, whatever its method, so a GET stream opened with
   `body=` is no longer served the entry stored for its URL. It goes to the network as it arrives.
+- `CassetteFilter(headers="x-api-key")` no longer records the header it was asked to scrub: it filtered the letters
+  `x`, `-`, `a` and so on. A bare `str` is now refused.
 - Every pager's next-page `httpx2.URL` is resolved against the URL that answered the page, and a next page from
   `https` to plain `http` is refused as `ForbiddenDestinationError` before it is sent, by the walk itself. Only the
   built-in `LinkHeader` and `NextUrl` did this, so a custom pager could take a walk, its cursor and its request, to
