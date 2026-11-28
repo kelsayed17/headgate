@@ -139,6 +139,9 @@ class ExchangeAuth(SigningAuth):
   secret, so error messages redact them.
 - `skips(request)` says a request is sent unsigned: by default, one already carrying a signed header or parameter.
   Override it for requests that need no signature, such as a provider's public reads.
+- `sign` and `skips` are the hooks. The flow, `async_auth_flow`, is final: it holds the guarantees above, so a subclass
+  that overrides it fails when it is defined, and ty reports `override-of-final-method`. A header every request needs,
+  such as a tenant id, belongs in a [middleware](configuration.md#middleware).
 - `credential_identity()` names the key for the cache partition. By default each instance is its own identity; return
   the key's secret material (hashed, never stored) to let instances holding the same key share entries.
 
@@ -225,6 +228,9 @@ endpoint. The API host's breaker records nothing for it.
   undeclared credential would follow a request anywhere. The default declares `frozenset({"authorization"})`. The parameters are withheld from untrusted origins like the headers, a 401 to a request
   carrying one re-mints, and error messages redact them.
 - `skips(request)` says a request needs no token (by default, one that already carries a token header or parameter).
+- `mint`, `attach` and `skips` are the hooks. The flow, `async_auth_flow`, and `reject_credential_rotation` are final:
+  a subclass that overrides either fails when it is defined, and ty reports `override-of-final-method`. A header every
+  request needs belongs in a [middleware](configuration.md#middleware).
 - `seed(Minted(token, lifetime))` caches a token obtained elsewhere, such as one restored from storage or a test's fixed bearer.
 - `CachedTokenAuth[TokenT]` is generic in the token's type, `str` by default. The default `attach` sends only a `str`,
   so a subclass whose token is another type (`CachedTokenAuth[dict[str, str]]`) overrides `attach`; one that does not
