@@ -102,7 +102,16 @@ from headgate._options import (
     reject_upstream_httpx,
 )
 from headgate._redirects import redirect_method
-from headgate._request_body import EncodedBody, Lowered, WireValue, Writer, encoded_json, lowered, wire_value
+from headgate._request_body import (
+    EncodedBody,
+    Lowered,
+    WireValue,
+    Writer,
+    encoded_json,
+    lowered,
+    query_values,
+    wire_value,
+)
 from headgate._responses import Expect, Reader, ResponseCheck, accepts, with_answers
 from headgate._stack import NETWORK_OVERRIDE, Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
@@ -1373,7 +1382,7 @@ def _query_pairs(params: Mapping[str, object]) -> list[tuple[str, WireValue]]:
         tuple inside another among them, before anything is sent.
     """
     pairs: list[tuple[str, WireValue]] = []
-    for key, value in params.items():
+    for key, value in query_values(params).items():
         items = value if isinstance(value, list | tuple) else (value,)
         pairs.extend((key, wire_value("params=", key, item)) for item in items)
     return pairs

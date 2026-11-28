@@ -47,6 +47,7 @@ __all__ = [
     "encoded_json",
     "files_replayable",
     "lowered",
+    "query_values",
     "wire_fields",
     "wire_value",
 ]
@@ -85,6 +86,16 @@ def wire_value(option: str, key: str, value: object, *, wanted: str = _WIRE_VALU
         "such as with json.dumps"
     )
     raise TypeError(msg)
+
+
+def query_values(params: Mapping[str, object]) -> Mapping[str, object]:
+    """Return *params* with every value of a repeated key: an ``httpx2.QueryParams`` as a list per repeated key.
+
+    A ``QueryParams`` is a mapping whose items give each key's first value only, so ``a=1&a=2`` would lose ``2``.
+    """
+    if not isinstance(params, httpx2.QueryParams):
+        return params
+    return {key: values if len(values := params.get_list(key)) > 1 else values[0] for key in params}
 
 
 def wire_fields(option: str, fields: Mapping[str, object], *, raw: bool = False) -> dict[str, object]:

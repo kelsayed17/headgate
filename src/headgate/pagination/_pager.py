@@ -33,7 +33,7 @@ from typing import ClassVar, Final, Protocol, override
 import httpx2
 
 from headgate._core import check_callable, check_int, check_kind
-from headgate._request_body import Writer
+from headgate._request_body import Writer, query_values
 from headgate._responses import Expect, Reader
 from headgate._url import CallUrl
 from headgate.pagination._link import next_link
@@ -70,7 +70,7 @@ class PageRequest[B = None]:
     def __post_init__(self) -> None:
         """Freeze the params."""
         if self.params is not None:
-            object.__setattr__(self, "params", MappingProxyType(dict(self.params)))
+            object.__setattr__(self, "params", MappingProxyType(dict(query_values(self.params))))
 
     def with_param(self, name: str, value: object) -> PageRequest[B]:
         """Return this request with the query parameter *name* set to *value*."""

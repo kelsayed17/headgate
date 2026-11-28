@@ -23,6 +23,9 @@ import msgspec
 import pytest
 
 from headgate import Client, Form, HttpOptions, Multipart, nothing
+from headgate.msgspec import reader
+from headgate.pagination import LinkHeader
+from headgate.testing import FakeTransport
 
 
 class _Status(enum.Enum):
@@ -152,3 +155,24 @@ def test_form_fields_refuse_bytes() -> None:
     """Refuse ``bytes`` in a form field, which a form can carry only as text."""
     with pytest.raises(TypeError, match=r"^Form\(fields=\) takes a str, .* \(got bytes under 'v'\)"):
         Form({"v": b"raw"})
+
+
+async def test_query_params_with_a_repeated_key_send_every_value() -> None:
+    """Send every value of an ``httpx2.QueryParams`` built from pairs, where only the first of a repeated key went."""
+    fake = FakeTransport().reply("GET", "/x", 200)
+    params = httpx2.QueryParams([("a", "1"), ("a", "2"), ("b", "3")])
+    async with Client(base_url="https://api.example.test/", http=HttpOptions(transport=fake)) as client:
+        await client.get("x", expect=nothing, params=params)
+
+    assert fake.calls[0].url.params.multi_items() == [("a", "1"), ("a", "2"), ("b", "3")]
+
+
+async def test_a_walk_sends_every_value_of_its_query_params() -> None:
+    """Send every value of a walk's ``httpx2.QueryParams`` on each page, as a call does."""
+    fake = FakeTransport().reply("GET", "/x", httpx2.Response(200, json=[]))
+    params = httpx2.QueryParams([("tag", "a"), ("tag", "b")])
+    pager = LinkHeader(reader(list[int]), items=list)
+    async with Client(base_url="https://api.example.test/", http=HttpOptions(transport=fake)) as client:
+        await client.paginate("x", pager=pager, params=params).collect()
+
+    assert fake.calls[0].url.params.get_list("tag") == ["a", "b"]
