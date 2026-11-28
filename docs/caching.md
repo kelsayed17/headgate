@@ -22,12 +22,15 @@ policy = CallPolicy(cache=cache)
 
 ## What is stored, and for how long
 
-`HttpCache(*, storage, ttl=None, partition=Partition.CREDENTIAL, methods=None, paths=None, statuses=None)`:
+`HttpCache(*, storage, ttl=None, partition=Partition.CREDENTIAL, methods=frozenset({"GET"}), paths=None,
+statuses=frozenset({200}))`:
 
 - **What is stored**: a request whose method is in `methods` (`{"GET"}` by default) and whose path matches one of
   `paths` (every path by default), answered with a status in `statuses` (`{200}` by default). It is stored **even past a `no-store`**, which is the point for a provider that sends no cache
   headers, or wrong ones. An empty collection matches nothing, so `methods=()` stores nothing. Each is a collection:
-  a bare `str` (`methods="GET"`), a number or a one-shot iterator raises `TypeError`.
+  a bare `str` (`methods="GET"`), a number or a one-shot iterator raises `TypeError`, and so does `None` for
+  `methods` or `statuses`, whose defaults are values: leave them out, or turn the cache off with `cache=None`.
+  `paths=None` is the path filter off.
 - **`paths` takes whole segments or patterns.** A string is one or more whole path segments, matched as a `Route`
   matches, so `"series"` keeps `/v1/series/GDP` but not `/v1/timeseries`. A compiled pattern is searched for in the
   path, for what segments cannot say, such as a file name's prefix or extension:
@@ -120,7 +123,7 @@ POSTs, streams and GETs the rules do not name are never shared, and a hedge neve
 ## Storage faults
 
 A storage that fails (a full disk, an unreachable Redis) never fails a call that would otherwise succeed: the request
-is redone on the network, reported as a `CacheResult` event with outcome `degraded`, and counted in
+is redone on the network, reported as a `CacheChecked` event with outcome `degraded`, and counted in
 `headgate.health.cache_degradations()`. Nothing a caller can see repeats the backend's message, which can carry a DSN
 and its password; only the exception's type is named. Anything else raised inside hishel is a bug and propagates.
 
@@ -135,7 +138,8 @@ The storage is never closed by a client: one storage may serve many clients, so 
 
 - A hit spends no rate turn and is neither a success nor a failure for the breaker. Admission is still decided before
   the fetch, so an open breaker refuses a call the cache could have answered.
-- Every request the cache answers emits `CacheResult` with outcome `hit`, `miss`, `shared` or `degraded`.
+- Every request the cache answers emits `CacheChecked` with outcome `hit`, `miss`, `coalesced` (it waited on an
+  identical request's download) or `degraded`.
 
 ## Conditional reads
 

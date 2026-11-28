@@ -172,7 +172,8 @@ the routes that override it. `RouteOptions` gains `timeout` (P24), since every o
   and `Deprecated` becomes `DeprecationNoticed`, so every event is a past-tense fact (P27).
 - `head()` requires `expect=` like every verb (P25): `head(url, expect=nothing)` is the one spelling.
 - `HttpCache(methods=frozenset({"GET"}), statuses=frozenset({200}))`: defaults are values, so `None` keeps meaning
-  off (P12).
+  off (P12). The two stay typed `Collection[str]` and `Collection[int]`, as 1.7 typed and checks them, so a tuple is
+  still accepted; the fields hold frozensets, and `None` for either is a `TypeError`. (Amended with the phase 3 plan.)
 - Time has one seam (P8): the `timing=` keyword goes from `RateBudget`, `RetryBudget`, `BreakerRegistry`,
   `CircuitBreaker` and `CachedTokenAuth`, and `FaultyTransport` drops `sleep=`. `timing_override()` and
   `TestClock.install()` are the way in, as they already are for `Client`.

@@ -39,12 +39,12 @@ __all__ = ["HttpCache", "Partition"]
 #: The methods ``HttpCache(methods=...)`` may name: those a URL identifies, since the URL is the cache key.
 _URL_KEYED_METHODS: Final = frozenset({"GET", "HEAD"})
 
-#: What ``methods`` and ``statuses`` mean when left ``None``.
+#: What ``methods`` and ``statuses`` hold when left out.
 _DEFAULT_METHODS: Final = frozenset({"GET"})
 _DEFAULT_STATUSES: Final = frozenset({200})
 
 
-class Partition(enum.Enum):
+class Partition(enum.StrEnum):
     """Whose entries a cached response is visible to."""
 
     CREDENTIAL = "credential"
@@ -89,9 +89,9 @@ class HttpCache:
     storage: AsyncBaseStorage
     ttl: float | None = None
     partition: Partition = Partition.CREDENTIAL
-    methods: Collection[str] | None = None
+    methods: Collection[str] = _DEFAULT_METHODS
     paths: Collection[str | re.Pattern[str]] | None = None
-    statuses: Collection[int] | None = None
+    statuses: Collection[int] = _DEFAULT_STATUSES
 
     def __post_init__(self) -> None:
         """Refuse a TTL no entry could live by, a method a URL cannot key, and a path rule that matches every path.
@@ -101,32 +101,32 @@ class HttpCache:
         if self.ttl is not None and not (self.ttl > 0 and math.isfinite(self.ttl)):
             msg = f"ttl must be a positive finite number of seconds, or None (got {self.ttl})"
             raise ValueError(msg)
-        if self.methods is not None:
-            check_names("methods", self.methods, "a collection of methods, such as ('GET',)")
-            methods = frozenset(method.upper() for method in self.methods)
-            if bodied := sorted(methods - _URL_KEYED_METHODS):
-                msg = (
-                    f"methods= may name only GET and HEAD (got {', '.join(bodied)}): the cache keys an entry by its "
-                    f"URL, so two requests with different bodies would share one"
-                )
-                raise ValueError(msg)
-            object.__setattr__(self, "methods", methods)
+        _refuse_none("methods", self.methods, "('GET',)", "GET")
+        check_names("methods", self.methods, "a collection of methods, such as ('GET',)")
+        methods = frozenset(method.upper() for method in self.methods)
+        if bodied := sorted(methods - _URL_KEYED_METHODS):
+            msg = (
+                f"methods= may name only GET and HEAD (got {', '.join(bodied)}): the cache keys an entry by its "
+                f"URL, so two requests with different bodies would share one"
+            )
+            raise ValueError(msg)
+        object.__setattr__(self, "methods", methods)
         if self.paths is not None:
             check_collection("paths", self.paths, "a collection of path fragments or patterns, such as ('/items',)")
             paths = tuple(self.paths)
             for path in paths:
                 _check_path(path)
             object.__setattr__(self, "paths", paths)
-        if self.statuses is not None:
-            check_collection("statuses", self.statuses, "a collection of statuses, such as (200,)")
-            statuses = frozenset(self.statuses)
-            if unstorable := sorted(status for status in statuses if not _storable(status)):
-                msg = (
-                    f"statuses= may name only 2xx statuses other than 206 (got {', '.join(map(str, unstorable))}): "
-                    f"hishel stores no other response, and a 206 holds only part of the body"
-                )
-                raise ValueError(msg)
-            object.__setattr__(self, "statuses", statuses)
+        _refuse_none("statuses", self.statuses, "(200,)", "200")
+        check_collection("statuses", self.statuses, "a collection of statuses, such as (200,)")
+        statuses = frozenset(self.statuses)
+        if unstorable := sorted(status for status in statuses if not _storable(status)):
+            msg = (
+                f"statuses= may name only 2xx statuses other than 206 (got {', '.join(map(str, unstorable))}): "
+                f"hishel stores no other response, and a 206 holds only part of the body"
+            )
+            raise ValueError(msg)
+        object.__setattr__(self, "statuses", statuses)
 
     def caches_request(self, method: str, path: str) -> bool:
         """Return whether a request with *method* (in any case) and the URL path *path* goes through the cache.
@@ -134,17 +134,29 @@ class HttpCache:
         *path* is the path as sent, percent-encoded (:func:`~headgate._core.url_path`): a fragment is matched segment by
         segment, so an escaped ``/`` stays in its segment, and a pattern is searched in the decoded path, as written.
 
-        ``methods`` left ``None`` means ``GET``, and ``paths`` left ``None`` any path; an empty collection matches
-        nothing. Any other request is sent past the cache: never looked up, never stored.
+        ``paths`` left ``None`` matches any path; an empty collection matches nothing. Any other request is sent past
+        the cache: never looked up, never stored.
         """
-        methods = _DEFAULT_METHODS if self.methods is None else self.methods
-        if method.upper() not in methods:
+        if method.upper() not in self.methods:
             return False
         return self.paths is None or any(_matches(path, rule) for rule in self.paths)
 
     def stores_status(self, status: int) -> bool:
-        """Return whether a response with *status* may be stored: one in ``statuses``, ``200`` when it is ``None``."""
-        return status in (_DEFAULT_STATUSES if self.statuses is None else self.statuses)
+        """Return whether a response with *status* may be stored: one in ``statuses``."""
+        return status in self.statuses
+
+
+def _refuse_none(option: str, value: object, example: str, default: str) -> None:
+    """Refuse ``None`` for *option*, whose default is a value: left out, it is *default*; ``cache=None`` is off.
+
+    :raises TypeError: naming the option, an *example* collection, and the two spellings ``None`` might have meant.
+    """
+    if value is None:
+        msg = (
+            f"{option}= takes a collection, such as {example}, not None: leave it out for {default}, or turn the cache "
+            "off with cache=None"
+        )
+        raise TypeError(msg)
 
 
 def _storable(status: int) -> bool:

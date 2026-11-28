@@ -37,8 +37,8 @@ coroutine function: its events would be dropped. Hand slow work (a network sink)
 | `RetryScheduled` | the retry layer will send again | `attempt`, `delay`, `reason` (`"503"`, `"ConnectError"`, `"hedge"`) |
 | `RateLimited` | the rate budget held the call, or its response paused the budget | `delay`, `reason`: `paced`, `throttled`, `paused`, `pushback` |
 | `BreakerChanged` | an origin's breaker changed state | `origin`, `previous`, `state`, `failures`, `call` |
-| `CacheResult` | the cache answered | `outcome`, a `CacheOutcome`: `hit`, `miss`, `shared`, `degraded` |
-| `Deprecated` | the response announced deprecation or a sunset | `deprecated`, `deprecated_at`, `sunset_at`, `link`, `sunset_link` |
+| `CacheChecked` | the cache checked the call | `outcome`, a `CacheOutcome`: `hit`, `miss`, `coalesced`, `degraded` |
+| `DeprecationNoticed` | the response announced deprecation or a sunset | `deprecated`, `deprecated_at`, `sunset_at`, `link`, `sunset_link` |
 | `CallFinished` | a call ends, either way | `status_code`, `error` (the exception type's name; not that of a non-`ClientError` a `stream()` block raised itself), `attempts`, `elapsed` |
 
 Every call event is a `CallEvent` and carries `call`, a `CallInfo`: the `method`, the `url` as given (sanitized), the
@@ -95,7 +95,7 @@ provider's own header first if it uses another.
 
 A provider retiring an endpoint says so on its responses. When a response carries a valid `Deprecation` header (RFC
 9745's `@<epoch>` date, or the older `true` or HTTP-date forms) or a `Sunset` date (RFC 8594), the call emits a
-`Deprecated` event with the parsed dates and the `rel="deprecation"` and `rel="sunset"` links, resolved and redacted.
+`DeprecationNoticed` event with the parsed dates and the `rel="deprecation"` and `rel="sunset"` links, resolved and redacted.
 An observer that alerts on it finds every endpoint a client depends on that is going away, before it does.
 
 ## User-Agent
