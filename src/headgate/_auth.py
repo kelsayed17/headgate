@@ -349,6 +349,30 @@ def _refuse_final_overrides(cls: type, base: type, hooks: str) -> None:
             raise TypeError(msg)
 
 
+#: How each synchronous hook is written, for the refusal of a coroutine function in its place.
+_SYNC_HOOKS: Final = {
+    "sign": "def sign(self, request, now)",
+    "skips": "def skips(self, request)",
+    "attach": "def attach(self, request, token)",
+}
+
+
+def _refuse_async_hooks(cls: type, base: type, *hooks: str) -> None:
+    """Refuse *cls* when one of its *hooks* is a coroutine function: *base*'s flow calls each and never awaits it.
+
+    An ``async def sign`` or ``attach`` would set nothing, and an ``async def skips`` returns a coroutine, which is
+    truthy, so every request would be skipped. ty reports each; this refuses them for an untyped caller too.
+    """
+    for hook in hooks:
+        if inspect.iscoroutinefunction(getattr(cls, hook)):
+            msg = (
+                f"{cls.__name__}.{hook} is a coroutine function, which {base.__name__} calls without awaiting, so it "
+                f"would never run: write {_SYNC_HOOKS[hook]}, and fetch what it needs (a key from a KMS) before the "
+                "call"
+            )
+            raise TypeError(msg)
+
+
 def _carries(auth: Auth, request: httpx2.Request) -> bool:
     """Return whether *request* carries any of the headers or query parameters *auth* declares."""
     params = request.url.params
@@ -491,13 +515,7 @@ class SigningAuth(Auth):
         """Refuse a concrete subclass that declares nothing it signs with, and register its parameters as secret."""
         super().__init_subclass__(**kwargs)
         _refuse_final_overrides(cls, SigningAuth, "sign and skips")
-        if inspect.iscoroutinefunction(cls.sign):
-            msg = (
-                f"{cls.__name__}.sign is a coroutine function, which the signing layer cannot await, so its requests "
-                "would go out unsigned: write def sign(self, request, now), and fetch what it needs (a key from a "
-                "KMS) before the call"
-            )
-            raise TypeError(msg)
+        _refuse_async_hooks(cls, SigningAuth, "sign", "skips")
         declared = _declares_names(cls)
         if not inspect.isabstract(cls) and not declared:
             msg = (
@@ -738,6 +756,7 @@ class CachedTokenAuth[TokenT = str](Auth):
         """
         super().__init_subclass__(**kwargs)
         _refuse_final_overrides(cls, CachedTokenAuth, "mint, attach and skips")
+        _refuse_async_hooks(cls, CachedTokenAuth, "attach", "skips")
         declared = _declares_names(cls)
         _check_margin(cls)
         mro = cls.__mro__

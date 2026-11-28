@@ -93,7 +93,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   a coroutine function raises `TypeError` when the class is defined (its requests went out unsigned, with only a
   "never awaited" warning): write `def sign(self, request, now)`. `Client()` raises `TypeError` for an observer whose
   `notify` is a coroutine function (its events were dropped): write `def notify(self, event)`; and for a middleware
-  whose `__call__` is not one (it failed at the first call): write `async def __call__(self, request, call_next)`.
+  whose `__call__` is not one (it failed at the first call): write `async def __call__(self, request, call_next)`. A
+  coroutine-function `skips`, on either auth base, and `attach` on a `CachedTokenAuth`, are refused when the class is
+  defined too: an `async def skips` returned a coroutine, which is truthy, so every request went out unsigned or
+  without its token. Write `def skips(self, request)` and `def attach(self, request, token)`.
 - `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.

@@ -556,5 +556,15 @@ def test_an_async_sign_is_refused_when_defined() -> None:
     async def sign(_self: SigningAuth, request: httpx2.Request, now: float) -> None:
         request.headers["X-Sig"] = repr(now)
 
-    with pytest.raises(TypeError, match=r"_AsyncSign\.sign is a coroutine function, which the signing layer cannot"):
+    with pytest.raises(TypeError, match=r"_AsyncSign\.sign is a coroutine function, which SigningAuth calls without"):
         type("_AsyncSign", (SigningAuth,), {"sign": sign, "credential_headers": frozenset({"X-Sig"})})
+
+
+def test_an_async_skips_is_refused_when_defined() -> None:
+    """Refuse a coroutine-function ``skips`` (R2): a coroutine is truthy, so every request went out unsigned."""
+
+    async def skips(_self: SigningAuth, _request: httpx2.Request) -> bool:
+        return False
+
+    with pytest.raises(TypeError, match=r"_AsyncSkips\.skips is a coroutine function, which SigningAuth calls"):
+        type("_AsyncSkips", (_Signer,), {"skips": skips})
