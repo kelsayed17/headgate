@@ -23,6 +23,33 @@ change the public API; such changes are listed under **Changed** and **Removed**
   keyed the entry by its URL alone, so a second GET with another body was served the first one's answer. A body keyword
   on either raises `TypeError` pointing to `query()`, the safe read with a body: write
   `query(url, expect=..., body=Json(...))`. `delete()` keeps `body=`.
+- A call's `httpx2.URL` must be absolute. A relative one raises `TypeError`, since its only use was to skip escaping:
+  `httpx2.URL(f"items/{uid}")` type-checked and reached `/admin` for `uid = "../admin"`. Write a t-string,
+  `t"items/{uid}"`, or `{fragment:raw}` for a pre-built fragment. A URL of any other kind (`None`, `bytes`, a list, a
+  number) raises `TypeError` too, instead of being sent as its text with the client's credentials: pass a `str`, a
+  t-string or an absolute `httpx2.URL`.
+- `params=`, `Form` fields and `Multipart` fields share one allowlist of values with a wire meaning:
+  - a `str`, `int`, `float`, `bool` or `None` is sent as before;
+  - an `Enum` member is sent as its `.value`, which must be a `str` or an `int`: a plain `Enum` went out as
+    `Status.OPEN`, and now goes out as `open`;
+  - a `UUID` or a `Decimal` is sent as its text, as before;
+  - a `date`, `datetime` or `time` is sent in ISO 8601, `2026-01-02T03:04:00+00:00`, where `str(datetime)` put a
+    space in place of the `T`;
+  - every other value raises `TypeError` naming the key and its type, instead of being sent as its Python `repr`: a
+    dataclass, a msgspec `Struct`, a pydantic model, `object()`, a mapping, a set, `bytes`, an `Enum` whose value is
+    neither a `str` nor an `int`, and a list or tuple inside a list or tuple. `params=` refuses it at the call, and a
+    `Form` or `Multipart` when it is built (a nested `dict` in a `Form` was sent as its `repr`). Encode such a value
+    into text first, with `json.dumps` or the API's own format.
+- `Form.fields` and `Multipart.fields` hold the encoded values, a copy of the mapping given: `Form({"s": Status.OPEN})`
+  has `fields == {"s": "open"}`. Read the values you built the body from, not the body's.
+- Parameters that take names or codes take a collection of them: `CassetteFilter(headers=, params=)`,
+  `HttpCache(methods=, paths=, statuses=)` and `RetryPolicy(methods=, statuses=)`. A bare `str` (read one letter at a
+  time), a number or a one-shot iterator (a generator, which checking would empty) raises `TypeError` naming the
+  option: write `methods=("GET",)` or `statuses=(503,)`, and turn a generator into a tuple. `RetryPolicy(methods="GET")`
+  retried no GET, and `HttpCache(methods="GET")` raised a `ValueError` that named the letters.
+- `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
+  `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
+  and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.
 
 ### Removed
 
