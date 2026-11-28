@@ -236,3 +236,25 @@ async def test_digest_auth_is_three_lines_of_auth() -> None:
 def test_each_auth_reads_as_what_its_constructor_takes(auth_class: type, signature: str) -> None:
     """Show each constructor's own parameters, not the ``(*args, **kwargs)`` the protocol base put there."""
     assert str(inspect.signature(auth_class, annotation_format=annotationlib.Format.STRING)) == signature
+
+
+def test_an_auth_whose_class_escaped_the_checks_is_refused() -> None:
+    """Refuse at ``Client()`` a leaf below a base whose ``__init_subclass__`` skips ``super()`` (R4)."""
+
+    class _Quiet(SigningAuth):
+        def __init_subclass__(cls, **kwargs: object) -> None:
+            del cls, kwargs  # skips super().__init_subclass__(), so no check runs for a subclass
+
+    class _Leaf(_Quiet):
+        @override
+        def sign(self, request: httpx2.Request, now: float) -> None:
+            request.headers["X-Key"] = "secret"  # declared nowhere
+
+    with pytest.raises(TypeError, match=r"_Leaf was not checked when it was defined: .*super\(\)\.__init_subclass__"):
+        Client(base_url="https://api.example", auth=_Leaf())
+
+
+def test_every_auth_headgate_ships_was_checked() -> None:
+    """Accept the shipped auths and a well-behaved subclass, each checked when its class was defined."""
+    for auth in (BearerAuth("t"), StaticHeaderAuth({}), QueryParamAuth({}), _Digest("user", "pass")):
+        Client(base_url="https://api.example", auth=auth)
