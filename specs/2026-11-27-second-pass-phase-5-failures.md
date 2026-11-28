@@ -288,3 +288,37 @@ the body cursor); the delete in `security.md`; every block of `streaming.md`. Fo
 stood were rewritten to run or check rather than left unmarked: the request-body fragment of `streaming.md` (a method
 body with `self` and `...`), the wrapper method of `configuration.md` (now a small class), the `HeaderTokens` and
 `SearchPages` pagers (a truthiness test of `str | None`, and a page type that clashed with the page's other one).
+
+## Changed with the phase 5 review
+
+The review overturned or tightened these, and each is built and tested:
+
+- **R1, the docs test (Decision 19):** every `python` and `py` fence in `docs/` must carry a marker; a third mode,
+  `<!-- docs-test: skip: <reason> -->`, must give its reason; a marker before no Python fence fails. The context
+  (`tests/examples/doc_context.py`) exports fixtures only, and the module header no longer star-imports `headgate`, so
+  a sample that leaves out an import fails (proven by removing one from `security.md`). A run sample's `test_*` that
+  takes an argument fails the run rather than being skipped.
+- **R2 and the loop guard design (Decision 16):** the body check runs only for a pager whose class says
+  `counts_pages = True`, a `ClassVar` declared on `WritingPager` (default `False`) and set by `Offset`, `PageNumber`
+  and `BodyOffset`; the walk reads it with `getattr`, so a pager by its shape needs nothing. It is documented on the
+  `Pager` protocol but is not a member of it: a protocol member is required of every structural pager, even with a
+  default, so declaring it there would have made every custom pager write the line. `page_items` runs once per page:
+  the items the guard peeks at are held for the item walk, as `chain((first,), rest)`, and released when the walk
+  moves past the page. Spec 5.5 is amended.
+- **R3 (Decision 18):** a `FakeTransport` keeps its answers on itself; the resolver reads them only from a
+  `FakeTransport`; the weak maps and `__weakref__` go. **N7 (Decision 17):** `FakeNetwork(...)` raises; `fake_network`
+  builds the handle past its constructor.
+- **R4:** `localhost` and the names under it resolve to `127.0.0.1` and `::1` (RFC 6761). Spec 6.2 is amended.
+- **R5:** a walk's payload without a writer is encoded in `paginate()`, refused in a walk's words.
+- **Json (Decision 9):** a hand-written final class, `__slots__ = ("_encoded", "value")`, encoded once.
+- **cache_ttl (Decision 15):** refused on every call that is not cached. Spec 5.4 is amended.
+- **Retry statuses (Decision 5):** 200–599.
+- **Codecs (Decision 11):** both flavors refuse a writer of a class they cannot encode, worded for a writer; the
+  pydantic flavor names the class it was given before reading pydantic's message.
+- **N1 (Decision 12):** a reader's misuse is a plain `TypeError` with a private mark (`reader_misuse`,
+  `is_reader_misuse` in `_failures.py`); no private class reaches a traceback.
+- **N2–N6, N10–N12** as the review lists them: Json's `ValueError` names `Json`; `resolve()` names a bad address;
+  `Reader(bytes)`, `Reader(dict)` and `Reader(list)` point to their readers; a returned class is named as one; an
+  observer or middleware given as its class is refused; the changelog names what used to be accepted; a bearer token
+  with whitespace around it, or starting with `bearer` after stripping, is refused; every value of a repeated key in
+  an `httpx2.QueryParams` is sent.
