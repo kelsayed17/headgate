@@ -92,6 +92,9 @@ UNRETRYABLE_ERRORS: tuple[type[Exception], ...] = (
     httpx2.TooManyRedirects,
 )
 
+#: The lowest final status: httpx2 handles a 1xx itself and never hands one back as a response.
+_FIRST_FINAL_STATUS: Final = 200
+
 #: The methods a hedge may never be configured for: RFC 9110 does not define them as idempotent.
 _UNHEDGEABLE_METHODS: Final = frozenset({"POST", "PATCH"})
 
@@ -277,6 +280,12 @@ class RetryPolicy:
         )
         check_names("methods", self.methods, "a collection of methods, such as ('GET', 'PUT')")
         check_statuses("statuses", self.statuses, "a collection of statuses, such as (429, 503)")
+        if informational := sorted(status for status in self.statuses if status < _FIRST_FINAL_STATUS):
+            msg = (
+                f"statuses= may not name a 1xx (got {', '.join(map(str, informational))}): httpx2 never answers with "
+                "one, so it would never match"
+            )
+            raise ValueError(msg)
         methods = frozenset(method.upper() for method in self.methods)
         object.__setattr__(self, "methods", methods)
         object.__setattr__(self, "statuses", frozenset(self.statuses))

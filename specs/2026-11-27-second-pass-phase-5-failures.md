@@ -53,8 +53,8 @@ the dev group for the docs' codec.
    and `Expect(headers=)` use `check_text_map`; `events(last_event_id=)` takes a `str` or `None`.
 4. **`stream(method=)` takes one of `Method`'s seven upper-case names**; any other value, `"get"` and `"BREW"`
    included, is a `TypeError` naming the seven, as the spec's 5.1 says.
-5. **Retry statuses are 100–599 and nothing narrower**: a `RetryPolicy` may retry a 202 a polling API answers while a
-   job runs. `HttpCache(statuses=)` checks kinds and range with the same helper before its 2xx rule.
+5. **Retry statuses are 200–599**: a `RetryPolicy` may retry a 202 a polling API answers while a job runs, but not a
+   1xx, which httpx2 never hands back. (Changed with the phase 5 review, which overturned 100–599.) `HttpCache(statuses=)` checks kinds and range with the same helper before its 2xx rule.
 6. **`Expect.on(status=)` takes an `int`** (`check_int`), so `True` and `"404"` are `TypeError`s naming `status=`.
 7. **An observer needs a callable `notify`** (`check_observers`): `observers=[print]` and one whose method is
    misspelled are `TypeError`s naming the entry.
