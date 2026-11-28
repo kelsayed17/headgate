@@ -35,17 +35,23 @@ passes `sign` the client's wall-clock time. `Client()` refuses an async observer
 1. **`timing=` leaves `CachedTokenAuth` now.** 2.3 removes its `__init__`, and the keyword lives there; 3.5 removes it
    from the other four constructors in phase 3. The token's clock is `current_timing().clock`, read when its state is
    made: when a `Client` is built with it (the client touches the state, so the auth runs on the timing the client
-   is built under, as the docs already promise), or at its first `seed()` or call if that comes first.
+   is built under, as the docs already promise), or at its first `seed()` or call if that comes first. Changed after
+   review: its clients share one timing, so a client built on another timing than an earlier client's, or than the
+   one a held or minted token was measured on, raises `TypeError`; a state with no token and no mint moves to the
+   client's timing. A copy of the auth gets a state of its own.
 2. **`mint` is declared as a plain `def` returning `AsyncGenerator[...]`**, abstract, so a subclass's `async def mint`
    with `yield` is a valid override for ty.
 3. **`@final` is enforced at runtime too.** A subclass that defines `async_auth_flow` or `reject_credential_rotation`
    raises `TypeError` when it is defined, since the override fails deep inside the call (E13's `AttributeError`).
-4. **`Auth` gets an explicit `__init__(self) -> None`**, which `SigningAuth` and `CachedTokenAuth` inherit, so all
-   three read `()`. It shadows a sibling base's constructor, so the digest recipe becomes
-   `class Digest(httpx2.DigestAuth, Auth)`: the wrapped auth first.
-5. **A declaration through a property still counts** for the "declares at least one name" checks, as it did for
-   `CachedTokenAuth`; it is checked for its kind when the client is built, and its parameters are not registered as
-   secret at class definition.
+4. **`Auth` does not derive from the `CredentialStamper` protocol** (changed after review, replacing an explicit
+   `Auth.__init__(self) -> None`, which shadowed a sibling base's constructor). The protocol base put its
+   `(*args, **kwargs)` constructor in every auth's place; without it, `Auth`, `SigningAuth` and `CachedTokenAuth` read
+   `()` on their own, a cooperative mixin's constructor runs, and the digest recipe keeps
+   `class Digest(Auth, httpx2.DigestAuth)`. A type-level test pins that an `Auth` is assignable to `CredentialStamper`.
+5. **A declaration through a property is refused on `SigningAuth` and `CachedTokenAuth`** (changed during
+   implementation: the plan first let a property count for the "declares at least one name" checks). ty rejects a
+   property over their class attributes, and the check of at least one name cannot read one, so it raises `TypeError`
+   when the class is defined. A plain `Auth` may still declare through a property, checked when a client is built.
 
 ## Review Focus
 
