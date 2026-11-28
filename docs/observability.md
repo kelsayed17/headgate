@@ -112,8 +112,9 @@ A `User-Agent` in `HttpOptions(headers=...)` replaces it entirely.
   it is `refusing` calls now, and its consecutive `failures` since the last success. A client's breakers are its own
   unless it is given a registry, so to watch them, build one and give it to the clients:
   `breaker=BreakerRegistry(BreakerPolicy())`;
-- `observer_failures()`: per observer class, how many events its `notify` raised on, across the process, since an
-  observer that raises cannot be told of it through observers.
+- `observer_failures()`: per observer class, keyed by its module and qualified name (`"myapp.metrics.Exporter"`),
+  how many events its `notify` raised on, across the process, since an observer that raises cannot be told of it
+  through observers.
 
 A broken cache is not counted here: each call that found it broken reports a `CacheChecked` event with outcome
 `degraded`, or `unstored` when its answer could not be stored, which an observer counts with the call it names.

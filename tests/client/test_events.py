@@ -134,6 +134,11 @@ async def test_each_retry_is_its_own_attempt() -> None:
     assert finished.attempts == len(attempts)
 
 
+def _key(cls: type) -> str:
+    """Return the key *cls*'s failures are counted under: its module and qualified name."""
+    return f"{cls.__module__}.{cls.__qualname__}"
+
+
 def _refuse(request: httpx2.Request) -> httpx2.Response:
     """Fail the connection."""
     msg = "connection refused"
@@ -186,13 +191,13 @@ async def test_durations_are_measured_on_the_clients_clock() -> None:
 
 async def test_a_failing_observer_never_breaks_the_call() -> None:
     """Complete the call, deliver to the other observers, and count the failures in ``headgate.health``."""
-    before = observer_failures().get(_Broken.__qualname__, 0)
+    before = observer_failures().get(_key(_Broken), 0)
     recorder = Recorder()
     body = await _client(_get("x"), _Broken(), recorder).get("x", expect=as_bytes)
 
     assert body == b""
     assert len(recorder.events) == len(("started", "attempt", "finished"))
-    assert observer_failures()[_Broken.__qualname__] == before + len(recorder.events)
+    assert observer_failures()[_key(_Broken)] == before + len(recorder.events)
 
 
 async def test_a_streamed_get_reports_its_start_and_end() -> None:

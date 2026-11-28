@@ -214,7 +214,8 @@ class Observer(Protocol):
         ...
 
 
-#: How many times each observer class raised from ``notify``, since process start.
+#: How many times each observer class raised from ``notify``, since process start, keyed by its module and qualified
+#: name (``"myapp.metrics.Exporter"``), so two classes of one name in different modules are counted apart.
 #: Unbounded, since its keys are observer classes, which a program defines a fixed few of, not hosts it is handed.
 OBSERVER_FAILURES: Counter[str] = Counter()
 
@@ -243,7 +244,8 @@ class Emitter:
                 observer.notify(event)
                 delivered = True
             if not delivered:
-                OBSERVER_FAILURES[type(observer).__qualname__] += 1
+                kind = type(observer)
+                OBSERVER_FAILURES[f"{kind.__module__}.{kind.__qualname__}"] += 1
 
 
 #: The emitter of a client with no observers.

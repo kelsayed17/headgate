@@ -49,6 +49,8 @@ def breaker_states(registry: BreakerRegistry) -> dict[str, BreakerSnapshot]:
 def observer_failures() -> dict[str, int]:
     """Return, per observer class, how many events its ``notify`` raised on, which headgate swallowed.
 
+    Each key is the class's module and qualified name, such as ``"myapp.metrics.Exporter"``.
+
     The count is process-wide, across every client: an observer that raises cannot be told about its own failure
     through observers, so this is where it is read.
     """
