@@ -72,11 +72,15 @@ member (ruff `SLF001`, which applies to `tests/` too).
 8. **`SecurityOptions(check: AddressCheck | None = None)`**, `None` being `forbidden_reason`, accepted only with
    `block_private_hosts=True` (`ValueError`, as `resolver=`) and refused with `TypeError` when not callable.
    `AddressGuard`, `PinnedHTTPTransport` and `resolve_with_loop` stay in their private modules.
-9. **A transport that pins itself holds a `GuardBinding`** (`security/_transport.py`), registered in a weak map the
-   stack reads with `guard_binding(transport)`, which replaces the public `AsyncCurlTransport.bind_guard` and the
-   `GuardedTransport` protocol: the stack binds a curl transport without a public method and without importing the
-   optional curl module. The binding holds no reference to its transport, so the weak map frees both. Its refusals
-   keep their messages.
+9. **A curl transport holds a `GuardBinding` (`headgate._curl`) in its own instance dictionary**, which
+   `guard_binding(transport)` reads with `vars()` and an `isinstance` check, so a wrapper forwarding attributes, or an
+   object with no instance dictionary, has none; it replaces the public `AsyncCurlTransport.bind_guard` and the
+   `GuardedTransport` protocol. The stack reads it only once `headgate._curl` is in `sys.modules`, since the module
+   needs the curl extra and a curl transport cannot exist before it is imported. A shallow copy of the transport shares
+   its curl session and so its binding, which keeps the one-guard refusal; `bind()` checks and sets under a lock. Its
+   refusals keep their messages. (Changed with the phase 4 review: the first cut kept the bindings in a weak map in
+   `security/_transport.py`, which crashed `Client()` on an unhashable transport, such as a dataclass, and gave a copy
+   of a curl transport a binding of its own, escaping the one-guard rule.)
 10. **4.5's predicates become functions of their private modules:** `caches_request(cache, method, path)` and
     `stores_status(cache, status)` in `cache/_policy.py`, `response_parts(step)` in `testing/_faults.py` (both fakes
     use it; kept out of that module's `__all__`, which the one-home test requires to be exported whole by
