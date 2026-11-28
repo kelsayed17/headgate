@@ -80,7 +80,8 @@ class CacheOutcome(StrEnum):
     * ``HIT``: a stored response answered it;
     * ``MISS``: it went to the network (and its response may have been stored);
     * ``COALESCED``: it waited on an identical request's download and got a copy of its response, or its failure;
-    * ``DEGRADED``: the storage failed, so it went to the network uncached.
+    * ``DEGRADED``: the storage failed: the request went to the network uncached, or its response could not be stored
+      (reported after its ``MISS``).
 
     The cache is TTL-only and never revalidates an entry with the origin, so there is no revalidated outcome.
     """

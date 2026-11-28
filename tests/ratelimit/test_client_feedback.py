@@ -16,7 +16,7 @@ import pytest
 
 from headgate import CallPolicy, Client, HttpCache, HttpOptions, Rate, RateBudget, RateLimitError
 from headgate._core import AttemptFinished, CallFinished, RateLimited, Timing
-from headgate.cache._transport import CACHE_DEGRADATIONS
+from headgate.events import CacheChecked, CacheOutcome
 from headgate.testing import TestClock
 from tests.support.breakers import failures
 from tests.support.events import Recorder
@@ -133,20 +133,20 @@ async def test_a_call_the_paused_budget_refuses_reports_no_attempt() -> None:
 
 
 async def test_a_pause_past_the_deadline_is_not_mistaken_for_a_cache_fault(storage: AsyncSqliteStorage) -> None:
-    """Raise the pause through the cache layer as itself, counting no cache degradation."""
+    """Raise the pause through the cache layer as itself, reporting no cache degradation."""
     clock = TestClock()
     budget = _budget(clock)
     server = _Server()
     cache = HttpCache(storage=storage)
-    client = _client(budget, server, cache=cache)
+    recorder = Recorder()
+    client = _client(budget, server, cache=cache, recorder=recorder)
     with pytest.raises(RateLimitError):
         await client.get("x", expect=RESPONSE)
-    before = CACHE_DEGRADATIONS[_HOST]
 
     with pytest.raises(RateLimitError, match="past the call's deadline"):
         await client.get("x", expect=RESPONSE, deadline=_DEADLINE)
 
-    assert CACHE_DEGRADATIONS[_HOST] == before
+    assert CacheOutcome.DEGRADED not in [event.outcome for event in recorder.of(CacheChecked)]
 
 
 async def test_feedback_from_another_origin_neither_pauses_nor_throttles_the_shared_budget() -> None:

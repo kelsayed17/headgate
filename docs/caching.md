@@ -123,13 +123,15 @@ POSTs, streams and GETs the rules do not name are never shared, and a hedge neve
 ## Storage faults
 
 A storage that fails (a full disk, an unreachable Redis) never fails a call that would otherwise succeed: the request
-is redone on the network, reported as a `CacheChecked` event with outcome `degraded`, and counted in
-`headgate.health.cache_degradations()`. Nothing a caller can see repeats the backend's message, which can carry a DSN
-and its password; only the exception's type is named. Anything else raised inside hishel is a bug and propagates.
+is redone on the network and reported as a `CacheChecked` event with outcome `degraded`. A write that fails after the
+call accepted a miss, or that outlasts the call's deadline, is dropped and reported the same way, after the call's
+`miss`. Count the `degraded` outcomes in an [observer](observability.md) to watch a cache's health: each names its
+call. Nothing a caller can see repeats the backend's message, which can carry a DSN and its password; only the
+exception's type is named. Anything else raised inside hishel is a bug and propagates.
 
 hishel 2's own storages (`AsyncSqliteStorage`, `AsyncRedisStorage`) catch most of their faults themselves: a failed read
 is a miss and a failed write leaves the response uncached, each logged through the `hishel` logger with its traceback.
-Those never reach headgate, so `cache_degradations()` counts only a fault a storage raises, such as one of your own
+Those never reach headgate, so a `degraded` outcome reports only a fault a storage raises, such as one of your own
 storage's. Route or silence the `hishel` logger if a backend's message must not reach your logs.
 
 The storage is never closed by a client: one storage may serve many clients, so whoever created it closes it.

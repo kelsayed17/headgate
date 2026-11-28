@@ -8,9 +8,8 @@ from dataclasses import dataclass
 from headgate._core import OBSERVER_FAILURES, BreakerState
 from headgate.breaker import BreakerRegistry
 from headgate.breaker._registry import table_of
-from headgate.cache._transport import CACHE_DEGRADATIONS
 
-__all__ = ["BreakerSnapshot", "breaker_states", "cache_degradations", "observer_failures"]
+__all__ = ["BreakerSnapshot", "breaker_states", "observer_failures"]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -41,15 +40,10 @@ def breaker_states(registry: BreakerRegistry) -> dict[str, BreakerSnapshot]:
     }
 
 
-def cache_degradations() -> dict[str, int]:
-    """Return, per host, how many requests found the HTTP cache broken and were handed to the live transport.
-
-    It holds at most 1024 hosts, the breaker registry's default bound: past that, the host least recently degraded is
-    dropped, and counts from zero if it degrades again.
-    """
-    return dict(CACHE_DEGRADATIONS)
-
-
 def observer_failures() -> dict[str, int]:
-    """Return, per observer class, how many events its ``notify`` raised on, which headgate swallowed."""
+    """Return, per observer class, how many events its ``notify`` raised on, which headgate swallowed.
+
+    The count is process-wide, across every client: an observer that raises cannot be told about its own failure
+    through observers, so this is where it is read.
+    """
     return dict(OBSERVER_FAILURES)

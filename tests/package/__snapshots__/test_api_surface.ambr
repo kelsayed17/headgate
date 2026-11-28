@@ -147,13 +147,12 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.health]
   '''
   module headgate.health
-  __all__ = ['BreakerSnapshot', 'breaker_states', 'cache_degradations', 'observer_failures']
+  __all__ = ['BreakerSnapshot', 'breaker_states', 'observer_failures']
   class BreakerSnapshot(object)(*, state: 'BreakerState', refusing: 'bool', failures: 'int') -> 'None'
       field state: BreakerState
       field refusing: bool
       field failures: int
   def breaker_states(registry: 'BreakerRegistry') -> 'dict[str, BreakerSnapshot]'
-  def cache_degradations() -> 'dict[str, int]'
   def observer_failures() -> 'dict[str, int]'
   '''
 # ---
