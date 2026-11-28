@@ -29,6 +29,10 @@ when they are sent alike. `Offset`, `PageNumber` and `BodyOffset` build each req
 ignores the paging parameter would answer the same page forever: a page with items whose body repeats an earlier
 page's raises `ClientError` too. A walk remembers a fixed-size digest of each, for its last 4096 pages.
 
+`Paginated` is the class of the walk itself, so a traceback names it: `await client.paginate(...)` raises
+`TypeError: 'Paginated' object can't be awaited`, and a plain `for` that it is not iterable. Iterate with `async for`,
+or `await` its `collect()`.
+
 ## Collecting into a list
 
 `await walk.collect()` returns every item as a list. `collect(max_items=n)` returns at most the first `n`, and stops as

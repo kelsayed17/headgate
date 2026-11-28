@@ -131,6 +131,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `read: Reader[Page]`. `paginate()` raises `TypeError` for a pager whose `read` is missing or is not a `Reader` or an
   `Expect`, before the pager runs.
 
+- `Paginated` is the class of the walk `paginate()` returns, a final class rather than a protocol, so a mistake names
+  it: `await client.paginate(...)` raises `TypeError: 'Paginated' object can't be awaited`, where it named a private
+  `PageWalk`. Iterate with `async for`, or `await walk.collect()`. Annotations are unchanged: `Paginated[Issue]` and
+  `Paginated[Issue, IssuePage]`.
+
 ### Removed
 
 - The cache's `ClientConfigurationError` for an auth that does not declare its credentials, which no auth can now

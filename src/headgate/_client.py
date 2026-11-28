@@ -127,7 +127,7 @@ from headgate.errors import (
     RefusedError,
 )
 from headgate.pagination import PageRequest, WritingPager
-from headgate.pagination._paginated import PageWalk, check_page_budget
+from headgate.pagination._paginated import PageWalk, Paginated, check_page_budget
 from headgate.ratelimit._budget import BudgetPausedError, RateBudget
 from headgate.ratelimit._budgets import CALL_BUDGET, Lane, PathBudgets
 from headgate.ratelimit._rate import Rate
@@ -147,7 +147,6 @@ if TYPE_CHECKING:
     from headgate.breaker._registry import Breaker
     from headgate.cache._policy import HttpCache
     from headgate.pagination import Pager
-    from headgate.pagination._paginated import Paginated
     from headgate.retry._policy import RetryPolicy
     from headgate.streaming import Stream
 
@@ -724,7 +723,8 @@ class Client:
             body = Json(request.payload) if write is None else write(request.payload)
             return await self.post(request.url, expect=paired, body=body, **page_options)
 
-        return PageWalk(fetch, pager, first, source=self._source, max_pages=max_pages, on_limit=on_limit)
+        walk = PageWalk(fetch, pager, first, source=self._source, max_pages=max_pages, on_limit=on_limit)
+        return Paginated(walk.pages, walk.items)
 
     def _one_key_for_every_page(self, options: CallOptions) -> bool:
         """Return whether every call made with *options* sends one fixed idempotency key.
