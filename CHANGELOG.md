@@ -458,6 +458,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   suite, so a spelling the API no longer has cannot survive in them. The samples it found wrong are fixed: an
   `Auth` without `@override`, a conditional read typed on the SDK rather than its `Client`, a deadline sum over
   optional phases, a pager example whose page type clashed with the page's other one, and missing imports.
+- `params=httpx2.QueryParams([("a", "1"), ("a", "2")])` sends every value, `?a=1&a=2`, on a call and on every page
+  of a walk, where it sent only the first, `?a=1`, losing the rest without a word. Nothing to write differently; a
+  mapping of lists, `params={"a": ["1", "2"]}`, sends the same.
 
 ### Security
 
