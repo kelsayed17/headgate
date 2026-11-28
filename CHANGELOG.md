@@ -340,8 +340,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   being followed may still be declared. Pass `follow_redirects=False` to read the redirect:
   `client.get(url, expect=Expect(ok).on(302, location), follow_redirects=False)`. A walk whose pager's reader declares
   one raises from `paginate()`.
-- `cache_ttl=` on a client without a cache raises `ValueError` at the call, where it was silently ignored. Give the
-  client `CallPolicy(cache=HttpCache(...))`, or leave `cache_ttl=` out.
+- `cache_ttl=` on a call that is not cached raises `ValueError` at the call, where it was silently ignored: on a client
+  without a cache, under a route with `cache=None`, or for a method or path the cache's rules leave out, a POST, a
+  PUT, a PATCH, a DELETE and a QUERY included, since a cache stores only GETs and HEADs. Leave `cache_ttl=` out there,
+  give the client `CallPolicy(cache=HttpCache(...))`, or name the path in `HttpCache(paths=)`.
 - The repeated-body loop guard runs for any pager that declares `counts_pages = True` (a class attribute: its next
   request is computed by counting, as an offset or a page number, not read from the page), where only `Offset`,
   `PageNumber` and `BodyOffset` walks were checked, by their class. Those three declare it; a counting pager of your

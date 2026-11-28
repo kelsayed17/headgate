@@ -249,7 +249,7 @@ await client.get(
     expect=reader_or_expect,
     retry=RetryPolicy(attempts=5),  # replaces the view's, the route's or the client's; None: send once
     follow_redirects=False,  # a 3xx raises as itself; True follows it
-    cache_ttl=60.0,  # this response's cache lifetime, over HttpCache.ttl; None: no lifetime limit
+    cache_ttl=60.0,  # a cached response's lifetime, over HttpCache.ttl; None: no limit; refused if not cached
     params={"q": "gdp"},  # a list or tuple value repeats the key
     headers={"Accept-Language": "en"},
     timeout=Timeouts(read=5.0),  # the phases it sets replace the view's or the client's

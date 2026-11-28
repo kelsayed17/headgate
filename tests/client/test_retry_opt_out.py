@@ -91,7 +91,7 @@ async def test_retry_none_and_a_cache_ttl_are_both_stamped(httpx2_mock: HTTPXMoc
     )
 
     async with cached as client:
-        await client.post("orders", expect=RESPONSE, retry=None, cache_ttl=ttl)
+        await client.get("orders", expect=RESPONSE, retry=None, cache_ttl=ttl)
 
     sent = httpx2_mock.get_requests()[0]
     context = CallContext.find(sent)

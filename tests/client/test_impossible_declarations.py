@@ -10,14 +10,17 @@ of nothing.
 
 from __future__ import annotations
 
-from typing import Final
+from typing import TYPE_CHECKING, Final, LiteralString
 
 import httpx2
 import pytest
 
-from headgate import Client, Expect, HttpOptions, Reader, as_json, nothing
+from headgate import CallPolicy, Client, Expect, HttpCache, HttpOptions, Reader, Route, as_json, nothing
 from headgate.pagination import LinkHeader
 from headgate.testing import FakeTransport
+
+if TYPE_CHECKING:
+    from hishel import AsyncSqliteStorage
 
 _BASE: Final = "https://api.example.test/"
 
@@ -77,3 +80,34 @@ async def test_a_cache_lifetime_on_a_client_without_a_cache_is_refused() -> None
         with pytest.raises(ValueError, match=r"^cache_ttl= sets a cached response's lifetime, but the client of"):
             await client.get("x", expect=nothing, cache_ttl=60.0)
     assert not fake.calls
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "routes", "message"),
+    [
+        ("POST", "x", (), r"the client's cache stores no POST /x: its methods= and paths= leave it out"),
+        ("GET", "y", (), r"the client's cache stores no GET /y: its methods= and paths= leave it out"),
+        ("GET", "x", (Route("/x", cache=None),), r"its route \(/x\) keeps its paths out of the cache"),
+    ],
+    ids=["method", "path", "route"],
+)
+async def test_a_cache_lifetime_on_a_call_the_cache_does_not_store_is_refused(
+    storage: AsyncSqliteStorage, method: str, path: LiteralString, routes: tuple[Route, ...], message: str
+) -> None:
+    """Refuse ``cache_ttl=`` on a call the cache never stores: a method or path its rules leave out, or a route's."""
+    fake = FakeTransport()
+    policy = CallPolicy(cache=HttpCache(storage=storage, paths=("/x",)), routes=routes)
+    async with Client(base_url=_BASE, policy=policy, http=HttpOptions(transport=fake)) as client:
+        send = client.post if method == "POST" else client.get
+        with pytest.raises(ValueError, match=rf"^cache_ttl= sets a cached response's lifetime, but {message}"):
+            await send(path, expect=nothing, cache_ttl=60.0)
+    assert not fake.calls
+
+
+async def test_a_cache_lifetime_on_a_call_the_cache_stores_is_sent(storage: AsyncSqliteStorage) -> None:
+    """Accept ``cache_ttl=`` on a GET the cache's rules store."""
+    fake = FakeTransport().reply("GET", "/x", 200)
+    policy = CallPolicy(cache=HttpCache(storage=storage, paths=("/x",)))
+    async with Client(base_url=_BASE, policy=policy, http=HttpOptions(transport=fake)) as client:
+        await client.get("x", expect=nothing, cache_ttl=60.0)
+    assert len(fake.calls) == 1
