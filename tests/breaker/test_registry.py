@@ -19,6 +19,7 @@ import pytest
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
 
+from headgate import BreakerPolicy
 from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
 from headgate.breaker._registry import DEFAULT_MAX_HOSTS
 from headgate.timing import Timing
@@ -47,13 +48,11 @@ def _trip(breaker: CircuitBreaker) -> None:
 
 def test_a_registry_holds_at_most_max_hosts_dropping_the_least_recently_used_closed_one() -> None:
     """Evict the least recently used closed breaker, keeping open ones and recently used ones."""
-    registry = BreakerRegistry(max_hosts=_MAX)
-    first, second, third = (
-        registry.breaker_for(o, failure_threshold=1, recovery_timeout=_COOLDOWN) for o in _ORIGINS[:3]
-    )
+    registry = BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN), max_hosts=_MAX)
+    first, second, third = (registry.breaker_for(o) for o in _ORIGINS[:3])
     _trip(first)
-    registry.breaker_for(_ORIGINS[1], failure_threshold=1, recovery_timeout=_COOLDOWN)  # second is now recent
-    fourth = registry.breaker_for(_ORIGINS[3], failure_threshold=1, recovery_timeout=_COOLDOWN)
+    registry.breaker_for(_ORIGINS[1])  # second is now recent
+    fourth = registry.breaker_for(_ORIGINS[3])
 
     assert registry.breakers() == (first, second, fourth), "the closed, least recently used third was dropped"
     assert third not in registry.breakers()
@@ -62,22 +61,22 @@ def test_a_registry_holds_at_most_max_hosts_dropping_the_least_recently_used_clo
 
 def test_a_registry_of_open_breakers_still_stays_bounded() -> None:
     """Drop the least recently used breaker of all when every one is open, so failing origins cannot grow it."""
-    registry = BreakerRegistry(max_hosts=1)
-    first = registry.breaker_for(_ORIGINS[0], failure_threshold=1, recovery_timeout=_COOLDOWN)
+    registry = BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN), max_hosts=1)
+    first = registry.breaker_for(_ORIGINS[0])
     _trip(first)
-    second = registry.breaker_for(_ORIGINS[1], failure_threshold=1, recovery_timeout=_COOLDOWN)
+    second = registry.breaker_for(_ORIGINS[1])
     assert registry.breakers() == (second,)
 
 
 def test_a_registry_takes_an_origin_or_a_url_and_refuses_a_relative_one() -> None:
     """Accept an ``httpx2.Origin``, a URL object or text, and refuse a relative URL, which has no origin."""
     registry = BreakerRegistry()
-    by_origin = registry.breaker_for(httpx2.Origin("https://a.example"), failure_threshold=1, recovery_timeout=1.0)
-    by_url = registry.breaker_for(httpx2.URL("https://a.example/p"), failure_threshold=1, recovery_timeout=1.0)
+    by_origin = registry.breaker_for(httpx2.Origin("https://a.example"))
+    by_url = registry.breaker_for(httpx2.URL("https://a.example/p"))
     assert by_origin is by_url
     assert registry.breakers(httpx2.Origin("https://a.example")) == (by_origin,)
     with pytest.raises(ValueError, match="absolute"):
-        registry.breaker_for("/relative", failure_threshold=1, recovery_timeout=1.0)
+        registry.breaker_for("/relative")
 
 
 def test_a_registry_defaults_to_a_thousand_and_twenty_four_breakers_and_refuses_none() -> None:
@@ -93,7 +92,9 @@ def test_one_registry_shared_by_threads_running_their_own_loops_stays_consistent
     Every fetch fails, so the shared breakers trip and then refuse. Each breaker's state stays one of the three, its
     failure count never passes its threshold, and every fetch either ran or was refused, none lost.
     """
-    registry = BreakerRegistry(max_hosts=_SHARED_ORIGINS)
+    registry = BreakerRegistry(
+        BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN), max_hosts=_SHARED_ORIGINS
+    )
     outcomes: list[int] = []
     lock = threading.Lock()
 
@@ -101,7 +102,7 @@ def test_one_registry_shared_by_threads_running_their_own_loops_stays_consistent
         ran = 0
         for n in range(_FETCHES):
             origin = _ORIGINS[(n + offset) % _SHARED_ORIGINS]
-            breaker = registry.breaker_for(origin, failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
+            breaker = registry.breaker_for(origin)
             with contextlib.suppress(Exception), breaker.track() as verdict:
                 ran += 1
                 await asyncio.sleep(0)
@@ -131,14 +132,18 @@ class RegistryMachine(RuleBasedStateMachine):
         """Start with an empty registry on a hand-driven clock."""
         super().__init__()
         self.now = 0.0
-        self.registry = BreakerRegistry(max_hosts=_MAX, timing=Timing(clock=lambda: self.now))
+        self.registry = BreakerRegistry(
+            BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN),
+            max_hosts=_MAX,
+            timing=Timing(clock=lambda: self.now),
+        )
         self.last_built: CircuitBreaker | None = None
 
     @rule(origin=st.sampled_from(_ORIGINS))
     def look_up(self, origin: str) -> None:
         """Fetch *origin*'s breaker, building it if new; the same origin always returns the same breaker while held."""
         held = {b.name: b for b in self.registry}
-        breaker = self.registry.breaker_for(origin, failure_threshold=_THRESHOLD, recovery_timeout=_COOLDOWN)
+        breaker = self.registry.breaker_for(origin)
         if origin in held:
             assert breaker is held[origin]
         assert self.registry.breakers()[-1] is breaker, "a lookup makes the breaker the most recently used"

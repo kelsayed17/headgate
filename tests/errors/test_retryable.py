@@ -59,7 +59,9 @@ def _answering(status: int) -> httpx2.MockTransport:
     return httpx2.MockTransport(lambda _request: httpx2.Response(status, content=b"[1]"))
 
 
-def _client(status: int, *, http: HttpOptions | None = None, breaker: BreakerPolicy | None = None) -> Client:
+def _client(
+    status: int, *, http: HttpOptions | None = None, breaker: BreakerPolicy | BreakerRegistry | None = None
+) -> Client:
     """Return a client whose every request is answered *status*, retried once without waiting."""
     return Client(
         base_url=_BASE,
@@ -145,7 +147,7 @@ _COOLDOWN = 3600.0
 
 def _broken(status: int = 503) -> Client:
     """Return a client whose breaker opens on its first failure and stays open for :data:`_COOLDOWN`."""
-    breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=BreakerRegistry())
+    breaker = BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN))
     return _client(status, breaker=breaker)
 
 

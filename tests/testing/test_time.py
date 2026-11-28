@@ -16,7 +16,17 @@ import httpx2
 import pytest
 
 import headgate.timing
-from headgate import Client, HttpOptions, Rate, RateBudget, RetryPolicy, TransportPolicy, UpstreamStatusError, nothing
+from headgate import (
+    BreakerPolicy,
+    Client,
+    HttpOptions,
+    Rate,
+    RateBudget,
+    RetryPolicy,
+    TransportPolicy,
+    UpstreamStatusError,
+    nothing,
+)
 from headgate._core import Timing as CoreTiming
 from headgate._core import current_timing
 from headgate.breaker import BreakerRegistry, CircuitBreaker
@@ -222,11 +232,15 @@ async def test_install_reaches_a_rate_budget_two_clients_share() -> None:
     assert clock.now == pytest.approx(1.0), "the second client waited its turn on the test clock"
 
 
+#: A breaker that trips after one failure and cools down for 30 s.
+_TRIP_AT_ONCE = BreakerPolicy(failure_threshold=1, recovery_timeout=30.0)
+
+
 def test_install_reaches_the_cooldown_of_a_registry() -> None:
     """Run the cooldown of a breaker from a registry built in the block on the test clock."""
     clock = TestClock()
     with clock.install():
-        registry = BreakerRegistry()
+        registry = BreakerRegistry(_TRIP_AT_ONCE)
     _trip(registry)
 
     clock.advance(29.0)
@@ -237,7 +251,7 @@ def test_install_reaches_the_cooldown_of_a_registry() -> None:
 
 def test_what_is_built_outside_the_block_keeps_the_system_clock() -> None:
     """Leave a registry built before the block on the system clock: installing a clock changes nothing already built."""
-    outside = BreakerRegistry()
+    outside = BreakerRegistry(_TRIP_AT_ONCE)
     clock = TestClock()
     with clock.install():
         _trip(outside)
@@ -247,8 +261,8 @@ def test_what_is_built_outside_the_block_keeps_the_system_clock() -> None:
 
 
 def _breaker(registry: BreakerRegistry) -> CircuitBreaker:
-    """Return *registry*'s breaker for the test origin, tripping after one failure and cooling down for 30 s."""
-    return registry.breaker_for("https://h.test", failure_threshold=1, recovery_timeout=30.0)
+    """Return *registry*'s breaker for the test origin, which trips after one failure and cools down for 30 s."""
+    return registry.breaker_for("https://h.test")
 
 
 def _trip(registry: BreakerRegistry) -> None:

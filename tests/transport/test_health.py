@@ -17,7 +17,7 @@ import httpx2
 import pytest
 from hishel import AsyncSqliteStorage, Entry
 
-from headgate import HttpCache
+from headgate import BreakerPolicy, HttpCache
 from headgate._core import OBSERVER_FAILURES
 from headgate.breaker import BreakerRegistry, BreakerState
 from headgate.cache import _transport
@@ -64,8 +64,8 @@ def _trip(breaker: CircuitBreaker) -> None:
 
 def test_breaker_states_reports_a_tripped_host_as_open() -> None:
     """Report a host's breaker as closed and admitting, then open and refusing once it trips."""
-    registry = BreakerRegistry()
-    breaker = registry.breaker_for(_ORIGIN, failure_threshold=_THRESHOLD, recovery_timeout=_LONG_COOLDOWN)
+    registry = BreakerRegistry(BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_LONG_COOLDOWN))
+    breaker = registry.breaker_for(_ORIGIN)
     assert breaker_states(registry)[_ORIGIN] == (BreakerState.CLOSED, False)
 
     _trip(breaker)
@@ -75,8 +75,8 @@ def test_breaker_states_reports_a_tripped_host_as_open() -> None:
 
 def test_a_tripped_breaker_past_its_cooldown_is_open_but_not_refusing() -> None:
     """Report open but not refusing: ``state`` waits for a probe, ``refusing`` follows the cooldown."""
-    registry = BreakerRegistry()
-    _trip(registry.breaker_for(_ORIGIN, failure_threshold=_THRESHOLD, recovery_timeout=0.0))
+    registry = BreakerRegistry(BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=0.0))
+    _trip(registry.breaker_for(_ORIGIN))
 
     assert breaker_states(registry)[_ORIGIN] == (BreakerState.OPEN, False)
 
@@ -84,7 +84,7 @@ def test_a_tripped_breaker_past_its_cooldown_is_open_but_not_refusing() -> None:
 def test_breaker_states_is_a_copy() -> None:
     """Return a fresh mapping each call, so clearing a snapshot leaves the registry intact."""
     registry = BreakerRegistry()
-    registry.breaker_for(_ORIGIN, failure_threshold=_THRESHOLD, recovery_timeout=_LONG_COOLDOWN)
+    registry.breaker_for(_ORIGIN)
     breaker_states(registry).clear()
     assert _ORIGIN in breaker_states(registry)
 

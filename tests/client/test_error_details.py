@@ -179,7 +179,7 @@ _LOOP_HOPS = 2
 async def test_a_redirect_loop_is_not_retried_nor_charged_to_the_breaker() -> None:
     """Refuse a redirect loop once, not retryable and not charged: the origin answered every hop, as it would again."""
     script = Script(httpx2.Response(302, headers={"location": f"{_BASE}/orders"}))
-    breaker = BreakerPolicy(failure_threshold=1, registry=BreakerRegistry())
+    breaker = BreakerRegistry(BreakerPolicy(failure_threshold=1))
     client = Client(
         base_url=_BASE,
         rate=Rate.per_second(1000),
@@ -256,8 +256,7 @@ async def test_a_body_read_failure_is_retryable_only_for_a_method_safe_to_resend
 
 async def test_an_open_breaker_raises_circuit_open_error_with_its_cooldown() -> None:
     """Refuse without sending, as ``CircuitOpenError`` (a ``TransportError``) carrying the cooldown left."""
-    registry = BreakerRegistry()
-    breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=3600.0, registry=registry)
+    breaker = BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=3600.0))
     script = Script(503)
     client = Client(
         base_url=_BASE,
@@ -273,7 +272,7 @@ async def test_an_open_breaker_raises_circuit_open_error_with_its_cooldown() -> 
     assert isinstance(error, TransportError)
     assert error.attempts == 0, "nothing was sent"
     assert error.retry_after is not None
-    assert 0 < error.retry_after <= breaker.recovery_timeout
+    assert 0 < error.retry_after <= breaker.policy.recovery_timeout
     assert len(script.sent) == 1
 
 

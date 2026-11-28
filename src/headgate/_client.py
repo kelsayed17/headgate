@@ -1150,12 +1150,7 @@ class Client:
 
     def _breaker_for(self, url: httpx2.URL) -> Breaker:
         """Return *url*'s origin's breaker from the client's registry, or a no-op one when the client has no breaker."""
-        policy = self._policy.breaker
-        if policy is None or self._breakers is None:
-            return NO_BREAKER
-        return self._breakers.breaker_for(
-            url, failure_threshold=policy.failure_threshold, recovery_timeout=policy.recovery_timeout
-        )
+        return NO_BREAKER if self._breakers is None else self._breakers.breaker_for(url)
 
     @staticmethod
     def _breaker_listener(breaker: Breaker, context: CallContext) -> Callable[[Transition], None] | None:
@@ -1312,18 +1307,11 @@ def _effective_policy(policy: TransportPolicy, *, off: bool) -> TransportPolicy:
 
 
 def _registry_of(policy: TransportPolicy, timing: Timing) -> BreakerRegistry | None:
-    """Return the registry a client's breakers live in: the policy's shared one, else one of its own on *timing*.
-
-    The registry is bound to the policy's thresholds here, so a client that cannot share it fails when it is built.
-
-    :raises ValueError: for thresholds other than the ones a shared registry is bound to.
-    """
+    """Return the registry a client's breakers live in: the shared one it is given, else one of its own on *timing*."""
     breaker = policy.breaker
-    if breaker is None:
-        return None
-    registry = BreakerRegistry(timing=timing) if breaker.registry is None else breaker.registry
-    registry.bind(failure_threshold=breaker.failure_threshold, recovery_timeout=breaker.recovery_timeout)
-    return registry
+    if breaker is None or isinstance(breaker, BreakerRegistry):
+        return breaker
+    return BreakerRegistry(breaker, timing=timing)
 
 
 def _query_pairs(params: Mapping[str, object]) -> list[tuple[str, WireValue]]:

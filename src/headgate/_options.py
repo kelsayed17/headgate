@@ -46,6 +46,7 @@ from headgate._core import (
 )
 from headgate._failures import DEFAULT_REQUEST_ID_HEADERS
 from headgate.breaker._policy import BreakerPolicy
+from headgate.breaker._registry import BreakerRegistry
 from headgate.cache._policy import HttpCache
 from headgate.ratelimit._budget import RateBudget
 from headgate.ratelimit._rate import Rate
@@ -367,7 +368,9 @@ class TransportPolicy:
       sets may not be longer than ``deadline``, since it could never take effect.
     * ``deadline``: seconds the whole logical call may take, every attempt, wait and the body read included; ``None``
       for none. Past it the call raises ``ClientTimeoutError``. A call overrides it with ``deadline=``.
-    * ``breaker``: the circuit breaker (:class:`~headgate.BreakerPolicy`), or ``None`` for none.
+    * ``breaker``: the circuit breaker: a :class:`~headgate.BreakerPolicy`, from which the client builds breakers of
+      its own, a :class:`~headgate.breaker.BreakerRegistry` whose breakers it shares with whoever else holds it, or
+      ``None`` for none.
     * ``cache``: an opt-in :class:`~headgate.HttpCache`.
     * ``idempotency``: stamp idempotency keys on POST and PATCH (:class:`IdempotencyKeys`), or ``None``.
     * ``routes``: the per-path rules (:class:`Route`): a call's first matching route sets its retry, deadline, rate and
@@ -377,7 +380,7 @@ class TransportPolicy:
     retry: RetryPolicy | None = field(default_factory=RetryPolicy)
     timeout: Timeouts = field(default_factory=Timeouts)
     deadline: float | None = 60.0
-    breaker: BreakerPolicy | None = field(default_factory=BreakerPolicy)
+    breaker: BreakerPolicy | BreakerRegistry | None = field(default_factory=BreakerPolicy)
     cache: HttpCache | None = None
     idempotency: IdempotencyKeys | None = None
     routes: tuple[Route, ...] = ()
@@ -386,10 +389,16 @@ class TransportPolicy:
         """Refuse a retry or breaker of the wrong kind and a deadline that is not positive and finite; freeze the rules.
 
         :raises TypeError: for a ``retry`` that is neither a :class:`~headgate.RetryPolicy` nor ``None`` (a ``bool``
-            included), or a ``breaker`` that is neither a :class:`~headgate.BreakerPolicy` nor ``None``.
+            included), or a ``breaker`` that is neither a :class:`~headgate.BreakerPolicy`, a ``BreakerRegistry`` nor
+            ``None``.
         """
         check_kind("retry", self.retry, (RetryPolicy, type(None)), "a RetryPolicy, or None to send every call once")
-        check_kind("breaker", self.breaker, (BreakerPolicy, type(None)), "a BreakerPolicy, or None for no breaker")
+        check_kind(
+            "breaker",
+            self.breaker,
+            (BreakerPolicy, BreakerRegistry, type(None)),
+            "a BreakerPolicy, a shared BreakerRegistry, or None for no breaker",
+        )
         check_kind("cache", self.cache, (HttpCache, type(None)), "an HttpCache, or None for no cache")
         check_kind("idempotency", self.idempotency, (IdempotencyKeys, type(None)), "IdempotencyKeys(), or None")
         check_deadline(self.deadline)

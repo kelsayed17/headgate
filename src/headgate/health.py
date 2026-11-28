@@ -40,8 +40,8 @@ class BreakerSnapshot(NamedTuple):
 def breaker_states(registry: BreakerRegistry) -> dict[str, BreakerSnapshot]:
     """Return a snapshot per origin (``scheme://host[:port]``) *registry* holds a breaker for.
 
-    Pass the registry the clients to report on share (``BreakerPolicy(registry=...)``); a client given none keeps its
-    breakers to itself. An origin no client has called yet is absent.
+    Pass the registry the clients to report on share (their ``breaker=BreakerRegistry(...)``); a client given a
+    ``BreakerPolicy`` keeps its breakers to itself. An origin no client has called yet is absent.
     """
     return {breaker.name: BreakerSnapshot(breaker.state, breaker.refusing) for breaker in registry.breakers()}
 

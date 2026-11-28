@@ -88,7 +88,7 @@ async def test_the_same_server_is_reachable_without_the_guard() -> None:
 
 async def test_a_refusal_is_not_retried_and_not_charged_to_the_breaker() -> None:
     """Send no retry for a refusal and leave the breaker closed, however often it happens."""
-    breaker = BreakerPolicy(failure_threshold=1, registry=BreakerRegistry())
+    breaker = BreakerRegistry(BreakerPolicy(failure_threshold=1))
     async with (
         serving() as server,
         _guarded(server.url(), TransportPolicy(retry=RetryPolicy(attempts=3), breaker=breaker)) as client,
