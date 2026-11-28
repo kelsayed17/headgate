@@ -164,7 +164,9 @@ the routes that override it. `RouteOptions` gains `timeout` (P24), since every o
 
 - `Expect(ok, *, headers=, accept=)`: `answers` is filled only by `.on()` (F7, P17).
 - `call_info` becomes `call_view(request) -> CallView | None`; `CallView.call` becomes `CallView.info`; `CallInfo.route`
-  becomes `CallInfo.template`, OTel's own name (P6). `CallInfo.full_url` is always filled (E18).
+  becomes `CallInfo.template`, OTel's own name (P6). `CallInfo.full_url` is always filled (E18). `CallView.call` keeps
+  its name, since every event already exposes its `CallInfo` as `call`, so one name holds for both. (Amended with the
+  phase 3 review.)
 - `stream()` drops `last_event_id=`, which `events()` keeps; `Stream.retry` becomes `Stream.reconnect_after`, a `float`
   in seconds like every other duration (P16). `aiter_bytes(*, chunk_size=)` is keyword-only (P26).
 - `event_stream` becomes `as_events`, beside `as_bytes`, `as_json` and the new `as_text` (P19, T6).

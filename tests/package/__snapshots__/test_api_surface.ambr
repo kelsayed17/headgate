@@ -129,8 +129,8 @@
       field call_id: int = <factory>
   class CallStarted(CallEvent)(*, call: 'CallInfo') -> 'None'
       field call: CallInfo
-  class CallView(object)(info: 'CallInfo', attempt: 'int', remaining: 'float | None') -> 'None'
-      field info: CallInfo
+  class CallView(object)(call: 'CallInfo', attempt: 'int', remaining: 'float | None') -> 'None'
+      field call: CallInfo
       field attempt: int
       field remaining: float | None
   class DeprecationNoticed(CallEvent)(*, call: 'CallInfo', deprecated: 'bool' = False, deprecated_at: 'datetime | None' = None, sunset_at: 'datetime | None' = None, link: 'str | None' = None, sunset_link: 'str | None' = None) -> 'None'

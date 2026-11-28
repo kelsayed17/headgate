@@ -319,8 +319,8 @@ async def test_a_middleware_reads_its_call_through_call_view() -> None:
     first, second = seen
     assert first is not None
     assert second is not None
-    assert (first.info.template, first.attempt, second.attempt) == ("series/{series_id}", 1, 2)
-    assert first.info is second.info, "one call, the same record events carry"
+    assert (first.call.template, first.attempt, second.attempt) == ("series/{series_id}", 1, 2)
+    assert first.call is second.call, "one call, the same record events carry"
     assert first.remaining == pytest.approx(30.0)
     assert clock.now > 0
     assert second.remaining == pytest.approx(30.0 - clock.now), "the time left fell by the backoff waited"
@@ -441,4 +441,4 @@ async def test_full_url_is_filled_without_observers() -> None:
 
     (view,) = seen
     assert view is not None
-    assert view.info.full_url == "https://h.test/items/a%2Fb?api_key=***"
+    assert view.call.full_url == "https://h.test/items/a%2Fb?api_key=***"
