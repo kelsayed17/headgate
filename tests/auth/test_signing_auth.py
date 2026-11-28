@@ -608,3 +608,25 @@ async def test_a_signer_may_rewrite_a_name_it_found_and_set_declared_names_in_an
         await client.get("orders", expect=RESPONSE)
 
     assert (sent[0].headers["x-sig"], sent[0].headers["accept"]) == ("sig", "application/json")
+
+
+async def test_each_hedged_attempt_is_handed_its_own_now() -> None:
+    """Sign a hedge at the time it is sent, half a second after the attempt it races, on the test clock (R11)."""
+    clock = TestClock()
+    auth = _ClockSigner()
+    release = asyncio.Event()
+    calls = itertools.count(1)
+
+    async def handle(_request: httpx2.Request) -> httpx2.Response:
+        if next(calls) == 1:
+            await release.wait()  # the first attempt hangs until the hedge arrives
+        else:
+            release.set()
+        return httpx2.Response(200)
+
+    with clock.install():
+        client = Client(base_url=_BASE, auth=auth, http=HttpOptions(transport=httpx2.MockTransport(handle)))
+    async with client:
+        await client.get("orders", expect=RESPONSE, retry=RetryPolicy(budget=None, hedge=Hedge(after=0.5)))
+
+    assert auth.signed_at == [clock.epoch, clock.epoch + 0.5]
