@@ -163,11 +163,18 @@ like them. Call it from your tests; `record=` is a record type of the codec's ow
 
 <!-- docs-test: run -->
 ```python
+from dataclasses import dataclass
+
 from headgate.testing import check_codec
 
 
+@dataclass(frozen=True)
+class Reading:
+    value: int  # the one field check_codec's record= asks for
+
+
 def test_the_codec_keeps_headgates_promises() -> None:
-    check_codec(CODEC, record=Row)
+    check_codec(CODEC, record=Reading)
 ```
 
 It raises `AssertionError` naming the first promise broken:

@@ -39,6 +39,10 @@ A route table of canned replies and a log of every request:
 
 <!-- docs-test: run -->
 ```python
+import httpx2
+
+from headgate.testing import FakeTransport
+
 fake = (
     FakeTransport()
     .reply("GET", "/v1/series/GDP", httpx2.Response(503), httpx2.Response(200, json=GDP))
@@ -128,6 +132,9 @@ second call that a fake network never sees.
 
 <!-- docs-test: run -->
 ```python
+from hishel import AsyncSqliteStorage
+
+from headgate import Rate
 from headgate.testing import FakeTransport, budget_for, cache_of, fake_network
 
 
@@ -139,7 +146,8 @@ def test_candles_have_a_budget_of_their_own() -> None:
     assert budget_for(client).rate == Rate.per_second(10)
 
 
-async def test_only_the_archives_are_cached(storage: AsyncSqliteStorage) -> None:
+async def test_only_the_archives_are_cached() -> None:
+    storage = AsyncSqliteStorage(database_path=":memory:")
     fake = FakeTransport().reply("GET", "/archives/2025.zip", 200).reply("GET", "/status", 200)
     with fake_network(fake) as net:
         archive = ArchiveClient(cache_storage=storage)
@@ -147,6 +155,7 @@ async def test_only_the_archives_are_cached(storage: AsyncSqliteStorage) -> None
         for _ in range(2):
             await archive.archive("2025.zip")
             await archive.status()
+    await storage.close()
 
     assert len(fake.calls_to("GET", "/archives/2025.zip")) == 1, "the second came from the cache"
     assert len(fake.calls_to("GET", "/status")) == 2, "the status is never cached"

@@ -1,24 +1,25 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The guides' marked code samples type-check under the project's own rules, and the ones marked to run, run.
+"""The guides' code samples type-check under the project's own rules, and the ones marked to run, run.
 
-A sample is marked by an HTML comment on the line before its fence, which renders as nothing:
+Every Python fence (``python`` or ``py``) in ``docs/`` carries a marker, an HTML comment on the line before it, which
+renders as nothing, so no sample drops out of the check by losing one:
 
 * ``<!-- docs-test: check -->``: the sample type-checks. Each page's marked samples, in order, form one module after
-  ``from headgate import *`` and ``from tests.examples.doc_context import *`` (the domain types, values and SDKs a
-  sample names without defining), a sample's statements from its first top-level ``await`` on wrapped in an
-  ``async def``. One ``ty check`` runs over every page's module, with every rule an error, so a spelling the API no
-  longer has fails here.
+  ``from tests.examples.doc_context import *``, the fixtures a sample names without defining (domain types, values,
+  clients and SDKs, never an import, so a sample imports what it uses). A sample's statements from its first
+  top-level ``await`` on are wrapped in an ``async def``. One ``ty check`` runs over every page's module, with every
+  rule an error, so a spelling the API no longer has, or an import a sample lacks, fails here.
 * ``<!-- docs-test: run -->``: the sample type-checks, and runs too. A page's module runs, in a temporary directory,
   with each sample marked to check cut at its first statement that awaits (what came before, its imports and
   definitions, later samples rely on), inside ``fake_network(FakeTransport())`` and ``TestClock().install()``, so a
   client built at import is on a fake network and nothing waits or reaches the internet. Every test function a run
-  sample defines that takes no argument is then called, and awaited when it is async: the sample test of the codec
-  guide runs ``check_codec`` on the guide's own codec.
+  sample defines is then called, and awaited when it is async, so one that takes an argument fails: the codec guide's
+  sample test runs ``check_codec`` on the guide's own codec.
+* ``<!-- docs-test: skip: <reason> -->``: the sample is neither checked nor run, for the reason it must give.
 
-The README's samples are excerpts of tested modules, checked by ``test_docs.py``; an unmarked guide sample is an
-illustrative fragment, each listed with its reason in the phase 5 plan.
+The README's samples are excerpts of tested modules, checked by ``test_docs.py``.
 """
 
 from __future__ import annotations
@@ -44,14 +45,18 @@ if TYPE_CHECKING:
 _ROOT: Final = Path(__file__).resolve().parents[2]
 _PAGES: Final = sorted((_ROOT / "docs").glob("*.md"))
 
-#: A marker and the Python fence right after it: its mode and its body.
-_MARKED: Final = re.compile(r"^<!-- docs-test: (\w+) -->\n```python\n(.*?)^```$", re.MULTILINE | re.DOTALL)
+#: A Python fence, ``python`` or ``py``, with the line before it and its body: read from a page with a newline put
+#: before it, so a fence on its first line has a line before it too.
+_FENCE: Final = re.compile(r"^(?P<before>[^\n]*)\n```(?:python|py)\n(?P<code>.*?)^```$", re.MULTILINE | re.DOTALL)
 
-#: Any marker, whether or not a Python fence follows it.
-_MARKER: Final = re.compile(r"<!-- docs-test:[^>]*-->")
+#: A marker: its mode, and after a colon, its reason.
+_MARKER: Final = re.compile(r"<!-- docs-test: (?P<mode>[\w-]+)(?::(?P<reason>[^>]*))? -->")
 
-#: What each page's module starts with, before its samples.
-_HEADER: Final[str] = "from headgate import *\nfrom tests.examples.doc_context import *\n"
+#: The modes a marker takes.
+_MODES: Final = frozenset({"run", "check", "skip"})
+
+#: What each page's module starts with, before its samples: the fixtures only, so a sample imports what it uses.
+_HEADER: Final[str] = "from tests.examples.doc_context import *\n"
 
 #: A diagnostic in ty's concise output: its file, line, and the rest.
 _DIAGNOSTIC: Final = re.compile(r"^(?P<file>.+?):(?P<line>\d+):\d+: (?P<text>(?:error|warning)\[.*)$", re.MULTILINE)
@@ -89,12 +94,41 @@ def _awaits(node: ast.AST) -> bool:
     return any(_awaits(child) for child in ast.iter_child_nodes(node))
 
 
+def _marker_faults(name: str, text: str) -> list[str]:
+    """Return what is wrong with the markers of the page *text*, named *name*: each fault at its ``page:line``.
+
+    Every Python fence (``python`` or ``py``) carries a marker on the line before it, so a sample cannot drop out of
+    the check by losing its marker; a ``skip`` gives its reason, and every marker stands before a Python fence.
+    """
+    faults: list[str] = []
+    marked = 0
+    text = "\n" + text
+    for match in _FENCE.finditer(text):
+        where = f"{name}:{text.count(chr(10), 0, match.start('code'))}"
+        marker = _MARKER.fullmatch(match["before"].strip())
+        if marker is None:
+            faults.append(f"{where}: a Python fence without a docs-test marker (run, check, or skip: <reason>)")
+            continue
+        marked += 1
+        if marker["mode"] not in _MODES:
+            faults.append(f"{where}: an unknown docs-test mode {marker['mode']!r}")
+        elif marker["mode"] == "skip" and not (marker["reason"] or "").strip():
+            faults.append(f"{where}: a skip without its reason, as in <!-- docs-test: skip: <reason> -->")
+    if len(_MARKER.findall(text)) != marked:
+        faults.append(f"{name}: a docs-test marker that stands before no Python fence")
+    return faults
+
+
 def _samples(page: Path) -> list[_Sample]:
-    """Return the marked samples of *page*, in order."""
-    text = page.read_text(encoding="utf-8")
-    return [
-        _Sample(page, text.count("\n", 0, match.start(2)) + 1, match[1], match[2]) for match in _MARKED.finditer(text)
-    ]
+    """Return the samples of *page* marked to run or to check, in order."""
+    text = "\n" + page.read_text(encoding="utf-8")
+    samples = []
+    for match in _FENCE.finditer(text):
+        marker = _MARKER.fullmatch(match["before"].strip())
+        if marker is not None and marker["mode"] in {"run", "check"}:
+            line = text.count("\n", 0, match.start("code"))
+            samples.append(_Sample(page, line, marker["mode"], match["code"]))
+    return samples
 
 
 _SAMPLES: Final = {page: _samples(page) for page in _PAGES}
@@ -158,18 +192,41 @@ async def type_report(tmp_path_factory: pytest.TempPathFactory) -> dict[Path, li
 
 
 def test_the_guides_mark_samples_to_check() -> None:
-    """Find marked samples, of both modes, so an emptied marker set cannot pass the checks below unnoticed."""
+    """Find samples of both modes, so an emptied marker set cannot pass the checks below unnoticed."""
     modes = {sample.mode for samples in _SAMPLES.values() for sample in samples}
     assert modes == {"run", "check"}
 
 
 @pytest.mark.parametrize("page", _PAGES, ids=[page.name for page in _PAGES])
-def test_every_marker_is_known_and_on_a_python_sample(page: Path) -> None:
-    """Refuse a marker of another mode, or one not on the line before a Python fence, which would check nothing."""
-    text = page.read_text(encoding="utf-8")
-    assert len(_MARKER.findall(text)) == len(_SAMPLES[page]), f"{page.name}: a marker not before a Python fence"
-    unknown = [f"{s.page.name}:{s.line}" for s in _SAMPLES[page] if s.mode not in {"run", "check"}]
-    assert not unknown, f"markers of an unknown mode at {unknown}"
+def test_every_python_fence_is_marked(page: Path) -> None:
+    """Find a known marker before every Python fence of *page*, a reason on every skip, and no marker astray."""
+    faults = _marker_faults(page.name, page.read_text(encoding="utf-8"))
+    assert not faults, "\n".join(faults)
+
+
+@pytest.mark.parametrize(
+    ("text", "fault"),
+    [
+        ("Prose.\n```python\nx = 1\n```\n", "a Python fence without a docs-test marker"),
+        ("Prose.\n```py\nx = 1\n```\n", "a Python fence without a docs-test marker"),
+        ("<!-- docs-test: skip -->\n```python\nx = 1\n```\n", "a skip without its reason"),
+        ("<!-- docs-test: skip:  -->\n```python\nx = 1\n```\n", "a skip without its reason"),
+        ("<!-- docs-test: runs -->\n```python\nx = 1\n```\n", "an unknown docs-test mode 'runs'"),
+        ("<!-- docs-test: run -->\n\n```python\nx = 1\n```\n", "a Python fence without a docs-test marker"),
+        ("<!-- docs-test: run -->\n```text\nx\n```\n", "a docs-test marker that stands before no Python fence"),
+    ],
+    ids=["python", "py", "skip-bare", "skip-blank", "unknown", "gap", "astray"],
+)
+def test_a_fence_without_a_marker_fails(text: str, fault: str) -> None:
+    """Fail a page whose Python fence is unmarked, a skip without its reason, or a marker of no fence."""
+    assert any(fault in found for found in _marker_faults("page.md", text))
+
+
+def test_a_skip_with_its_reason_passes() -> None:
+    """Accept a sample skipped for a reason, and one marked to run."""
+    skipped = "<!-- docs-test: skip: a fragment of a method -->\n```py\nself.x\n```\n"
+    text = skipped + "<!-- docs-test: run -->\n```python\n1\n```\n"
+    assert _marker_faults("page.md", text) == []
 
 
 @pytest.mark.parametrize("page", _MARKED_PAGES, ids=[page.name for page in _MARKED_PAGES])
@@ -205,6 +262,10 @@ async def test_every_run_sample_runs(page: Path, tmp_path: Path) -> None:
             # A sample with a top-level await, wrapped to type-check, runs here; so does a test a sample defines.
             if not _runnable(value, name):
                 continue
+            assert not inspect.signature(value).parameters, (
+                f"{page.name}: {value.__name__} takes arguments, so the run cannot call it: give it what it needs, or "
+                "mark its sample check"
+            )
             if inspect.isawaitable(result := value()):
                 await result
     finally:
@@ -213,12 +274,7 @@ async def test_every_run_sample_runs(page: Path, tmp_path: Path) -> None:
 
 def _runnable(value: object, module: str) -> bool:
     """Return whether *value* is a function *module* defines that the run calls: a wrapped sample, or a test."""
-    return (
-        inspect.isfunction(value)
-        and value.__module__ == module
-        and value.__name__.startswith(("_sample_", "test_"))
-        and not inspect.signature(value).parameters
-    )
+    return inspect.isfunction(value) and value.__module__ == module and value.__name__.startswith(("_sample_", "test_"))
 
 
 def test_the_context_holds_every_name_it_lists() -> None:

@@ -128,6 +128,8 @@ from pathlib import Path
 
 import anyio
 
+from headgate import Multipart, Raw, nothing
+
 
 async def chunks(path: Path) -> AsyncIterator[bytes]:
     async with await anyio.open_file(path, "rb") as f:

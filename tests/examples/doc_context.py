@@ -1,28 +1,24 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""What the guides' code samples take as given: the domain types, values and SDKs a sample names but does not define.
+"""What the guides' code samples take as given: the fixtures a sample names but does not define.
 
-``test_doc_samples.py`` puts every marked sample of a page after ``from headgate import *`` and
-``from tests.examples.doc_context import *``, so a sample reads like the guide's prose around it: an ``Order`` is an
-order, ``client`` a client, ``api_key`` a key. Each name here is real, so a sample marked to run runs on it; the ones a
+``test_doc_samples.py`` puts every marked sample of a page after ``from tests.examples.doc_context import *``, so a
+sample reads like the guide's prose around it: an ``Order`` is an order, ``client`` a client, ``api_key`` a key. It
+exports fixtures only (domain types, values, clients and SDKs), never a name a sample should import, so a sample
+that leaves out an import fails the type check. Each name here is real, so a sample marked to run runs on it; the ones a
 sample only type-checks against (``client``, ``catalog``) are clients that send nothing until called.
 """
 
 import io
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from http import HTTPStatus
 from pathlib import Path
-from typing import Self, Unpack
+from typing import TYPE_CHECKING, Self
 
-import httpx2
 import msgspec
-from hishel import AsyncBaseStorage, AsyncSqliteStorage
 from quickstart import CatalogClient, Series
 
 from headgate import (
-    CallOptions,
     CallPolicy,
     CallUrl,
     Client,
@@ -37,6 +33,9 @@ from headgate.msgspec import reader
 from headgate.pagination import Cursor
 from headgate.testing import FakeTransport, fake_network
 
+if TYPE_CHECKING:
+    from hishel import AsyncBaseStorage
+
 __all__ = [
     "GDP",
     "ORDER",
@@ -44,28 +43,21 @@ __all__ = [
     "REPORT",
     "SERIES",
     "ArchiveClient",
-    "AsyncIterator",
-    "AsyncSqliteStorage",
-    "CallOptions",
     "CatalogClient",
     "ExchangeClient",
     "FilingsPage",
-    "HTTPStatus",
     "Issue",
     "Item",
     "NewOrder",
     "Order",
     "Page",
-    "Path",
     "Query",
     "Rejection",
     "Report",
     "Row",
     "SearchPage",
-    "Self",
     "Series",
     "Statement",
-    "Unpack",
     "api_key",
     "blob_id",
     "catalog",
@@ -75,8 +67,6 @@ __all__ = [
     "decode_statements",
     "handle",
     "hits_of",
-    "httpx2",
-    "msgspec",
     "order",
     "partner_auth",
     "path",

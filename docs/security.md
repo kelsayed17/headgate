@@ -145,6 +145,8 @@ A t-string path escapes every interpolated value as exactly one segment:
 
 <!-- docs-test: check -->
 ```python
+from headgate import nothing
+
 await client.delete(t"positions/{symbol}", expect=nothing)  # "BTC/USD" -> positions/BTC%2FUSD
 ```
 
