@@ -29,7 +29,7 @@ from uuid import UUID
 
 import httpx2
 
-from headgate._core import check_kind
+from headgate._core import check_kind, refuse_subclass
 
 __all__ = [
     "Body",
@@ -173,53 +173,91 @@ _JSON_INSTEAD: Final = (
 )
 
 
-class _NotBuiltinsError(TypeError):
-    """A :class:`Json` value held something JSON's encoder does not know: raised as it is."""
-
-
-def _not_builtins(value: object) -> NoReturn:
-    """Refuse *value*, which ``json.dumps`` met inside a :class:`Json` value and cannot encode, naming its type."""
-    msg = f"{_JSON_TAKES} (got {type(value).__name__}): {_JSON_INSTEAD}"
-    raise _NotBuiltinsError(msg)
-
-
 @final
-@dataclass(frozen=True, slots=True)
 class Json:
     """A JSON body of builtins, sent with ``Content-Type: application/json``; a codec's ``to_builtins`` builds one.
 
-    It is encoded where it is built, so a value JSON cannot carry fails there, and as httpx2 encodes JSON:
-    ``Json(None)`` sends ``null``, a tuple an array and an ``int`` key a string. The ``Content-Type`` yields to one the
-    call's ``headers=`` (or its view's) set.
+    It is encoded once, where it is built, as httpx2 encodes JSON: ``Json(None)`` sends ``null``, a tuple an array and
+    an ``int`` key a string. So a value JSON cannot carry fails there, and a change to the value afterwards changes
+    nothing that is sent. The ``Content-Type`` yields to one the call's ``headers=`` (or its view's) set. A ``Json`` is
+    a value of its ``value``: equal, hashed (when the value hashes), shown and matched (``case Json(value)``) by it, and
+    copied with ``copy.replace(body, value=...)``.
 
     :raises TypeError: for a value that is not builtins (a struct, a dataclass, a model, a ``date``, a ``set``), naming
         its type: a flavor's ``writer(Type)`` encodes a typed value, and its ``to_builtins`` turns one into builtins.
-    :raises ValueError: for ``NaN`` or an infinity, which JSON cannot carry.
+    :raises ValueError: for ``NaN`` or an infinity, which JSON cannot carry, and for a value that holds itself.
     """
 
-    value: object
+    __slots__ = ("_encoded", "value")
+    __match_args__ = ("value",)
 
-    def __post_init__(self) -> None:
-        """Encode the value once, refusing one that is not builtins or holds a number JSON cannot carry."""
-        _encoded_json(self.value)
+    value: object
+    _encoded: bytes
+
+    def __init__(self, value: object) -> None:
+        """Encode *value*, refusing one that is not builtins or holds what JSON cannot carry."""
+        object.__setattr__(self, "value", value)
+        object.__setattr__(self, "_encoded", _encoded_json(value))
+
+    @override
+    def __setattr__(self, name: str, value: object) -> None:
+        """Refuse every change: the body was encoded when it was built."""
+        msg = f"Json is immutable: build a new one, or copy.replace(body, value=...), for another {name}"
+        raise AttributeError(msg)
+
+    @override
+    def __delattr__(self, name: str) -> None:
+        """Refuse every change: the body was encoded when it was built."""
+        msg = f"Json is immutable: {name} cannot be deleted"
+        raise AttributeError(msg)
+
+    def __replace__(self, *, value: object) -> Json:
+        """Return a ``Json`` of *value*, for ``copy.replace``."""
+        return Json(value)
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return self.value == other.value if isinstance(other, Json) else NotImplemented
+
+    @override
+    def __hash__(self) -> int:
+        return hash(self.value)
+
+    @override
+    def __repr__(self) -> str:
+        return f"Json(value={self.value!r})"
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a subclass: the body is its encoded value, which nothing overriding a method would change."""
+        del kwargs
+        refuse_subclass(cls, Json, "build a Json of the value, or write a body with a flavor's writer")
 
 
 def _encoded_json(value: object) -> bytes:
     """Return *value* encoded as httpx2 encodes ``json=``, so a body reads the same whichever spelling built it.
 
-    The encoding is not kept on the :class:`Json`, whose one field is its value: a call encodes it again, as it is sent.
-
     :raises TypeError: for a value that is not builtins, naming its type, or a key JSON cannot write.
-    :raises ValueError: for ``NaN`` or an infinity.
+    :raises ValueError: for ``NaN`` or an infinity, or a value that holds itself.
     """
+    refused: list[object] = []
+
+    def not_builtins(item: object) -> NoReturn:
+        refused.append(item)
+        raise TypeError(item)
+
     try:
-        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False, default=_not_builtins)
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False, default=not_builtins)
     except TypeError as exc:
-        if isinstance(exc, _NotBuiltinsError):
-            raise
-        # A key json.dumps cannot write, such as a tuple, which it refuses before asking default=.
-        msg = f"{_JSON_TAKES} ({exc}): {_JSON_INSTEAD}"
+        # A plain TypeError at the boundary: neither the encoder's error nor not_builtins' adds anything to it.
+        got = f"got {type(refused[0]).__name__}" if refused else str(exc)
+        msg = f"{_JSON_TAKES} ({got}): {_JSON_INSTEAD}"
         raise TypeError(msg) from None
+    except ValueError as exc:
+        msg = (
+            f"Json takes a value JSON can carry ({exc}): write None or a string in place of NaN and the infinities, "
+            "and break a value that holds itself"
+        )
+        raise ValueError(msg) from None
     return encoded.encode()
 
 
@@ -333,8 +371,8 @@ def lowered(body: Body | None) -> Lowered:
     match body:
         case EncodedBody(content=content, content_type=content_type):
             return Lowered(content, content_type)
-        case Json(value=value):
-            return Lowered(_encoded_json(value), "application/json")
+        case Json(_encoded=encoded):
+            return Lowered(encoded, "application/json")
         case Form(fields=fields):
             return Lowered(data=fields)
         case Multipart(files=files, fields=fields):

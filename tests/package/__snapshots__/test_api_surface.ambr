@@ -555,7 +555,6 @@
       field header: str = 'Idempotency-Key'
       field factory: Callable[[], str] = <function _uuid4_text at 0x…>
   class Json(object)(value: 'object') -> 'None'
-      field value: object
   type Method = Literal['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'QUERY']
   class Middleware(CredentialCarrier, Protocol)(*args, **kwargs)
       def __call__(self, request: 'httpx2.Request', call_next: 'Next') -> 'httpx2.Response'
