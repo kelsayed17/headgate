@@ -38,9 +38,30 @@ class KeyAuth(Auth):
 ```
 
 A subclass that leaves a member out cannot be built, and a declaration that is not a `frozenset` of names, or whose
-names are all one character long (`frozenset("x-api-key")` is a set of its letters, not one name), fails when the class is
-defined (or, for a property, when the client is built). A fixed header needs no class: `StaticHeaderAuth`. For basic auth,
-`StaticHeaderAuth({"Authorization": "Basic " + base64.b64encode(b"user:pass").decode()})`.
+names are all one character long (`frozenset("x-api-key")` is a set of its letters, not one name), fails when the
+class is defined (or, for a property, when the client is built). A fixed header needs no class: `StaticHeaderAuth`.
+For basic auth, `StaticHeaderAuth({"Authorization": "Basic " + base64.b64encode(b"user:pass").decode()})`.
+
+Digest auth is httpx2's own flow with the declarations added, since `httpx2.DigestAuth` declares nothing:
+
+```python
+from typing import ClassVar
+
+import httpx2
+
+from headgate import Auth
+
+
+class Digest(Auth, httpx2.DigestAuth):
+    credential_headers: ClassVar = frozenset({"authorization"})
+    credential_params: ClassVar = frozenset[str]()
+
+    def credential_identity(self) -> bytes:
+        return b"user:pass"  # the credential's secret material, hashed for the cache, never stored
+
+
+auth = Digest("user", "pass")
+```
 
 ## Static credentials
 

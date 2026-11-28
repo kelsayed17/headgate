@@ -142,3 +142,39 @@ def test_a_virtual_subclass_is_refused() -> None:
 def test_an_auth_is_a_credential_stamper_by_its_bases() -> None:
     """Define the contract once: ``Auth`` derives from ``CredentialStamper``, the protocol the guard and cache read."""
     assert CredentialStamper in headgate.Auth.__mro__
+
+
+class _Digest(headgate.Auth, httpx2.DigestAuth):
+    """``httpx2.DigestAuth`` as an ``Auth``, as the auth guide writes it: its two declarations and its identity."""
+
+    credential_headers: ClassVar = frozenset({"authorization"})
+    credential_params: ClassVar = frozenset[str]()
+
+    @override
+    def credential_identity(self) -> bytes:
+        return b"user:pass"
+
+
+async def test_digest_auth_is_three_lines_of_auth() -> None:
+    """Answer a digest challenge through ``_Digest``, httpx2's own flow, and withhold its header cross-origin."""
+    seen: list[tuple[str, str | None]] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        seen.append((request.url.host, request.headers.get("authorization")))
+        if request.url.host != "api.example":
+            return httpx2.Response(200, json={})
+        if "authorization" not in request.headers:
+            return httpx2.Response(401, headers={"WWW-Authenticate": 'Digest realm="r", nonce="n", qop="auth"'})
+        return httpx2.Response(302, headers={"Location": "https://cdn.example/blob"})
+
+    auth = _Digest("user", "pass")
+    async with Client(
+        base_url="https://api.example", auth=auth, http=HttpOptions(transport=httpx2.MockTransport(handle))
+    ) as c:
+        await c.get("x", expect=as_json)
+
+    (first, challenged, hop) = seen
+    assert first == ("api.example", None)
+    assert challenged[1] is not None
+    assert challenged[1].startswith("Digest ")
+    assert hop == ("cdn.example", None)
