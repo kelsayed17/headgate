@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Protocol, override
 
 import httpx2
 
-from headgate._auth import SIGNER_EXT, SigningAuth
+from headgate._auth import SIGNER_EXT, SigningAuth, refuse_undeclared, stamped_names
 from headgate._core import CredentialCarrier
 
 if TYPE_CHECKING:
@@ -93,7 +93,9 @@ class MiddlewareTransport(httpx2.AsyncBaseTransport):
             if signer is not None and request.extensions.get(SIGNER_EXT) is signer:
                 # A hedge's copy and a redirect hop are new requests over the body the flow buffered: read it again.
                 await request.aread()
+                before = stamped_names(request)
                 signer.sign(request, wall_clock())
+                refuse_undeclared(signer, "sign", request, before)
             await guard(request)
             return await transport.handle_async_request(request)
 

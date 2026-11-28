@@ -159,6 +159,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
   whose `__init_subclass__` did not call `super().__init_subclass__()` let every subclass below it skip them all: an
   undeclared or misdeclared credential, an `async def sign`, an overridden flow. Call
   `super().__init_subclass__(**kwargs)` in every `__init_subclass__` of an auth class.
+- What an auth's hook stamps must be what it declares. A `SigningAuth.sign` or a `CachedTokenAuth.attach` that sets a
+  header or query parameter it does not declare raises `TypeError` naming it, before the request is sent: the guard
+  withholds only declared names, so a signer that also set `X-Api-Key` sent that long-lived key along a cross-origin
+  redirect. Add every name the hook sets to `credential_headers` or `credential_params` (headers compared
+  case-insensitively); a name the request already carried is not counted.
 
 ## [0.12.1] - 2026-11-16
 
