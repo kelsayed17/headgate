@@ -29,6 +29,7 @@ from headgate import (
     ClientError,
     HttpOptions,
     Json,
+    Minted,
     RateLimitError,
     Reader,
     RetryPolicy,
@@ -44,7 +45,7 @@ from headgate.timing import Timing, current_timing, timing_override
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterator
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 
     from syrupy.assertion import SnapshotAssertion
 
@@ -288,12 +289,12 @@ class _MintRejected(CachedTokenAuth):
     """Mint on a client of its own against a token endpoint that answers 401."""
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         transport = httpx2.MockTransport(lambda _request: httpx2.Response(401, text="invalid_client"))
         async with httpx2.AsyncClient(transport=transport) as client:
             response = await client.post("https://auth.example.test/token?client_secret=S3CR3T")
         response.raise_for_status()
-        return "never", 60.0
+        yield Minted("never", 60.0)
 
 
 async def _mint_failure() -> None:
@@ -305,8 +306,8 @@ class _MintUnreadable(CachedTokenAuth):
     """Mint from a token response with no ``access_token``."""
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
-        return {"token": "x"}["access_token"], 60.0
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+        yield Minted({"token": "x"}["access_token"], 60.0)
 
 
 async def _mint_unreadable() -> None:
@@ -318,10 +319,11 @@ class _MintUnreachable(CachedTokenAuth):
     """Mint against a token host that refuses the connection."""
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         request = httpx2.Request("POST", "https://auth.example.test/token?client_secret=S3CR3T")
         msg = "connection refused"
         raise httpx2.ConnectError(msg, request=request)
+        yield  # unreachable: the yield makes this the async generator a mint is
 
 
 async def _mint_unreachable() -> None:

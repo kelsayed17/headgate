@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 
+from headgate import Minted
 from headgate._auth import CachedTokenAuth
 
 #: The bearer every pre-minted auth stamps, for a test that asserts on the header.
@@ -20,5 +21,5 @@ TEST_BEARER = "test-token"
 
 def premint[A: CachedTokenAuth](auth: A, token: str = TEST_BEARER) -> A:
     """Return *auth* with *token* cached and never expiring, so it stamps without minting."""
-    auth.seed(token, math.inf)
+    auth.seed(Minted(token, math.inf))
     return auth

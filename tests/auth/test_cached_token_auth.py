@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import math
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, Any, cast, override
 
 import httpx2
 import pytest
@@ -20,7 +20,7 @@ import pytest
 from headgate import AuthError, Client, HttpOptions, TransportError, _auth
 from headgate._auth import AUTH_HOP, FRESH_TOKEN_S, CachedTokenAuth, Minted, failed_on_auth_hop
 from headgate.errors import ClientConfigurationError
-from headgate.testing import TestClock
+from headgate.testing import FakeTransport, Respond, TestClock, fake_network, instant_retries
 from tests.support.responses import RESPONSE
 from tests.support.tokens import TEST_BEARER, premint
 
@@ -48,12 +48,12 @@ class _CountingAuth(CachedTokenAuth):
         self._delay = delay
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         if self._delay:
             # Widen the window in which concurrent callers pile up, so a missing lock shows as extra exchanges.
             await asyncio.sleep(self._delay)
         self.mints += 1
-        return f"tok-{self.mints}", self._lifetime
+        yield Minted(f"tok-{self.mints}", self._lifetime)
 
 
 @pytest.fixture
@@ -181,25 +181,27 @@ class _FailsAfterFirst(_CountingAuth):
         self.attempts = 0
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         self.attempts += 1
         if self.attempts > 1:
             if self._delay:
                 await asyncio.sleep(self._delay)
             msg = "token host unreachable"
             raise TransportError(msg, source="_FailsAfterFirst")
-        return await super().mint_token()
+        async for step in super().mint(request):
+            yield step
 
 
 class _FailsEveryTime(_CountingAuth):
     """Fail every exchange after *delay* seconds, as a token host that is down."""
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         self.mints += 1
         await asyncio.sleep(self._delay)
         msg = "token host unreachable"
         raise TransportError(msg, source="_FailsEveryTime")
+        yield  # unreachable: the yield makes this the async generator a mint is
 
 
 class TestAFailedMint:
@@ -434,7 +436,7 @@ class TestSeed:
     async def test_a_seeded_lifetime_is_counted_from_the_seed(self, client_factory: _Factory, clock: TestClock) -> None:
         """Re-mint once the seeded token's remaining lifetime enters the margin."""
         auth = _CountingAuth()
-        auth.seed("restored", _LIFETIME_S)
+        auth.seed(Minted("restored", _LIFETIME_S))
         client = client_factory(auth, _ok)
 
         clock.advance(_LIFETIME_S - _MARGIN_S - 1)
@@ -486,7 +488,7 @@ class _HoppingAuth(CachedTokenAuth[tuple[str, str]]):
         self.mints = 0
 
     @override
-    async def mint_flow(
+    async def mint(
         self, request: httpx2.Request
     ) -> AsyncGenerator[httpx2.Request | Minted[tuple[str, str]], httpx2.Response]:
         self.mints += 1
@@ -520,7 +522,7 @@ def _crumb_server(seen: list[str]) -> Callable[[httpx2.Request], httpx2.Response
 
 
 class TestAMintThatYieldsRequests:
-    """``mint_flow``: the exchange's requests are sent by the client's own stack, under the same cache and lock."""
+    """``mint``: the exchange's requests are sent by the client's own stack, under the same cache and lock."""
 
     async def test_the_hops_go_through_the_client_and_the_pair_is_attached(self, client_factory: _Factory) -> None:
         """Send each hop through the client, then attach the minted pair to the call."""
@@ -620,25 +622,18 @@ class TestAMintThatYieldsRequests:
             """Mint through a flow that yields nothing."""
 
             @override
-            async def mint_flow(
+            async def mint(
                 self, request: httpx2.Request
             ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
                 if request.url.path == "/never":
                     yield Minted("unreachable", 0.0)
 
-        with pytest.raises(RuntimeError, match=r"_Unfinished\.mint_flow ended without yielding Minted"):
+        with pytest.raises(RuntimeError, match=r"_Unfinished\.mint ended without yielding Minted"):
             await anext(_Unfinished().async_auth_flow(_get()))
 
 
 class TestASubclassMustSupplyAMint:
-    """A subclass supplies ``mint_token`` or ``mint_flow``, checked when the class is defined."""
-
-    def test_neither_hook_overridden_fails_at_the_class_statement(self) -> None:
-        """Refuse a class that overrides neither."""
-        with pytest.raises(TypeError, match="must override mint_token or mint_flow"):
-
-            class _Neither(CachedTokenAuth):
-                """Supply no mint."""
+    """A subclass supplies ``mint``, or inherits one."""
 
     async def test_an_override_inherited_from_a_parent_counts(self) -> None:
         """Accept a subclass of a provider's auth, which supplies no mint of its own."""
@@ -649,50 +644,6 @@ class TestASubclassMustSupplyAMint:
         sent = await anext(_Child().async_auth_flow(_get()))
 
         assert sent.headers["Authorization"] == "Bearer tok-1"
-
-    async def test_a_mint_flow_alone_is_enough_and_the_flow_wins_when_both_exist(self) -> None:
-        """Accept a flow-only class, and run the flow rather than ``mint_token`` when a class has both."""
-
-        class _FlowOnly(CachedTokenAuth):
-            """Mint through a flow only."""
-
-            @override
-            async def mint_flow(
-                self, request: httpx2.Request
-            ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
-                yield Minted("from-flow", math.inf)
-
-        class _Both(_CountingAuth):
-            """Mint through both hooks."""
-
-            @override
-            async def mint_flow(
-                self, request: httpx2.Request
-            ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
-                yield Minted("from-flow", math.inf)
-
-        flow_only = await anext(_FlowOnly().async_auth_flow(_get()))
-        both = _Both()
-        sent = await anext(both.async_auth_flow(_get()))
-
-        assert flow_only.headers["Authorization"] == sent.headers["Authorization"] == "Bearer from-flow"
-        assert both.mints == 0
-
-    async def test_the_default_mint_token_names_the_flow_only_class(self) -> None:
-        """Raise a clear error when a flow-only class falls back to the default ``mint_token``."""
-
-        class _Delegating(CachedTokenAuth):
-            """Override the flow, then delegate to the default one, which calls ``mint_token``."""
-
-            @override
-            async def mint_flow(
-                self, request: httpx2.Request
-            ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
-                async for step in super().mint_flow(request):
-                    yield step
-
-        with pytest.raises(NotImplementedError, match="_Delegating mints through mint_flow"):
-            await anext(_Delegating().async_auth_flow(_get()))
 
 
 class TestFailedOnAuthHop:
@@ -715,3 +666,65 @@ class TestFailedOnAuthHop:
     def test_an_error_that_is_not_a_request_error_is_not(self) -> None:
         """Ignore exceptions httpx2 does not stamp with a request, such as a bare ``OSError``."""
         assert not failed_on_auth_hop(OSError("reset"))
+
+
+class TestOneMint:
+    """``mint`` is the one hook: an async generator ending with ``Minted``, whether or not it makes a request."""
+
+    async def test_a_mint_with_no_hop_yields_only_minted(self, client_factory: _Factory) -> None:
+        """Cache the token a mint yields without sending any request of its own (P15, E7)."""
+
+        class _Vendor(CachedTokenAuth):
+            @override
+            async def mint(
+                self, request: httpx2.Request
+            ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+                yield Minted("vendor-token", 3600.0)
+
+        response = await client_factory(_Vendor(), _ok).get("/x")
+
+        assert response.json() == {"seen": "Bearer vendor-token"}
+
+    def test_an_auth_without_a_mint_cannot_be_built(self) -> None:
+        """Leave ``mint`` abstract, so a subclass without one fails when built, naming it."""
+
+        class _NoMint(CachedTokenAuth):
+            """Supply no mint."""
+
+        with pytest.raises(TypeError, match="abstract method 'mint'"):
+            cast("Any", _NoMint)()
+
+    async def test_seed_takes_a_minted(self, client_factory: _Factory) -> None:
+        """Cache a token obtained elsewhere in the shape a mint ends with (P15)."""
+        auth = _CountingAuth()
+        auth.seed(Minted("restored", 3600.0))
+
+        response = await client_factory(auth, _ok).get("/x")
+
+        assert (response.json(), auth.mints) == ({"seen": "Bearer restored"}, 0)
+
+    async def test_a_mint_reaches_the_fake_network(self) -> None:
+        """Send the exchange through the client's stack, so ``fake_network`` answers it (F2's probe)."""
+
+        class _Flow(CachedTokenAuth):
+            @override
+            async def mint(
+                self, request: httpx2.Request
+            ) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+                response = yield httpx2.Request("POST", "https://login.tasks.example/token", data={"id": "x"})
+                yield Minted(response.json()["access_token"], 3600.0)
+
+        fake = (
+            FakeTransport()
+            .reply("POST", "/token", Respond(json={"access_token": "tok"}))
+            .reply("GET", "/v2/me", Respond(json={"ok": True}))
+        )
+        with fake_network(fake), instant_retries():
+            client = Client(base_url="https://api.tasks.example/v2", auth=_Flow())
+        async with client:
+            await client.get("me", expect=RESPONSE)
+
+        assert [str(call.url) for call in fake.calls] == [
+            "https://login.tasks.example/token",
+            "https://api.tasks.example/v2/me",
+        ]

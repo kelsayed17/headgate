@@ -160,15 +160,18 @@ it:
   one-shot stream (`body=Raw(...)` of an async iterable) is streamed as it is produced, never held in memory, so its
   401 reaches the caller and the next call mints a new token. Give `Raw` a factory to have it re-sent.
 
-The exchange is one of two methods. `mint_token()` makes it on a client of its own and returns `(token, lifetime)`:
+The exchange is the subclass's `mint(request)`: an async generator that yields the requests the exchange needs, so
+they travel through the owning client's own stack (its transport, rate budget, retries, error mapping and, in a test,
+`fake_network`), and ends by yielding `Minted(token, lifetime)`:
 
 ```python
+from collections.abc import AsyncGenerator
 from typing import override
 
 import httpx2
 import msgspec
 
-from headgate import CachedTokenAuth
+from headgate import CachedTokenAuth, Minted
 from headgate.msgspec import decode
 
 
@@ -180,19 +183,18 @@ class Token(msgspec.Struct, frozen=True):
 class PartnerAuth(CachedTokenAuth):
     def __init__(self, client_id: str, client_secret: str) -> None:
         super().__init__()
-        self._credentials = (client_id, client_secret)
+        self._form = {"grant_type": "client_credentials", "client_id": client_id, "client_secret": client_secret}
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
-        async with httpx2.AsyncClient(timeout=10.0, trust_env=False) as http:  # read no proxy from the environment
-            response = await http.post("https://login.partner.example/token", auth=self._credentials)
-            response.raise_for_status()
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+        response = yield httpx2.Request("POST", "https://login.partner.example/token", data=self._form)
+        response.raise_for_status()
         token = decode(response.content, Token)
-        return token.access_token, token.expires_in
+        yield Minted(token.access_token, token.expires_in)
 ```
 
-Or `mint_flow(request)` yields the requests the exchange needs, so they travel through the owning client's own stack
-(its transport, rate budget, retries and error mapping), and ends by yielding `Minted(token, lifetime)`.
+A mint that makes no request of its own, such as one that calls a vendor SDK, yields only the `Minted`:
+`yield Minted(await vendor.fetch_token(), 3600.0)`. A subclass without a `mint` cannot be built.
 [`examples/orders_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/orders_client.py) has a complete
 one. What the flow can count on:
 
@@ -222,13 +224,13 @@ endpoint. The API host's breaker records nothing for it.
   undeclared credential would follow a request anywhere. The default declares `frozenset({"authorization"})`. The parameters are withheld from untrusted origins like the headers, a 401 to a request
   carrying one re-mints, and error messages redact them.
 - `skips(request)` says a request needs no token (by default, one that already carries a token header or parameter).
-- `seed(token, lifetime)` caches a token obtained elsewhere, such as one restored from storage or a test's fixed bearer.
+- `seed(Minted(token, lifetime))` caches a token obtained elsewhere, such as one restored from storage or a test's fixed bearer.
 - `CachedTokenAuth[TokenT]` is generic in the token's type, `str` by default. The default `attach` sends only a `str`,
   so a subclass whose token is another type (`CachedTokenAuth[dict[str, str]]`) overrides `attach`; one that does not
   fails when it is defined, or, when a generic subclass binds the type further down, at its first call.
 - `credential_identity()` names the long-lived credential for the cache partition. By default each instance is its own
   identity; return the client id and secret (hashed, never stored) to let instances holding the same credential share
   entries. Never return the short-lived token, which changes on every refresh.
-- `self.reject_credential_rotation(returned, configured, setting=...)`, called from your `mint_token`, raises
+- `self.reject_credential_rotation(returned, configured, setting=...)`, called from your `mint`, raises
   `ClientConfigurationError` when a token endpoint hands back a replacement for the long-lived credential, which an
   in-memory cache cannot persist.

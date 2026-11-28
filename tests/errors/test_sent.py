@@ -195,7 +195,7 @@ class _HopMint(CachedTokenAuth):
     """Mint through the owning client's stack, with a hop to the token endpoint."""
 
     @override
-    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         response = yield httpx2.Request("POST", f"{_BASE}/token")
         yield Minted(response.text, math.inf)
 
@@ -225,7 +225,7 @@ async def test_a_mint_hop_that_failed_after_the_calls_request_leaves_it_sent() -
         return httpx2.Response(401)
 
     auth = _HopMint()
-    auth.seed("revoked", math.inf)  # of unknown age, so a 401 on it mints again
+    auth.seed(Minted("revoked", math.inf))  # of unknown age, so a 401 on it mints again
     error = await _raised(_client(answer, auth=auth))
 
     assert isinstance(error, TransportError)

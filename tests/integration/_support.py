@@ -10,11 +10,21 @@ from typing import TYPE_CHECKING, override
 
 import msgspec
 
-from headgate import Auth, CachedTokenAuth, Client, HttpOptions, QueryParamAuth, Rate, StaticHeaderAuth, TransportPolicy
+from headgate import (
+    Auth,
+    CachedTokenAuth,
+    Client,
+    HttpOptions,
+    Minted,
+    QueryParamAuth,
+    Rate,
+    StaticHeaderAuth,
+    TransportPolicy,
+)
 from headgate._core import CredentialStamper
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncGenerator, Sequence
 
     import httpx2
 
@@ -77,7 +87,7 @@ class Bearer(CachedTokenAuth):
     """A bearer auth whose exchange never runs: :func:`seeded` caches its token."""
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         raise NotImplementedError
 
 
@@ -88,7 +98,7 @@ BEARER = "minted-bearer"
 def seeded() -> Bearer:
     """Return a :class:`Bearer` holding :data:`BEARER`, never expiring, so it stamps without minting."""
     auth = Bearer()
-    auth.seed(BEARER, math.inf)
+    auth.seed(Minted(BEARER, math.inf))
     return auth
 
 

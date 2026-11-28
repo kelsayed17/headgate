@@ -65,7 +65,7 @@ __all__ = [
 ]
 
 #: The request extension marking a request an auth flow yields to acquire a credential, as opposed to the call's own
-#: request. :class:`CachedTokenAuth` sets it on every request its :meth:`~CachedTokenAuth.mint_flow` yields. A fixture
+#: request. :class:`CachedTokenAuth` sets it on every request its :meth:`~CachedTokenAuth.mint` yields. A fixture
 #: recorder can read it to skip the hop, which is not the endpoint's answer.
 AUTH_HOP = "headgate.auth_hop"
 
@@ -564,15 +564,13 @@ class CachedTokenAuth[TokenT = str](Auth):
       its 401 reaches the caller, and the rejected token is dropped so the next call mints.
 
     The exchange itself is the subclass's, because that is where providers differ (form-encoded or JSON, a separate
-    sign-in host, their own field names). It supplies one of:
+    sign-in host, their own field names). It supplies :meth:`mint`, an async generator that yields the requests the
+    exchange needs, so they travel through the owning client's own stack (its transport, rate budget, retries and error
+    mapping, and a test's ``fake_network``), marked :data:`AUTH_HOP`, and ends by yielding :class:`Minted`. A mint that
+    makes no request of its own (a vendor SDK's call) yields only the :class:`Minted`. A subclass without one cannot
+    be built.
 
-    * :meth:`mint_token`, a coroutine that makes the exchange on a client of its own and returns
-      ``(token, lifetime)``. The usual shape.
-    * :meth:`mint_flow`, an async generator that yields the requests the exchange needs, so they travel through the
-      owning client's own stack (its transport, rate budget, retries and error mapping), marked :data:`AUTH_HOP`. It
-      ends by yielding :class:`Minted`. A cookie-plus-crumb exchange has this shape.
-
-    Supplying neither fails when the class is defined; with both, the flow runs :meth:`mint_flow`. Two more hooks let a
+    Two more hooks let a
     credential that is not an ``Authorization`` bearer ride the same cache: :meth:`attach` (how a token is put on a
     request) and :meth:`skips` (a request that needs none). ``TokenT`` is the credential's type, ``str`` for every
     bearer; a subclass whose token is of another type overrides :meth:`attach`, or its definition fails (or, when the
@@ -593,7 +591,7 @@ class CachedTokenAuth[TokenT = str](Auth):
     A subclass that wants them to overrides :meth:`credential_identity` to return its long-lived secret material (the
     API key, or client id and secret), never the short-lived token.
 
-    The hops a :meth:`mint_flow` yields are addressed by the subclass's own code, so each may carry credentials to the
+    The hops a :meth:`mint` yields are addressed by the subclass's own code, so each may carry credentials to the
     origin it names, and the redirects it is answered with stay pinned to that origin: one to another origin is refused
     as ``ForbiddenDestinationError`` rather than followed, since the hop's own headers and body may carry the long-lived
     credential (see :mod:`headgate.security`).
@@ -613,10 +611,10 @@ class CachedTokenAuth[TokenT = str](Auth):
     by httpx2 outside the flow, so it is neither shared nor answered with the held token.
 
     **A failed mint is reported as the token endpoint's failure**, never the API call's (see
-    :func:`~headgate._failures.mint_error`): an exception the mint code raises (a ``ConnectError`` on its own client,
+    :func:`~headgate._failures.mint_error`): an exception the mint code raises (a ``ConnectError`` from a vendor SDK,
     a ``raise_for_status()``, an unreadable token response) becomes the ``ClientError`` it means, named for this auth
     class and the token endpoint, chained to the original. It is raised from the auth flow, so the API host's circuit
-    breaker records nothing for it. A hop :meth:`mint_flow` yields travels the owning client's stack; a network
+    breaker records nothing for it. A hop :meth:`mint` yields travels the owning client's stack; a network
     failure there is reported the same way, as ``TransportError`` naming this auth class and the hop's endpoint
     (:func:`mint_hop_failure`), and reading its response (bounded at 1 MiB) fails
     through the same mapping, so a body that is too large is ``ResponseTooLargeError`` and a dropped connection
@@ -651,17 +649,11 @@ class CachedTokenAuth[TokenT = str](Auth):
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse a subclass with no mint, or whose :meth:`attach` sets a credential it has not declared.
 
-        A subclass must inherit a :meth:`mint_token` or a :meth:`mint_flow` override; and when it overrides
-        :meth:`attach`, that class or one below it must declare :attr:`credential_headers` or
+        When a subclass overrides :meth:`attach`, that class or one below it must declare :attr:`credential_headers` or
         :attr:`credential_params`, not both empty. Its parameters are registered as secret.
         """
         super().__init_subclass__(**kwargs)
         declared = _declares_names(cls)
-        # Not @abstractmethod: either of two methods satisfies the contract.
-        supplied = any(getattr(cls, name) is not getattr(CachedTokenAuth, name) for name in ("mint_token", "mint_flow"))
-        if not supplied:
-            msg = f"{cls.__name__} must override mint_token or mint_flow"
-            raise TypeError(msg)
         mro = cls.__mro__
         attaching = next(klass for klass in mro if "attach" in vars(klass))
         below = [vars(klass) for klass in mro[: mro.index(attaching) + 1]]
@@ -691,30 +683,18 @@ class CachedTokenAuth[TokenT = str](Auth):
         """
         return self._identity
 
-    async def mint_token(self) -> tuple[TokenT, float]:
-        """Exchange the provider's long-lived credential for ``(access_token, lifetime_seconds)``.
+    @abstractmethod
+    def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[TokenT], httpx2.Response]:
+        """Mint a token: yield each request the exchange needs, and end by yielding :class:`Minted`.
 
-        Called with the lock held, so an implementation need not guard against concurrent mints. Raise rather than
-        return an empty token. An implementation whose provider may rotate its long-lived credential calls
-        :meth:`reject_credential_rotation` with the returned value.
+        Write it as an ``async def`` that yields. Each request travels the owning client's stack, and its response is
+        sent back in already read (up to 1 MiB), so ``.content`` and ``.json()`` work on it. A hop that sets no
+        ``timeout`` extension is sent with the call's timeouts, and every hop's timeouts are cut to what the call's
+        deadline leaves. A mint with no request of its own yields only the :class:`Minted`. *request* is the call that
+        needs the credential, for a hop that wants another of its extensions. Called with the lock held, so an
+        implementation need not guard against concurrent mints. Raise rather than yield an empty token. A mint whose
+        provider may rotate its long-lived credential calls :meth:`reject_credential_rotation` with the returned value.
         """
-        msg = f"{type(self).__name__} mints through mint_flow, not mint_token"
-        raise NotImplementedError(msg)
-
-    async def mint_flow(
-        self, request: httpx2.Request
-    ) -> AsyncGenerator[httpx2.Request | Minted[TokenT], httpx2.Response]:
-        """Mint through the owning client's stack: yield each request the exchange needs, end with :class:`Minted`.
-
-        Each response is sent back in already read (up to 1 MiB), so ``.content`` and
-        ``.json()`` work on it. A hop that sets no ``timeout`` extension is sent with the call's timeouts, and every
-        hop's timeouts are cut to what the call's deadline leaves. *request* is the call that needs the credential, for
-        a hop that wants another of its extensions. Called with the lock held, like :meth:`mint_token`; the default
-        delegates to it.
-        """
-        del request  # only a flow that yields its own requests needs the call it is minting for
-        token, lifetime = await self.mint_token()
-        yield Minted(token, lifetime)
 
     def attach(self, request: httpx2.Request, token: TokenT) -> None:
         """Put *token* on *request*, replacing any earlier one: the re-send after a 401 calls this a second time.
@@ -758,13 +738,13 @@ class CachedTokenAuth[TokenT = str](Auth):
 
     # -- Cache ---------------------------------------------------------------
 
-    def seed(self, token: TokenT, lifetime: float) -> None:
-        """Cache *token*, obtained outside this auth, with *lifetime* seconds left to live.
+    def seed(self, minted: Minted[TokenT]) -> None:
+        """Cache *minted*, a token obtained outside this auth with its lifetime left to live, in seconds.
 
         For a token restored from storage, or a test's fixed bearer. Its age is unknown, so it never counts as fresh:
         a 401 on it re-mints.
         """
-        self._cache(token, lifetime, minted_at=-math.inf)
+        self._cache(minted.token, minted.lifetime, minted_at=-math.inf)
 
     def _cache(self, token: TokenT, lifetime: float, *, minted_at: float) -> None:
         # A lifetime at or under the margin would read as due the moment it was cached, so every request would mint
@@ -846,7 +826,7 @@ class CachedTokenAuth[TokenT = str](Auth):
                     try:
                         # Only this generator can yield to the client, so it drives the mint flow: httpx2 sends each
                         # request the mint yields and hands its response back in.
-                        mint = self.mint_flow(request)
+                        mint = self.mint(request)
                         try:
                             step = await self._mint_step(anext(mint))
                             while isinstance(step, httpx2.Request):
@@ -855,7 +835,7 @@ class CachedTokenAuth[TokenT = str](Auth):
                                 hop_response = await self._mint_step(_read_hop(hop_response, type(self).__name__))
                                 step = await self._mint_step(mint.asend(hop_response))
                         except StopAsyncIteration:
-                            msg = f"{type(self).__name__}.mint_flow ended without yielding Minted"
+                            msg = f"{type(self).__name__}.mint ended without yielding Minted"
                             raise RuntimeError(msg) from None
                         finally:
                             await mint.aclose()

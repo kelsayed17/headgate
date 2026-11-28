@@ -46,7 +46,7 @@ class _Bearer(CachedTokenAuth):
     """A bearer auth whose exchange never runs: tests seed it."""
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         raise NotImplementedError
 
 
@@ -56,7 +56,7 @@ class _HeaderToken(CachedTokenAuth):
     credential_headers: ClassVar = frozenset({"X-Token"})
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         raise NotImplementedError
 
     @override
@@ -71,7 +71,7 @@ class _QueryToken(CachedTokenAuth):
     credential_params: ClassVar = frozenset({"access_token"})
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         raise NotImplementedError
 
     @override
@@ -266,7 +266,7 @@ class _MintingAuth(CachedTokenAuth):
     """Mint by posting a basic-auth request, a secret header and a form body to a token host on another origin."""
 
     @override
-    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         response = yield httpx2.Request(
             "POST",
             "https://login.example/token",
