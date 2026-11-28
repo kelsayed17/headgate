@@ -23,13 +23,13 @@ import httpx2
 import pytest
 
 from headgate import (
+    CallPolicy,
     Client,
     HttpCache,
     HttpOptions,
     RetryPolicy,
     Timeouts,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
 )
 from headgate._core import CallContext, CallInfo
@@ -75,8 +75,8 @@ class _GatedNetwork(httpx2.AsyncBaseTransport):
 
 
 def _store_nothing() -> CacheRules:
-    """Look every GET up but store no status, so no GET in a test is stored."""
-    return {"statuses": ()}
+    """Look every GET up but store only a 203, which no test answers, so no GET in a test is stored."""
+    return {"statuses": (httpx2.codes.NON_AUTHORITATIVE_INFORMATION,)}
 
 
 async def _get(transport: ResilientCacheTransport, url: str = _URL) -> bytes:
@@ -448,7 +448,7 @@ def _timed(read: float) -> httpx2.Request:
 def _retried(policy: RetryPolicy) -> httpx2.Request:
     """Return a GET of the shared URL whose call carries its own retry *policy*."""
     request = httpx2.Request("GET", _URL)
-    context = CallContext(CallInfo(method="GET", url=_URL))
+    context = CallContext(CallInfo(method="GET", url=_URL, full_url=_URL))
     context.put(RETRY_POLICY, policy)
     context.attach(request)
     return request
@@ -483,7 +483,7 @@ def _sharing_client(network: _GatedNetwork, storage: AsyncSqliteStorage) -> Clie
     """Build a client over *network* that caches every GET and sends each request once."""
     return Client(
         base_url="https://example.test",
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), cache=HttpCache(**every_get_rules(), storage=storage)),
+        policy=CallPolicy(retry=RetryPolicy(attempts=1), cache=HttpCache(**every_get_rules(), storage=storage)),
         http=HttpOptions(transport=network),
     )
 
@@ -524,7 +524,7 @@ async def test_gets_whose_timeouts_the_deadline_cut_still_share(storage: AsyncSq
     network = _GatedNetwork()
     client = Client(
         base_url="https://example.test",
-        policy=TransportPolicy(
+        policy=CallPolicy(
             deadline=20.0, retry=RetryPolicy(attempts=1), cache=HttpCache(**every_get_rules(), storage=storage)
         ),
         http=HttpOptions(transport=network),
@@ -542,7 +542,7 @@ async def test_gets_whose_timeouts_the_deadline_cut_still_share(storage: AsyncSq
 def _due_in(seconds: float) -> httpx2.Request:
     """Return a GET of the shared URL asking for a 60 s read timeout, fitted to a deadline *seconds* away."""
     request = httpx2.Request("GET", _URL, extensions={"timeout": {"read": 60.0}})
-    context = CallContext(CallInfo(method="GET", url=_URL), deadline_after=seconds)
+    context = CallContext(CallInfo(method="GET", url=_URL, full_url=_URL), deadline_after=seconds)
     context.attach(request)
     context.fit_timeouts(request)
     return request
@@ -613,7 +613,7 @@ async def test_timeout_sharing_uses_only_the_failed_phase(
     transport = cache_transport(storage, network, rules=_store_nothing())
     requests = [httpx2.Request("GET", _URL, extensions={"timeout": dict(limits)}) for _ in range(_CONCURRENT)]
     for request in requests:
-        context = CallContext(CallInfo(method="GET", url=_URL), deadline_after=60.0)
+        context = CallContext(CallInfo(method="GET", url=_URL, full_url=_URL), deadline_after=60.0)
         context.attach(request)
         context.fit_timeouts(request)
     tasks = [asyncio.create_task(transport.handle_async_request(request)) for request in requests]
@@ -652,7 +652,7 @@ async def test_middleware_timeout_overrides_define_sharing(storage: AsyncSqliteS
     middleware = _TimeoutOverride(same=same)
     client = Client(
         base_url="https://example.test",
-        policy=TransportPolicy(
+        policy=CallPolicy(
             retry=None,
             deadline=60.0,
             cache=HttpCache(**_store_nothing(), storage=storage),
@@ -692,7 +692,7 @@ async def test_middleware_can_change_the_timeout_on_a_later_retry(storage: Async
     middleware = _TimeoutOverride(same=False)
     client = Client(
         base_url="https://example.test",
-        policy=TransportPolicy(
+        policy=CallPolicy(
             retry=RetryPolicy(attempts=2),
             deadline=60.0,
             cache=HttpCache(**_store_nothing(), storage=storage),

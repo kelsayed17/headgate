@@ -3,10 +3,8 @@
 
 """The check that refuses an option value of the wrong kind, naming what it got, and how it writes a type."""
 
-from __future__ import annotations
-
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from typing import Any, Final, NewType, TypeAliasType, get_origin
 
 __all__ = [
@@ -16,6 +14,8 @@ __all__ = [
     "check_kind",
     "check_names",
     "check_not_letters",
+    "check_options",
+    "named",
     "type_text",
 ]
 
@@ -41,7 +41,7 @@ def type_text(value: object) -> str:
     return _QUALIFIERS.sub(lambda match: match[1] or "", repr(value))
 
 
-def _named(value: object) -> str:
+def named(value: object) -> str:
     """Return what *value* is, for a refusal: ``the type list[Order]``, ``the class Order``, or its type's name."""
     if _is_type_expression(value):
         return f"the type {type_text(value)}"
@@ -60,7 +60,7 @@ def check_kind(option: str, value: object, kind: type | tuple[type, ...], wanted
         <name>`` for a class, and its type's name for anything else.
     """
     if not isinstance(value, kind):
-        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        msg = f"{option}= takes {wanted} (got {named(value)})"
         raise TypeError(msg)
 
 
@@ -70,7 +70,7 @@ def check_int(option: str, value: object, wanted: str) -> None:
     :raises TypeError: naming the option, what it takes (*wanted*) and what it got.
     """
     if isinstance(value, bool) or not isinstance(value, int):
-        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        msg = f"{option}= takes {wanted} (got {named(value)})"
         raise TypeError(msg)
 
 
@@ -80,7 +80,7 @@ def check_callable(option: str, value: object, wanted: str) -> None:
     :raises TypeError: naming the option, what it takes (*wanted*) and what it got.
     """
     if not callable(value):
-        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        msg = f"{option}= takes {wanted} (got {named(value)})"
         raise TypeError(msg)
 
 
@@ -92,7 +92,7 @@ def check_collection(option: str, value: object, wanted: str) -> None:
     :raises TypeError: naming the option, what it takes (*wanted*) and what it got.
     """
     if isinstance(value, str | bytes) or not isinstance(value, Collection):
-        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        msg = f"{option}= takes {wanted} (got {named(value)})"
         raise TypeError(msg)
 
 
@@ -108,7 +108,7 @@ def check_names(option: str, value: object, wanted: str) -> None:
         or not isinstance(value, Collection)
         or not all(isinstance(name, str) for name in value)
     ):
-        msg = f"{option}= takes {wanted} (got {_named(value)})"
+        msg = f"{option}= takes {wanted} (got {named(value)})"
         raise TypeError(msg)
 
 
@@ -136,3 +136,18 @@ def check_not_letters(where: str, names: Collection[str]) -> None:
             f"which splits a name into its letters: write frozenset({{{example!r}}})"
         )
     raise TypeError(msg)
+
+
+def check_options(
+    where: str, options: Mapping[str, object], allowed: frozenset[str], hints: Mapping[str, str] | None = None
+) -> None:
+    """Refuse a keyword *where* does not take, as a function with that signature would.
+
+    :raises TypeError: naming the first such keyword in sorted order, and what to write instead when *hints* says.
+    """
+    if unknown := options.keys() - allowed:
+        name = min(unknown)
+        msg = f"{where}() got an unexpected keyword argument {name!r}"
+        if hints is not None and (hint := hints.get(name)) is not None:
+            msg = f"{msg}: {hint}"
+        raise TypeError(msg)

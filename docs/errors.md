@@ -21,8 +21,10 @@ Every error class has one module to import it from:
 | `UnmatchedRequestError` | `headgate.testing` |
 
 The six a caller catches most are at the top level, the test kit's own is in `headgate.testing`, and the rest live in
-`headgate.errors`. `headgate.errors` also defines the six, so `from headgate.errors import ClientError` still works,
-but type checkers and these docs name `headgate.ClientError`.
+`headgate.errors`. That is each one's only import: `from headgate.errors import ClientError` raises `ImportError`.
+Each class reports the same home in tracebacks and `repr`, `headgate.UpstreamStatusError` or
+`headgate.errors.CircuitOpenError`, so the name a traceback prints is the one to import, as it is for every class and
+function headgate exports.
 
 Every failure a client raises is a `headgate.ClientError`, and the shape of the tree is part of the contract:
 an application boundary can map it onto its own answers without knowing which client failed.

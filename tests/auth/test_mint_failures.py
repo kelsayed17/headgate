@@ -22,6 +22,7 @@ from headgate import (
     Auth,
     AuthError,
     CachedTokenAuth,
+    CallPolicy,
     Client,
     ClientTimeoutError,
     HttpOptions,
@@ -29,7 +30,6 @@ from headgate import (
     RetryPolicy,
     Timeouts,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
 )
 from headgate._auth import _MAX_MINT_RESPONSE_BYTES
@@ -91,7 +91,7 @@ def _api(auth: Auth, handler: Callable[[httpx2.Request], httpx2.Response] | None
     return Client(
         base_url=f"https://{_API_HOST}",
         auth=auth,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
+        policy=CallPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(transport=httpx2.MockTransport(handler or (lambda _r: httpx2.Response(httpx2.codes.OK)))),
     )
 
@@ -444,7 +444,7 @@ async def _hop_timeouts(auth: CachedTokenAuth, *, deadline: float | None) -> dic
     client = Client(
         base_url=f"https://{_API_HOST}",
         auth=auth,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1), deadline=None, timeout=_CALL_TIMEOUTS),
+        policy=CallPolicy(retry=RetryPolicy(attempts=1), deadline=None, timeout=_CALL_TIMEOUTS),
         http=HttpOptions(transport=httpx2.MockTransport(handle)),
     )
     async with client:

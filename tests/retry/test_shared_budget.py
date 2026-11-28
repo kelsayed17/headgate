@@ -13,7 +13,7 @@ from typing import Any, Final, LiteralString, cast
 
 import pytest
 
-from headgate import Client, HttpOptions, Rate, RetryPolicy, Route, TransportPolicy, UpstreamStatusError, nothing
+from headgate import CallPolicy, Client, HttpOptions, Rate, RetryPolicy, Route, UpstreamStatusError, nothing
 from headgate.retry import Backoff, RetryBudget, RetryShare
 from tests.support.wire import Script
 
@@ -25,8 +25,7 @@ def _client(script: Script, budget: RetryShare | RetryBudget | None, *routes: Ro
     """Return a client over *script* whose policy retries 503s from *budget*, with *routes*."""
     return Client(
         base_url="https://api.example.test",
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=RetryPolicy(budget=budget), breaker=None, routes=routes),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=RetryPolicy(budget=budget), breaker=None, routes=routes),
         http=HttpOptions(transport=script.transport()),
     )
 
@@ -40,7 +39,7 @@ async def _retried(client: Client, path: LiteralString = "x") -> bool:
     return True
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_two_clients_given_one_retry_budget_spend_one_window() -> None:
     """Refuse the second client's retry once the first spent the budget they were both given."""
     shared = RetryBudget(_ONE_RETRY)
@@ -50,7 +49,7 @@ async def test_two_clients_given_one_retry_budget_spend_one_window() -> None:
     assert not await _retried(second)
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 @pytest.mark.parametrize("budget", [_ONE_RETRY, None], ids=["share", "none"])
 async def test_two_clients_given_a_share_keep_a_budget_each(budget: RetryShare | None) -> None:
     """Let each client retry once from a budget of its own, built from the share each was given (or no cap)."""
@@ -60,7 +59,7 @@ async def test_two_clients_given_a_share_keep_a_budget_each(budget: RetryShare |
     assert await _retried(second)
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_a_clients_views_and_routes_spend_its_one_budget() -> None:
     """Spend one budget for a client's own calls, its view's and a route's that names an equal share."""
     script = Script(503, 200, 503, 503, 200)

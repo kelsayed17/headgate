@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Final
 
 import pytest
 
-from headgate import Client, HttpOptions, Rate, SecurityOptions, nothing
+from headgate import CallPolicy, Client, HttpOptions, Rate, SecurityOptions, nothing
 from headgate.curl import AsyncCurlTransport
 from headgate.errors import ForbiddenDestinationError
 from headgate.testing import FakeTransport, TestClock, fake_network
@@ -27,7 +27,7 @@ class _Sdk:
         """Hold a client on *transport*, else on curl, paced at *rate*."""
         self.http = Client(
             base_url="https://api.example.test/v1",
-            rate=rate,
+            policy=CallPolicy(rate=rate),
             http=HttpOptions(transport=AsyncCurlTransport(impersonate="chrome") if transport is None else transport),
         )
 
@@ -58,7 +58,7 @@ async def test_an_sdk_built_outside_the_block_keeps_its_own_transport() -> None:
     assert (len(own.calls), len(fake.calls)) == (1, 0)
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_the_sdks_retries_and_rate_budget_run_over_the_fake() -> None:
     """Replace the network only: the client still retries a 503, and paces its sends at its own rate."""
     fake = FakeTransport().reply("GET", "/v1/ping", 503, 200)
@@ -78,7 +78,7 @@ async def test_the_ssrf_guard_still_refuses_a_private_address() -> None:
     with fake_network(fake):
         client = Client(
             base_url="http://127.0.0.1",
-            rate=_RATE,
+            policy=CallPolicy(rate=_RATE),
             http=HttpOptions(security=SecurityOptions(block_private_hosts=True)),
         )
 

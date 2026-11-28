@@ -3,26 +3,21 @@
 
 """The lazy sequence of pages and items :meth:`Client.paginate <headgate.Client.paginate>` returns."""
 
-from __future__ import annotations
-
 import hashlib
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from contextlib import aclosing
 from dataclasses import replace
-from typing import TYPE_CHECKING, Final, Literal, Protocol, final
+from typing import Final, Literal, cast, final
 
 import httpx2
 
 from headgate._core import check_int
+from headgate._errors import ClientError
 from headgate._failures import loggable_url, shorten
+from headgate._request_body import Writer
 from headgate._url import redact_secrets
-from headgate.errors import ClientError, ForbiddenDestinationError, PageLimitError
-from headgate.pagination._pager import BodyOffset, Offset, PageNumber, WritingPager
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
-
-    from headgate._request_body import Writer
-    from headgate.pagination._pager import Pager, PageRequest
+from headgate.errors import ForbiddenDestinationError, PageLimitError
+from headgate.pagination._pager import BodyOffset, Offset, PageNumber, Pager, PageRequest, WritingPager
 
 __all__ = ["REMEMBERED_PAGES", "OnLimit", "PageWalk", "Paginated", "Remembered", "check_page_budget"]
 
@@ -64,7 +59,8 @@ type Fetch[P, B] = Callable[[PageRequest[B]], Awaitable[tuple[P, httpx2.Response
 """Fetches one page through the client, returning what the call's reader read and the response it read it from."""
 
 
-class Paginated[I, P = object](Protocol):
+@final
+class Paginated[I, P = object]:
     """The pages of a paginated endpoint and the items on them, fetched one page at a time as iteration reaches them.
 
     ``async for item in paginated`` yields every item; :meth:`pages` yields the pages themselves; :meth:`collect`
@@ -74,7 +70,7 @@ class Paginated[I, P = object](Protocol):
 
     A page that leads back to a request already made (a cursor or next URL that repeats) raises ``ClientError``
     instead of looping forever; the requests made are remembered for that, as a digest per page of its URL (as written
-    and as sent), query and, for a POST, the bytes its pager's ``write`` encodes the body to, or the ``repr`` of a body
+    and as sent), params and, for a POST, the bytes its pager's ``write`` encodes the body to, or the ``repr`` of a body
     of builtins sent as JSON. An :class:`~headgate.pagination.Offset`, :class:`~headgate.pagination.PageNumber` or
     :class:`~headgate.pagination.BodyOffset` walk builds each request from the last, so a server that ignores its
     paging would send the same page forever: a page with items whose body repeats an earlier page's raises
@@ -84,31 +80,67 @@ class Paginated[I, P = object](Protocol):
 
     ``I`` is the item type and ``P`` the page type, which defaults to ``object``: ``Paginated[Issue]`` is a walk of
     issues, and ``Paginated[Issue, IssuePage]`` names the pages :meth:`pages` yields too.
+
+    :meth:`Client.paginate <headgate.Client.paginate>` builds one from its walk. A test double of an SDK builds one
+    from its own pages: ``Paginated(pages, items_of)``, where *pages* is a function of no arguments that starts a fresh
+    iteration of the pages each time it is called, and *items_of* returns the items on one page, so the items always
+    come from the pages.
     """
+
+    __slots__ = ("_items_of", "_pages")
+
+    def __init__(self, pages: Callable[[], AsyncIterator[P]], items_of: Callable[[P], Iterable[I]], /) -> None:
+        """Start each iteration with *pages*, and read each page's items with *items_of*."""
+        self._pages: Final = pages
+        # Read only with pages this walk yielded, so it is held as taking any object: P stays covariant, and a
+        # Paginated[Issue, IssuePage] is a Paginated[Issue].
+        self._items_of: Final = cast("Callable[[object], Iterable[I]]", items_of)
 
     def __aiter__(self) -> AsyncIterator[I]:
         """Iterate the items of every page, in order."""
-        ...
+        return self._items()
 
     def pages(self) -> AsyncIterator[P]:
         """Iterate the pages, in order."""
-        ...
+        return self._pages()
 
     async def collect(self, *, max_items: int | None = None) -> list[I]:
-        """Return every item of the walk, in order; with *max_items*, at most that many."""
-        ...
+        """Return every item of the walk, in order; with *max_items*, at most that many.
+
+        The walk stops as soon as it has *max_items* items, so no page past the one that filled it is fetched, and
+        ``max_items=0`` sends no request. A page budget (``max_pages=``) applies as it does to iteration: a walk it cuts
+        short raises ``PageLimitError`` unless the items were all collected first.
+        """
+        if max_items is not None and (isinstance(max_items, bool) or max_items < 0):
+            msg = f"max_items must be None or >= 0 (got {max_items!r})"
+            raise ValueError(msg)
+        collected: list[I] = []
+        if max_items == 0:
+            return collected
+        async with aclosing(self._items()) as items:
+            async for item in items:
+                collected.append(item)
+                if len(collected) == max_items:
+                    break
+        return collected
+
+    async def _items(self) -> AsyncGenerator[I]:
+        """Iterate the items of every page, in order."""
+        async for page in self._pages():
+            for item in self._items_of(page):
+                yield item
 
 
 @final
-class PageWalk[P, I, B]:
-    """The :class:`Paginated` :meth:`Client.paginate <headgate.Client.paginate>` builds."""
+class PageWalk[I, P, B]:
+    """The pages of one walk, and the items on them: what the :class:`Paginated` ``paginate`` returns iterates."""
 
     __slots__ = ("_fetch", "_first", "_items_of", "_max_pages", "_on_limit", "_pager", "_source", "_write")
 
     def __init__(
         self,
         fetch: Fetch[P, B],
-        pager: Pager[P, I, B],
+        pager: Pager[I, P, B],
         first: PageRequest[B],
         *,
         source: str,
@@ -137,10 +169,6 @@ class PageWalk[P, I, B]:
             pager.items if isinstance(pager, Offset | PageNumber | BodyOffset) else None
         )
 
-    def __aiter__(self) -> AsyncIterator[I]:
-        """Iterate the items of every page, in order."""
-        return self._items()
-
     async def pages(self) -> AsyncIterator[P]:
         """Iterate the pages, in order."""
         request: PageRequest[B] | None = self._first
@@ -155,7 +183,7 @@ class PageWalk[P, I, B]:
                 raise self._loop_error(request, fetched)
             page, response = await self._fetch(request)
             fetched += 1
-            if request.body is None:
+            if request.payload is None:
                 # A next URL from the wire is absolute, so the page is remembered as it was sent too.
                 requests.add(_sent_key(response))
             if self._items_of is not None and self._items_of(page) and not bodies.add(response.content):
@@ -168,32 +196,6 @@ class PageWalk[P, I, B]:
                 raise self._invalid_error(request, fetched, exc) from exc
             del response
             yield page
-
-    async def collect(self, *, max_items: int | None = None) -> list[I]:
-        """Return every item of the walk, in order; with *max_items*, at most that many.
-
-        The walk stops as soon as it has *max_items* items, so no page past the one that filled it is fetched, and
-        ``max_items=0`` sends no request. A page budget (``max_pages=``) applies as it does to iteration: a walk it cuts
-        short raises ``PageLimitError`` unless the items were all collected first.
-        """
-        if max_items is not None and (isinstance(max_items, bool) or max_items < 0):
-            msg = f"max_items must be None or >= 0 (got {max_items!r})"
-            raise ValueError(msg)
-        collected: list[I] = []
-        if max_items == 0:
-            return collected
-        async with aclosing(self._items()) as items:
-            async for item in items:
-                collected.append(item)
-                if len(collected) == max_items:
-                    break
-        return collected
-
-    async def _items(self) -> AsyncGenerator[I]:
-        """Iterate the items of every page, in order."""
-        async for page in self.pages():
-            for item in self._pager.page_items(page):
-                yield item
 
     def _limit_error(self, request: PageRequest[B], fetched: int) -> PageLimitError:
         """Build the error for *request*, the page after the *fetched* pages the budget allowed."""
@@ -290,7 +292,7 @@ def _key[B](request: PageRequest[B], write: Writer[B] | None) -> bytes:
     which a later body can reuse. Without *write*, a body is builtins sent as JSON, whose ``repr`` is their value.
     """
     query = None if request.params is None else tuple(request.params.items())
-    body = request.body if request.body is None or write is None else write(request.body).content
+    body = request.payload if request.payload is None or write is None else write(request.payload).content
     return repr((request.url, query, body)).encode()
 
 
@@ -302,4 +304,4 @@ def _sent_key(response: httpx2.Response) -> bytes:
 
 def _method[B](request: PageRequest[B]) -> Literal["GET", "POST"]:
     """Return the method *request* is sent with: a POST when it has a body."""
-    return "GET" if request.body is None else "POST"
+    return "GET" if request.payload is None else "POST"

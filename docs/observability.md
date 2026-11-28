@@ -17,7 +17,7 @@ class Metrics:
     def notify(self, event: Event) -> None:
         match event:
             case CallFinished(call=call, status_code=status, error=error, elapsed=elapsed):
-                record_call(call.method, call.route or call.url, status, error, elapsed)
+                record_call(call.method, call.template or call.url, status, error, elapsed)
             case RateLimited(delay=delay, reason=reason):
                 record_wait(reason, delay)
             case _:
@@ -37,13 +37,13 @@ coroutine function: its events would be dropped. Hand slow work (a network sink)
 | `RetryScheduled` | the retry layer will send again | `attempt`, `delay`, `reason` (`"503"`, `"ConnectError"`, `"hedge"`) |
 | `RateLimited` | the rate budget held the call, or its response paused the budget | `delay`, `reason`: `paced`, `throttled`, `paused`, `pushback` |
 | `BreakerChanged` | an origin's breaker changed state | `origin`, `previous`, `state`, `failures`, `call` |
-| `CacheResult` | the cache answered | `outcome`, a `CacheOutcome`: `hit`, `miss`, `shared`, `degraded` |
-| `Deprecated` | the response announced deprecation or a sunset | `deprecated`, `deprecated_at`, `sunset_at`, `link`, `sunset_link` |
+| `CacheChecked` | the cache checked the call | `outcome`, a `CacheOutcome`: `hit`, `miss`, `coalesced`, `degraded` |
+| `DeprecationNoticed` | the response announced deprecation or a sunset | `deprecated`, `deprecated_at`, `sunset_at`, `link`, `sunset_link` |
 | `CallFinished` | a call ends, either way | `status_code`, `error` (the exception type's name; not that of a non-`ClientError` a `stream()` block raised itself), `attempts`, `elapsed` |
 
 Every call event is a `CallEvent` and carries `call`, a `CallInfo`: the `method`, the `url` as given (sanitized), the
-`route` (the t-string template, `"series/{series_id}"`, or `None` for a literal string or an `httpx2.URL`), the
-absolute `full_url` (sanitized), and a process-unique `call_id` that groups the events of one call among many concurrent
+`template` (the t-string template, `"series/{series_id}"`, OpenTelemetry's `url.template`, or `None` for a literal
+string or an `httpx2.URL`), the absolute `full_url` (sanitized, and filled with or without observers), and a process-unique `call_id` that groups the events of one call among many concurrent
 ones. Durations are seconds on the client's clock.
 
 Events carry **sanitized data only**: no header, no body, no credential. They are frozen dataclasses, so an observer can
@@ -95,7 +95,7 @@ provider's own header first if it uses another.
 
 A provider retiring an endpoint says so on its responses. When a response carries a valid `Deprecation` header (RFC
 9745's `@<epoch>` date, or the older `true` or HTTP-date forms) or a `Sunset` date (RFC 8594), the call emits a
-`Deprecated` event with the parsed dates and the `rel="deprecation"` and `rel="sunset"` links, resolved and redacted.
+`DeprecationNoticed` event with the parsed dates and the `rel="deprecation"` and `rel="sunset"` links, resolved and redacted.
 An observer that alerts on it finds every endpoint a client depends on that is going away, before it does.
 
 ## User-Agent
@@ -109,8 +109,8 @@ A `User-Agent` in `HttpOptions(headers=...)` replaces it entirely.
 `headgate.health` reads the state that says something is degraded, as fresh copies a metrics callback can poll:
 
 - `breaker_states(registry)`: a `BreakerSnapshot(state, refusing)` per origin, of the registry you pass. A client's
-  breakers are its own unless its policy names a registry, so to watch them, build one and give it to the clients:
-  `BreakerPolicy(registry=watched)`;
+  breakers are its own unless it is given a registry, so to watch them, build one and give it to the clients:
+  `breaker=BreakerRegistry(BreakerPolicy())`;
 - `cache_degradations()`: per host, how many requests found the cache broken and went to the network, for at most
   the 1024 hosts most recently degraded;
 - `observer_failures()`: per observer class, how many events its `notify` raised on.

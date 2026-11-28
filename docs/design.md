@@ -26,13 +26,15 @@ src/headgate/
   __init__.py        the public API, re-exported
   _client.py         Client: a call end to end
   _stack.py          the transport stack, assembled in one place
-  _options.py        TransportPolicy, HttpOptions, Timeouts, IdempotencyKeys, Route
+  _options.py        CallPolicy, HttpOptions, Timeouts, IdempotencyKeys, Route
   _responses.py      Reader, Expect and the built-in readers
   _failures.py       the ClientError a failed exchange becomes
   _auth.py           StaticHeaderAuth, QueryParamAuth, CachedTokenAuth
   _codec.py          the Codec protocol, and the readers and writers built on one
   _body.py, _request_body.py, _redirects.py, _middleware.py, _attempts.py, _deprecation.py, _view.py, _url.py,
-  _user_agent.py, _curl.py
+  _user_agent.py, _curl.py, _sse.py
+  _errors.py         every error class, exported from headgate (the six) and headgate.errors (the rest)
+  _health.py, _msgspec.py, _otel.py, _pydantic.py: what headgate.health, .msgspec, .otel and .pydantic export
   _core/             shared seams only: time, origins, CallContext, events, the policy switch
   retry/             RetryPolicy and its values, RetryTransport, send tracking, the budget ledger
   breaker/           BreakerPolicy, BreakerRegistry, CircuitBreaker
@@ -97,7 +99,7 @@ A request travels through httpx2, hooks, a cache that rebuilds it, and transport
 per-call state they share rides on the request as a single extension, a `CallContext`, which httpx2 copies to every
 redirect hop and the cache layer restores below hishel. Every layer finds it with `CallContext.of(request)`:
 
-- what the call is: `info` (method, sanitized URL, route template, absolute URL, call id);
+- what the call is: `info` (method, sanitized URL, template, absolute URL, call id);
 - when it must end: `deadline`, absolute on the client's clock, `remaining()`, and `fit_timeouts(request)`, which cuts a
   send's timeouts to the time left;
 - its sends: `begin_attempt()`, `attempt`, and the current attempt's `progress` (connected, bytes sent);
@@ -113,9 +115,9 @@ with no deadline.
 ## Events
 
 The event types are defined in `_core`, below every layer, so each layer emits the events it owns through the call's
-context: the client emits `CallStarted`, `CallFinished`, `BreakerChanged` and `Deprecated`; the attempt layer
+context: the client emits `CallStarted`, `CallFinished`, `BreakerChanged` and `DeprecationNoticed`; the attempt layer
 `AttemptFinished`; the retry layer `RetryScheduled`; the rate budget and its transport `RateLimited`; the cache
-`CacheResult`. A layer checks `context.observed` before building one, so a client without observers pays nothing.
+`CacheChecked`. A layer checks `context.observed` before building one, so a client without observers pays nothing.
 `Emitter` delivers to each observer in turn, swallowing and counting what one raises.
 
 ## Adding a layer
@@ -124,7 +126,7 @@ context: the client emits `CallStarted`, `CallFinished`, `BreakerChanged` and `D
    (`httpx2.AsyncBaseTransport.aclose` is a no-op, so a missing override leaks the pool).
 2. Decide where it sits: above the retry layer it runs once per call; below it, once per attempt; above the cache, for
    hits too; below the rate budget, only for what reaches the network.
-3. Configure it with a frozen option value on `TransportPolicy` or `HttpOptions`, validated in `__post_init__`.
+3. Configure it with a frozen option value on `CallPolicy` or `HttpOptions`, validated in `__post_init__`.
 4. Keep its per-call state in a `Slot` on the `CallContext`, never in a request extension of its own, and its waits on
    the injected `Timing`.
 5. Emit a typed event for what an operator would want to see, with sanitized data only, after checking

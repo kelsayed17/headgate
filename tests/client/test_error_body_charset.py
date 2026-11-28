@@ -13,7 +13,7 @@ from __future__ import annotations
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, RetryPolicy, TransportPolicy, UpstreamStatusError, as_bytes
+from headgate import CallPolicy, Client, HttpOptions, RetryPolicy, UpstreamStatusError, as_bytes
 from headgate._failures import body_snippet
 
 #: Codecs Python registers that are not text encodings.
@@ -42,7 +42,7 @@ def _client(status: int, charset: str) -> Client:
     headers = {"Content-Type": f"text/plain; charset={charset}"}
     return Client(
         base_url="https://api.example.test",
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
+        policy=CallPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(
             transport=httpx2.MockTransport(lambda _request: httpx2.Response(status, headers=headers, content=b"gone"))
         ),

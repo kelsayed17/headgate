@@ -14,7 +14,17 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import CachedTokenAuth, Client, Expect, HttpOptions, Minted, Reader, TransportError, UpstreamStatusError
+from headgate import (
+    CachedTokenAuth,
+    CallPolicy,
+    Client,
+    Expect,
+    HttpOptions,
+    Minted,
+    Reader,
+    TransportError,
+    UpstreamStatusError,
+)
 from tests.security._servers import client_ssl_context, serving
 from tests.security._web import BASE, Web
 from tests.support.responses import RESPONSE
@@ -141,7 +151,7 @@ async def test_a_real_tls_server_cannot_downgrade_to_a_plain_one() -> None:
         async with serving(redirect, tls=True) as secure:
             client = Client(
                 base_url=secure.url(host="localhost"),
-                rate=Rate.per_second(1000),
+                policy=CallPolicy(rate=Rate.per_second(1000)),
                 http=HttpOptions(ssl_context=client_ssl_context()),
             )
             async with client:

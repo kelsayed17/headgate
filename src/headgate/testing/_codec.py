@@ -8,19 +8,14 @@ type expressions every serialization library reads (``dict[str, int]``, ``dict[s
 unknown-field promise, a record type of the codec's own kind.
 """
 
-from __future__ import annotations
-
 import re
 import traceback
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
-from headgate._codec import decode_with
+from typing_extensions import TypeForm
+
+from headgate._codec import Codec, decode_with
 from headgate.errors import DecodeError
-
-if TYPE_CHECKING:
-    from typing_extensions import TypeForm
-
-    from headgate._codec import Codec
 
 __all__ = ["check_codec"]
 

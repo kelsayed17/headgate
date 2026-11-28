@@ -14,11 +14,10 @@ The values the retry layer exchanges with the rest of the stack through a call's
 layer concluded about the call's last attempt, which the client folds into the error it raises).
 """
 
-from __future__ import annotations
-
 import math
 import sys
 import threading
+import weakref
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, final, override
 
@@ -30,7 +29,7 @@ from headgate.retry._budget import RetryLedger
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from headgate._core import CallContext, Timing
+    from headgate._core import CallContext, Clock
 
 __all__ = [
     "IDEMPOTENCY_HEADER",
@@ -49,6 +48,7 @@ __all__ = [
     "RetryOutcome",
     "RetryPolicy",
     "RetryShare",
+    "clock_of",
     "is_keyed",
 ]
 
@@ -166,21 +166,23 @@ class RetryBudget:
 
     It is built from a :class:`RetryShare` and spends it over a sliding window, as a :class:`~headgate.RateBudget` is
     built from a :class:`~headgate.Rate`. Two clients whose policies name the same ``RetryBudget`` spend one window
-    together: once the first has spent it, the second's retries are refused too. The window runs on *timing*'s
-    clock, or, without one, on the timing current when the budget is built. Its ``repr`` shows the share and what the
-    window holds now.
+    together: once the first has spent it, the second's retries are refused too. The window runs on the clock of the
+    timing current when the budget is built (:func:`headgate.timing.current_timing`). Its ``repr`` shows the share and
+    what the window holds now.
 
     :raises TypeError: for a *share* that is not a :class:`RetryShare`, and, as Python's own, for the old keywords
         (``RetryBudget(ratio=0.1)`` is now ``RetryBudget(RetryShare(ratio=0.1))``).
     """
 
-    __slots__ = ("_ledger", "_lock", "_share")
+    __slots__ = ("__weakref__", "_ledger", "_lock", "_share")
 
-    def __init__(self, share: RetryShare = _DEFAULT_SHARE, *, timing: Timing | None = None) -> None:
-        """Spend *share* over its window, on *timing*'s clock."""
+    def __init__(self, share: RetryShare = _DEFAULT_SHARE) -> None:
+        """Spend *share* over its window, on the current timing's clock."""
         check_kind("share", share, RetryShare, "a RetryShare, such as RetryShare(ratio=0.1)")
         self._share = share
-        self._ledger = RetryLedger(share, (current_timing() if timing is None else timing).clock)
+        clock = current_timing().clock
+        self._ledger = RetryLedger(share, clock)
+        _CLOCKS[self] = clock
         self._lock = threading.Lock()
 
     @property
@@ -338,3 +340,12 @@ REPLAYABLE_BODY = Slot[bool]("replayable_body")
 
 #: The retry layer's verdict on the call's last attempt, read by the client into the error it raises.
 RETRY_OUTCOME = Slot[RetryOutcome]("retry_outcome")
+
+
+#: The clock each retry budget measures its window on, read without reaching into the budget.
+_CLOCKS: Final[weakref.WeakKeyDictionary[RetryBudget, Clock]] = weakref.WeakKeyDictionary()
+
+
+def clock_of(budget: RetryBudget) -> Clock:
+    """Return the clock *budget* measures its window on: the timing's current when it was built."""
+    return _CLOCKS[budget]

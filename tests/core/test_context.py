@@ -18,7 +18,9 @@ _STEP = 4.0
 
 def _context(clock: TestClock | None = None, *, deadline_after: float | None = None) -> CallContext:
     """Build a context for a GET of the test URL."""
-    return CallContext(CallInfo(method="GET", url=_URL), clock=clock or TestClock(), deadline_after=deadline_after)
+    return CallContext(
+        CallInfo(method="GET", url=_URL, full_url=_URL), clock=clock or TestClock(), deadline_after=deadline_after
+    )
 
 
 def test_find_returns_the_attached_context_and_none_for_a_bare_request() -> None:
@@ -91,7 +93,7 @@ def test_a_slot_holds_one_layers_value() -> None:
 def test_emit_delivers_to_the_clients_observers() -> None:
     """Deliver an event through the context's emitter, and say whether anyone listens."""
     recorder = Recorder()
-    info = CallInfo(method="GET", url=_URL)
+    info = CallInfo(method="GET", url=_URL, full_url=_URL)
     context = CallContext(info, emitter=Emitter((recorder,)))
     assert context.observed
     assert not _context().observed
@@ -103,7 +105,10 @@ def test_emit_delivers_to_the_clients_observers() -> None:
 
 def test_every_call_gets_its_own_id() -> None:
     """Number calls uniquely, so an observer can tell concurrent calls apart."""
-    assert CallInfo(method="GET", url=_URL).call_id != CallInfo(method="GET", url=_URL).call_id
+    assert (
+        CallInfo(method="GET", url=_URL, full_url=_URL).call_id
+        != CallInfo(method="GET", url=_URL, full_url=_URL).call_id
+    )
 
 
 def test_a_standalone_context_names_only_the_origin_and_path() -> None:

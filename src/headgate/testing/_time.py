@@ -7,20 +7,16 @@ Both plug into :func:`headgate._core.timing_override`, which sets the clock and 
 a block, so they reach an SDK that fixes its client's options where it builds it.
 """
 
-from __future__ import annotations
-
 import asyncio
 import heapq
 import itertools
 import math
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import replace
-from typing import TYPE_CHECKING, Final, Self
+from typing import Final, Self
 
 from headgate._core import RandomSource, Timing, current_timing, system_random, timing_override
-
-if TYPE_CHECKING:
-    from collections.abc import Generator
 
 __all__ = ["TestClock", "instant_retries"]
 
@@ -121,7 +117,7 @@ class TestClock:
 
     @contextmanager
     def install(self) -> Generator[Self]:
-        """Build everything constructed inside the block with no ``timing=`` of its own on this clock; yield it."""
+        """Build everything constructed inside the block on this clock; yield it."""
         with timing_override(self.timing):
             yield self
 

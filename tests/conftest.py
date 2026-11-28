@@ -1,11 +1,11 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The suite's fixtures: autouse ones that keep the transport policy real but instant and isolated, and a storage.
+"""The suite's fixtures: autouse ones that keep the call policy real but instant and isolated, and a storage.
 
 They apply to every test under ``tests/``: a mocked failure is retried as production retries it without sleeping
 through the backoff, and the rate budget admits at once. A test whose subject is the throttle's own timing opts out of
-the no-op budget wait with ``@pytest.mark.transport_policy``. Breakers need no reset: each client keeps its own.
+the no-op budget wait with ``@pytest.mark.call_policy``. Breakers need no reset: each client keeps its own.
 """
 
 from __future__ import annotations
@@ -39,9 +39,9 @@ def instant_retry_sleep() -> Iterator[None]:
 def no_rate_limit(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Make the rate budget's wait a no-op, the one seam patched; which requests spend from which budget is unchanged.
 
-    A test whose subject is the throttle's timing carries ``@pytest.mark.transport_policy`` and keeps the real wait.
+    A test whose subject is the throttle's timing carries ``@pytest.mark.call_policy`` and keeps the real wait.
     """
-    if request.node.get_closest_marker("transport_policy"):
+    if request.node.get_closest_marker("call_policy"):
         return
 
     async def admit_at_once(_budget: Pacer, _context: CallContext) -> None:

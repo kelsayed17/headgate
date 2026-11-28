@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import pytest
 
 from headgate import (
+    CallPolicy,
     Client,
     EncodedBody,
     Form,
@@ -26,7 +27,6 @@ from headgate import (
     Multipart,
     Rate,
     Raw,
-    TransportPolicy,
     UpstreamStatusError,
     nothing,
 )
@@ -45,8 +45,7 @@ def _client(script: Script) -> Client:
     """Return a client over *script*."""
     return Client(
         base_url="https://api.example.test",
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(breaker=None),
+        policy=CallPolicy(rate=Rate.per_second(1000), breaker=None),
         http=HttpOptions(transport=script.transport()),
     )
 

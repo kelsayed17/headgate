@@ -116,7 +116,10 @@ def _render_class(name: str, cls: type) -> list[str]:
     bases = ", ".join(base.__qualname__ for base in cls.__bases__)
     lines = [f"class {name}({bases}){_signature(cls)}"]
     if dataclasses.is_dataclass(cls):
-        lines.extend(f"    field {f.name}: {f.type}{_field_default(f)}" for f in dataclasses.fields(cls))
+        written: dict[str, str] = {}
+        for klass in reversed(cls.__mro__):
+            written.update(annotationlib.get_annotations(klass, format=annotationlib.Format.STRING))
+        lines.extend(f"    field {f.name}: {written[f.name]}{_field_default(f)}" for f in dataclasses.fields(cls))
     elif is_typeddict(cls):
         annotations = annotationlib.get_annotations(cls, format=annotationlib.Format.STRING)
         required = getattr(cls, "__required_keys__", frozenset())
@@ -174,8 +177,8 @@ def _render(module_name: str) -> str:
     return "\n".join(lines)
 
 
-# transport_policy: keep the real ``RateBudget.wait``, which the suite's autouse fixture otherwise patches.
-@pytest.mark.transport_policy
+# call_policy: keep the real ``RateBudget.wait``, which the suite's autouse fixture otherwise patches.
+@pytest.mark.call_policy
 @pytest.mark.parametrize("module_name", _PUBLIC_MODULES)
 def test_the_public_surface_matches_the_snapshot(module_name: str, snapshot: SnapshotAssertion) -> None:
     """Check that the module's public names, signatures, fields and defaults are exactly the reviewed ones."""

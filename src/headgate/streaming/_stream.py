@@ -8,24 +8,18 @@ Its iterators read the body as it arrives, after content-decoding, and map a fai
 mapping (and the breaker charge that goes with a network failure) is the client's, passed in as *fail*.
 """
 
-from __future__ import annotations
-
 import codecs
 import functools
-from typing import TYPE_CHECKING, Final, Protocol, final
+from collections.abc import AsyncIterator, Callable, Iterator
+from typing import Final, Protocol, final
 
-from headgate._failures import parse_error
+import httpx2
+
+from headgate._errors import ClientError
+from headgate._failures import CallSite, parse_error
+from headgate._sse import EventParser, EventTooLargeError, text_decoder
 from headgate.errors import ResponseTooLargeError
 from headgate.retry._policy import NETWORK_ERRORS
-from headgate.streaming._events import EventParser, EventTooLargeError
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Iterator
-
-    import httpx2
-
-    from headgate._failures import CallSite
-    from headgate.errors import ClientError
 
 __all__ = ["DEFAULT_MAX_EVENT_SIZE", "NetworkFailure", "OpenStream", "Stream"]
 
@@ -71,22 +65,23 @@ class Stream(Protocol):
         """The event id the server last set, as of what :meth:`aiter_events` has read; ``None`` before it sets one.
 
         It is ``""`` once the server reset it with an empty ``id``, and a block without data (an ``id:`` alone) sets
-        it too, as a browser's ``EventSource`` keeps it. Pass it as ``last_event_id=`` when re-opening the stream, so
-        the server resumes after it.
+        it too, as a browser's ``EventSource`` keeps it. Pass it as ``events(last_event_id=)`` when re-opening the
+        stream, so the server resumes after it.
         """
         ...
 
     @property
-    def retry(self) -> int | None:
-        """The reconnection time in milliseconds the server last set, as of what :meth:`aiter_events` has read.
+    def reconnect_after(self) -> float | None:
+        """The seconds to wait before re-opening the stream, as the server's last ``retry:`` set them.
 
-        ``None`` before a ``retry:`` sets one. A ``retry:`` alone, in a block without data, sets it too, and it holds
-        until another replaces it, as a browser's ``EventSource`` keeps it; an event's own ``retry`` is only the field
-        its block named. Wait this long before re-opening the stream.
+        It is the reconnection time the server sends in milliseconds, in seconds like every other duration, as of what
+        :meth:`aiter_events` has read, and ``None`` before a ``retry:`` sets one. A ``retry:`` alone, in a block
+        without data, sets it too, and it holds until another replaces it, as a browser's ``EventSource`` keeps it;
+        an event's own ``retry`` is only the field its block named, in milliseconds.
         """
         ...
 
-    def aiter_bytes(self, chunk_size: int | None = None) -> AsyncIterator[bytes]:
+    def aiter_bytes(self, *, chunk_size: int | None = None) -> AsyncIterator[bytes]:
         """Iterate the body as bytes, in chunks as they arrive or of *chunk_size* bytes."""
         ...
 
@@ -95,8 +90,9 @@ class Stream(Protocol):
 
         A line past *max_line_size* characters (1 MiB by default, as an event; ``None`` for no limit) raises
         ``ResponseTooLargeError``, before it ends if it never does. The body is decoded by its ``charset``; one that is
-        no text encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is, and a body its ``charset``
-        cannot decode raises ``ResponseParseError``.
+        no text encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is. Bytes the ``charset`` decodes
+        badly become replacement characters, and a body it cannot decode at all (UTF-16 without a byte order mark)
+        raises ``ResponseParseError``.
         """
         ...
 
@@ -149,22 +145,24 @@ class OpenStream:
         """The event id the server last set, as of what :meth:`aiter_events` has read; ``None`` before it sets one.
 
         It is ``""`` once the server reset it with an empty ``id``, and a block without data (an ``id:`` alone) sets
-        it too, as a browser's ``EventSource`` keeps it. Pass it as ``last_event_id=`` when re-opening the stream, so
-        the server resumes after it.
+        it too, as a browser's ``EventSource`` keeps it. Pass it as ``events(last_event_id=)`` when re-opening the
+        stream, so the server resumes after it.
         """
         return None if self._events is None else self._events.last_event_id
 
     @property
-    def retry(self) -> int | None:
-        """The reconnection time in milliseconds the server last set, as of what :meth:`aiter_events` has read.
+    def reconnect_after(self) -> float | None:
+        """The seconds to wait before re-opening the stream, as the server's last ``retry:`` set them.
 
-        ``None`` before a ``retry:`` sets one. A ``retry:`` alone, in a block without data, sets it too, and it holds
-        until another replaces it, as a browser's ``EventSource`` keeps it; an event's own ``retry`` is only the field
-        its block named. Wait this long before re-opening the stream.
+        It is the reconnection time the server sends in milliseconds, in seconds like every other duration, as of what
+        :meth:`aiter_events` has read, and ``None`` before a ``retry:`` sets one. A ``retry:`` alone, in a block
+        without data, sets it too, and it holds until another replaces it, as a browser's ``EventSource`` keeps it;
+        an event's own ``retry`` is only the field its block named, in milliseconds.
         """
-        return None if self._events is None else self._events.retry
+        retry = None if self._events is None else self._events.retry
+        return None if retry is None else retry / 1000
 
-    def aiter_bytes(self, chunk_size: int | None = None) -> AsyncIterator[bytes]:
+    def aiter_bytes(self, *, chunk_size: int | None = None) -> AsyncIterator[bytes]:
         """Iterate the body as bytes, in chunks as they arrive or of *chunk_size* bytes."""
         return _Guarded(self._response.aiter_bytes(chunk_size), self._fail)
 
@@ -173,10 +171,11 @@ class OpenStream:
 
         A line past *max_line_size* characters (1 MiB by default, as an event; ``None`` for no limit) raises
         ``ResponseTooLargeError``, before it ends if it never does. The body is decoded by its ``charset``; one that is
-        no text encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is, and a body its ``charset``
-        cannot decode raises ``ResponseParseError``.
+        no text encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is. Bytes the ``charset`` decodes
+        badly become replacement characters, and a body it cannot decode at all (UTF-16 without a byte order mark)
+        raises ``ResponseParseError``.
         """
-        decoder = _text_decoder(self._response.encoding)
+        decoder = text_decoder(self._response.encoding)
         chunks = _Guarded(self._response.aiter_bytes(), self._fail)
         unreadable = functools.partial(parse_error, resp=self._response, site=self._site)
         too_large = functools.partial(self._too_large, f"line over {max_line_size} characters")
@@ -207,17 +206,6 @@ class OpenStream:
         """Return the error for *what* outgrew its limit: the body's fault, so it charges no breaker."""
         message = f"{what} from {self._site.method} {self._site.url}"
         return ResponseTooLargeError(message, **self._site.details(self._response))
-
-
-def _text_decoder(encoding: str | None) -> codecs.IncrementalDecoder:
-    """Return an incremental decoder for *encoding*, or UTF-8's when it decodes no text (``base64``, ``undefined``)."""
-    name = encoding or "utf-8"
-    try:
-        # One byte, since a codec that is no text encoding refuses only a non-empty body.
-        b"a".decode(name, "replace")
-    except LookupError, UnicodeError:
-        name = "utf-8"
-    return codecs.getincrementaldecoder(name)("replace")
 
 
 async def _lines(

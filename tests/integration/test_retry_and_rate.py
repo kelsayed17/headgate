@@ -4,7 +4,7 @@
 """A 429 reaches both the rate budget, which pauses every call sharing it, and the retry layer, which waits it.
 
 Both read the response's ``Retry-After`` the same way, so the retry's wait and the budget's pause end together and
-the call waits once. The budget's real wait is kept (``transport_policy``) and runs on a test clock.
+the call waits once. The budget's real wait is kept (``call_policy``) and runs on a test clock.
 """
 
 from __future__ import annotations
@@ -18,8 +18,9 @@ from headgate.testing import FakeTransport, TestClock
 from headgate.timing import Timing
 from tests.integration._support import client
 from tests.support.events import Recorder
+from tests.support.timing import built_on
 
-pytestmark = pytest.mark.transport_policy
+pytestmark = pytest.mark.call_policy
 
 #: The seconds the server asks for, in whole seconds and in milliseconds.
 _ASKED = 2.0
@@ -30,7 +31,9 @@ async def _waits(limited: httpx2.Response) -> tuple[TestClock, Recorder]:
     """Make one call answered *limited* and then 200, on a test clock; return the clock and the call's events."""
     clock = TestClock()
     recorder = Recorder()
-    budget = RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
+    budget = built_on(
+        Timing(clock=clock, sleep=clock.sleep, wall_clock=clock), lambda: RateBudget(Rate.per_second(100))
+    )
     fake = FakeTransport().reply("GET", "/v1/x", limited, 200)
     with clock.install():
         built = client(fake, rate=budget, http=HttpOptions(), observers=(recorder,))

@@ -41,8 +41,6 @@ The key is per process, so credential-partitioned entries in a persistent storag
 nor is an entry whose response varies on a request header (``Vary``); they expire by their TTL like any other.
 """
 
-from __future__ import annotations
-
 import hashlib
 import hmac
 import secrets

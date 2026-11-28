@@ -3,8 +3,6 @@
 
 """A rate (:class:`Rate`) and adaptive throttling (:class:`Adaptive`)."""
 
-from __future__ import annotations
-
 import math
 from dataclasses import dataclass
 
@@ -65,7 +63,7 @@ class Rate:
         return max(1.0, self.requests)
 
 
-#: A rate that never throttles in practice (1M req/s): what a budget built with transport policy off paces at.
+#: A rate that never throttles in practice (1M req/s): what a budget built with call policy off paces at.
 UNPACED = Rate.per_second(1_000_000)
 
 

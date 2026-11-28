@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The ``CacheResult`` event each cached request emits: a hit, a miss, a degraded fetch, or a shared download."""
+"""The ``CacheChecked`` event each cached request emits: a hit, a miss, a degraded fetch, or a shared download."""
 
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, override
 
 import httpx2
 
-from headgate import Client, HttpCache, HttpOptions, TransportError, TransportPolicy
+from headgate import CallPolicy, Client, HttpCache, HttpOptions, TransportError
 from headgate.cache._transport import served_from_cache
-from headgate.events import CacheOutcome, CacheResult, Event
+from headgate.events import CacheChecked, CacheOutcome, Event
 from tests.cache._helpers import FaultyStorage, Network, every_get_rules
 from tests.support.responses import RESPONSE
 
@@ -24,7 +24,7 @@ _CONCURRENT = 3
 
 
 class _Recorder:
-    """An observer that keeps every ``CacheResult`` it receives."""
+    """An observer that keeps every ``CacheChecked`` it receives."""
 
     def __init__(self) -> None:
         """Start empty."""
@@ -33,7 +33,7 @@ class _Recorder:
 
     def notify(self, event: Event) -> None:
         """Keep a cache event's outcome and URL."""
-        if isinstance(event, CacheResult):
+        if isinstance(event, CacheChecked):
             self.outcomes.append(event.outcome)
             self.urls.append(event.call.url)
 
@@ -60,7 +60,7 @@ def _client(network: httpx2.AsyncBaseTransport, storage: AsyncBaseStorage, recor
     """Build a client caching every GET into *storage*, reporting to *recorder*, retrying nothing."""
     return Client(
         base_url="https://x",
-        policy=TransportPolicy(retry=None, cache=HttpCache(**every_get_rules(), storage=storage)),
+        policy=CallPolicy(retry=None, cache=HttpCache(**every_get_rules(), storage=storage)),
         http=HttpOptions(transport=network),
         observers=(recorder,),
     )
@@ -106,7 +106,7 @@ async def test_requests_that_waited_on_another_report_a_shared_download(storage:
     network.gate.set()
     await asyncio.gather(*tasks)
 
-    assert sorted(recorder.outcomes) == sorted([CacheOutcome.MISS] + [CacheOutcome.SHARED] * (_CONCURRENT - 1))
+    assert sorted(recorder.outcomes) == sorted([CacheOutcome.MISS] + [CacheOutcome.COALESCED] * (_CONCURRENT - 1))
 
 
 async def test_requests_that_shared_a_failure_report_it_shared(storage: AsyncSqliteStorage) -> None:
@@ -121,7 +121,7 @@ async def test_requests_that_shared_a_failure_report_it_shared(storage: AsyncSql
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     assert all(isinstance(result, TransportError) for result in results)
-    assert recorder.outcomes == [CacheOutcome.SHARED] * (_CONCURRENT - 1)
+    assert recorder.outcomes == [CacheOutcome.COALESCED] * (_CONCURRENT - 1)
 
 
 async def test_a_client_without_observers_emits_nothing(storage: AsyncSqliteStorage) -> None:
@@ -129,7 +129,7 @@ async def test_a_client_without_observers_emits_nothing(storage: AsyncSqliteStor
     network = Network()
     client = Client(
         base_url="https://x",
-        policy=TransportPolicy(cache=HttpCache(**every_get_rules(), storage=storage)),
+        policy=CallPolicy(cache=HttpCache(**every_get_rules(), storage=storage)),
         http=HttpOptions(transport=network),
     )
 
@@ -142,4 +142,4 @@ async def test_a_client_without_observers_emits_nothing(storage: AsyncSqliteStor
 
 def test_every_outcome_is_one_the_cache_emits() -> None:
     """Offer only the outcomes the cache reports: it never revalidates, so there is no revalidated outcome."""
-    assert {outcome.value for outcome in CacheOutcome} == {"hit", "miss", "shared", "degraded"}
+    assert {outcome.value for outcome in CacheOutcome} == {"hit", "miss", "coalesced", "degraded"}

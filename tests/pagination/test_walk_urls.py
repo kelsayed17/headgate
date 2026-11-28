@@ -29,6 +29,8 @@ _INTS: Reader[_Page] = Reader(lambda response: response.json(), name="ints")
 class _HeaderUrl:
     """A pager whose next URL is the ``X-Next-Url`` header, absolute or relative, forwarded as the docs say."""
 
+    read: Reader[_Page] = _INTS
+
     def first(self, request: PageRequest) -> PageRequest:
         return request
 
@@ -44,6 +46,8 @@ class _HeaderUrl:
 @dataclass(frozen=True)
 class _BodyStr:
     """A pager forwarding the body's ``next`` as the ``str`` it read from JSON, not as an ``httpx2.URL``."""
+
+    read: Reader[_Page] = _INTS
 
     def first(self, request: PageRequest) -> PageRequest:
         return request
@@ -82,7 +86,7 @@ async def test_a_custom_pager_cannot_downgrade_the_walk() -> None:
     }
     async with _client(answers, sent) as client:
         with pytest.raises(ForbiddenDestinationError, match=r"from https to http://api\.example/things2"):
-            await client.paginate("things", expect=_INTS, pages=_HeaderUrl()).collect()
+            await client.paginate("things", pager=_HeaderUrl()).collect()
 
     assert [str(request.url) for request in sent] == ["https://api.example/v1/things"]
 
@@ -96,7 +100,7 @@ async def test_a_custom_pager_relative_url_resolves_against_the_answering_url() 
         "/v2/page2": httpx2.Response(200, json={"items": [2]}),
     }
     async with _client(answers, sent) as client:
-        items = await client.paginate("things", expect=_INTS, pages=_HeaderUrl()).collect()
+        items = await client.paginate("things", pager=_HeaderUrl()).collect()
 
     assert items == [1, 2]
     assert str(sent[-1].url) == "https://api.example/v2/page2"
@@ -111,7 +115,7 @@ async def test_a_str_next_url_cannot_downgrade_the_walk() -> None:
     }
     async with _client(answers, sent) as client:
         with pytest.raises(ForbiddenDestinationError, match=r"from https to http://api\.example/v1/things2"):
-            await client.paginate("things", expect=_INTS, pages=_BodyStr()).collect()
+            await client.paginate("things", pager=_BodyStr()).collect()
 
     assert [str(request.url) for request in sent] == ["https://api.example/v1/things"]
 
@@ -125,7 +129,7 @@ async def test_a_relative_str_next_url_still_joins_base_url() -> None:
         "/v1/page2": httpx2.Response(200, json={"items": [2]}),
     }
     async with _client(answers, sent) as client:
-        items = await client.paginate("things", expect=_INTS, pages=_BodyStr()).collect()
+        items = await client.paginate("things", pager=_BodyStr()).collect()
 
     assert items == [1, 2]
     assert str(sent[-1].url) == "https://api.example/v1/page2"

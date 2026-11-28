@@ -14,7 +14,7 @@ from typing import Any, cast
 import httpx2
 import pytest
 
-from headgate import Auth, BearerAuth, Client, HttpOptions, Rate, TransportPolicy, nothing
+from headgate import Auth, BearerAuth, CallPolicy, Client, HttpOptions, Rate, nothing
 from headgate.events import CallFinished
 from tests.support.events import Recorder
 
@@ -30,9 +30,8 @@ def _client(sent: list[httpx2.Request], recorder: Recorder, *, auth: Auth | None
 
     return Client(
         base_url=_BASE,
-        rate=Rate.per_second(1000),
         auth=auth,
-        policy=TransportPolicy(retry=None),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=None),
         http=HttpOptions(transport=httpx2.MockTransport(handle)),
         observers=(recorder,),
     )
@@ -47,7 +46,7 @@ async def test_a_url_object_is_sent_verbatim() -> None:
 
     assert sent[0].url.raw_path == b"/items/a%2Fb?x=1"
     (finished,) = recorder.of(CallFinished)
-    assert finished.call.route is None
+    assert finished.call.template is None
 
 
 async def test_an_absolute_url_object_is_sent_as_given() -> None:

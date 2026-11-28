@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, cast, override
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, Multipart, Rate, Raw, as_bytes, nothing
+from headgate import CallPolicy, Client, HttpOptions, Multipart, Rate, Raw, as_bytes, nothing
 from headgate._core import CallContext
 from headgate.retry._policy import REPLAYABLE_BODY
 
@@ -49,7 +49,9 @@ class _Server(httpx2.AsyncBaseTransport):
 
     def client(self) -> Client:
         """Return a client sending to this server."""
-        return Client(base_url="https://x.test", rate=Rate.per_second(100), http=HttpOptions(transport=self))
+        return Client(
+            base_url="https://x.test", policy=CallPolicy(rate=Rate.per_second(100)), http=HttpOptions(transport=self)
+        )
 
 
 async def _chunks() -> AsyncIterator[bytes]:

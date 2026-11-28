@@ -14,8 +14,6 @@ so a conditional call it can answer from storage comes back :class:`Fresh` with 
 origin; only a miss reaches the origin with the validator.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 import httpx2

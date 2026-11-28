@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``EventParser``, the incremental event-stream parser behind ``Stream.aiter_events`` and ``event_stream``.
+"""``EventParser``, the incremental event-stream parser behind ``Stream.aiter_events`` and ``as_events``.
 
 The grammar itself is covered through those two readers; these cases are the parser's own: a body cut into chunks at
 any point, and the exact bounds of ``max_event_size``.
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from headgate.streaming._events import EventParser, EventTooLargeError
+from headgate._sse import EventParser, EventTooLargeError
 
 #: Every line ending the grammar knows, with a CR and a CRLF where a chunk boundary can split them from what follows.
 _BODY = b": hi\r\ndata: a\r\ndata: b\r\rdata: c\n\nid: 1\r\ndata: d\r\n\r\n"

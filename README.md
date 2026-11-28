@@ -58,7 +58,7 @@ part of [`examples/github_client.py`](https://github.com/kelsayed17/headgate/blo
 tested client for the GitHub REST API:
 
 ```python
-from headgate import BearerAuth, Client, Expect, HttpOptions, Rate, RateBudget, nothing
+from headgate import BearerAuth, CallPolicy, Client, Expect, HttpOptions, Rate, RateBudget, nothing
 from headgate.msgspec import reader
 from headgate.pagination import LinkHeader
 
@@ -66,7 +66,7 @@ from headgate.pagination import LinkHeader
 REPOSITORY = reader(Repository)
 REPOSITORY_OR_NONE = Expect(REPOSITORY).on(HTTPStatus.NOT_FOUND, nothing)  # a missing or hidden repository
 ISSUES = reader(list[Issue])
-ISSUE_PAGES = LinkHeader(items=_issues)
+ISSUE_PAGES = LinkHeader(ISSUES, items=_issues)
 
 
 class GitHub:
@@ -77,7 +77,7 @@ class GitHub:
         self._http = Client(
             base_url=API,
             # Well under the 5,000 requests an hour a token gets, and never more than 50 at once.
-            rate=RateBudget(Rate.per_second(10), max_in_flight=50),
+            policy=CallPolicy(rate=RateBudget(Rate.per_second(10), max_in_flight=50)),
             auth=BearerAuth(token),
             http=HttpOptions(
                 headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
@@ -91,7 +91,7 @@ class GitHub:
     def open_issues(self, owner: str, name: str) -> Paginated[Issue]:
         """Return the open issues (and pull requests) of *owner*/*name*, 100 a page, fetched as they are iterated."""
         params = {"state": "open", "per_page": 100}
-        return self._http.paginate(t"repos/{owner}/{name}/issues", expect=ISSUES, pages=ISSUE_PAGES, params=params)
+        return self._http.paginate(t"repos/{owner}/{name}/issues", pager=ISSUE_PAGES, params=params)
 ```
 
 Nothing in those methods mentions retries, pacing, GitHub's `X-RateLimit-*` headers, timeouts or where the token may
@@ -179,7 +179,7 @@ from typing import TYPE_CHECKING, Self
 
 import msgspec
 
-from headgate import BearerAuth, Client, Expect, Rate, nothing
+from headgate import BearerAuth, CallPolicy, Client, Expect, Rate, nothing
 from headgate.msgspec import reader
 from headgate.pagination import Cursor
 
@@ -222,7 +222,7 @@ def cursor_after(page: ReleasePage) -> str | None:
 # Readers and pagers are values: build them once, at import, where a bad declaration fails.
 SERIES = reader(Series)
 SERIES_OR_NONE = Expect(SERIES).on(HTTPStatus.NOT_FOUND, nothing)  # the API documents 404 as "no such series"
-RELEASE_PAGES = Cursor(items=releases_on, next=cursor_after, param="cursor")
+RELEASE_PAGES = Cursor(reader(ReleasePage), items=releases_on, next=cursor_after, param="cursor")
 
 
 class CatalogClient:
@@ -232,7 +232,7 @@ class CatalogClient:
         """Authenticate with *api_key*."""
         self._http = Client(
             base_url="https://api.catalog.example/v1",
-            rate=Rate.per_second(10),
+            policy=CallPolicy(rate=Rate.per_second(10)),
             auth=BearerAuth(api_key),
         )
 
@@ -258,7 +258,7 @@ class CatalogClient:
 
     def releases(self) -> Paginated[Release]:
         """Return every release, fetched a page at a time as the iteration reaches it."""
-        return self._http.paginate("releases", expect=reader(ReleasePage), pages=RELEASE_PAGES)
+        return self._http.paginate("releases", pager=RELEASE_PAGES)
 ```
 
 Use it with `async with`, which closes the connection pool on the way out:
@@ -300,7 +300,7 @@ token, an idempotent POST, a declared business refusal, `Link`-header pages and 
 | [Response cap](https://kelsayed17.github.io/headgate/configuration/#httpoptions) | 32 MiB per buffered body, counted after decompression |
 | [Caching](https://kelsayed17.github.io/headgate/caching/) | Opt-in hishel cache, partitioned by credential, never storing one; coalesced identical GETs; conditional reads |
 | [Streaming and uploads](https://kelsayed17.github.io/headgate/streaming/) | `stream()` for bodies and server-sent events with resume; raw, streamed and multipart request bodies |
-| [Pagination](https://kelsayed17.github.io/headgate/pagination/) | `paginate()` with `Cursor`, `Offset`, `PageNumber`, `LinkHeader` or `NextUrl`, and walks of POSTs given `query=` (`BodyCursor`, `BodyOffset`); lazy, loop-safe, bounded by pages or items |
+| [Pagination](https://kelsayed17.github.io/headgate/pagination/) | `paginate()` with `Cursor`, `Offset`, `PageNumber`, `LinkHeader` or `NextUrl`, and walks of POSTs given `payload=` (`BodyCursor`, `BodyOffset`); lazy, loop-safe, bounded by pages or items |
 | [Errors](https://kelsayed17.github.io/headgate/errors/) | One `ClientError` tree; method, URL, request id, attempts, `retryable`, `retry_after`, RFC 9457 problems |
 | [Auth](https://kelsayed17.github.io/headgate/auth/) | Static headers, query keys, per-attempt signatures, re-sent once on a 401, and a cached minted token with one re-mint on a 401 |
 | [Observability](https://kelsayed17.github.io/headgate/observability/) | Typed events, OpenTelemetry spans and metrics, request ids, `Deprecation` / `Sunset` notices, health snapshots |
@@ -324,10 +324,10 @@ How the pieces fit together, for contributors and the curious: [design](https://
 
 ## Configuration
 
-`Client(*, base_url, rate=None, auth=None, policy=TransportPolicy(), http=HttpOptions(), observers=(),
-middleware=())`. `rate` is a `Rate` (a budget of the client's own) or a `RateBudget` shared with other clients; without
-one the client paces nothing itself but still waits out the pauses the server asks for. `TransportPolicy` says what the
-stack does to every request, `HttpOptions` how requests are sent and read. Both are frozen and validate on
+`Client(*, base_url, auth=None, policy=CallPolicy(), http=HttpOptions(), observers=(), middleware=())`. `CallPolicy`
+says what the stack does with every call, its rate first: `CallPolicy(rate=...)` is a `Rate` (a budget of the client's
+own) or a `RateBudget` shared with other clients; without one the client paces nothing itself but still waits out the
+pauses the server asks for. `HttpOptions` says how requests are sent and read. Both are frozen and validate on
 construction.
 
 <details>
@@ -347,9 +347,9 @@ class OrdersClient:
         """Mint tokens with *client_id* and *client_secret*; report to *observers*."""
         self._http = Client(
             base_url="https://api.shop.example/v2",
-            rate=Rate.per_second(20),
             auth=ShopTokenAuth(client_id, client_secret),
-            policy=TransportPolicy(
+            policy=CallPolicy(
+                rate=Rate.per_second(20),
                 retry=RetryPolicy(attempts=4),  # four sends at most, the first included
                 timeout=Timeouts(read=20.0),
                 deadline=30.0,  # each call, every attempt and wait included
@@ -364,15 +364,16 @@ class OrdersClient:
 
 </details>
 
-| `TransportPolicy` | Default |
+| `CallPolicy` | Default |
 | --- | --- |
+| `rate` | none: only the server's pauses are kept |
 | `retry` | `RetryPolicy()`: 3 attempts |
 | `deadline` | `60.0` seconds per call |
 | `breaker` | `BreakerPolicy()`: 5 failures, 60 s |
 | `timeout` | `Timeouts()`: connect 10 s, read 30 s, write 10 s, pool 15 s |
 | `cache` | none |
 | `idempotency` | none |
-| `routes` | none: `Route(fragment, retry=, deadline=, rate=, cache=)` per path, first match wins |
+| `routes` | none: `Route(fragment, retry=, timeout=, deadline=, rate=, cache=)` per path, first match wins |
 
 | `HttpOptions` | Default |
 | --- | --- |

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Final, override
 import httpx2
 import pytest
 
-from headgate import Client, HttpCache, HttpOptions, Method, SecurityOptions, TransportPolicy, as_bytes
+from headgate import CallPolicy, Client, HttpCache, HttpOptions, Method, SecurityOptions, as_bytes
 from headgate._core import CallContext, CallInfo
 from headgate.cache import Partition
 from headgate.cache._transport import CACHE_DEGRADATIONS
@@ -135,7 +135,7 @@ async def test_a_second_send_of_one_call_fetches_for_itself(storage: AsyncSqlite
     """Answer a hedge from its own send, though its call's first send of the same GET is still in flight."""
     network = _FirstHangs()
     transport = cache_transport(storage, network)
-    context = CallContext(CallInfo(method="GET", url=_URL))
+    context = CallContext(CallInfo(method="GET", url=_URL, full_url=_URL))
     first, hedge = httpx2.Request("GET", _URL), httpx2.Request("GET", _URL)
     context.attach(first)
     context.attach(hedge)
@@ -260,7 +260,7 @@ async def test_traced_identical_gets_share_one_download(storage: AsyncSqliteStor
     telemetry = Telemetry()
     client = Client(
         base_url="https://x",
-        policy=TransportPolicy(cache=HttpCache(storage=storage)),
+        policy=CallPolicy(cache=HttpCache(storage=storage)),
         http=HttpOptions(transport=network),
         observers=(telemetry.observer,),
         middleware=(telemetry.observer,),
@@ -299,7 +299,7 @@ async def test_a_guarded_client_is_never_served_an_unguarded_clients_entry(
     unguarded = stub_client(transport=Network(), cache=cache)
     guarded = Client(
         base_url="https://x",
-        policy=TransportPolicy(cache=cache),
+        policy=CallPolicy(cache=cache),
         http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=_Names(x="10.0.0.5"))),
     )
     async with unguarded, guarded:

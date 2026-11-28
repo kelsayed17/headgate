@@ -18,6 +18,7 @@ from headgate import (
     Auth,
     AuthError,
     CachedTokenAuth,
+    CallPolicy,
     Client,
     HttpCache,
     HttpOptions,
@@ -27,13 +28,13 @@ from headgate import (
     RateBudget,
     RetryPolicy,
     SigningAuth,
-    TransportPolicy,
 )
 from headgate._core import CredentialStamper, Timing
 from headgate._url import is_secret_param
 from headgate.retry import Hedge
 from headgate.testing import TestClock, instant_retries
 from tests.support.responses import RESPONSE
+from tests.support.timing import built_on
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -439,7 +440,7 @@ class _ClockSigner(SigningAuth):
         request.headers["X-Signed-At"] = repr(now)
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_a_request_waiting_in_the_rate_queue_is_signed_when_it_leaves_it() -> None:
     """Sign after the rate wait, so a call queued behind a tight budget does not go out with a stale signature."""
     clock = TestClock()
@@ -449,11 +450,11 @@ async def test_a_request_waiting_in_the_rate_queue_is_signed_when_it_leaves_it()
         ages.append(clock.wall_clock() - float(request.headers["X-Signed-At"]))
         return httpx2.Response(200)
 
-    budget = RateBudget(Rate.per_second(1), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
+    budget = built_on(Timing(clock=clock, sleep=clock.sleep, wall_clock=clock), lambda: RateBudget(Rate.per_second(1)))
     with clock.install():
         client = Client(
             base_url=_BASE,
-            rate=budget,
+            policy=CallPolicy(rate=budget),
             auth=_ClockSigner(),
             http=HttpOptions(transport=httpx2.MockTransport(handle)),
         )
@@ -475,7 +476,7 @@ async def test_a_cached_clients_401_is_signed_again_once(auth: type[SigningAuth]
     client = Client(
         base_url=_BASE,
         auth=auth(),
-        policy=TransportPolicy(cache=HttpCache(storage=storage)),
+        policy=CallPolicy(cache=HttpCache(storage=storage)),
         http=HttpOptions(transport=httpx2.MockTransport(handle)),
     )
     async with client:

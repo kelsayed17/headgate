@@ -25,6 +25,7 @@ from headgate.testing import (
     Slow,
     TestClock,
 )
+from tests.support.timing import built_on
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -42,7 +43,7 @@ def _request(*, timeout: dict[str, float | None] | None = None) -> tuple[httpx2.
     """Build a POST with a ten-byte body and a fresh context whose first attempt has begun."""
     extensions = {} if timeout is None else {"timeout": timeout}
     request = httpx2.Request("POST", "https://api.test/orders", content=_BODY, extensions=extensions)
-    context = CallContext(CallInfo(method="POST", url="https://api.test/orders"))
+    context = CallContext(CallInfo(method="POST", url="https://api.test/orders", full_url="https://api.test/orders"))
     context.attach(request)
     context.begin_attempt()
     return request, context
@@ -186,7 +187,7 @@ async def test_progress_through_the_tracking_layer_is_what_httpx2_reports(
     no chunk after it.
     """
     request = _streamed()
-    context = CallContext(CallInfo(method="POST", url="https://api.test/orders"))
+    context = CallContext(CallInfo(method="POST", url="https://api.test/orders", full_url="https://api.test/orders"))
     context.attach(request)
     context.begin_attempt()
     network = FaultyTransport(schedule=[step])
@@ -201,7 +202,7 @@ async def test_progress_through_the_tracking_layer_is_what_httpx2_reports(
 async def test_slow_waits_then_answers() -> None:
     """Wait the step's seconds through the injected sleep, then take its follow-up step."""
     clock = TestClock()
-    network = FaultyTransport(schedule=[Slow(seconds=2.0, then=Respond(204))], sleep=clock.sleep)
+    network = built_on(clock.timing, lambda: FaultyTransport(schedule=[Slow(seconds=2.0, then=Respond(204))]))
     request, _ = _request(timeout={"read": _READ_TIMEOUT})
 
     response = await network.handle_async_request(request)
@@ -214,7 +215,7 @@ async def test_slow_waits_then_answers() -> None:
 async def test_slow_past_the_read_timeout_times_out_at_the_timeout() -> None:
     """Wait only the read timeout, then raise ``ReadTimeout``."""
     clock = TestClock()
-    network = FaultyTransport(schedule=[Slow(seconds=60.0)], sleep=clock.sleep)
+    network = built_on(clock.timing, lambda: FaultyTransport(schedule=[Slow(seconds=60.0)]))
     request, _ = _request(timeout={"read": _READ_TIMEOUT})
 
     with pytest.raises(httpx2.ReadTimeout):
@@ -226,7 +227,7 @@ async def test_slow_past_the_read_timeout_times_out_at_the_timeout() -> None:
 async def test_slow_without_a_read_timeout_waits_in_full(timeouts: dict[str, float | None] | None) -> None:
     """Wait the whole delay when the request carries no read timeout."""
     clock = TestClock()
-    network = FaultyTransport(schedule=[Slow(seconds=60.0)], sleep=clock.sleep)
+    network = built_on(clock.timing, lambda: FaultyTransport(schedule=[Slow(seconds=60.0)]))
     request, _ = _request(timeout=timeouts)
 
     await (await network.handle_async_request(request)).aclose()
@@ -294,7 +295,7 @@ async def test_each_fault_raises_its_httpx2_error_on_the_request(
     step: Step, error: type[httpx2.RequestError], message: str
 ) -> None:
     """Raise the httpx2 error each fault stands for, with its message and the request it failed."""
-    network = FaultyTransport(schedule=[step], sleep=TestClock().sleep)
+    network = built_on(TestClock().timing, lambda: FaultyTransport(schedule=[step]))
     request, _ = _request(timeout={"read": _READ_TIMEOUT})
 
     with pytest.raises(error) as raised:
@@ -332,7 +333,7 @@ async def test_a_refused_stream_names_stream_one_and_its_request() -> None:
 async def test_slow_exactly_at_the_read_timeout_still_answers() -> None:
     """Answer a wait exactly as long as the read timeout: only a longer one times out."""
     clock = TestClock()
-    network = FaultyTransport(schedule=[Slow(seconds=_READ_TIMEOUT)], sleep=clock.sleep)
+    network = built_on(clock.timing, lambda: FaultyTransport(schedule=[Slow(seconds=_READ_TIMEOUT)]))
     request, _ = _request(timeout={"read": _READ_TIMEOUT})
 
     response = await network.handle_async_request(request)

@@ -16,6 +16,7 @@ import httpx2
 import pytest
 
 from headgate import (
+    CallPolicy,
     Client,
     HttpCache,
     HttpOptions,
@@ -24,7 +25,7 @@ from headgate import (
     RateLimitError,
     RetryPolicy,
     Route,
-    TransportPolicy,
+    Timeouts,
     UpstreamStatusError,
     as_bytes,
     nothing,
@@ -36,6 +37,8 @@ from tests.cache._helpers import every_get_rules, stub_client
 from tests.support.wire import Script
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from hishel import AsyncSqliteStorage
 
 _BASE: Final = "https://api.example.test"
@@ -49,8 +52,7 @@ def _client(
     """Return a client over *script* with *routes*, a policy *retry* and *deadline*, and no breaker."""
     return Client(
         base_url=_BASE,
-        rate=_RATE,
-        policy=TransportPolicy(retry=retry, deadline=deadline, breaker=None, routes=routes),
+        policy=CallPolicy(rate=_RATE, retry=retry, deadline=deadline, breaker=None, routes=routes),
         http=HttpOptions(transport=script.transport()),
     )
 
@@ -166,7 +168,7 @@ async def test_a_routes_rate_none_paces_nothing_yet_still_takes_the_servers_paus
 async def test_a_routes_cache_none_keeps_its_paths_out_of_the_cache(storage: AsyncSqliteStorage) -> None:
     """Send every call on a ``cache=None`` route to the network, and serve a route that leaves ``cache`` out from it."""
     script = Script(httpx2.Response(200, content=b"body"))
-    policy = TransportPolicy(routes=(Route("/live", cache=None), Route("/stored")))
+    policy = CallPolicy(routes=(Route("/live", cache=None), Route("/stored")))
     client = stub_client(
         transport=script.transport(), cache=HttpCache(**every_get_rules(), storage=storage), policy=policy
     )
@@ -219,6 +221,61 @@ def test_a_policy_takes_only_routes() -> None:
     """Refuse a bare fragment, or a fragment string, where a route goes."""
     message = r"^routes= takes a tuple of Route, such as \(Route\('/exports', deadline=300\.0\),\) \(got str\)$"
     with pytest.raises(TypeError, match=message):
-        TransportPolicy(routes=cast("Any", ("/x",)))
+        CallPolicy(routes=cast("Any", ("/x",)))
     with pytest.raises(TypeError, match=message):
-        TransportPolicy(routes=cast("Any", "/x"))
+        CallPolicy(routes=cast("Any", "/x"))
+
+
+# A route's timeout.
+
+
+async def test_a_route_sets_its_paths_timeout_under_the_views_and_the_calls() -> None:
+    """Send a route's read timeout on its paths only; a view's and a call's own timeouts win over it."""
+    script = Script(200, 200, 200, 200)
+    client = _client(script, Route("/exports", timeout=Timeouts(read=45.0)))
+
+    await client.get("exports/a", expect=nothing)
+    await client.get("items/a", expect=nothing)
+    view = client.with_options(timeout=Timeouts(connect=5.0)).with_options(timeout=Timeouts(read=50.0))
+    await view.get("exports/b", expect=nothing)
+    await client.get("exports/c", expect=nothing, timeout=Timeouts(read=55.0))
+
+    reads = [request.extensions["timeout"]["read"] for request in script.sent]
+    assert reads == [45.0, Timeouts.DEFAULT.read, 50.0, 55.0]
+    connects = [request.extensions["timeout"]["connect"] for request in script.sent]
+    assert connects == [Timeouts.DEFAULT.connect, Timeouts.DEFAULT.connect, 5.0, Timeouts.DEFAULT.connect]
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: Route("/exports", timeout=Timeouts(read=90.0), deadline=60.0),
+        lambda: CallPolicy(routes=(Route("/exports", timeout=Timeouts(read=90.0)),)),
+    ],
+    ids=["route-deadline", "policy-deadline"],
+)
+def test_a_route_timeout_longer_than_its_deadline_is_refused(build: Callable[[], object]) -> None:
+    """Refuse a route's timeout longer than the deadline its calls run under, its own or the policy's 60 s."""
+    with pytest.raises(ValueError, match=r"^read timeout 90s is longer than the 60s deadline it runs under"):
+        build()
+
+
+def test_a_route_timeout_is_a_timeouts() -> None:
+    """Refuse a bare number where a route's ``Timeouts`` goes."""
+    with pytest.raises(TypeError, match=r"^timeout= takes a Timeouts, such as Timeouts\(read=5.0\) \(got float\)$"):
+        Route("/exports", timeout=cast("Any", 5.0))
+
+
+async def test_the_policy_holds_the_rate() -> None:
+    """Pace by the policy's rate, which the client constructor no longer takes."""
+    client = Client(
+        base_url=_BASE,
+        policy=CallPolicy(rate=Rate.per_second(2), breaker=None),
+        http=HttpOptions(transport=Script(200).transport()),
+    )
+
+    assert budget_for(client).rate == Rate.per_second(2)
+    with pytest.raises(TypeError, match="rate"):
+        Client(base_url=_BASE, **cast("Any", {"rate": _RATE}))
+    with pytest.raises(TypeError, match=r"^rate= takes a Rate, such as Rate.per_second\(10\), a RateBudget or None"):
+        CallPolicy(rate=cast("Any", 10))

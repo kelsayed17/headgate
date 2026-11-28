@@ -10,6 +10,7 @@ import json
 import pytest
 
 from headgate import (
+    CallPolicy,
     Client,
     HttpOptions,
     IdempotencyKeys,
@@ -18,7 +19,6 @@ from headgate import (
     RateLimitError,
     RetryPolicy,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
     body_reader,
     nothing,
@@ -27,6 +27,7 @@ from headgate._core import RetryScheduled, Timing, timing_override
 from headgate.retry import Backoff, RetryShare
 from headgate.testing import ConnectFail, DropMidBody, FaultyTransport, Respond, Slow, TestClock
 from tests.support.breakers import failures
+from tests.support.timing import built_on
 
 #: The host every test client addresses.
 _HOST = "api.test"
@@ -64,8 +65,7 @@ def _client(
     chosen = RetryPolicy(backoff=_FULL, budget=None) if retry is None else retry
     return Client(
         base_url=f"https://{_HOST}",
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=chosen, idempotency=idempotency, deadline=deadline),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=chosen, idempotency=idempotency, deadline=deadline),
         http=HttpOptions(transport=network),
     )
 
@@ -192,7 +192,7 @@ async def test_the_budget_is_shared_by_every_call_of_a_client() -> None:
 async def test_an_exhausted_deadline_stops_the_retries() -> None:
     """Stop retrying when the backoff would leave no time before the call's deadline."""
     clock = TestClock()
-    network = FaultyTransport(schedule=[Slow(seconds=60), Respond(200)], sleep=clock.sleep)
+    network = built_on(clock.timing, lambda: FaultyTransport(schedule=[Slow(seconds=60), Respond(200)]))
     with timing_override(Timing(clock=clock, sleep=clock.sleep)):
         client = _client(network, deadline=2.0)
 
@@ -210,8 +210,7 @@ async def test_retries_are_announced_to_the_clients_observers() -> None:
     network = FaultyTransport(schedule=[Respond(503), Respond(200)])
     client = Client(
         base_url=f"https://{_HOST}",
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=RetryPolicy(backoff=_FULL, budget=None)),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=RetryPolicy(backoff=_FULL, budget=None)),
         http=HttpOptions(transport=network),
         observers=(observer,),
     )

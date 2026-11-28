@@ -39,6 +39,7 @@ from headgate.testing import (
     TestClock,
 )
 from headgate.timing import Timing
+from tests.support.timing import built_on
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -102,7 +103,10 @@ def _request(
     request = httpx2.Request(method, "https://api.test/orders", json={"qty": 1}, extensions={"timeout": _TIMEOUTS})
     emitter = Emitter((observer,)) if observer is not None else Emitter()
     context = CallContext(
-        CallInfo(method=method, url="https://api.test/orders"), clock=clock, deadline_after=deadline, emitter=emitter
+        CallInfo(method=method, url="https://api.test/orders", full_url="https://api.test/orders"),
+        clock=clock,
+        deadline_after=deadline,
+        emitter=emitter,
     )
     context.idempotency_key = key
     context.attach(request)
@@ -113,7 +117,7 @@ def _transport(
     schedule: list[Step], clock: TestClock, policy: RetryPolicy = _POLICY
 ) -> tuple[RetryTransport, FaultyTransport]:
     """Return a retry transport under *policy* over a faulty network playing *schedule*, both on *clock*."""
-    network = FaultyTransport(schedule=schedule, sleep=clock.sleep)
+    network = built_on(clock.timing, lambda: FaultyTransport(schedule=schedule))
     return RetryTransport(
         transport=network,
         policy=policy,
@@ -476,7 +480,7 @@ async def test_a_deadline_reached_during_the_wait_stops_before_the_next_attempt(
     async def oversleep(seconds: float, /) -> None:
         await clock.sleep(seconds + 10.0)
 
-    network = FaultyTransport(schedule=[Respond(503, content=b"busy"), Respond(200)], sleep=clock.sleep)
+    network = built_on(clock.timing, lambda: FaultyTransport(schedule=[Respond(503, content=b"busy"), Respond(200)]))
     retry = RetryTransport(
         transport=network, policy=_POLICY, timing=Timing(clock=clock, sleep=oversleep, random=_full_draw)
     )
@@ -518,7 +522,7 @@ async def test_a_breaker_opening_during_the_wait_stops_before_the_next_attempt()
         gate_open = True
         await clock.sleep(seconds)
 
-    network = FaultyTransport(schedule=[Respond(503), Respond(200)], sleep=clock.sleep)
+    network = built_on(clock.timing, lambda: FaultyTransport(schedule=[Respond(503), Respond(200)]))
     retry = RetryTransport(
         transport=network, policy=_POLICY, timing=Timing(clock=clock, sleep=open_breaker, random=_full_draw)
     )
@@ -702,7 +706,9 @@ async def test_the_wait_is_the_retry_after_the_attempt_was_judged_by() -> None:
     clock = TestClock()
     readings = iter(range(1_700_000_000, 1_700_000_100))
     date = email.utils.formatdate(1_700_000_010, usegmt=True)
-    network = FaultyTransport(schedule=[Respond(503, headers={"Retry-After": date}), Respond(200)], sleep=clock.sleep)
+    network = built_on(
+        clock.timing, lambda: FaultyTransport(schedule=[Respond(503, headers={"Retry-After": date}), Respond(200)])
+    )
     timing = Timing(clock=clock, sleep=clock.sleep, wall_clock=lambda: float(next(readings)), random=_full_draw)
     retry = RetryTransport(transport=network, policy=_POLICY, timing=timing)
     request, context = _request(clock=clock)

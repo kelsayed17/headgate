@@ -5,7 +5,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'event': 'CallStarted',
@@ -15,7 +15,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -26,7 +26,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'event': 'BreakerChanged',
@@ -40,7 +40,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': 'UpstreamStatusError',
@@ -51,7 +51,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'event': 'CallStarted',
@@ -61,7 +61,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': 'CircuitOpenError',
@@ -76,7 +76,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'event': 'CallStarted',
@@ -85,10 +85,10 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
-      'event': 'CacheResult',
+      'event': 'CacheChecked',
       'outcome': <CacheOutcome.DEGRADED: 'degraded'>,
     }),
     dict({
@@ -96,7 +96,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -108,7 +108,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -123,7 +123,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'event': 'CallStarted',
@@ -132,10 +132,10 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
-      'event': 'CacheResult',
+      'event': 'CacheChecked',
       'outcome': <CacheOutcome.MISS: 'miss'>,
     }),
     dict({
@@ -143,7 +143,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -155,7 +155,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -166,7 +166,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'event': 'CallStarted',
@@ -175,10 +175,10 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
-      'event': 'CacheResult',
+      'event': 'CacheChecked',
       'outcome': <CacheOutcome.HIT: 'hit'>,
     }),
     dict({
@@ -186,7 +186,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -198,7 +198,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -213,7 +213,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'event': 'CallStarted',
@@ -223,7 +223,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -234,12 +234,12 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'deprecated': True,
       'deprecated_at': datetime.datetime(2023, 6, 30, 23, 59, 59, tzinfo=datetime.timezone.utc),
-      'event': 'Deprecated',
+      'event': 'DeprecationNoticed',
       'link': None,
       'sunset_at': datetime.datetime(2024, 6, 30, 23, 59, 59, tzinfo=datetime.timezone.utc),
       'sunset_link': None,
@@ -249,7 +249,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -264,7 +264,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'event': 'CallStarted',
@@ -274,7 +274,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'delay': 0.5,
@@ -286,7 +286,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -298,7 +298,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': 'CancelledError',
@@ -310,7 +310,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -325,7 +325,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'event': 'CallStarted',
@@ -335,7 +335,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -347,7 +347,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -362,7 +362,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'event': 'CallStarted',
@@ -371,7 +371,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'delay': 1.0,
@@ -383,7 +383,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -395,7 +395,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': 'RateLimitError',
@@ -406,7 +406,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'event': 'CallStarted',
@@ -415,7 +415,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'delay': 1.0,
@@ -427,7 +427,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -439,7 +439,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -454,7 +454,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'event': 'CallStarted',
@@ -464,7 +464,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -476,7 +476,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'delay': 0.5,
@@ -488,7 +488,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -500,7 +500,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'delay': 1.0,
@@ -512,7 +512,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,
@@ -524,7 +524,7 @@
       'call': dict({
         'full_url': 'https://api.example.test/v1/x',
         'method': 'GET',
-        'route': None,
+        'template': None,
         'url': 'x',
       }),
       'error': None,

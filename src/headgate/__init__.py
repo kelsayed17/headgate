@@ -3,20 +3,20 @@
 
 """headgate: an async HTTP client with retry, rate limiting, circuit breaking and declared responses.
 
-Built on ``httpx2``; Python 3.14 or newer. An SDK holds a :class:`Client`, configures it with a :class:`Rate` (or a
-shared :class:`RateBudget`) and optionally :class:`TransportPolicy` and :class:`HttpOptions`, and picks a codec:
+Built on ``httpx2``; Python 3.14 or newer. An SDK holds a :class:`Client`, configures it with a :class:`CallPolicy`
+(its :class:`Rate`, or a shared :class:`RateBudget`, among the rest) and :class:`HttpOptions`, and picks a codec:
 ``headgate.msgspec``, ``headgate.pydantic``, or any library as a :class:`Codec` of its own. Exported here is what a
 client is written with, and each name only here:
 
 * the client: :class:`Client`, :data:`Method`, :class:`RequestOptions`, :class:`CallOptions`, :class:`ViewOptions`;
-* configuration: :class:`TransportPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`, :class:`Timeouts` (with
+* configuration: :class:`CallPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`, :class:`Timeouts` (with
   :attr:`Timeouts.DEFAULT`), :class:`Route`, :class:`RouteOptions`, :class:`IdempotencyKeys`, :data:`ResponseCheck`;
-* middleware: :class:`Middleware`, :data:`Next` (what a middleware calls to continue) and :func:`call_info` (what it
+* middleware: :class:`Middleware`, :data:`Next` (what a middleware calls to continue) and :func:`call_view` (what it
   reads of its call);
 * the policy values a client usually sets: :class:`RetryPolicy`, :class:`BreakerPolicy`, :class:`Rate`,
   :class:`RateBudget` and :class:`HttpCache`;
 * declared responses: :class:`Expect`, :class:`Reader` and the readers :data:`as_json`, :data:`as_bytes`,
-  :func:`body_reader`, :data:`nothing` and :func:`event_stream`;
+  :data:`as_text`, :func:`body_reader`, :data:`nothing` and :data:`as_events`;
 * codecs: :class:`Codec`, and :func:`reader_for`, :func:`writer_for` and :func:`decode_with`, which build a reader, a
   writer and a decode on any codec;
 * request bodies: :data:`Body`, one of :class:`Json`, :class:`Form`, :class:`Multipart`, :class:`Raw` and a
@@ -47,32 +47,9 @@ from headgate._auth import (
 from headgate._call_options import CallOptions, RequestOptions
 from headgate._client import Client, Method
 from headgate._codec import Codec, decode_with, reader_for, writer_for
-from headgate._core import call_info
-from headgate._middleware import Middleware, Next
-from headgate._options import (
-    HttpOptions,
-    IdempotencyKeys,
-    Route,
-    RouteOptions,
-    SecurityOptions,
-    Timeouts,
-    TransportPolicy,
-)
-from headgate._request_body import Body, EncodedBody, Form, Json, Multipart, Raw, Writer
-from headgate._responses import (
-    Expect,
-    Reader,
-    ResponseCheck,
-    as_bytes,
-    as_json,
-    body_reader,
-    event_stream,
-    nothing,
-)
-from headgate._view import ViewOptions
-from headgate.breaker._policy import BreakerPolicy
-from headgate.cache._policy import HttpCache
-from headgate.errors import (
+from headgate._core import call_view
+from headgate._core import rehome as _rehome
+from headgate._errors import (
     AuthError,
     ClientError,
     ClientTimeoutError,
@@ -80,6 +57,31 @@ from headgate.errors import (
     TransportError,
     UpstreamStatusError,
 )
+from headgate._middleware import Middleware, Next
+from headgate._options import (
+    CallPolicy,
+    HttpOptions,
+    IdempotencyKeys,
+    Route,
+    RouteOptions,
+    SecurityOptions,
+    Timeouts,
+)
+from headgate._request_body import Body, EncodedBody, Form, Json, Multipart, Raw, Writer
+from headgate._responses import (
+    Expect,
+    Reader,
+    ResponseCheck,
+    as_bytes,
+    as_events,
+    as_json,
+    as_text,
+    body_reader,
+    nothing,
+)
+from headgate._view import ViewOptions
+from headgate.breaker._policy import BreakerPolicy
+from headgate.cache._policy import HttpCache
 from headgate.pagination._paginated import Paginated
 from headgate.ratelimit._budget import RateBudget
 from headgate.ratelimit._rate import Rate
@@ -93,6 +95,7 @@ __all__ = [
     "BreakerPolicy",
     "CachedTokenAuth",
     "CallOptions",
+    "CallPolicy",
     "Client",
     "ClientError",
     "ClientTimeoutError",
@@ -126,17 +129,19 @@ __all__ = [
     "StaticHeaderAuth",
     "Timeouts",
     "TransportError",
-    "TransportPolicy",
     "UpstreamStatusError",
     "ViewOptions",
     "Writer",
     "as_bytes",
+    "as_events",
     "as_json",
+    "as_text",
     "body_reader",
-    "call_info",
+    "call_view",
     "decode_with",
-    "event_stream",
     "nothing",
     "reader_for",
     "writer_for",
 ]
+
+_rehome(__name__, globals())

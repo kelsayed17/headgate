@@ -5,14 +5,14 @@ a long one. headgate's retry layer re-sends a request only when that is **safe**
 repeating it is harmless) and **worthwhile** (the failure is transient, the budget allows it, the deadline leaves time,
 and the origin's breaker is not refusing).
 
-Configure it once with `TransportPolicy(retry=RetryPolicy(...))`; override it for a call with `retry=RetryPolicy(...)`,
+Configure it once with `CallPolicy(retry=RetryPolicy(...))`; override it for a call with `retry=RetryPolicy(...)`,
 turn it off with `retry=None`, or set it per route with `Route(fragment, retry=...)`.
 
 ```python
-from headgate import RetryPolicy, TransportPolicy
+from headgate import RetryPolicy, CallPolicy
 from headgate.retry import Backoff, Hedge, RetryShare
 
-policy = TransportPolicy(
+policy = CallPolicy(
     retry=RetryPolicy(
         attempts=4,
         backoff=Backoff(factor=0.25, max_wait=8.0),
@@ -104,11 +104,11 @@ several clients together, as a `RateBudget` paces them together, build one live 
 each client the same object:
 
 ```python
-from headgate import RetryPolicy, TransportPolicy
+from headgate import RetryPolicy, CallPolicy
 from headgate.retry import RetryBudget, RetryShare
 
 shared = RetryBudget(RetryShare(ratio=0.1))  # its window runs on the current timing, as TestClock.install() sets it
-policy = TransportPolicy(retry=RetryPolicy(budget=shared))  # every client built with it spends one budget
+policy = CallPolicy(retry=RetryPolicy(budget=shared))  # every client built with it spends one budget
 ```
 
 Its `repr` shows the share and what the window holds now (`RetryBudget(RetryShare(...), retries=3, firsts=40)`).
@@ -139,7 +139,7 @@ PATCH refuses a hedge when it is constructed.
 
 ## Idempotency keys
 
-A POST is safe to retry once the server can recognize a re-send. `TransportPolicy(idempotency=IdempotencyKeys())`
+A POST is safe to retry once the server can recognize a re-send. `CallPolicy(idempotency=IdempotencyKeys())`
 stamps a fresh key on every POST and PATCH, under `Idempotency-Key` by default (`IdempotencyKeys(header=...,
 factory=...)` changes either). A call can pass its own with `idempotency_key=`, and a key set in `headers=` is kept.
 An empty or blank key is no key: `idempotency_key=` or a factory giving one raises `ValueError`, and one in `headers=`

@@ -10,7 +10,10 @@ Self-contained: it imports only ``httpx2``, the standard library and :mod:`headg
 """
 
 from headgate._core import BreakerState
+from headgate._core import rehome as _rehome
 from headgate.breaker._breaker import CircuitBreaker
 from headgate.breaker._registry import BreakerRegistry
 
 __all__ = ["BreakerRegistry", "BreakerState", "CircuitBreaker"]
+
+_rehome(__name__, globals())

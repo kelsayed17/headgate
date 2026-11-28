@@ -17,6 +17,15 @@ change the public API; such changes are listed under **Changed** and **Removed**
   not derive from the protocol, so `Auth()`, `SigningAuth()` and `CachedTokenAuth()` read as taking nothing
   (`inspect.signature`, `help()`), and a base listed after `Auth`, such as `httpx2.DigestAuth` or a cooperative
   mixin, keeps its own constructor.
+- `RouteOptions` takes `timeout=`, as every other layer of overrides does: `Route("/exports",
+  timeout=Timeouts(read=120.0))` sets the phases it names on its paths, under a view's and a call's own timeouts and
+  over the policy's. A route timeout longer than the deadline its paths run under (its own, else the policy's) raises
+  `ValueError` where it is given.
+- `as_text`, a `Reader[str]` beside `as_bytes`: the body as text, decoded by the response's `charset`, as
+  `Stream.aiter_lines` decodes it (UTF-8 without one, or for one such as `base64` that names no text encoding, where
+  `response.text` raises). A leading UTF-8 byte order mark is dropped, and the rest read as UTF-8. A body its
+  `charset` cannot decode at all (UTF-16 without a byte order mark) raises `ResponseParseError`. Write
+  `expect=as_text` for a plain-text body.
 
 ### Changed
 
@@ -111,6 +120,111 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.
+- A walk's body is its `payload`, so "query" names only the QUERY verb and, in prose, the URL query:
+  `paginate(payload=)`, `PageRequest.payload` and `PageRequest.with_payload()`. Write
+  `paginate(url, payload=Query(...), ...)` for `paginate(url, query=Query(...), ...)`, and `request.payload` and
+  `request.with_payload(...)` in a pager for `request.body` and `request.with_body(...)`. `paginate(query=)` raises
+  `TypeError` naming `payload=`.
+- A pager carries its page reader, as its first argument, so a type checker knows the page type before it reads the
+  lambdas after it: `Cursor(reader(Page), items=lambda p: p.items, next=lambda p: p.next, param="cursor")` is a
+  `Cursor[Item, Page]`, and `lambda p: p.itemz` is a type error where it was an `Unknown` that reached every item.
+  `paginate()` takes no `expect=` and names the pager `pager=`, not `pages=` (which `Paginated.pages()` uses for the
+  pages): write `paginate(url, pager=LinkHeader(reader(list[Issue]), items=lambda page: page))` for
+  `paginate(url, expect=reader(list[Issue]), pages=LinkHeader(items=lambda page: page))`. The reader may be an
+  `Expect`, so declared answers, `accept=` and `headers=` reach every page as before. Every pager's generic parameters
+  read item first, as `Paginated[I, P]` does: `Pager[I, P, B]`, `WritingPager[I, P, B]`, `Cursor[Item, Page, Query]`
+  for `Cursor[Page, Item, Query]`, and the reader and writer usually bind them, so the subscript can go. The `Pager`
+  protocol gains a `read` property: give a pager of your own a `read`, such as a dataclass field `read: Reader[Page]`.
+  `WritingPager` declares `read` and `write` for its subclass to give, as fields or properties, rather than making
+  `write` an abstract property, and no longer subclasses the `Pager` protocol (it is one by its shape), so a plain
+  `@dataclass(frozen=True)` subclass with `read` and `write` fields builds: write `read: Reader[Page]` and
+  `write: Writer[Query]` as fields, where a `write` property was required. Its methods stay abstract. `paginate()`
+  raises `TypeError`, before the pager runs, for a pager whose `read` is missing or is not a `Reader` or an `Expect`,
+  and for a writing pager with no `write`.
+- `Paginated` is the class of the walk `paginate()` returns, a final class rather than a protocol, so a mistake names
+  it: `await client.paginate(...)` raises `TypeError: 'Paginated' object can't be awaited`, where it named a private
+  `PageWalk`. Iterate with `async for`, or `await walk.collect()`. Annotations are unchanged: `Paginated[Issue]` and
+  `Paginated[Issue, IssuePage]`. A test double that stood in for a walk by the protocol's shape (a class with
+  `__aiter__`, `pages()` and `collect()`) no longer type-checks as one: build the real class from its pages, write
+  `Paginated(pages, lambda page: page.items)`, where `pages` is a function of no arguments that starts the pages afresh
+  (see the testing guide's "A fake walk").
+- Breakers take the shape a rate does: a policy's `breaker=` is a `BreakerPolicy`, from which the client builds
+  breakers of its own, or a shared `BreakerRegistry`, built from one, whose breakers every client given it shares
+  (`breaker: BreakerPolicy | BreakerRegistry | None`, as `rate: Rate | RateBudget | None`). The registry holds the
+  thresholds, given first as a `RateBudget`'s rate is: `BreakerRegistry(BreakerPolicy(failure_threshold=3),
+  max_hosts=256)`, read back as `.policy`, and `BreakerPolicy()` when left out. Write
+  `breaker=BreakerRegistry(BreakerPolicy(failure_threshold=3))` for
+  `breaker=BreakerPolicy(failure_threshold=3, registry=BreakerRegistry())`, and `registry.breaker_for(origin)` for
+  `registry.breaker_for(origin, failure_threshold=..., recovery_timeout=...)`.
+- `TransportPolicy` is `CallPolicy`, the pair of `CallOptions`, which override it per call, leaving "transport" to
+  the network layer (`HttpOptions(transport=)`, `TransportError`): write `Client(policy=CallPolicy(...))` for
+  `Client(policy=TransportPolicy(...))`. It holds the client's rate, beside the routes that override it per path:
+  `Client(rate=)` is removed, so write `Client(base_url=..., policy=CallPolicy(rate=Rate.per_second(10)))` for
+  `Client(base_url=..., rate=Rate.per_second(10))`. A rate of the wrong kind raises `TypeError` from `CallPolicy`, and
+  `policy_disabled()` still builds a client's budget unpaced.
+- `Expect` declares its answers one way, with `.on()`, which widens the result type with each: `answers` is no longer
+  a constructor argument, and stays readable. Write `Expect(reader(Order)).on(404, nothing)` for
+  `Expect(reader(Order), {404: nothing})`. `Expect` is no longer a dataclass, so no copy drops the answers `.on()` declared:
+  `copy.replace(expect, accept=...)` and `copy.copy(expect)` keep them, and `dataclasses.replace(expect, ...)`, which
+  built one without them, raises `TypeError`; write `copy.replace` for `dataclasses.replace`. Its `ok`, `answers`,
+  `headers` and `accept` are read-only properties, and two equal `Expect` objects hash alike.
+- `head()` requires `expect=`, as every verb does: write `head(url, expect=nothing)` for `head(url)`.
+- A middleware reads its call with `headgate.call_view(request)`, which returns a `CallView`: write `call_view` for
+  `call_info`. Its `call` is the call's `CallInfo`, as every event's `call` is. `CallInfo.route`, the t-string
+  template, is `CallInfo.template`, OpenTelemetry's `url.template`, since a `Route` is the per-path rule: write
+  `call_view(request).call.template` for `call_info(request).call.route`, and `event.call.template` for
+  `event.call.route`.
+- `stream()` takes no `last_event_id=`, which `events()` keeps as the one way to resume a server-sent event stream:
+  write `events(url, last_event_id=...)` for `stream(url, last_event_id=...)`, or send `Last-Event-ID` in a raw
+  stream's `headers=`. `Stream.retry`, the reconnection time in milliseconds, is `Stream.reconnect_after`, in seconds
+  like every other duration: write `await asyncio.sleep(stream.reconnect_after)` for
+  `await asyncio.sleep(stream.retry / 1000)`. `Stream.aiter_bytes()` takes `chunk_size=` by keyword only, as the
+  other sizes are: write `aiter_bytes(chunk_size=1024)` for `aiter_bytes(1024)`.
+- `event_stream` is `as_events`, a reader beside `as_bytes`, `as_json` and `as_text`, where its name said it was a
+  stream: write `expect=as_events` for `expect=event_stream`. `events()` still opens a stream.
+- Every event's name is a past-tense fact: `CacheResult` is `CacheChecked` and `Deprecated` is `DeprecationNoticed`,
+  so write `case CacheChecked(outcome=...)` and `isinstance(event, DeprecationNoticed)`. `CacheOutcome.SHARED`, a
+  call that waited on an identical request's download, is `CacheOutcome.COALESCED` (value `"coalesced"`), leaving
+  "shared" to `Partition.SHARED`. `Partition` is a `StrEnum`, as `BreakerState` and `CacheOutcome` are, so
+  `str(Partition.SHARED)` is `"shared"`.
+- `HttpCache(methods=, statuses=)` default to the values themselves, `frozenset({"GET"})` and `frozenset({200})`, and
+  hold them, where `None` stood for them; `None` for either raises `TypeError`, since `None` means off and the cache's
+  off is `cache=None`. Leave them out for the defaults. `paths=None` is still the path filter off.
+- Time has one seam, `timing_override()` (and `TestClock.install()`, built on it), as it already was for `Client`:
+  `RateBudget`, `RetryBudget`, `BreakerRegistry` and `CircuitBreaker` take no `timing=`, and `FaultyTransport` no
+  `sleep=`. Each runs on the timing current when it is built, the breakers a registry builds later included. Write
+  `with clock.install(): shared = RateBudget(rate)` for `RateBudget(rate, timing=clock.timing)`, and
+  `with clock.install(): network = FaultyTransport(schedule=[...])` for
+  `FaultyTransport(schedule=[...], sleep=clock.sleep)`.
+- Every exported class and function reports, in `__module__`, the public module it is imported from, so a traceback,
+  a `repr` and `help()` name the one import: `headgate.UpstreamStatusError`, `headgate.testing.UnmatchedRequestError`
+  and `headgate.Client`, where they named `headgate.errors.UpstreamStatusError`,
+  `headgate.testing._transport.UnmatchedRequestError` and `headgate._client.Client`. Pickles name the same homes.
+  Code that compared `__module__` to a private module's name compares it to the public one. A cache partition keyed
+  by an auth's class name is keyed by its public name now, so an entry a credential-partitioned cache stored before
+  is not found again, and is fetched afresh.
+- The six top-level errors (`ClientError`, `TransportError`, `ClientTimeoutError`, `UpstreamStatusError`,
+  `AuthError` and `RateLimitError`) have one home, `headgate`: `from headgate.errors import ClientError` raises
+  `ImportError`, so write `from headgate import ClientError`. `headgate.errors` keeps every other error,
+  `ErrorDetails` and `Problem`. A pickle of one of the six made before this release names it as
+  `headgate.errors.ClientError` (and so on), which no longer resolves, so it no longer loads: unpickling it raises
+  `AttributeError`. Re-create such pickles from the error, or load them with the earlier release.
+- A public module binds only what it exports and its public submodules, so no name has a second home:
+  `headgate.health`, `headgate.msgspec`, `headgate.pydantic` and `headgate.otel` re-export what private modules
+  define, as every other public module does, and the names they imported to do their work are gone from them. Import
+  each from its own home: `from headgate.breaker import BreakerState` for `from headgate.health import BreakerState`,
+  `import msgspec` for `headgate.msgspec.msgspec`, and `from headgate import reader_for` for
+  `headgate.msgspec.reader_for`.
+- `HttpCache(methods=(), paths=(), statuses=())`, an empty rule that made a cache store nothing, raises `ValueError`
+  naming `cache=None`: write `CallPolicy(cache=None)` for a client without a cache.
+- A client given a shared object that holds time, built on another timing than the client, raises `TypeError` before
+  it builds anything, as it does for a `CachedTokenAuth` that runs on another: a `RateBudget` (as its policy's or a
+  route's `rate=`), a `BreakerRegistry` (as `breaker=`) or a `RetryBudget` (as the `budget=` of its policy's or a
+  route's `RetryPolicy`). One quota, cooldown or retry window cannot run on two clocks. This catches a shared budget
+  built outside `TestClock.install()` and given to a client built inside it, which paced the test on real time. Build
+  the shared object inside the same block as its clients: `with clock.install(): shared = RateBudget(rate);
+  client = Client(..., policy=CallPolicy(rate=shared))`. Under `policy_disabled()` a client ignores a shared budget,
+  and is not refused.
 
 ### Removed
 
@@ -121,6 +235,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `fake_network`, so a test sent its client secret to the real token host. Yield the exchange's request from `mint`
   instead (see the auth guide), or, for a mint that is not an HTTP request, yield only the `Minted`. The guide's recipe
   for it, and the testing guide's note that it does not reach the fake, are gone with it.
+- `BreakerPolicy.registry`, `BreakerRegistry.bind()` and the `ValueError` for a client whose thresholds differed from
+  the ones a shared registry was bound to: a registry carries its own policy, so its clients cannot disagree. Give the
+  registry the thresholds, and the clients the registry.
 
 ### Fixed
 
@@ -135,6 +252,15 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `TypeError` when the class is defined. It sent the bearer undeclared, and its 401s never re-minted, since a 401
   re-mints only for a request that carried a declared name. Keep `authorization` in the declaration, or override
   `attach` to put the token where the declaration says.
+- `CallInfo.full_url` is filled for every call, so a middleware reads the absolute URL of a client with no observers
+  too, where it read `None`. It is a required `str`: a `CallInfo` built by hand, in a test of an observer, passes
+  `full_url=`, such as `CallInfo(method="GET", url="items/1", full_url="https://api.example/items/1")`, and an
+  observer drops its `if info.full_url is not None` check.
+- `typing.get_type_hints()` resolves on every exported class and function, and on the methods they define, after a
+  bare `import headgate`, so `msgspec.convert({"read": 5.0}, Timeouts)`, pydantic and `inspect.signature(Client)` read
+  headgate's options. They raised `NameError` for a name the annotation imported only for the type checker (`Mapping`,
+  `ClassVar`, `httpx2`). headgate's modules no longer use `from __future__ import annotations`; their annotations are
+  Python 3.14's own, evaluated on demand in the module that wrote them. Nothing to write differently.
 
 ### Security
 

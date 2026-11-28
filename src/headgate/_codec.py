@@ -13,24 +13,16 @@ the promises theirs keep: strict types, unknown fields ignored, malformed bytes 
 the input.
 """
 
-from __future__ import annotations
+from collections.abc import Callable
+from typing import Protocol
 
-from typing import TYPE_CHECKING, Protocol
+from typing_extensions import TypeForm
 
 from headgate._core import type_text
 from headgate._failures import NESTED_TOO_DEEPLY, shorten
-from headgate._request_body import EncodedBody
-from headgate._responses import _body_reader
-from headgate.errors import DecodeError
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from typing_extensions import TypeForm
-
-    from headgate._request_body import Writer
-    from headgate._responses import Reader
-    from headgate.errors import RefusedError
+from headgate._request_body import EncodedBody, Writer
+from headgate._responses import Reader, _body_reader
+from headgate.errors import DecodeError, RefusedError
 
 __all__ = ["Codec", "decode_with", "drop_none", "reader_for", "writer_for"]
 

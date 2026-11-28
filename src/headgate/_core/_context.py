@@ -8,7 +8,7 @@ httpx2 hands a request's extensions to every redirect hop, and the cache layer r
 layer from the auth flow down to the network transport finds the same object with :meth:`CallContext.find`. Layers
 read and write it through its methods, never through extension keys of their own:
 
-* what the call is: :attr:`~CallContext.info` (method, sanitized URL, route template, call id);
+* what the call is: :attr:`~CallContext.info` (method, sanitized URL, template, call id);
 * when it must end: :attr:`~CallContext.deadline`, absolute on the client's clock, :meth:`~CallContext.remaining`,
   and :meth:`~CallContext.fit_timeouts`, which cuts a request's timeouts to it;
 * its sends: :meth:`~CallContext.begin_attempt`, :attr:`~CallContext.attempt` and the current attempt's
@@ -20,22 +20,17 @@ read and write it through its methods, never through extension keys of their own
   reads and writes it with :meth:`~CallContext.get` and :meth:`~CallContext.put`.
 """
 
-from __future__ import annotations
-
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, cast, override
+from typing import Final, cast, override
 
-from headgate._core._events import SILENT, CallInfo
+import httpx2
 
-if TYPE_CHECKING:
-    import httpx2
+from headgate._core._events import SILENT, CallInfo, Emitter, Event
+from headgate._core._time import Clock
 
-    from headgate._core._events import Emitter, Event
-    from headgate._core._time import Clock
-
-__all__ = ["SENDING", "CallContext", "CallView", "SendProgress", "Slot", "call_info", "progress_of"]
+__all__ = ["SENDING", "CallContext", "CallView", "SendProgress", "Slot", "call_view", "progress_of"]
 
 #: The one request extension headgate keeps its per-call state in.
 _EXTENSION: Final = "headgate.call"
@@ -172,7 +167,7 @@ class CallContext:
         if found is not None:
             return found
         bare = request.url.copy_with(query=None, fragment=None, userinfo=b"")
-        context = CallContext(CallInfo(method=request.method, url=str(bare)))
+        context = CallContext(CallInfo(method=request.method, url=str(bare), full_url=str(bare)))
         context.attach(request)
         return context
 
@@ -309,10 +304,10 @@ def progress_of(context: CallContext) -> SendProgress:
 
 @dataclass(frozen=True, slots=True)
 class CallView:
-    """A read-only view of the call a request belongs to, taken when :func:`call_info` is called.
+    """A read-only view of the call a request belongs to, taken when :func:`call_view` is called.
 
-    * ``call``: the :class:`~headgate.events.CallInfo` every event about the call carries: its method, URL and route
-      template (the t-string the URL was rendered from, or ``None``).
+    * ``call``: the :class:`~headgate.events.CallInfo` every event about the call carries, as its ``call``: its method,
+      URL, absolute URL and template (the t-string the URL was rendered from, or ``None``).
     * ``attempt``: how many sends the call has begun, so inside a middleware 1 on the first send and 2 on the first
       retry (or hedge).
     * ``remaining``: the seconds left before the call's deadline (negative once past it), or ``None`` without one.
@@ -323,10 +318,10 @@ class CallView:
     remaining: float | None
 
 
-def call_info(request: httpx2.Request) -> CallView | None:
+def call_view(request: httpx2.Request) -> CallView | None:
     """Return a view of the call *request* belongs to, now, or ``None`` for a request no client call built.
 
-    A middleware reads it to tell its call apart (by route template), to know a re-send from a first send, and to
+    A middleware reads it to tell its call apart (by its template), to know a re-send from a first send, and to
     leave a slow step out when the deadline is near. Every reading is fresh: the attempt and the time left are the
     call's as they stand.
     """

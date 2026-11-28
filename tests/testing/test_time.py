@@ -16,12 +16,24 @@ import httpx2
 import pytest
 
 import headgate.timing
-from headgate import Client, HttpOptions, Rate, RateBudget, RetryPolicy, TransportPolicy, UpstreamStatusError, nothing
+from headgate import (
+    BreakerPolicy,
+    CallPolicy,
+    Client,
+    HttpOptions,
+    Rate,
+    RateBudget,
+    RetryPolicy,
+    Route,
+    UpstreamStatusError,
+    nothing,
+)
 from headgate._core import Timing as CoreTiming
 from headgate._core import current_timing
 from headgate.breaker import BreakerRegistry, CircuitBreaker
+from headgate.policy import policy_disabled
 from headgate.retry import Backoff, RetryBudget, RetryShare
-from headgate.testing import FakeTransport, TestClock, instant_retries
+from headgate.testing import FakeTransport, FaultyTransport, Slow, TestClock, budget_for, instant_retries
 from headgate.testing._time import _SETTLE_TURNS
 from headgate.timing import Timing
 
@@ -155,8 +167,9 @@ async def test_concurrent_calls_back_off_together() -> None:
     with clock.install():
         client = Client(
             base_url="https://h.test",
-            rate=Rate.per_second(1000),
-            policy=TransportPolicy(retry=RetryPolicy(attempts=2, backoff=Backoff(factor=15.0, max_wait=60.0))),
+            policy=CallPolicy(
+                rate=Rate.per_second(1000), retry=RetryPolicy(attempts=2, backoff=Backoff(factor=15.0, max_wait=60.0))
+            ),
             http=HttpOptions(transport=fake),
         )
 
@@ -174,8 +187,7 @@ async def test_a_client_built_under_install_waits_on_the_test_clock() -> None:
         assert installed is clock
         client = Client(
             base_url="https://h.test",
-            rate=Rate.per_second(1000),
-            policy=TransportPolicy(retry=RetryPolicy(attempts=3, backoff=_EXACT_BACKOFF)),
+            policy=CallPolicy(rate=Rate.per_second(1000), retry=RetryPolicy(attempts=3, backoff=_EXACT_BACKOFF)),
             http=HttpOptions(transport=fake),
         )
     await client.get("x", expect=nothing)
@@ -198,12 +210,14 @@ async def test_instant_retries_retries_without_waiting() -> None:
     """Retry a mocked failure as production does, sending every attempt."""
     fake = FakeTransport().reply("GET", "/x", httpx2.codes.SERVICE_UNAVAILABLE, httpx2.codes.OK)
     with instant_retries():
-        client = Client(base_url="https://h.test", rate=Rate.per_second(1000), http=HttpOptions(transport=fake))
+        client = Client(
+            base_url="https://h.test", policy=CallPolicy(rate=Rate.per_second(1000)), http=HttpOptions(transport=fake)
+        )
     await client.get("x", expect=nothing)
     assert len(fake.calls) == len(("503", "200"))
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_install_reaches_a_rate_budget_two_clients_share() -> None:
     """Pace two clients that share a budget built in the block on the test clock: their waits are its sleeps."""
     clock = TestClock()
@@ -211,7 +225,9 @@ async def test_install_reaches_a_rate_budget_two_clients_share() -> None:
         shared = RateBudget(Rate.per_second(1))
         clients = [
             Client(
-                base_url="https://h.test", rate=shared, http=HttpOptions(transport=FakeTransport().reply("GET", "/x"))
+                base_url="https://h.test",
+                policy=CallPolicy(rate=shared),
+                http=HttpOptions(transport=FakeTransport().reply("GET", "/x")),
             )
             for _ in range(2)
         ]
@@ -222,11 +238,15 @@ async def test_install_reaches_a_rate_budget_two_clients_share() -> None:
     assert clock.now == pytest.approx(1.0), "the second client waited its turn on the test clock"
 
 
+#: A breaker that trips after one failure and cools down for 30 s.
+_TRIP_AT_ONCE = BreakerPolicy(failure_threshold=1, recovery_timeout=30.0)
+
+
 def test_install_reaches_the_cooldown_of_a_registry() -> None:
     """Run the cooldown of a breaker from a registry built in the block on the test clock."""
     clock = TestClock()
     with clock.install():
-        registry = BreakerRegistry()
+        registry = BreakerRegistry(_TRIP_AT_ONCE)
     _trip(registry)
 
     clock.advance(29.0)
@@ -237,7 +257,7 @@ def test_install_reaches_the_cooldown_of_a_registry() -> None:
 
 def test_what_is_built_outside_the_block_keeps_the_system_clock() -> None:
     """Leave a registry built before the block on the system clock: installing a clock changes nothing already built."""
-    outside = BreakerRegistry()
+    outside = BreakerRegistry(_TRIP_AT_ONCE)
     clock = TestClock()
     with clock.install():
         _trip(outside)
@@ -247,8 +267,8 @@ def test_what_is_built_outside_the_block_keeps_the_system_clock() -> None:
 
 
 def _breaker(registry: BreakerRegistry) -> CircuitBreaker:
-    """Return *registry*'s breaker for the test origin, tripping after one failure and cooling down for 30 s."""
-    return registry.breaker_for("https://h.test", failure_threshold=1, recovery_timeout=30.0)
+    """Return *registry*'s breaker for the test origin, which trips after one failure and cools down for 30 s."""
+    return registry.breaker_for("https://h.test")
 
 
 def _trip(registry: BreakerRegistry) -> None:
@@ -270,6 +290,47 @@ def test_the_old_clock_keywords_are_gone(build: Callable[[], object]) -> None:
     """Refuse ``jitter=``, ``wall_clock=`` and ``clock=``: each is a field of the one ``timing=`` now."""
     with pytest.raises(TypeError):
         build()
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: RateBudget(Rate.per_second(1), **cast("Any", {"timing": Timing()})),
+        lambda: RetryBudget(**cast("Any", {"timing": Timing()})),
+        lambda: BreakerRegistry(**cast("Any", {"timing": Timing()})),
+        lambda: CircuitBreaker(**cast("Any", {"timing": Timing()})),
+        lambda: FaultyTransport(schedule=[], **cast("Any", {"sleep": asyncio.sleep})),
+    ],
+    ids=["rate-budget", "retry-budget", "registry", "breaker", "faulty-sleep"],
+)
+def test_no_constructor_takes_its_own_timing(build: Callable[[], object]) -> None:
+    """Refuse ``timing=`` and ``FaultyTransport(sleep=)``: ``timing_override()`` and ``TestClock.install()`` are it."""
+    with pytest.raises(TypeError):
+        build()
+
+
+async def test_a_faulty_transport_sleeps_on_the_clock_it_was_built_under() -> None:
+    """Wait out a ``Slow`` step on the test clock installed when the fake network was built, after the block too."""
+    clock = TestClock()
+    with clock.install():
+        network = FaultyTransport(schedule=[Slow(seconds=2.0)])
+    async with httpx2.AsyncClient(transport=network) as client:
+        await client.get("https://h.test/x")
+
+    assert clock.now == pytest.approx(2.0)
+
+
+def test_a_shared_registry_built_in_the_block_keeps_the_test_clock_after_it() -> None:
+    """Trip and recover a breaker a shared registry builds after the block, on the clock installed when it was built."""
+    clock = TestClock()
+    with clock.install():
+        shared = BreakerRegistry(_TRIP_AT_ONCE)
+    _trip(shared)
+
+    clock.advance(29.0)
+    assert _breaker(shared).refusing
+    clock.advance(1.0)
+    assert not _breaker(shared).refusing
 
 
 def test_the_timing_module_is_the_one_seam() -> None:
@@ -298,8 +359,7 @@ async def test_an_errors_retry_after_date_is_read_against_the_clients_wall_clock
     with clock.install():
         client = Client(
             base_url="https://h.test",
-            rate=Rate.per_second(1000),
-            policy=TransportPolicy(retry=RetryPolicy(max_retry_after=30.0), breaker=None),
+            policy=CallPolicy(rate=Rate.per_second(1000), retry=RetryPolicy(max_retry_after=30.0), breaker=None),
             http=HttpOptions(transport=fake),
         )
 
@@ -321,11 +381,58 @@ async def test_a_wait_the_server_asks_for_draws_no_random_number() -> None:
     with clock.install():
         client = Client(
             base_url="https://h.test",
-            rate=Rate.per_second(1000),
-            policy=TransportPolicy(retry=RetryPolicy(attempts=3, backoff=_EXACT_BACKOFF), breaker=None),
+            policy=CallPolicy(
+                rate=Rate.per_second(1000), retry=RetryPolicy(attempts=3, backoff=_EXACT_BACKOFF), breaker=None
+            ),
             http=HttpOptions(transport=fake),
         )
 
     await client.get("x", expect=nothing)
     assert len(draws) == 1, "the second retry backs off; the first waits the second the server asked"
     assert clock.sleeps == [1.0, 4.0]
+
+
+#: Every shared object that holds time, built outside the block a test builds its client in.
+type _Shared = tuple[RateBudget, BreakerRegistry, RetryBudget]
+
+
+@pytest.mark.parametrize(
+    ("policy", "what"),
+    [
+        (lambda shared: CallPolicy(rate=shared[0]), "RateBudget given as rate="),
+        (lambda shared: CallPolicy(routes=(Route("/x", rate=shared[0]),)), "RateBudget given as rate="),
+        (lambda shared: CallPolicy(breaker=shared[1]), "BreakerRegistry given as breaker="),
+        (
+            lambda shared: CallPolicy(retry=RetryPolicy(budget=shared[2])),
+            "RetryBudget given as a RetryPolicy's budget=",
+        ),
+        (
+            lambda shared: CallPolicy(routes=(Route("/x", retry=RetryPolicy(budget=shared[2])),)),
+            "RetryBudget given as a RetryPolicy's budget=",
+        ),
+    ],
+    ids=["rate", "route-rate", "breaker", "retry-budget", "route-retry-budget"],
+)
+def test_a_shared_object_on_another_timing_is_refused(policy: Callable[[_Shared], CallPolicy], what: str) -> None:
+    """Refuse a client built on one timing given a budget or registry built on another, as a token auth is refused."""
+    shared = (RateBudget(Rate.per_second(1)), BreakerRegistry(), RetryBudget())
+    with TestClock().install(), pytest.raises(TypeError, match=rf"^the {what} runs on another timing than this client"):
+        Client(base_url="https://h.test", policy=policy(shared))
+
+
+def test_a_shared_object_on_the_clients_timing_is_taken() -> None:
+    """Take a budget and a registry built in the block the client is built in."""
+    clock = TestClock()
+    with clock.install():
+        shared, registry, retries = RateBudget(Rate.per_second(1)), BreakerRegistry(), RetryBudget()
+        policy = CallPolicy(rate=shared, breaker=registry, retry=RetryPolicy(budget=retries))
+        client = Client(base_url="https://h.test", policy=policy)
+    assert budget_for(client) is shared
+
+
+def test_a_client_built_with_its_policy_off_ignores_a_shared_object_on_another_timing() -> None:
+    """Build a client under ``policy_disabled()`` whatever timing its shared objects run on: it uses neither."""
+    shared, registry = RateBudget(Rate.per_second(1)), BreakerRegistry()
+    with TestClock().install(), policy_disabled():
+        client = Client(base_url="https://h.test", policy=CallPolicy(rate=shared, breaker=registry))
+    assert budget_for(client) is not shared

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import Client, IdempotencyKeys, Json, Rate, RetryPolicy, TransportError, TransportPolicy, nothing
+from headgate import CallPolicy, Client, IdempotencyKeys, Json, Rate, RetryPolicy, TransportError, nothing
 from headgate._core import CallContext, CallInfo, SendProgress
 from headgate.retry import Hedge
 from headgate.retry._tracking import SendTrackingTransport, head_size
@@ -82,7 +82,7 @@ async def _answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
 
 def _tracked(request: httpx2.Request) -> CallContext:
     """Stamp a fresh context on *request*, its first attempt begun, and return it."""
-    context = CallContext(CallInfo(method=request.method, url=str(request.url)))
+    context = CallContext(CallInfo(method=request.method, url=str(request.url), full_url=str(request.url)))
     context.attach(request)
     context.begin_attempt()
     return context
@@ -229,7 +229,7 @@ async def test_a_post_whose_head_reached_the_server_is_not_resent_end_to_end() -
         await _drop_unanswered(reader, writer)
 
     async with _server(count_and_drop) as url:
-        client = Client(base_url=url, rate=Rate.per_second(1000))
+        client = Client(base_url=url, policy=CallPolicy(rate=Rate.per_second(1000)))
         with pytest.raises(TransportError) as raised:
             await client.post("orders", expect=nothing, body=Json({"qty": 1}))
         await client.aclose()
@@ -248,7 +248,7 @@ async def test_a_keyed_post_whose_head_reached_the_server_is_resent_end_to_end()
         await _drop_unanswered(reader, writer)
 
     async with _server(count_and_drop) as url:
-        client = Client(base_url=url, rate=Rate.per_second(1000), policy=TransportPolicy(idempotency=IdempotencyKeys()))
+        client = Client(base_url=url, policy=CallPolicy(rate=Rate.per_second(1000), idempotency=IdempotencyKeys()))
         with pytest.raises(TransportError):
             await client.post("orders", expect=nothing, body=Json({"qty": 1}))
         await client.aclose()

@@ -6,14 +6,13 @@ client side is cheaper than collecting 429s, and a budget that listens to the se
 hammering an API that has said "slow down".
 
 ```python
-from headgate import Client, Rate, RateBudget, Route, TransportPolicy
+from headgate import CallPolicy, Client, Rate, RateBudget, Route
 
 shared = RateBudget(Rate.per_minute(600), max_in_flight=8)  # one provider quota, two clients
-search = Client(base_url="https://api.example.com/search", rate=shared)
+search = Client(base_url="https://api.example.com/search", policy=CallPolicy(rate=shared))
 reports = Client(
     base_url="https://api.example.com/reports",
-    rate=shared,
-    policy=TransportPolicy(routes=(Route("/export", rate=Rate.per_minute(6)),)),
+    policy=CallPolicy(rate=shared, routes=(Route("/export", rate=Rate.per_minute(6)),)),
 )
 ```
 
@@ -26,9 +25,9 @@ or per second for a steadier pace. A client given a `Rate` builds a budget of it
 an object: pass one instance to several clients (or rules) and they spend from it together, across tasks, event loops
 and threads, because its state is plain numbers under a `threading.Lock` and nothing in it is bound to a loop.
 
-`RateBudget(rate, *, max_in_flight=None, adaptive=Adaptive(), timing=None)`, where `timing` (a
-`headgate.timing.Timing`) is the clock and sleep it paces on and the wall clock it reads epochs against, the current
-timing when it is built by default:
+`RateBudget(rate, *, max_in_flight=None, adaptive=Adaptive())` paces on the clock and sleep of the timing current when
+it is built (`headgate.timing.current_timing()`, which `timing_override()` and `TestClock.install()` set for a block),
+and reads epochs against its wall clock:
 
 - **Pacing** is GCRA, the virtual-scheduling form of a leaky bucket. Up to `rate.requests` requests (at least one) go
   out back to back; after that they are `period / requests` seconds apart. Waiters are served in arrival order, and a
@@ -47,7 +46,7 @@ timing when it is built by default:
 
 ## Per-path lanes
 
-`TransportPolicy(routes=(Route(fragment, rate=...), ...))` gives the calls whose URL path holds `fragment` a budget of
+`CallPolicy(routes=(Route(fragment, rate=...), ...))` gives the calls whose URL path holds `fragment` a budget of
 their own, spent **instead of** the client's. A route's `rate` is a `Rate` (a budget per client), a shared
 `RateBudget`, or `None`, which paces nothing of the route's own while the server's pauses still apply; a route that
 leaves `rate` out spends from the client's budget. The fragment is one or more whole path segments, matched anywhere

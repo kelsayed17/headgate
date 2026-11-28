@@ -18,6 +18,7 @@ import msgspec
 
 from headgate import (
     CachedTokenAuth,
+    CallPolicy,
     Client,
     Expect,
     HttpOptions,
@@ -27,7 +28,6 @@ from headgate import (
     RetryPolicy,
     Route,
     Timeouts,
-    TransportPolicy,
     nothing,
 )
 from headgate.msgspec import decode, reader, writer
@@ -103,7 +103,7 @@ def orders_on(page: list[Order]) -> list[Order]:
 ORDER = reader(Order)
 NEW_ORDER = writer(NewOrder)
 ORDER_OR_REJECTION = Expect(ORDER).on(HTTPStatus.UNPROCESSABLE_ENTITY, reader(Rejection))
-ORDER_PAGES = LinkHeader(items=orders_on)
+ORDER_PAGES = LinkHeader(reader(list[Order]), items=orders_on)
 
 
 class OrdersClient:
@@ -119,9 +119,9 @@ class OrdersClient:
         """Mint tokens with *client_id* and *client_secret*; report to *observers*."""
         self._http = Client(
             base_url="https://api.shop.example/v2",
-            rate=Rate.per_second(20),
             auth=ShopTokenAuth(client_id, client_secret),
-            policy=TransportPolicy(
+            policy=CallPolicy(
+                rate=Rate.per_second(20),
                 retry=RetryPolicy(attempts=4),  # four sends at most, the first included
                 timeout=Timeouts(read=20.0),
                 deadline=30.0,  # each call, every attempt and wait included
@@ -160,7 +160,7 @@ class OrdersClient:
     def orders(self, *, status: str) -> Paginated[Order]:
         """Return the orders in *status*, a page of 100 at a time."""
         query = {"status": status, "per_page": 100}
-        return self._http.paginate("orders", expect=reader(list[Order]), pages=ORDER_PAGES, params=query)
+        return self._http.paginate("orders", pager=ORDER_PAGES, params=query)
 
     async def export_orders(self, write: Callable[[bytes], object]) -> None:
         """Stream the CSV export of every order into *write*, a chunk at a time, never holding it whole."""

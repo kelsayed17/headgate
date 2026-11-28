@@ -15,12 +15,12 @@ import httpx2
 import pytest
 
 from headgate import (
+    CallPolicy,
     ClientTimeoutError,
     Rate,
     RateBudget,
     RateLimitError,
     RetryPolicy,
-    TransportPolicy,
     UpstreamStatusError,
     nothing,
 )
@@ -28,6 +28,7 @@ from headgate.retry import Backoff
 from headgate.testing import FakeTransport, TestClock
 from headgate.timing import Timing
 from tests.integration._support import client
+from tests.support.timing import built_on
 
 #: The server's pause, the backoff before the first retry, and a deadline that covers the pause but not both.
 _PAUSE = 1.0
@@ -43,11 +44,13 @@ def _full_jitter() -> float:
     return 1.0
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_a_pause_a_backoff_and_attempts_stay_inside_the_deadline() -> None:
     """Wait the pause and send, then stop rather than start a backoff the deadline cannot cover."""
     clock = TestClock(random=_full_jitter)
-    budget = RateBudget(Rate.per_second(100), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
+    budget = built_on(
+        Timing(clock=clock, sleep=clock.sleep, wall_clock=clock), lambda: RateBudget(Rate.per_second(100))
+    )
     timeouts: list[float] = []
 
     def unavailable(request: httpx2.Request) -> httpx2.Response:
@@ -58,7 +61,7 @@ async def test_a_pause_a_backoff_and_attempts_stay_inside_the_deadline() -> None
     fake = FakeTransport().reply("GET", "/v1/limited", limited).reply("GET", "/v1/x", unavailable)
     retry = RetryPolicy(backoff=Backoff(factor=_BACKOFF / 2, max_wait=_BACKOFF))
     with clock.install():
-        built = client(fake, rate=budget, policy=TransportPolicy(retry=retry))
+        built = client(fake, rate=budget, policy=CallPolicy(retry=retry))
     with pytest.raises(RateLimitError):
         await built.get("limited", expect=nothing, retry=None)
     started = clock.now
@@ -80,7 +83,7 @@ async def test_an_attempt_still_running_at_the_deadline_raises_client_timeout_er
         raise AssertionError
 
     fake = FakeTransport().reply("GET", "/v1/x", 503, hangs)
-    built = client(fake, policy=TransportPolicy(retry=RetryPolicy(backoff=Backoff(factor=0.0))))
+    built = client(fake, policy=CallPolicy(retry=RetryPolicy(backoff=Backoff(factor=0.0))))
 
     with pytest.raises(ClientTimeoutError, match="deadline exceeded") as raised:
         await built.get("x", expect=nothing, deadline=_SHORT_DEADLINE)
@@ -97,7 +100,7 @@ _ADMITTED = 3
 _QUEUE_DEADLINE = 0.25
 
 
-@pytest.mark.transport_policy
+@pytest.mark.call_policy
 async def test_a_call_whose_budget_turn_is_past_the_deadline_fails_at_once_unsent() -> None:
     """Fail a call at once, saying it was never sent, when its turn in the rate budget comes after its deadline.
 
@@ -105,7 +108,7 @@ async def test_a_call_whose_budget_turn_is_past_the_deadline_fails_at_once_unsen
     """
     budget = RateBudget(Rate(requests=1, period=0.1), adaptive=None)
     fake = FakeTransport().reply("GET", "/v1/x", 200)
-    built = client(fake, rate=budget, policy=TransportPolicy(deadline=_QUEUE_DEADLINE))
+    built = client(fake, rate=budget, policy=CallPolicy(deadline=_QUEUE_DEADLINE))
 
     results = await asyncio.gather(*(built.get("x", expect=nothing) for _ in range(_QUEUED)), return_exceptions=True)
 

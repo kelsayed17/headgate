@@ -8,25 +8,21 @@ absent: it inherits the view's, the route's or the policy's, while ``None`` turn
 base that is not closed, since a closed ``TypedDict`` cannot be extended.
 
 At runtime ``**options`` would swallow any keyword, so every entry point checks the keys it got with
-:func:`check_options` before anything is sent, and the options this module names with :func:`check_overrides`.
+:func:`~headgate._core.check_options` before anything is sent, and the options this module names with
+:func:`check_overrides`.
 """
 
-from __future__ import annotations
-
 import math
-from typing import TYPE_CHECKING, Final
+from collections.abc import Mapping
+from typing import Final
 
 # A closed TypedDict (PEP 728) refuses a keyword it does not name, so a stray or misspelled option is a type error.
 from typing_extensions import TypedDict
 
 from headgate._core import check_kind
+from headgate._options import Timeouts
+from headgate._request_body import Body
 from headgate.retry._policy import RetryPolicy
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
-
-    from headgate._options import Timeouts
-    from headgate._request_body import Body
 
 __all__ = [
     "BODY_HINTS",
@@ -36,7 +32,6 @@ __all__ = [
     "CallOptions",
     "RequestOptions",
     "StreamOptions",
-    "check_options",
     "check_overrides",
 ]
 
@@ -121,25 +116,10 @@ BODY_HINTS: Final = {
     "files": "write body=Multipart(files, fields)",
 }
 
-#: The keywords each bag names, read once, for :func:`check_options`.
+#: The keywords each bag names, read once, for :func:`~headgate._core.check_options`.
 CALL_KEYS: Final = frozenset(CallOptions.__optional_keys__)
 REQUEST_KEYS: Final = frozenset(RequestOptions.__optional_keys__)
 STREAM_KEYS: Final = frozenset(StreamOptions.__optional_keys__)
-
-
-def check_options(
-    where: str, options: Mapping[str, object], allowed: frozenset[str], hints: Mapping[str, str] | None = None
-) -> None:
-    """Refuse a keyword *where* does not take, as a function with that signature would.
-
-    :raises TypeError: naming the first such keyword in sorted order, and what to write instead when *hints* says.
-    """
-    if unknown := options.keys() - allowed:
-        name = min(unknown)
-        msg = f"{where}() got an unexpected keyword argument {name!r}"
-        if hints is not None and (hint := hints.get(name)) is not None:
-            msg = f"{msg}: {hint}"
-        raise TypeError(msg)
 
 
 def check_overrides(options: Mapping[str, object]) -> None:

@@ -5,10 +5,11 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import traceback
 from collections.abc import MutableMapping
-from typing import Final, NoReturn, Protocol
+from typing import Any, Final, NoReturn, Protocol, cast
 
 import httpx2
 import msgspec
@@ -325,53 +326,20 @@ def test_on_refuses_a_status_outside_the_http_range(status: int) -> None:
         Expect(reader(_Ok)).on(status, reader(_No))
 
 
-@pytest.mark.parametrize("status", [401, 407, 429, 503])
-def test_the_constructor_refuses_a_status_that_means_we_could_not_ask(status: int) -> None:
-    """Refuse what ``.on()`` refuses: an ``Expect`` built with ``answers`` makes the same claim.
-
-    Without it, ``Expect(reader(X), {401: ...})`` would hand a real 401 back as data instead of ``AuthError``.
-    """
-    with pytest.raises(ValueError, match=f"^{status} means we could not ask"):
-        Expect(reader(_Ok), {status: nothing})
+def test_expect_takes_no_answers() -> None:
+    """Refuse answers given to the constructor: ``on()`` is the one way to declare one, and widens the type."""
+    with pytest.raises(TypeError, match="answers"):
+        Expect(reader(_Ok), **cast("Any", {"answers": {404: nothing}}))
+    with pytest.raises(TypeError):
+        cast("Any", Expect)(reader(_Ok), {404: nothing})
 
 
-@pytest.mark.parametrize("status", [99, 600])
-def test_the_constructor_refuses_a_status_outside_the_http_range(status: int) -> None:
-    """Refuse a status outside 100-599 in ``answers``."""
-    with pytest.raises(ValueError, match=f"^{status} is not an HTTP status"):
-        Expect(reader(_Ok), {status: nothing})
-
-
-def test_the_constructor_refuses_a_bad_status_beside_a_legal_one() -> None:
-    """Check every key, not only the first: the 503 sits after a legal 404."""
-    with pytest.raises(ValueError, match=r"^503 means we could not ask"):
-        Expect(reader(_Ok), {404: nothing, 503: nothing})
-
-
-@pytest.mark.parametrize("status", [401, 99])
-def test_the_constructor_and_on_refuse_with_the_same_message(status: int) -> None:
-    """Refuse with the same message on both paths."""
-    with pytest.raises(ValueError, match=str(status)) as built:
-        Expect(reader(_Ok), {status: nothing})
-    with pytest.raises(ValueError, match=str(status)) as declared:
-        Expect(reader(_Ok)).on(status, nothing)
-    assert str(built.value) == str(declared.value)
-
-
-def test_the_constructor_accepts_a_legal_answer() -> None:
-    """Accept legal statuses and read them with their readers."""
-    expect = Expect[_Ok | _No | None](reader(_Ok), {400: reader(_No), 404: nothing})
+def test_on_declares_an_answer() -> None:
+    """Hold each answer ``on()`` declared, read with its reader, in a read-only mapping."""
+    expect = Expect(reader(_Ok)).on(400, reader(_No)).on(404, nothing)
     assert set(expect.answers) == {400, 404}
     assert expect.answers[400](response(b'{"message": "no"}', status=400)) == _No(message="no")
-
-
-def test_answers_are_read_only_even_when_the_constructor_was_handed_a_dict() -> None:
-    """Copy the caller's dict as well as freezing it, so mutating it afterwards changes nothing."""
-    handed = {404: nothing}
-    expect = Expect(reader(_Ok), handed)
     assert not isinstance(expect.answers, MutableMapping)
-    handed[400] = nothing
-    assert set(expect.answers) == {404}
 
 
 def test_the_default_answers_are_read_only() -> None:
@@ -391,12 +359,54 @@ def test_403_404_and_an_exact_204_are_claimable() -> None:
     assert set(expect.answers) == {403, 404, 204}
 
 
-@pytest.mark.parametrize("name", [f.name for f in dataclasses.fields(Expect)])
+@pytest.mark.parametrize("name", ["ok", "answers", "headers", "accept"])
 def test_an_expect_refuses_assignment_to_every_field(name: str) -> None:
     """Refuse rebinding any field at runtime, not only in a type checker."""
     expect = Expect(reader(_Ok)).on(404, nothing)
-    with pytest.raises(dataclasses.FrozenInstanceError):
+    with pytest.raises(AttributeError):
         setattr(expect, name, nothing)
+
+
+def test_a_copy_of_an_expect_keeps_its_answers() -> None:
+    """Keep the answers ``on()`` declared through ``copy.replace`` and ``copy.copy``, and refuse ``answers=`` there."""
+    expect = Expect(reader(_Ok), accept="application/json").on(404, nothing)
+
+    replaced = copy.replace(expect, headers={"X-Api-Version": "2"})
+    copied = copy.copy(expect)
+
+    assert (dict(replaced.answers), replaced.headers, replaced.accept) == (
+        {404: nothing},
+        {"X-Api-Version": "2"},
+        "application/json",
+    )
+    assert copied == expect
+    assert dict(copied.answers) == {404: nothing}
+    with pytest.raises(TypeError, match="answers"):
+        copy.replace(expect, **cast("Any", {"answers": {}}))
+    with pytest.raises(
+        TypeError, match=r"^copy.replace\(\) of an Expect takes ok=, headers= and accept= \(got oops=\)$"
+    ):
+        copy.replace(expect, **cast("Any", {"oops": 1}))
+
+
+def test_dataclasses_replace_refuses_an_expect() -> None:
+    """Refuse ``dataclasses.replace``, which would build an ``Expect`` without the answers ``on()`` declared."""
+    with pytest.raises(TypeError, match="dataclass"):
+        dataclasses.replace(cast("Any", Expect(reader(_Ok)).on(404, nothing)), accept="text/plain")
+
+
+def test_an_expect_is_a_value() -> None:
+    """Compare and hash by its readers, answers, headers and accept, and read as what it was built from."""
+    first = Expect(reader(_Ok)).on(404, nothing)
+
+    assert first == copy.copy(first)
+    assert hash(first) == hash(copy.copy(first))
+    assert first != Expect(first.ok)
+    assert first != first.ok
+    assert (
+        repr(Expect(nothing, accept="text/plain"))
+        == "Expect(Reader(nothing), answers={}, headers={}, accept='text/plain')"
+    )
 
 
 def test_an_expect_is_not_a_reader() -> None:

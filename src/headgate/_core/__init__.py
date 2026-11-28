@@ -8,26 +8,27 @@ It imports only the standard library and ``httpx2``, so the policy subpackages (
 between those subpackages goes through what is defined here and is wired together in :mod:`headgate._stack`.
 """
 
-from headgate._core._context import SENDING, CallContext, CallView, SendProgress, Slot, call_info, progress_of
+from headgate._core._context import SENDING, CallContext, CallView, SendProgress, Slot, call_view, progress_of
 from headgate._core._events import (
     OBSERVER_FAILURES,
     SILENT,
     AttemptFinished,
     BreakerChanged,
     BreakerState,
+    CacheChecked,
     CacheOutcome,
-    CacheResult,
     CallEvent,
     CallFinished,
     CallInfo,
     CallStarted,
-    Deprecated,
+    DeprecationNoticed,
     Emitter,
     Event,
     Observer,
     RateLimited,
     RetryScheduled,
 )
+from headgate._core._home import rehome
 from headgate._core._kinds import (
     check_callable,
     check_collection,
@@ -35,6 +36,8 @@ from headgate._core._kinds import (
     check_kind,
     check_names,
     check_not_letters,
+    check_options,
+    named,
     type_text,
 )
 from headgate._core._origin import origin_of, origin_text
@@ -74,8 +77,8 @@ __all__ = [
     "BreakerState",
     "BudgetBacklogError",
     "BudgetPausedError",
+    "CacheChecked",
     "CacheOutcome",
-    "CacheResult",
     "CallContext",
     "CallEvent",
     "CallFinished",
@@ -85,7 +88,7 @@ __all__ = [
     "Clock",
     "CredentialCarrier",
     "CredentialStamper",
-    "Deprecated",
+    "DeprecationNoticed",
     "Emitter",
     "Event",
     "ExplicitHeaders",
@@ -98,7 +101,7 @@ __all__ = [
     "Slot",
     "Timing",
     "asyncio_sleep",
-    "call_info",
+    "call_view",
     "check_callable",
     "check_collection",
     "check_fragment",
@@ -106,7 +109,9 @@ __all__ = [
     "check_kind",
     "check_names",
     "check_not_letters",
+    "check_options",
     "current_timing",
+    "named",
     "origin_of",
     "origin_text",
     "parse_retry_after",
@@ -115,6 +120,7 @@ __all__ = [
     "policy_disabled",
     "policy_is_disabled",
     "progress_of",
+    "rehome",
     "retry_after_of",
     "segments_hold",
     "system_random",

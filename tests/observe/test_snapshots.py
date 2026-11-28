@@ -24,7 +24,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from syrupy.filters import props
 
-from headgate import BreakerPolicy, ClientError, HttpCache, Rate, RateBudget, RetryPolicy, TransportPolicy, nothing
+from headgate import BreakerPolicy, CallPolicy, ClientError, HttpCache, Rate, RateBudget, RetryPolicy, nothing
 from headgate.otel import OpenTelemetryObserver
 from headgate.retry import Backoff, Hedge
 from headgate.testing import FakeTransport, TestClock
@@ -32,6 +32,7 @@ from headgate.timing import Timing, current_timing, timing_override
 from tests.cache._helpers import FaultyStorage, every_get_rules
 from tests.observe._support import client
 from tests.support.events import Recorder
+from tests.support.timing import built_on
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -50,7 +51,7 @@ def _half_jitter() -> float:
 
 
 #: Send each call once, so a scenario's second call shows what the first left behind.
-_ONCE = TransportPolicy(retry=None)
+_ONCE = CallPolicy(retry=None)
 
 _DEPRECATED = {"Deprecation": "@1688169599", "Sunset": "Sun, 30 Jun 2024 23:59:59 GMT"}
 
@@ -69,7 +70,7 @@ async def _plain(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) 
 
 async def _retried(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) -> None:
     """Make one call, answered on its third attempt, backing off by a fixed jitter so the delays are reproducible."""
-    policy = TransportPolicy(retry=RetryPolicy(backoff=Backoff()))
+    policy = CallPolicy(retry=RetryPolicy(backoff=Backoff()))
     with timing_override(replace(current_timing(), random=_half_jitter)):
         built = client(FakeTransport().reply("GET", "/v1/x", 503, 502, 200), *observers, policy=policy)
     await _call(built)
@@ -78,12 +79,14 @@ async def _retried(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage
 async def _rate_limited(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) -> None:
     """Make one call the server rate-limits, then a second call that waits out the pause it put on the budget.
 
-    The budget is real and runs on a test clock (the scenario is marked ``transport_policy``), so the pause shows as
+    The budget is real and runs on a test clock (the scenario is marked ``call_policy``), so the pause shows as
     the first call's ``pushback`` and the second call's ``paused`` wait.
     """
     clock = TestClock()
     limited = httpx2.Response(429, headers={"Retry-After": "1"})
-    budget = RateBudget(Rate.per_second(1000), timing=Timing(clock=clock, sleep=clock.sleep, wall_clock=clock))
+    budget = built_on(
+        Timing(clock=clock, sleep=clock.sleep, wall_clock=clock), lambda: RateBudget(Rate.per_second(1000))
+    )
     with clock.install():
         built = client(FakeTransport().reply("GET", "/v1/x", limited, 200), *observers, rate=budget, policy=_ONCE)
     await _call(built, times=2)
@@ -97,7 +100,7 @@ async def _hedged(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage)
         raise AssertionError
 
     clock = TestClock()
-    policy = TransportPolicy(retry=RetryPolicy(hedge=Hedge(after=0.5)))
+    policy = CallPolicy(retry=RetryPolicy(hedge=Hedge(after=0.5)))
     with clock.install():
         built = client(FakeTransport().reply("GET", "/v1/x", hangs, 200), *observers, policy=policy)
     await _call(built)
@@ -106,20 +109,20 @@ async def _hedged(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage)
 async def _cache_hit(observers: tuple[Observer, ...], storage: AsyncSqliteStorage) -> None:
     """Make two calls for one cacheable resource, the second served from the cache."""
     fresh = httpx2.Response(200, content=b"cached", headers={"Cache-Control": "max-age=60"})
-    policy = TransportPolicy(cache=HttpCache(**every_get_rules(), storage=storage))
+    policy = CallPolicy(cache=HttpCache(**every_get_rules(), storage=storage))
     await _call(client(FakeTransport().reply("GET", "/v1/x", fresh), *observers, policy=policy), times=2)
 
 
 async def _cache_degraded(observers: tuple[Observer, ...], storage: AsyncSqliteStorage) -> None:
     """Make one call whose cache storage fails, so it is handed to the network."""
     broken = FaultyStorage(storage, OSError("disk gone"), failing="get_entries")
-    policy = TransportPolicy(cache=HttpCache(**every_get_rules(), storage=broken))
+    policy = CallPolicy(cache=HttpCache(**every_get_rules(), storage=broken))
     await _call(client(FakeTransport().reply("GET", "/v1/x"), *observers, policy=policy))
 
 
 async def _breaker_opening(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage) -> None:
     """Fail once, opening the host's breaker, then make a call it refuses."""
-    policy = TransportPolicy(retry=RetryPolicy(attempts=1), breaker=BreakerPolicy(failure_threshold=1))
+    policy = CallPolicy(retry=RetryPolicy(attempts=1), breaker=BreakerPolicy(failure_threshold=1))
     built = client(FakeTransport().reply("GET", "/v1/x", 503), *observers, policy=policy)
     await _call(built, times=2)
 
@@ -145,7 +148,7 @@ _SCENARIOS: dict[str, _Scenario] = {
 _REAL_BUDGET = frozenset({"rate_limited"})
 
 _PARAMS = [
-    pytest.param(name, marks=pytest.mark.transport_policy) if name in _REAL_BUDGET else pytest.param(name)
+    pytest.param(name, marks=pytest.mark.call_policy) if name in _REAL_BUDGET else pytest.param(name)
     for name in sorted(_SCENARIOS)
 ]
 

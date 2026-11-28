@@ -59,7 +59,7 @@ fake = (
 instead of waiting. Its wall clock reads `epoch` plus the reading, so a `Retry-After` date agrees with it, and `random`
 is the backoff's jitter draw: pass `random=lambda: 1.0` for a full backoff a test can predict.
 
-Everything built inside `clock.install()` with no `timing=` of its own runs on it: a client's deadlines, events, retry
+Everything built inside `clock.install()` runs on it: a client's deadlines, events, retry
 backoff and retry budget, the token lifetimes of the `CachedTokenAuth` it is given, a `RateBudget` the block builds
 (shared by any number of clients), and a `BreakerRegistry`'s cooldowns. So a test of a 60-second cooldown, or of a
 token that expires in an hour, runs in no time. What was built before the block keeps the clock it was built with. A
@@ -70,8 +70,11 @@ block.
 `install()` is `headgate.timing.timing_override(clock.timing)`. The seam is public, so a test kit of your own can
 install a clock the same way: a `Timing(clock=..., sleep=..., wall_clock=..., random=...)`, whose four fields satisfy
 the `Clock`, `Sleep` and `RandomSource` protocols, set for a block with `timing_override`, and read back with
-`current_timing()`. A budget and a registry take `timing=` too, to run on one timing whatever block they are built
-in.
+`current_timing()`. It is the one way in: no budget, registry, breaker or fake network takes a timing of its own, so
+build a shared one inside the block whose clock it should run on. A client given a shared `RateBudget`,
+`BreakerRegistry` or `RetryBudget` built on another timing raises `TypeError`, as it does for a `CachedTokenAuth` on
+another, since one quota, cooldown or retry window cannot run on two clocks: build the shared object and its clients in
+one block.
 
 Concurrent sleeps overlap as they would in real time: each sleeper wakes at the reading it began at plus its delay.
 The clock moves to the earliest wake after 16 turns of the event loop in which no sleep begins or ends, room for the
@@ -85,9 +88,10 @@ mocked failure is retried exactly as production retries it, without the backoff.
 
 ## Breakers
 
-Each client keeps its breakers in a `BreakerRegistry` of its own, unless its `BreakerPolicy` names one to share, so
-failures in one test open no breaker in the next. `breakers_of(client)` returns that registry (or `None` for a client
-without a breaker); assert on it with `headgate.health.breaker_states(registry)`.
+Each client keeps its breakers in a `BreakerRegistry` of its own, unless it is given one to share
+(`CallPolicy(breaker=BreakerRegistry(...))`), so failures in one test open no breaker in the next. `breakers_of(client)`
+returns that registry (or `None` for a client without a breaker); assert on it with
+`headgate.health.breaker_states(registry)`.
 
 ## What a client was built with
 
@@ -95,7 +99,7 @@ A client fixes its options in its `__init__`, so a test of its configuration rea
 the `HttpCache` it was built with (or `None`), whose `caches_request(method, path)` and `stores_status(status)` say
 what it stores, from its `methods`, `paths` and `statuses`. `budget_for(client, url)` returns the `RateBudget` a
 request to `url` spends from: that of the first `Route` that matches it, when that route sets `rate=`, or the default;
-without a `url`, the default budget, built from `rate=`.
+without a `url`, the default budget, built from the policy's `rate=`.
 
 ```python
 from headgate.testing import budget_for, cache_of
@@ -114,9 +118,33 @@ def test_only_the_archives_are_cached(storage) -> None:
 
 Neither sends anything. A view made with `with_options()` reads back as the client it was made from.
 
+## A fake walk
+
+A test that stands in for an SDK whose method returns a walk, rather than for its network, builds a `Paginated` of its
+own: `Paginated(pages, items_of)`, where `pages` is a function of no arguments that starts the pages afresh each time it
+is called (an async generator function, say), and `items_of` returns the items on one page. It is the class
+`paginate()` returns, so the code under test iterates, collects and reads pages exactly as it does against the SDK:
+
+```python
+from collections.abc import AsyncIterator
+
+from headgate import Paginated
+
+
+async def two_pages() -> AsyncIterator[list[Issue]]:
+    yield [Issue(number=1, title="first")]
+    yield [Issue(number=2, title="second")]
+
+
+class FakeGitHub:
+    def open_issues(self, owner: str, name: str) -> Paginated[Issue]:
+        return Paginated(two_pages, lambda page: page)
+```
+
 ## Fault injection
 
-`FaultyTransport(schedule=[...], sleep=asyncio.sleep)` answers each send with the next step of its schedule, reports
+`FaultyTransport(schedule=[...])` waits out a `Slow` step on the sleep of the timing current when it is built (the test
+clock, inside `clock.install()`), answers each send with the next step of its schedule, reports
 send progress the way httpx2's own transport does (so the retry layer's "was anything written?" rule sees real facts),
 and records each send as a `FaultCall`: the step, method, URL, headers, whether it connected, `bytes_sent`, the
 response, whether that response was closed, and the error raised.
@@ -188,7 +216,7 @@ from headgate.policy import policy_disabled
 
 
 @pytest.fixture(autouse=True)
-def _no_transport_policy() -> Iterator[None]:
+def _no_call_policy() -> Iterator[None]:
     with policy_disabled():
         yield
 ```

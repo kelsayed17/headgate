@@ -9,6 +9,7 @@ redacted), the t-string route template, and a call id. Durations are on the cloc
 
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING, Any, cast, override
 
 import httpx2
@@ -16,13 +17,13 @@ import pytest
 
 from headgate import (
     Auth,
+    CallPolicy,
     Client,
     HttpOptions,
     QueryParamAuth,
     Rate,
     RetryPolicy,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
     as_bytes,
     nothing,
@@ -74,15 +75,14 @@ def _dropping(request: httpx2.Request) -> httpx2.Response:
 def _client(
     fake: FakeTransport,
     *observers: Recorder | _Broken,
-    policy: TransportPolicy | None = None,
+    policy: CallPolicy | None = None,
     auth: Auth | None = None,
 ) -> Client:
     """Build a client over *fake* reporting to *observers*."""
     return Client(
         base_url=_BASE,
-        rate=_RATE,
         auth=auth,
-        policy=policy or TransportPolicy(),
+        policy=dataclasses.replace(policy or CallPolicy(), rate=_RATE),
         http=HttpOptions(transport=fake),
         observers=observers,
     )
@@ -103,7 +103,7 @@ async def test_a_call_reports_its_start_each_send_and_its_end_under_one_call_inf
     assert info == CallInfo(
         method="GET",
         url="series/GDP%2Freal",
-        route="series/{series_id}",
+        template="series/{series_id}",
         full_url=f"{_BASE}/series/GDP%2Freal?token=***",
         call_id=info.call_id,
     )
@@ -119,7 +119,7 @@ async def test_a_str_url_has_no_route() -> None:
     await _client(_get("series"), recorder).get("series", expect=nothing)
     started = recorder.events[0]
     assert isinstance(started, CallStarted)
-    assert started.call.route is None
+    assert started.call.template is None
 
 
 async def test_each_retry_is_its_own_attempt() -> None:
@@ -144,7 +144,7 @@ async def test_a_failed_call_reports_the_error_types() -> None:
     """Name what a send raised on its attempt, and the ``ClientError`` the call raised on its end."""
     recorder = Recorder()
     with pytest.raises(TransportError):
-        await _client(_get("x", _refuse), recorder, policy=TransportPolicy(retry=None)).get("x", expect=nothing)
+        await _client(_get("x", _refuse), recorder, policy=CallPolicy(retry=None)).get("x", expect=nothing)
 
     _, attempt, finished = recorder.events
     assert isinstance(attempt, AttemptFinished)
@@ -174,7 +174,7 @@ async def test_durations_are_measured_on_the_clients_clock() -> None:
 
     recorder = Recorder()
     with clock.install():
-        client = _client(_get("x", slow), recorder, policy=TransportPolicy(retry=RetryPolicy(attempts=1)))
+        client = _client(_get("x", slow), recorder, policy=CallPolicy(retry=RetryPolicy(attempts=1)))
     await client.get("x", expect=nothing)
 
     _, attempt, finished = recorder.events
@@ -237,7 +237,9 @@ async def test_a_network_failure_mid_stream_is_the_calls_error() -> None:
 async def test_a_client_without_observers_emits_nothing_and_still_works() -> None:
     """Send normally with no observers installed."""
     fake = _get("x")
-    await Client(base_url=_BASE, rate=_RATE, http=HttpOptions(transport=fake)).get("x", expect=nothing)
+    await Client(base_url=_BASE, policy=CallPolicy(rate=_RATE), http=HttpOptions(transport=fake)).get(
+        "x", expect=nothing
+    )
     assert len(fake.calls) == 1
 
 

@@ -20,13 +20,13 @@ from headgate import (
     Auth,
     BearerAuth,
     CachedTokenAuth,
+    CallPolicy,
     Client,
     HttpCache,
     HttpOptions,
     Minted,
     QueryParamAuth,
     StaticHeaderAuth,
-    TransportPolicy,
 )
 from headgate.cache import Partition
 from headgate.cache._credentials import CALLER_CREDENTIALS, CallerCredentials, CredentialScope, mark_caller_credentials
@@ -70,7 +70,7 @@ def _client(echo: _Echo, storage: AsyncSqliteStorage, auth: Auth) -> Client:
     return Client(
         base_url="https://x",
         auth=auth,
-        policy=TransportPolicy(cache=HttpCache(**series_rules(), storage=storage)),
+        policy=CallPolicy(cache=HttpCache(**series_rules(), storage=storage)),
         http=HttpOptions(transport=httpx2.MockTransport(echo)),
     )
 

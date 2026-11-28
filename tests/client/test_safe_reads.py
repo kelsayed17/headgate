@@ -117,7 +117,7 @@ async def test_the_cache_passes_a_call_given_a_body_by(storage: AsyncSqliteStora
     transport = cache_transport(storage, network)
     await accept(await transport.handle_async_request(httpx2.Request("GET", _URL)))
     bodied = httpx2.Request("GET", _URL, headers={"Content-Length": "0"})
-    context = CallContext(CallInfo(method="GET", url=_URL))
+    context = CallContext(CallInfo(method="GET", url=_URL, full_url=_URL))
     context.put(HAS_BODY, value=True)
     context.attach(bodied)
 

@@ -17,8 +17,6 @@ text that comes from outside (an exception's message, a body) is bounded with :f
 the request line as ``METHOD log_url``, so a 404, a surviving 503 and an undecodable 200 read alike.
 """
 
-from __future__ import annotations
-
 import json
 import re
 import time
@@ -29,19 +27,16 @@ from typing import TYPE_CHECKING, Final
 import httpx2
 
 from headgate._core import retry_after_of
-from headgate._url import redact_secrets, sanitize_url
-from headgate.errors import (
+from headgate._errors import (
     AuthError,
     ClientError,
     ClientTimeoutError,
-    DecodeError,
-    ErrorDetails,
-    Problem,
     RateLimitError,
-    ResponseParseError,
     TransportError,
     UpstreamStatusError,
 )
+from headgate._url import redact_secrets, sanitize_url
+from headgate.errors import DecodeError, ErrorDetails, Problem, ResponseParseError
 from headgate.retry._policy import UNRETRYABLE_ERRORS
 
 if TYPE_CHECKING:

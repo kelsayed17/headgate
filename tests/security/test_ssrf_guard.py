@@ -10,6 +10,7 @@ raises ``ForbiddenDestinationError``, which is not retried and not charged to th
 
 from __future__ import annotations
 
+import dataclasses
 import socket
 from typing import TYPE_CHECKING, Final, override
 
@@ -18,13 +19,13 @@ import pytest
 
 from headgate import (
     BreakerPolicy,
+    CallPolicy,
     Client,
     HttpOptions,
     Rate,
     RetryPolicy,
     SecurityOptions,
     TransportError,
-    TransportPolicy,
 )
 from headgate.breaker import BreakerRegistry
 from headgate.curl import AsyncCurlTransport
@@ -55,12 +56,11 @@ class _Names:
         return (self.table[host],)
 
 
-def _guarded(base_url: str, policy: TransportPolicy | None = None) -> Client:
+def _guarded(base_url: str, policy: CallPolicy | None = None) -> Client:
     """Build a client on *base_url* with the SSRF guard on, under *policy* (the default one if not given)."""
     return Client(
         base_url=base_url,
-        rate=Rate.per_second(1000),
-        policy=policy or TransportPolicy(),
+        policy=dataclasses.replace(policy or CallPolicy(), rate=Rate.per_second(1000)),
         http=HttpOptions(security=SecurityOptions(block_private_hosts=True)),
     )
 
@@ -80,7 +80,10 @@ async def test_a_loopback_server_is_never_reached() -> None:
 
 async def test_the_same_server_is_reachable_without_the_guard() -> None:
     """Reach the same loopback server when private hosts are allowed, the default."""
-    async with serving() as server, Client(base_url=server.url(), rate=Rate.per_second(1000)) as client:
+    async with (
+        serving() as server,
+        Client(base_url=server.url(), policy=CallPolicy(rate=Rate.per_second(1000))) as client,
+    ):
         resp = await client.get("x", expect=RESPONSE)
 
     assert resp.text == "ok"
@@ -88,10 +91,10 @@ async def test_the_same_server_is_reachable_without_the_guard() -> None:
 
 async def test_a_refusal_is_not_retried_and_not_charged_to_the_breaker() -> None:
     """Send no retry for a refusal and leave the breaker closed, however often it happens."""
-    breaker = BreakerPolicy(failure_threshold=1, registry=BreakerRegistry())
+    breaker = BreakerRegistry(BreakerPolicy(failure_threshold=1))
     async with (
         serving() as server,
-        _guarded(server.url(), TransportPolicy(retry=RetryPolicy(attempts=3), breaker=breaker)) as client,
+        _guarded(server.url(), CallPolicy(retry=RetryPolicy(attempts=3), breaker=breaker)) as client,
     ):
         for _ in range(3):
             with pytest.raises(ForbiddenDestinationError) as exc:
@@ -104,7 +107,9 @@ async def test_a_name_resolving_to_a_private_address_is_refused() -> None:
     options = HttpOptions(
         security=SecurityOptions(block_private_hosts=True, resolver=_Names(internal_example="10.0.0.5"))
     )
-    async with Client(base_url="https://internal.example", rate=Rate.per_second(1000), http=options) as client:
+    async with Client(
+        base_url="https://internal.example", policy=CallPolicy(rate=Rate.per_second(1000)), http=options
+    ) as client:
         with pytest.raises(ForbiddenDestinationError, match=r"internal\.example: it resolves to 10\.0\.0\.5"):
             await client.get("x", expect=RESPONSE)
 
@@ -159,7 +164,7 @@ async def test_the_curl_transport_is_vetted_before_it_sends() -> None:
         options = HttpOptions(
             transport=AsyncCurlTransport(impersonate="chrome"), security=SecurityOptions(block_private_hosts=True)
         )
-        async with Client(base_url=server.url(), rate=Rate.per_second(1000), http=options) as client:
+        async with Client(base_url=server.url(), policy=CallPolicy(rate=Rate.per_second(1000)), http=options) as client:
             with pytest.raises(ForbiddenDestinationError):
                 await client.get("x", expect=RESPONSE)
 

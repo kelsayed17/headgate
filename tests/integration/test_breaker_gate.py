@@ -12,7 +12,7 @@ from __future__ import annotations
 import httpx2
 import pytest
 
-from headgate import BreakerPolicy, HttpOptions, TransportPolicy, UpstreamStatusError, nothing
+from headgate import BreakerPolicy, CallPolicy, HttpOptions, UpstreamStatusError, nothing
 from headgate.breaker import BreakerState, CircuitBreaker
 from headgate.events import BreakerChanged
 from headgate.testing import FakeTransport, TestClock
@@ -22,7 +22,7 @@ from tests.support.events import Recorder
 
 _PATH = "/v1/x"
 _COOLDOWN = 60.0
-_POLICY = TransportPolicy(breaker=BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN))
+_POLICY = CallPolicy(breaker=BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN))
 
 
 def _fail_once(breaker: CircuitBreaker) -> None:
@@ -42,7 +42,7 @@ async def test_a_breaker_opening_mid_sequence_stops_the_retries() -> None:
     fake = FakeTransport().reply("GET", _PATH, unavailable_while_another_call_fails, 200)
     built = client(fake, policy=_POLICY)
     registry = registry_of(built)
-    breakers.append(registry.breaker_for(BASE, failure_threshold=1, recovery_timeout=_COOLDOWN))
+    breakers.append(registry.breaker_for(BASE))
 
     with pytest.raises(UpstreamStatusError) as raised:
         await built.get("x", expect=nothing)
@@ -61,7 +61,7 @@ async def test_a_half_open_probe_keeps_its_retries() -> None:
     with clock.install():
         built = client(fake, policy=_POLICY, http=HttpOptions(), observers=(recorder,))
     registry = registry_of(built)
-    breaker = registry.breaker_for(BASE, failure_threshold=1, recovery_timeout=_COOLDOWN)
+    breaker = registry.breaker_for(BASE)
     _fail_once(breaker)
     clock.advance(_COOLDOWN)
 

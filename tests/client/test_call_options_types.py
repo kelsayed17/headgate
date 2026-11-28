@@ -20,7 +20,7 @@ _PRELUDE = dedent(
     from headgate import CallOptions, Client, Paginated, RequestOptions, nothing
     from headgate.pagination import NextUrl
 
-    PAGES = NextUrl[None, object](items=lambda _page: (), next=lambda _page: None)
+    PAGES = NextUrl[object, None](nothing, items=lambda _page: (), next=lambda _page: None)
 
 
     async def probe(c: Client, url: LiteralString) -> None:
@@ -47,7 +47,7 @@ async def test_a_wrapper_forwards_the_call_options(tmp_path: Path) -> None:
         async def fetch(**options: Unpack[CallOptions]) -> None:
             await c.get(url, expect=nothing, **options)
             await c.post(url, expect=nothing, **options)
-            c.paginate(url, expect=nothing, pages=PAGES, **options)
+            c.paginate(url, pager=PAGES, **options)
 
         await fetch(retry=None, follow_redirects=False, cache_ttl=None)
         """,
@@ -94,9 +94,9 @@ async def test_a_walk_names_its_items_first_and_its_page_type_only_when_it_matte
     code, out = await _check(
         tmp_path,
         """
-        items: Paginated[object] = c.paginate(url, expect=nothing, pages=PAGES)
-        both: Paginated[object, None] = c.paginate(url, expect=nothing, pages=PAGES, max_pages=2, on_limit="stop")
-        flipped: Paginated[None, object] = c.paginate(url, expect=nothing, pages=PAGES)
+        items: Paginated[object] = c.paginate(url, pager=PAGES)
+        both: Paginated[object, None] = c.paginate(url, pager=PAGES, max_pages=2, on_limit="stop")
+        flipped: Paginated[None, object] = c.paginate(url, pager=PAGES)
         """,
     )
 

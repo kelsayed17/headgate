@@ -10,6 +10,7 @@ defaults, to build on. The layers that re-send a request and record what each se
 package's private modules.
 """
 
+from headgate._core import rehome as _rehome
 from headgate.retry._policy import (
     IDEMPOTENT_METHODS,
     RETRY_STATUSES,
@@ -20,3 +21,5 @@ from headgate.retry._policy import (
 )
 
 __all__ = ["IDEMPOTENT_METHODS", "RETRY_STATUSES", "Backoff", "Hedge", "RetryBudget", "RetryShare"]
+
+_rehome(__name__, globals())

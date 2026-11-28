@@ -9,8 +9,6 @@ next hop: the 3xx becomes the final response and is raised through the status la
 :class:`~headgate.UpstreamStatusError` it is, with a note naming the refused target.
 """
 
-from __future__ import annotations
-
 import httpx2
 
 from headgate._core import CallContext

@@ -154,7 +154,9 @@ is `pager=`, not `pages=` (which `Paginated.pages()` uses for pages). Generic pa
 **3.3 Breakers take the rate's shape (P2).** `CallPolicy(breaker: BreakerPolicy | BreakerRegistry | None)` and
 `BreakerRegistry(policy: BreakerPolicy = BreakerPolicy(), /, *, max_hosts=1024)`, as `rate: Rate | RateBudget` and
 `RetryBudget(share)`. Removed: `BreakerPolicy.registry`, `BreakerRegistry.bind`, its mismatch `ValueError`, and the
-threshold keywords on lookup.
+threshold keywords on lookup. The registry takes its policy as `RateBudget` takes its rate and `RetryBudget` its share,
+by position or by name: `BreakerRegistry(BreakerPolicy(failure_threshold=3), max_hosts=256)`, with no positional-only
+marker. (Amended with the phase 3 review.)
 
 **3.4 `CallPolicy`, holding the rate (P5, P18).** `TransportPolicy` becomes `CallPolicy`, the pair of `CallOptions`,
 leaving "transport" to the network layer and its failure. `rate=` moves from the `Client` constructor into it, beside
@@ -164,7 +166,9 @@ the routes that override it. `RouteOptions` gains `timeout` (P24), since every o
 
 - `Expect(ok, *, headers=, accept=)`: `answers` is filled only by `.on()` (F7, P17).
 - `call_info` becomes `call_view(request) -> CallView | None`; `CallView.call` becomes `CallView.info`; `CallInfo.route`
-  becomes `CallInfo.template`, OTel's own name (P6). `CallInfo.full_url` is always filled (E18).
+  becomes `CallInfo.template`, OTel's own name (P6). `CallInfo.full_url` is always filled (E18). `CallView.call` keeps
+  its name, since every event already exposes its `CallInfo` as `call`, so one name holds for both. (Amended with the
+  phase 3 review.)
 - `stream()` drops `last_event_id=`, which `events()` keeps; `Stream.retry` becomes `Stream.reconnect_after`, a `float`
   in seconds like every other duration (P16). `aiter_bytes(*, chunk_size=)` is keyword-only (P26).
 - `event_stream` becomes `as_events`, beside `as_bytes`, `as_json` and the new `as_text` (P19, T6).
@@ -172,7 +176,8 @@ the routes that override it. `RouteOptions` gains `timeout` (P24), since every o
   and `Deprecated` becomes `DeprecationNoticed`, so every event is a past-tense fact (P27).
 - `head()` requires `expect=` like every verb (P25): `head(url, expect=nothing)` is the one spelling.
 - `HttpCache(methods=frozenset({"GET"}), statuses=frozenset({200}))`: defaults are values, so `None` keeps meaning
-  off (P12).
+  off (P12). The two stay typed `Collection[str]` and `Collection[int]`, as 1.7 typed and checks them, so a tuple is
+  still accepted; the fields hold frozensets, and `None` for either is a `TypeError`. (Amended with the phase 3 plan.)
 - Time has one seam (P8): the `timing=` keyword goes from `RateBudget`, `RetryBudget`, `BreakerRegistry`,
   `CircuitBreaker` and `CachedTokenAuth`, and `FaultyTransport` drops `sleep=`. `timing_override()` and
   `TestClock.install()` are the way in, as they already are for `Client`.
@@ -183,6 +188,11 @@ module that exports it, and the one-home test checks it. The six top-level error
 `headgate.UpstreamStatusError`. The same applies to the testing kit (`headgate.testing.UnmatchedRequestError`).
 `Paginated` becomes the concrete final class the walk is, so `await client.paginate(...)` names `Paginated`.
 (F5's alternative, moving all fifteen errors to `headgate.errors`, re-opens design 8 and was not taken.)
+The cost is that `inspect.getsource` (and IPython's `Client??`) cannot find a class's source: it looks the class up in
+the module `__module__` names, where only the import is. Functions, and every traceback, keep their real file paths,
+since those come from the code object. The public home wins because it is what a user reads and copies: a traceback, a
+`repr`, `help()` and a pickle name the one import that works, and the private module is no second home. trio and numpy
+pay the same cost for the same reason. (Amended with the phase 3 review.)
 
 ### 4. The surface is what users use
 

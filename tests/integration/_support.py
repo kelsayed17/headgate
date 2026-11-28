@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from typing import TYPE_CHECKING, override
 
@@ -13,13 +14,13 @@ import msgspec
 from headgate import (
     Auth,
     CachedTokenAuth,
+    CallPolicy,
     Client,
     HttpOptions,
     Minted,
     QueryParamAuth,
     Rate,
     StaticHeaderAuth,
-    TransportPolicy,
 )
 from headgate._core import CredentialStamper
 
@@ -41,7 +42,7 @@ FAST = Rate.per_second(1000)
 def client(
     transport: httpx2.AsyncBaseTransport,
     *,
-    policy: TransportPolicy | None = None,
+    policy: CallPolicy | None = None,
     http: HttpOptions | None = None,
     auth: Auth | None = None,
     rate: Rate | RateBudget = FAST,
@@ -52,9 +53,8 @@ def client(
     options = http or HttpOptions()
     return Client(
         base_url=BASE,
-        rate=rate,
         auth=auth,
-        policy=policy or TransportPolicy(),
+        policy=dataclasses.replace(policy or CallPolicy(), rate=rate),
         http=HttpOptions(
             transport=transport,
             headers=options.headers,

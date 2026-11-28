@@ -9,8 +9,6 @@ observers. A send the rate budget refused before the deadline (``BudgetBacklogEr
 reached the network, and the retry layer withdraws its attempt, so it is not reported.
 """
 
-from __future__ import annotations
-
 from typing import override
 
 import httpx2

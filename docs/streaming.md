@@ -11,7 +11,7 @@ async with client.stream("exports/2026.csv") as stream:
         sink.write(chunk)
 ```
 
-`client.stream(url, *, method="GET", last_event_id=None, **options)` sends the request when the block is entered and
+`client.stream(url, *, method="GET", **options)` sends the request when the block is entered and
 hands it a `Stream` once a 2xx head has arrived. Its options are `headgate.streaming.StreamOptions`: a verb's
 [per-call options](configuration.md#per-call-options), `retry=` and `follow_redirects=` included, but `cache_ttl=` and
 `max_response_bytes=`, since its body is never buffered. It runs through the same stack and failure ladder as a verb,
@@ -36,7 +36,7 @@ except that:
 - the client's `response_check` runs on the response head, before the block is entered.
 
 A `Stream` has `status_code`, `headers` and `request_id`, and three ways to read the body, one per stream:
-`aiter_bytes(chunk_size=None)` (decoded bytes as they arrive), `aiter_lines(max_line_size=1 MiB)` (decoded text lines)
+`aiter_bytes(*, chunk_size=None)` (decoded bytes as they arrive), `aiter_lines(*, max_line_size=1 MiB)` (decoded text lines)
 and `aiter_events()`.
 
 `aiter_lines` splits where `str.splitlines` does, as httpx2's does, and raises `ResponseTooLargeError` for a line past
@@ -59,7 +59,8 @@ async with client.events("feed", last_event_id=resume_from) as stream:
 `client.events(url, ...)` is `stream()` of a GET with two defaults: it sends `Accept: text/event-stream` unless your
 `headers=` name an `Accept`, and each read has no time limit (`math.inf`) unless your `timeout=` sets `read`, since an
 event stream may be quiet for minutes. The deadline bounds opening it, as for any stream, and `asyncio.timeout` around
-the block bounds the whole of it. It takes every option `stream()` does.
+the block bounds the whole of it. It takes every option `stream()` does, and `last_event_id=`, which `stream()` does
+not: a raw stream that needs the header sends it in `headers=`.
 
 `aiter_events(max_event_size=1 MiB)` parses each event as soon as its blank line arrives, by the WHATWG grammar, into
 an `httpx2.ServerSentEvent`: `event`, `data` (multi-line joined), `id` and the `retry` its block named. The body is
@@ -70,13 +71,13 @@ that does not declare `text/event-stream` raises `ResponseParseError` at once; a
 event, and is dropped as it arrives. The 1 MiB default is `headgate.streaming.DEFAULT_MAX_EVENT_SIZE`.
 
 `stream.last_event_id` is the id the server last set, `None` until it sets one and `""` once it resets it with an
-empty `id`. Pass it as `last_event_id=` when re-opening, and the request carries `Last-Event-ID` (none when it is
-empty) so the server resumes after it. `stream.retry` is the reconnection time in milliseconds the server last set,
-`None` until a `retry:` sets one: it holds across blocks, a `retry:` alone included, as a browser keeps it, while an
-event's own `retry` is only the field its block named. A `retry:` past 2**63 - 1 is held at that. Wait that long
-before re-opening.
+empty `id`. Pass it as `events(last_event_id=)` when re-opening, and the request carries `Last-Event-ID` (none when it
+is empty) so the server resumes after it. `stream.reconnect_after` is the reconnection time the server last set, in
+seconds like every other duration (the wire's `retry:` is in milliseconds), `None` until a `retry:` sets one: it holds
+across blocks, a `retry:` alone included, as a browser keeps it, while an event's own `retry` is only the field its
+block named, in milliseconds. A `retry:` past 2**63 - 1 is held at that. Wait that long before re-opening.
 
-For an event stream that is short and bounded, the buffered `event_stream` reader returns every event in a body, parsed
+For an event stream that is short and bounded, the buffered `as_events` reader returns every event in a body, parsed
 the same way (see [responses](responses.md#readers)).
 
 ## Request bodies

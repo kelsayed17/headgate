@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``policy_disabled()``: build a client with its transport policy (breaker, retries, pacing) switched off.
+"""``policy_disabled()``: build a client with its call policy (breaker, retries, pacing) switched off.
 
 The tests pin each of the three behaviors switched off, plus the properties that make it a construction-time switch
 rather than a global one. They observe what a client does (how many sends a 503 gets, whether an open breaker refuses
@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import HttpOptions, Rate, RetryPolicy, Route, TransportPolicy, UpstreamStatusError
+from headgate import CallPolicy, HttpOptions, Rate, RetryPolicy, Route, UpstreamStatusError
 from headgate._client import Client
 from headgate._core import policy_is_disabled
 from headgate._responses import nothing
@@ -58,8 +58,9 @@ def _client(wire: Callable[[httpx2.Request], httpx2.Response]) -> Client:
     """
     return Client(
         base_url=f"https://{_HOST}",
-        rate=_RATE,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=_MAX_ATTEMPTS), routes=(Route("/r", rate=_RULE_RATE),)),
+        policy=CallPolicy(
+            rate=_RATE, retry=RetryPolicy(attempts=_MAX_ATTEMPTS), routes=(Route("/r", rate=_RULE_RATE),)
+        ),
         http=HttpOptions(transport=httpx2.MockTransport(wire)),
     )
 
@@ -78,7 +79,7 @@ def _built_off(wire: _Wire) -> Client:
 
 
 class TestPolicyOff:
-    """With ``policy_disabled()`` around construction, a client keeps none of its transport policy."""
+    """With ``policy_disabled()`` around construction, a client keeps none of its call policy."""
 
     def test_it_keeps_no_breaker(self) -> None:
         """Check that a policy-off client has no breaker to record in or be refused by, not merely one never tripped."""

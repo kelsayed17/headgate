@@ -37,8 +37,6 @@ Nothing here reads the environment: the client and the default transport are bui
 cookie jar refuses every cookie unless ``HttpOptions(cookies=True)``.
 """
 
-from __future__ import annotations
-
 from contextvars import ContextVar
 from dataclasses import dataclass
 from http.cookiejar import CookieJar, DefaultCookiePolicy
@@ -68,7 +66,7 @@ if TYPE_CHECKING:
 
     from headgate._core import Timing
     from headgate._middleware import Middleware
-    from headgate._options import HttpOptions, Timeouts, TransportPolicy
+    from headgate._options import CallPolicy, HttpOptions, Timeouts
     from headgate.ratelimit._budgets import PathBudgets
 
 __all__ = ["NETWORK_OVERRIDE", "Credentials", "build_http_client", "build_transport_stack"]
@@ -143,7 +141,7 @@ def build_http_client(
 
 def build_transport_stack(
     budgets: PathBudgets,
-    policy: TransportPolicy,
+    policy: CallPolicy,
     http: HttpOptions,
     timing: Timing,
     credentials: Credentials,

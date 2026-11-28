@@ -12,7 +12,7 @@ Every call (a verb, :meth:`~Client.stream`, each page of :meth:`~Client.paginate
 :class:`_Call` and runs through the same steps:
 
 1. :meth:`~Client._prepare` renders the URL, builds the ``httpx2.Request`` once, and stamps the call's
-   :class:`~headgate._core.CallContext` on it: method, sanitized URL, route template, deadline, retry override, body
+   :class:`~headgate._core.CallContext` on it: method, sanitized URL, template, deadline, retry override, body
    replayability, idempotency key and redirect choice;
 2. :meth:`~Client._reported` emits ``CallStarted`` and ``CallFinished`` around the call and adds its notes to
    the error it raises; :meth:`~Client._deadline` bounds it by its deadline;
@@ -26,17 +26,17 @@ The six verbs are written out rather than generated so that each keeps an exact 
 every body is a single call into :meth:`Client._request`.
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import copy
 import functools
 import math
+from collections.abc import AsyncGenerator, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Final, Literal, Self, Unpack, cast, final, overload
+from types import TracebackType
+from typing import Final, Literal, Self, Unpack, cast, final, overload
 
 import httpx2
 
@@ -50,28 +50,27 @@ from headgate._call_options import (
     CallOptions,
     RequestOptions,
     StreamOptions,
-    check_options,
     check_overrides,
 )
 from headgate._core import (
     BREAKER_GATE,
     EXPLICIT_HEADERS,
     SILENT,
-    BreakerChanged,
     BudgetBacklogError,
     CallContext,
-    CallFinished,
-    CallInfo,
-    CallStarted,
     Emitter,
     ExplicitHeaders,
+    Observer,
     Slot,
+    Timing,
     check_kind,
-    current_timing,
+    check_options,
+    named,
     policy_is_disabled,
     url_path,
 )
 from headgate._deprecation import announce_deprecation
+from headgate._errors import ClientError, ClientTimeoutError, RateLimitError
 from headgate._failures import (
     SHAPE_ERRORS,
     CallSite,
@@ -84,11 +83,14 @@ from headgate._failures import (
     transient_status_error,
     transport_error,
 )
+from headgate._middleware import Middleware
 from headgate._options import (
     KEYED_METHODS,
+    CallPolicy,
     HttpOptions,
+    Route,
+    RouteOptions,
     Timeouts,
-    TransportPolicy,
     check_deadline,
     check_hooks,
     check_middleware,
@@ -98,14 +100,15 @@ from headgate._options import (
     match_route,
     reject_upstream_httpx,
 )
-from headgate._request_body import Json, WireValue, lowered, wire_value
-from headgate._responses import Expect, Reader, accepts, nothing
+from headgate._request_body import Json, Lowered, WireValue, Writer, lowered, wire_value
+from headgate._responses import Expect, Reader, ResponseCheck, accepts, with_answers
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
 from headgate._view import KEEP, ROOT_DEFAULTS, VIEW_KEYS, ViewOptions
 from headgate.breaker import BreakerRegistry, CircuitBreaker
-from headgate.breaker._breaker import BreakerOpenError
-from headgate.breaker._registry import NO_BREAKER
+from headgate.breaker._breaker import BreakerOpenError, Transition, Verdict
+from headgate.breaker._registry import NO_BREAKER, Breaker, clock_of
+from headgate.cache._policy import HttpCache
 from headgate.cache._transport import (
     HAS_BODY,
     MAX_RESPONSE_BYTES,
@@ -116,39 +119,26 @@ from headgate.cache._transport import (
     stamp_ttl,
     store_accepted,
 )
-from headgate.errors import (
-    CircuitOpenError,
-    ClientError,
-    ClientTimeoutError,
-    DecodeError,
-    ForbiddenDestinationError,
-    RateLimitError,
-    RefusedError,
-)
-from headgate.pagination import PageRequest, WritingPager
-from headgate.pagination._paginated import PageWalk, check_page_budget
-from headgate.ratelimit._budget import BudgetPausedError, RateBudget
+from headgate.errors import CircuitOpenError, DecodeError, ForbiddenDestinationError, RefusedError
+from headgate.events import BreakerChanged, CallFinished, CallInfo, CallStarted
+from headgate.pagination import Pager, PageRequest, WritingPager
+from headgate.pagination._paginated import PageWalk, Paginated, check_page_budget
+from headgate.ratelimit._budget import BudgetPausedError, RateBudget, pacer_of
 from headgate.ratelimit._budgets import CALL_BUDGET, Lane, PathBudgets
 from headgate.ratelimit._rate import Rate
-from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE
+from headgate.retry._policy import (
+    NETWORK_ERRORS,
+    REPLAYABLE_BODY,
+    RETRY_OUTCOME,
+    RETRY_POLICY,
+    SEND_ONCE,
+    RetryBudget,
+    RetryPolicy,
+)
+from headgate.retry._policy import clock_of as retry_clock_of
+from headgate.streaming import Stream
 from headgate.streaming._stream import OpenStream
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
-    from types import TracebackType
-
-    from headgate._core import Observer, Timing
-    from headgate._middleware import Middleware
-    from headgate._options import Route, RouteOptions
-    from headgate._request_body import Lowered
-    from headgate._responses import ResponseCheck
-    from headgate.breaker._breaker import Transition, Verdict
-    from headgate.breaker._registry import Breaker
-    from headgate.cache._policy import HttpCache
-    from headgate.pagination import Pager
-    from headgate.pagination._paginated import Paginated
-    from headgate.retry._policy import RetryPolicy
-    from headgate.streaming import Stream
+from headgate.timing import Clock, current_timing, timing_override
 
 __all__ = ["Built", "Client", "Method", "built_with"]
 
@@ -186,15 +176,15 @@ _NO_BODY_HINTS: Final = {
     for method in ("GET", "HEAD")
 }
 
-#: What ``paginate`` says of a body keyword: a walk's body is the raw value its pager rewrites, ``query=``.
-_WALK_BODY = "a walk's body is query=, the value its pager rewrites for each page"
-_WALK_HINTS = dict.fromkeys(("body", "json", "data", "content", "files"), _WALK_BODY)
+#: What ``paginate`` says of a body keyword: a walk's body is the raw value its pager rewrites, ``payload=``.
+_WALK_BODY = "a walk's body is payload=, the value its pager rewrites for each page"
+_WALK_HINTS = dict.fromkeys(("body", "json", "data", "content", "files", "query"), _WALK_BODY)
 
 #: Why a walk of POSTs refuses one fixed idempotency key.
 _ONE_KEY_FOR_EVERY_PAGE = "an idempotency key would be sent with every page's body; a walk of POSTs takes none"
 
 #: The option groups a client gets when it passes none: frozen, so one instance serves every client.
-_DEFAULT_POLICY = TransportPolicy()
+_DEFAULT_POLICY = CallPolicy()
 _DEFAULT_HTTP = HttpOptions()
 
 
@@ -295,15 +285,16 @@ class Client:
     :meth:`with_options` makes a view whose calls take other defaults for headers, timeouts, deadline, retry and
     redirects.
 
-    **URLs.** A t-string URL (``t"series/{series_id}"``) is rendered by :func:`headgate._url.render_path`, which
-    escapes every interpolation as one path segment and raises ``ValueError`` for a value no segment can hold (as
+    **URLs.** A t-string URL (``t"series/{series_id}"``) is rendered by :func:`headgate._url.render_path`, which escapes
+    every interpolation as one path segment and raises ``ValueError`` for a value no segment can hold (as
     :func:`~headgate._url.escape_segment` does): that is a programming error at the call site. Its template is the
-    call's route in events. An absolute ``httpx2.URL`` is passed through verbatim, so a paginator can forward a cursor
-    URL from a response body; a literal ``str`` is passed through the same way. A relative ``httpx2.URL`` raises
-    ``TypeError``, since its only use would be to skip escaping, and so does a URL of any other kind. A computed
-    ``str``, such as an f-string, does not type-check, because it skipped escaping. A URL httpx2 cannot parse raises the
-    root ``ClientError``, since such a URL often comes from the wire rather than the code; a redirect to one is the
-    host's failure, a ``TransportError``. Every message names a URL redacted and cut to a few hundred characters.
+    call's ``CallInfo.template`` in events. An absolute ``httpx2.URL`` is passed through verbatim, so a paginator can
+    forward a cursor URL from a response body; a literal ``str`` is passed through the same way. A relative
+    ``httpx2.URL`` raises ``TypeError``, since its only use would be to skip escaping, and so does a URL of any other
+    kind. A computed ``str``, such as an f-string, does not type-check, because it skipped escaping. A URL httpx2 cannot
+    parse raises the root ``ClientError``, since such a URL often comes from the wire rather than the code; a redirect
+    to one is the host's failure, a ``TransportError``. Every message names a URL redacted and cut to a few hundred
+    characters.
 
     **Time.** The client takes its timing from :func:`headgate.timing.current_timing` when it is built.
     """
@@ -312,42 +303,31 @@ class Client:
         self,
         *,
         base_url: str,
-        rate: Rate | RateBudget | None = None,
         auth: Auth | None = None,
-        policy: TransportPolicy = _DEFAULT_POLICY,
+        policy: CallPolicy = _DEFAULT_POLICY,
         http: HttpOptions = _DEFAULT_HTTP,
         observers: Sequence[Observer] = (),
         middleware: Sequence[Middleware] = (),
     ) -> None:
-        """Build the transport stack for *base_url*, spending from *rate*, signing requests with *auth*.
+        """Build the transport stack for *base_url*, signing requests with *auth*.
 
-        *rate* is a :class:`~headgate.Rate`, from which the client builds a budget of its own, or a
-        :class:`~headgate.RateBudget` it shares with every other client given the same one. Without one (``None``) the
-        client paces nothing itself, but still waits out the pauses the server asks
-        for: a 429 or 503 with ``Retry-After``, and a spent ``RateLimit`` quota. Pass a rate when the provider states
-        its quota.
-
-        *policy* configures retries, the timeouts and the deadline, the breaker, per-path rates, the cache,
-        idempotency keys and per-route overrides (:class:`~headgate.TransportPolicy`); *http* the network transport,
+        *policy* configures the rate, retries, the timeouts and the deadline, the breaker, the cache, idempotency keys
+        and per-route overrides (:class:`~headgate.CallPolicy`); *http* the network transport,
         headers, redirects, the body cap and cookies (:class:`~headgate.HttpOptions`).
 
         *observers* receive the client's events (see :mod:`headgate.events`), and *middleware* runs once per attempt,
         in order, inside the retry layer (see :class:`~headgate.Middleware`).
 
         :raises TypeError: for an argument of the wrong kind: an *auth* that is not a :class:`~headgate.Auth` (a plain
-            ``httpx2.Auth`` declares nothing it stamps) or is an upstream ``httpx`` one, a *rate* that is neither
-            a ``Rate``, a ``RateBudget`` nor ``None``, such as a bare number, *observers* or *middleware* that are not
-            a sequence, a middleware that does not declare its credentials or is not async, an observer whose
-            ``notify`` is, and a *base_url*, *policy* or *http* that is not the kind it names.
+            ``httpx2.Auth`` declares nothing it stamps) or is an upstream ``httpx`` one, *observers* or *middleware*
+            that are not a sequence, a middleware that does not declare its credentials or is not async, an observer
+            whose ``notify`` is, and a *base_url*, *policy* or *http* that is not the kind it names.
         """
         check_kind("base_url", base_url, str, "the API root, such as 'https://api.example.com/v1'")
-        check_kind("policy", policy, TransportPolicy, "TransportPolicy(...)")
+        check_kind("policy", policy, CallPolicy, "CallPolicy(...)")
         check_kind("http", http, HttpOptions, "HttpOptions(...)")
         reject_upstream_httpx(auth, what="auth")
         _check_auth(auth)
-        check_kind(
-            "rate", rate, (Rate, RateBudget, type(None)), "a Rate, such as Rate.per_second(10), a RateBudget or None"
-        )
         observers, middleware = _stack_parts("observers", observers), _stack_parts("middleware", middleware)
         check_middleware(middleware)
         check_observers(observers)
@@ -355,19 +335,20 @@ class Client:
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
         self._source = httpx2.URL(base_url).netloc.decode("ascii")  # host, and a port other than the default
         self._timing = current_timing()
-        check_timing(auth, self._timing)
+        check_timing(auth, self._timing, () if self._policy_off else _shared_clocks(policy))
         self._breakers = _registry_of(policy, self._timing)
         self._response_check = http.response_check
         self._max_response_bytes = http.max_response_bytes
         self._request_id_headers = http.request_id_headers
         self._timeout = policy.timeout
+        self._view_timeout: Timeouts | None = None
         self._emitter = Emitter(observers) if observers else SILENT
         self._view = ROOT_DEFAULTS
         self._owns_pool = True
         credentials = Credentials.of(base_url=base_url, auth=auth, http=http, middleware=middleware)
         lanes = [Lane(route.fragment, *_route_rate(route)) for route in policy.routes]
         self._budgets = budgets = PathBudgets(
-            default=rate, lanes=lanes, timing=self._timing, origin=httpx2.URL(base_url).origin
+            default=policy.rate, lanes=lanes, timing=self._timing, origin=httpx2.URL(base_url).origin
         )
         stack = build_transport_stack(budgets, policy, http, self._timing, credentials, observed=bool(observers))
         self._http_client = build_http_client(
@@ -437,6 +418,7 @@ class Client:
             _view=layered,
             _owns_pool=False,
             _timeout=self._timeout if timeout is None else timeout.over(self._timeout),
+            _view_timeout=_layered_timeout(timeout, self._view_timeout),
         )
         return view
 
@@ -516,24 +498,14 @@ class Client:
         call = _Call("PATCH", url, options)
         return await self._request(call, expect)
 
-    @overload
     async def head[T](
         self,
         url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
         **options: Unpack[CallOptions],
-    ) -> T: ...
-    @overload
-    async def head(self, url: CallUrl, **options: Unpack[CallOptions]) -> None: ...
-    async def head(
-        self,
-        url: CallUrl,
-        *,
-        expect: Reader[object] | Expect[object] = nothing,
-        **options: Unpack[CallOptions],
-    ) -> object:
-        """Send a HEAD and read the reply through *expect*: by default :data:`~headgate.nothing`, as a HEAD has no body.
+    ) -> T:
+        """Send a HEAD and read the reply through *expect*: :data:`~headgate.nothing` for a HEAD read for its status.
 
         A reader still has the status line and headers, ``Content-Length`` and ``Content-Encoding`` included, so
         ``expect=`` reads a header off a HEAD; the size cap is not applied to a body that does not exist. It takes no
@@ -549,7 +521,6 @@ class Client:
         url: CallUrl,
         *,
         method: Method = "GET",
-        last_event_id: str | None = None,
         **options: Unpack[StreamOptions],
     ) -> contextlib.AbstractAsyncContextManager[Stream]:
         """Send a request, a GET unless *method* says otherwise, and open its 2xx response as a ``Stream``.
@@ -575,9 +546,7 @@ class Client:
 
         A GET or HEAD stream takes no ``body=``, as :meth:`get` takes none: ``method="QUERY"`` is the read with a body.
 
-        ``last_event_id=`` sends ``Last-Event-ID`` (when not empty, and in place of one in ``headers=``), to resume a
-        server-sent event stream after the last event a previous :class:`~headgate.streaming.Stream` saw (its
-        ``last_event_id``).
+        A server-sent event stream is :meth:`events`, which also resumes one after an event.
 
         The request goes out when the block is entered.
         """
@@ -589,12 +558,6 @@ class Client:
                 "method='QUERY', the safe read with a body"
             )
             raise TypeError(msg)
-        if bool(last_event_id):
-            # Merged case-insensitively, so it replaces a Last-Event-ID however headers= spelled it.
-            headers = httpx2.Headers(options.get("headers"))
-            headers["Last-Event-ID"] = last_event_id
-            options = options.copy()
-            options["headers"] = headers
         return self._streamed(_Call(method, url, options))
 
     def events(
@@ -605,11 +568,17 @@ class Client:
         ``async with client.events("feed") as stream:`` then ``async for event in stream.aiter_events():``. It sends
         ``Accept: text/event-stream`` unless the call's own ``headers=`` name an ``Accept``, and gives each read no
         timeout (``math.inf``) unless the call's ``timeout=`` sets ``read``, since an event stream may be quiet for
-        minutes. The deadline bounds opening it, as for any stream. ``last_event_id=`` resumes after an event, as on
-        :meth:`stream`.
+        minutes. The deadline bounds opening it, as for any stream.
+
+        ``last_event_id=`` sends ``Last-Event-ID`` (when not empty, and in place of one in ``headers=``), to resume the
+        stream after the last event a previous :class:`~headgate.streaming.Stream` saw (its ``last_event_id``); wait
+        its ``reconnect_after`` first.
         """
+        # Merged case-insensitively, so Last-Event-ID replaces one however headers= spelled it.
         headers = httpx2.Headers(options.get("headers"))
         headers.setdefault("Accept", _EVENT_STREAM)
+        if bool(last_event_id):
+            headers["Last-Event-ID"] = last_event_id
         timeout = options.get("timeout")
         options = options.copy()
         options["headers"] = headers
@@ -619,51 +588,49 @@ class Client:
             check_kind("timeout", timeout, Timeouts, "a Timeouts, such as Timeouts(read=5.0)")
             if timeout.read is None:
                 options["timeout"] = replace(timeout, read=math.inf)
-        return self.stream(url, last_event_id=last_event_id, **options)
+        return self.stream(url, **options)
 
     @overload
-    def paginate[P, I](
+    def paginate[I, P](
         self,
         url: CallUrl,
         *,
-        expect: Reader[P] | Expect[P],
-        pages: Pager[P, I, None],
+        pager: Pager[I, P, None],
         max_pages: int | None = None,
         on_limit: Literal["raise", "stop"] = "raise",
         **options: Unpack[CallOptions],
     ) -> Paginated[I, P]: ...
     @overload
-    def paginate[P, I, B](
+    def paginate[I, P, B](
         self,
         url: CallUrl,
         *,
-        query: B | None,
-        expect: Reader[P] | Expect[P],
-        pages: Pager[P, I, B],
+        payload: B | None,
+        pager: Pager[I, P, B],
         max_pages: int | None = None,
         on_limit: Literal["raise", "stop"] = "raise",
         **options: Unpack[CallOptions],
     ) -> Paginated[I, P]: ...
-    def paginate[P, I, B](
+    def paginate[I, P, B](
         self,
         url: CallUrl,
         *,
-        query: B | None = None,
-        expect: Reader[P] | Expect[P],
-        pages: Pager[P, I, B],
+        payload: B | None = None,
+        pager: Pager[I, P, B],
         max_pages: int | None = None,
         on_limit: Literal["raise", "stop"] = "raise",
         **options: Unpack[CallOptions],
     ) -> Paginated[I, P]:
-        """Return the pages *pages* follows from *url*, each read through *expect*, iterated lazily.
+        """Return the pages *pager* follows from *url*, each read through the pager's ``read``, iterated lazily.
 
         ``async for item in client.paginate(...)`` yields the items of each page in turn; ``.pages()`` yields the
-        pages. Each page is a GET (a POST, given ``query=``) through the whole stack, fetched only when the iteration
+        pages. Each page is a GET (a POST, given ``payload=``) through the whole stack, fetched only when the iteration
         reaches it, and a next-page URL taken from a response is sent as an absolute URL, under the same credential
-        and destination rules as any other. Iterating again starts again from the first page. The call options
+        and destination rules as any other. The pager carries the reader every page is read with, its ``read`` (a
+        :class:`~headgate.Reader` or an ``Expect``). Iterating again starts again from the first page. The call options
         (:class:`~headgate.CallOptions`) apply to every page, as they do to one :meth:`get` (or :meth:`post`).
 
-        A walk of POSTs passes its body as ``query=``: the raw value the pager rewrites page by page (a
+        A walk of POSTs passes its body as ``payload=``: the raw value the pager rewrites page by page (a
         :class:`~headgate.pagination.BodyCursor` or :class:`~headgate.pagination.BodyOffset` needs the value, not its
         bytes), ``None`` for none. The pager's ``write`` (a flavor's ``writer``, see
         :class:`~headgate.pagination.WritingPager`) encodes it for each page, since the writer belongs to the endpoint,
@@ -683,24 +650,24 @@ class Client:
             replay the first page's answer. A later page with a body is held to the same rule, and raises from the
             iteration.
         :raises TypeError: for a keyword no call option names, ``body=``, ``json=`` and ``limit=`` included (a walk's
-            body is ``query=``, its page budget ``max_pages=``), for a ``max_pages`` that is not an ``int``, and for an
-            ``expect=`` that is neither a :class:`~headgate.Reader` nor an ``Expect``, before the pager runs.
+            body is ``payload=``, its page budget ``max_pages=``), for a ``max_pages`` that is not an ``int``, and for
+            a pager whose ``read`` is not a :class:`~headgate.Reader` or an ``Expect``, before the pager runs.
         """
         check_options("paginate", options, CALL_KEYS, _WALK_HINTS)
         check_overrides(options)
         check_page_budget(max_pages, on_limit)
-        spec: Expect[P] = _expectation(expect)
+        spec: Expect[P] = _expectation(_page_reader(pager))
         call_options = options.copy()
         # How a body is sent is the walk's: the pager's writer encodes every page's, whatever request the pager returns.
-        write = pages.write if isinstance(pages, WritingPager) else None
-        first = pages.first(PageRequest(url, call_options.pop("params", None), query))
+        write = _page_writer(pager)
+        first = pager.first(PageRequest(url, call_options.pop("params", None), payload))
         # A page's body cannot carry one fixed key: refused for the first page here, and for a later one (a pager that
         # turns GETs into POSTs) before it is sent.
         fixed_key = self._one_key_for_every_page(call_options)
-        if first.body is not None and fixed_key:
+        if first.payload is not None and fixed_key:
             raise ValueError(_ONE_KEY_FOR_EVERY_PAGE)
         answers = {status: _paired(read) for status, read in spec.answers.items()}
-        paired = Expect(_paired(spec.ok), answers, headers=spec.headers, accept=spec.accept)
+        paired = with_answers(Expect(_paired(spec.ok), headers=spec.headers, accept=spec.accept), answers)
 
         # The origin the first page was sent to, once it was: a later page's call headers go there and nowhere else.
         addressed: list[httpx2.Origin] = []
@@ -718,14 +685,15 @@ class Client:
         async def fetch_page(request: PageRequest[B]) -> tuple[P, httpx2.Response]:
             page_options = call_options.copy()
             page_options["params"] = request.params
-            if request.body is None:
+            if request.payload is None:
                 return await self.get(request.url, expect=paired, **page_options)
             if fixed_key:
                 raise ValueError(_ONE_KEY_FOR_EVERY_PAGE)
-            body = Json(request.body) if write is None else write(request.body)
+            body = Json(request.payload) if write is None else write(request.payload)
             return await self.post(request.url, expect=paired, body=body, **page_options)
 
-        return PageWalk(fetch, pages, first, source=self._source, max_pages=max_pages, on_limit=on_limit)
+        walk = PageWalk(fetch, pager, first, source=self._source, max_pages=max_pages, on_limit=on_limit)
+        return Paginated(walk.pages, pager.page_items)
 
     def _one_key_for_every_page(self, options: CallOptions) -> bool:
         """Return whether every call made with *options* sends one fixed idempotency key.
@@ -887,13 +855,13 @@ class Client:
                 view=frozenset(name.lower() for name, _ in self._view.headers),
                 call=frozenset(name.lower() for name in own),
             )
-        # The absolute URL is for observers only (an OpenTelemetry span's url.full and server.address).
-        full_url = sanitize_url(str(request.url)) if self._emitter.active else None
-        info = CallInfo(method=call.method, url=log_url, route=route, full_url=full_url)
+        # The absolute URL names the server to an observer (an OpenTelemetry span's url.full) and to a middleware.
+        info = CallInfo(method=call.method, url=log_url, template=route, full_url=sanitize_url(str(request.url)))
         # The call's route is matched once, here; every layer reads what it set from the call's context.
         path = url_path(request.url)
         route_policy = match_route(self._policy.routes, path)
         route_options = {} if route_policy is None else route_policy.options
+        self._stamp_route_timeout(request, route_options, options.get("timeout"))
         deadline = self._deadline_of(call, route_options)
         if (timeout := options.get("timeout")) is not None:
             # Its kind was checked building the request (httpx_timeout), so a stream's is a Timeouts here.
@@ -910,6 +878,15 @@ class Client:
             stamp_ttl(request, options["cache_ttl"])
         context.attach(request)
         return _Prepared(request, context, follow)
+
+    def _stamp_route_timeout(self, request: httpx2.Request, route: RouteOptions, call: Timeouts | None) -> None:
+        """Send *request* with its *route*'s timeout, under the view's and the *call*'s own, over the policy's."""
+        if "timeout" not in route:
+            return
+        under = route["timeout"].over(self._policy.timeout)
+        if self._view_timeout is not None:
+            under = self._view_timeout.over(under)
+        request.extensions["timeout"] = httpx_timeout(under, call).as_dict()
 
     def _stamp_route(self, context: CallContext, call: _Call, route: RouteOptions, path: str) -> None:
         """Put on *context* what *call*'s *route* sets for every layer below: its retry policy, budget and cache."""
@@ -1151,12 +1128,7 @@ class Client:
 
     def _breaker_for(self, url: httpx2.URL) -> Breaker:
         """Return *url*'s origin's breaker from the client's registry, or a no-op one when the client has no breaker."""
-        policy = self._policy.breaker
-        if policy is None or self._breakers is None:
-            return NO_BREAKER
-        return self._breakers.breaker_for(
-            url, failure_threshold=policy.failure_threshold, recovery_timeout=policy.recovery_timeout
-        )
+        return NO_BREAKER if self._breakers is None else self._breakers.breaker_for(url)
 
     @staticmethod
     def _breaker_listener(breaker: Breaker, context: CallContext) -> Callable[[Transition], None] | None:
@@ -1282,6 +1254,27 @@ def _check_auth(auth: object) -> None:
         raise TypeError(msg)
 
 
+def _shared_clocks(policy: CallPolicy) -> Iterator[tuple[str, Clock]]:
+    """Yield what *policy* shares with other clients, named by the option it was given as, with the clock it runs on."""
+    rates = [policy.rate, *(route.options.get("rate") for route in policy.routes)]
+    for rate in rates:
+        if isinstance(rate, RateBudget):
+            yield "RateBudget given as rate=", pacer_of(rate).clock
+    if isinstance(policy.breaker, BreakerRegistry):
+        yield "BreakerRegistry given as breaker=", clock_of(policy.breaker)
+    retries = [policy.retry, *(route.options.get("retry") for route in policy.routes)]
+    for retry in retries:
+        if retry is not None and isinstance(retry.budget, RetryBudget):
+            yield "RetryBudget given as a RetryPolicy's budget=", retry_clock_of(retry.budget)
+
+
+def _layered_timeout(over: Timeouts | None, under: Timeouts | None) -> Timeouts | None:
+    """Return the phases *over* sets laid over *under*'s, either of which may be ``None`` for none."""
+    if over is None or under is None:
+        return under if over is None else over
+    return over.over(under)
+
+
 def _route_rate(route: Route) -> tuple[Rate | RateBudget | None, bool]:
     """Return the rate *route* sets, and whether it sets one; ``None`` paces nothing of the route's own."""
     options = route.options
@@ -1304,27 +1297,22 @@ def _stack_parts[T](name: str, parts: Sequence[T]) -> tuple[T, ...]:
     return items
 
 
-def _effective_policy(policy: TransportPolicy, *, off: bool) -> TransportPolicy:
-    """Return the policy a client built now runs: *policy*, less retries and the breaker when transport policy is *off*.
+def _effective_policy(policy: CallPolicy, *, off: bool) -> CallPolicy:
+    """Return the policy a client built now runs: *policy*, less retries and the breaker when call policy is *off*.
 
-    The rate budget checks for transport policy being off itself, when it is built.
+    The rate budget checks for call policy being off itself, when it is built.
     """
     return replace(policy, retry=None, breaker=None) if off else policy
 
 
-def _registry_of(policy: TransportPolicy, timing: Timing) -> BreakerRegistry | None:
-    """Return the registry a client's breakers live in: the policy's shared one, else one of its own on *timing*.
-
-    The registry is bound to the policy's thresholds here, so a client that cannot share it fails when it is built.
-
-    :raises ValueError: for thresholds other than the ones a shared registry is bound to.
-    """
+def _registry_of(policy: CallPolicy, timing: Timing) -> BreakerRegistry | None:
+    """Return the registry a client's breakers live in: the shared one it is given, else one of its own on *timing*."""
     breaker = policy.breaker
-    if breaker is None:
-        return None
-    registry = BreakerRegistry(timing=timing) if breaker.registry is None else breaker.registry
-    registry.bind(failure_threshold=breaker.failure_threshold, recovery_timeout=breaker.recovery_timeout)
-    return registry
+    if breaker is None or isinstance(breaker, BreakerRegistry):
+        return breaker
+    # A registry reads the current timing when it is built: this one is built on the client's.
+    with timing_override(timing):
+        return BreakerRegistry(breaker)
 
 
 def _query_pairs(params: Mapping[str, object]) -> list[tuple[str, WireValue]]:
@@ -1424,6 +1412,40 @@ def _expectation[T](expect: Reader[T] | Expect[T]) -> Expect[T]:
     """
     check_kind("expect", expect, (Reader, Expect), "a Reader or an Expect")
     return expect if isinstance(expect, Expect) else Expect(expect)
+
+
+def _page_reader[I, P, B](pager: Pager[I, P, B]) -> Reader[P] | Expect[P]:
+    """Return the reader *pager* reads its pages with, its ``read``.
+
+    :raises TypeError: for a pager with no ``read``, or a ``read`` that is neither a :class:`~headgate.Reader` nor an
+        ``Expect``, naming what it got.
+    """
+    read: object = getattr(pager, "read", None)
+    if not isinstance(read, Reader | Expect):
+        got = "no read" if read is None else f"a read of {named(read)}"
+        msg = (
+            f"paginate()'s pager reads each page with its read, a Reader or an Expect (the {type(pager).__name__} has "
+            f"{got}): pass the page reader first, as in Cursor(reader(Page), items=..., next=..., param=...)"
+        )
+        raise TypeError(msg)
+    return cast("Reader[P] | Expect[P]", read)
+
+
+def _page_writer[I, P, B](pager: Pager[I, P, B]) -> Writer[B] | None:
+    """Return the writer *pager* encodes each page's body with: a writing pager's ``write``, else ``None``.
+
+    :raises TypeError: for a :class:`~headgate.pagination.WritingPager` with no ``write``.
+    """
+    if not isinstance(pager, WritingPager):
+        return None
+    if not hasattr(pager, "write"):
+        msg = (
+            f"paginate()'s pager is a WritingPager, so it encodes each page's body with its write (the "
+            f"{type(pager).__name__} has none): give it write, a flavor's writer, or None for a body of builtins sent "
+            "as JSON"
+        )
+        raise TypeError(msg)
+    return pager.write
 
 
 def _paired[T](read: Reader[T]) -> Reader[tuple[T, httpx2.Response]]:

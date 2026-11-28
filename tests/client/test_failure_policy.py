@@ -9,31 +9,35 @@ Every call declares its ``expect=`` reader, and an undeclared non-success status
 
 from __future__ import annotations
 
+import dataclasses
+
 import httpx2
 import pytest
 
 from headgate import (
     AuthError,
+    CallPolicy,
     ClientTimeoutError,
     HttpOptions,
     Rate,
     RateLimitError,
     RetryPolicy,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
 )
 from headgate._client import Client
 from headgate.errors import ResponseParseError
 from headgate.msgspec import reader
 
-_POLICY = TransportPolicy(retry=RetryPolicy(attempts=1))
+_POLICY = CallPolicy(retry=RetryPolicy(attempts=1))
 
 
 def _client(transport: httpx2.MockTransport) -> Client:
     """Return a client over *transport* that sends each request once."""
     return Client(
-        base_url="https://example.test", rate=Rate.per_second(2), policy=_POLICY, http=HttpOptions(transport=transport)
+        base_url="https://example.test",
+        policy=dataclasses.replace(_POLICY, rate=Rate.per_second(2)),
+        http=HttpOptions(transport=transport),
     )
 
 
@@ -130,7 +134,9 @@ async def test_the_error_names_the_host_of_the_client_that_raised_it() -> None:
     """Check that ``source`` names the client's ``base_url`` host, which tells a caller which upstream failed."""
     transport = _answering(500)
     async with Client(
-        rate=Rate.per_second(2), base_url="https://example.test", policy=_POLICY, http=HttpOptions(transport=transport)
+        base_url="https://example.test",
+        policy=dataclasses.replace(_POLICY, rate=Rate.per_second(2)),
+        http=HttpOptions(transport=transport),
     ) as c:
         with pytest.raises(UpstreamStatusError) as ei:
             await c.get("/x", expect=reader(dict[str, int]))

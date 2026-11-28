@@ -22,7 +22,7 @@ import httpx2
 import msgspec
 from hishel import AsyncBaseStorage, Entry, Headers, Request, Response
 
-from headgate import Auth, Client, HttpCache, HttpOptions, QueryParamAuth, Rate, RetryPolicy, TransportPolicy, as_bytes
+from headgate import Auth, CallPolicy, Client, HttpCache, HttpOptions, QueryParamAuth, Rate, RetryPolicy, as_bytes
 from headgate import msgspec as msgspec_flavor
 from headgate._core import Timing, timing_override
 from headgate.pagination import LinkHeader
@@ -130,11 +130,10 @@ def _client(
     retry = RetryPolicy(budget=None)
     return Client(
         base_url=_BASE_URL,
-        rate=_FAST,
         auth=auth,
-        policy=TransportPolicy(retry=retry, cache=cache)
+        policy=CallPolicy(rate=_FAST, retry=retry, cache=cache)
         if breaker
-        else TransportPolicy(retry=retry, cache=cache, breaker=None),
+        else CallPolicy(retry=retry, cache=cache, breaker=None),
         http=HttpOptions(transport=httpx2.MockTransport(handler)),
     )
 
@@ -269,10 +268,10 @@ def _linked_page(request: httpx2.Request) -> httpx2.Response:
 def test_paginate_link_header(benchmark: BenchmarkFixture, runner: asyncio.Runner) -> None:
     """Measure walking ``_PAGES`` pages linked by the ``Link`` header, each a GET through the full stack."""
     client = _client(_linked_page)
-    pages = LinkHeader(items=_items_of)
+    pages = LinkHeader(_PAGE, items=_items_of)
 
     async def walk() -> int:
-        return sum([item async for item in client.paginate("items", expect=_PAGE, pages=pages)])
+        return sum([item async for item in client.paginate("items", pager=pages)])
 
     runner.run(walk())
     benchmark(lambda: runner.run(walk()))

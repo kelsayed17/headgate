@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import CallOptions, Client, HttpOptions, Timeouts, TransportPolicy, nothing
+from headgate import CallOptions, CallPolicy, Client, HttpOptions, Timeouts, nothing
 from headgate._options import httpx_timeout
 from headgate.testing import FakeTransport
 
@@ -34,7 +34,7 @@ def _client(*, timeout: Timeouts = _DEFAULTS, deadline: float | None = 60.0) -> 
     fake = FakeTransport().reply("GET", "/x", 200)
     return Client(
         base_url="https://api.example.test",
-        policy=TransportPolicy(deadline=deadline, timeout=timeout),
+        policy=CallPolicy(deadline=deadline, timeout=timeout),
         http=HttpOptions(transport=fake),
     )
 
@@ -136,7 +136,7 @@ async def test_no_limit_under_a_deadline_is_cut_to_the_time_left() -> None:
 
     client = Client(
         base_url="https://api.example.test",
-        policy=TransportPolicy(deadline=_SHORT),
+        policy=CallPolicy(deadline=_SHORT),
         http=HttpOptions(transport=httpx2.MockTransport(record)),
     )
     await client.get("x", expect=nothing, timeout=_NO_READ_LIMIT)

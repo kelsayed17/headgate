@@ -6,20 +6,20 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, assert_type, override
+from typing import TYPE_CHECKING, Any, assert_type, cast, override
 
 import httpx2
 import pytest
 
 from headgate import (
     BreakerPolicy,
+    CallPolicy,
     Client,
     ClientError,
     ClientTimeoutError,
     HttpOptions,
     Rate,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
 )
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
@@ -65,7 +65,7 @@ def _client(
         response_check=response_check,
         follow_redirects=response_check is None,
     )
-    return Client(base_url=_BASE, rate=_RATE, http=http)
+    return Client(base_url=_BASE, policy=CallPolicy(rate=_RATE), http=http)
 
 
 async def _drain(client: Client, on_chunk: Callable[[bytes], object] = len) -> None:
@@ -289,8 +289,7 @@ async def test_a_network_like_error_of_the_callers_own_is_not_the_streams(error:
     """Let an ``OSError`` or httpx2 error the block raises itself propagate unchanged, charging the host nothing."""
     client = Client(
         base_url=_BASE,
-        rate=_RATE,
-        policy=TransportPolicy(breaker=BreakerPolicy(failure_threshold=1)),
+        policy=CallPolicy(rate=_RATE, breaker=BreakerPolicy(failure_threshold=1)),
         http=HttpOptions(transport=httpx2.MockTransport(_answer(httpx2.Response(200, content=b"ok")))),
     )
     with pytest.raises(type(error)) as raised:
@@ -359,12 +358,13 @@ async def test_a_block_without_data_yields_nothing_but_its_id_is_kept() -> None:
 
 
 async def test_the_reconnection_time_is_the_last_the_server_set() -> None:
-    """Report ``None`` before any ``retry:``, then the last one read, a ``retry:`` alone included."""
-    body = _Body(b"data: a\n\n", b"retry: 5000\n\n", b"data: b\n\n")
+    """Report ``None`` before any ``retry:``, then the last one read, in seconds, a ``retry:`` alone included."""
+    body = _Body(b"data: a\n\n", b"retry: 2500\n\n", b"data: b\n\n")
     async with _client(_streaming(body, _SSE)).stream("events") as stream:
-        assert stream.retry is None
-        seen = [(event.data, event.retry, stream.retry) async for event in stream.aiter_events()]
-    assert seen == [("a", None, None), ("b", None, 5000)]
+        assert stream.reconnect_after is None
+        seen = [(event.data, event.retry, stream.reconnect_after) async for event in stream.aiter_events()]
+    assert seen == [("a", None, None), ("b", None, 2.5)]
+    assert not hasattr(stream, "retry")
 
 
 async def test_events_split_anywhere_across_chunks_parse_whole() -> None:
@@ -391,13 +391,19 @@ async def test_a_stream_resumes_after_the_last_event_id() -> None:
         return httpx2.Response(200, headers=_SSE, content=b"id: 41\ndata: x\n\n", request=request)
 
     client = _client(handle)
-    async with client.stream("events", headers={"x-trace": "1"}) as stream:
+    async with client.events("events", headers={"x-trace": "1"}) as stream:
         last = [event.id async for event in stream.aiter_events()][-1]
-    async with client.stream("events", last_event_id=last):
+    async with client.events("events", last_event_id=last):
         pass
-    async with client.stream("events", last_event_id=""):
+    async with client.events("events", last_event_id=""):
         pass
     assert seen == [None, "41", None]
+
+
+def test_stream_takes_no_last_event_id() -> None:
+    """Leave ``last_event_id=`` to ``events()``, the server-sent event entry, where ``stream()`` took it too."""
+    with pytest.raises(TypeError, match="last_event_id"):
+        _client(_answer(httpx2.Response(200))).stream("events", **cast("Any", {"last_event_id": "7"}))
 
 
 async def test_last_event_id_replaces_one_the_headers_set_in_another_case() -> None:
@@ -408,7 +414,7 @@ async def test_last_event_id_replaces_one_the_headers_set_in_another_case() -> N
         seen.append(request.headers.get_list("last-event-id"))
         return httpx2.Response(200, headers=_SSE, request=request)
 
-    async with _client(handle).stream("events", last_event_id="7", headers={"last-event-id": "3"}):
+    async with _client(handle).events("events", last_event_id="7", headers={"last-event-id": "3"}):
         pass
     assert seen == [["7"]]
 
@@ -453,8 +459,7 @@ async def test_a_stream_honors_the_policy_breaker() -> None:
     """Refuse to open a stream to a host whose breaker is open."""
     client = Client(
         base_url=_BASE,
-        rate=_RATE,
-        policy=TransportPolicy(),
+        policy=CallPolicy(rate=_RATE),
         http=HttpOptions(transport=httpx2.MockTransport(_answer(httpx2.Response(503)))),
     )
     for _ in range(BreakerPolicy().failure_threshold):
@@ -476,7 +481,7 @@ async def test_bytes_come_in_the_chunk_size_asked_for() -> None:
     """Re-chunk the body to *chunk_size* bytes when the caller asks for it."""
     client = _client(_answer(httpx2.Response(200, content=b"0123456789")))
     async with client.stream("f") as stream:
-        chunks = [chunk async for chunk in stream.aiter_bytes(_CHUNK)]
+        chunks = [chunk async for chunk in stream.aiter_bytes(chunk_size=_CHUNK)]
     assert chunks == [b"0123", b"4567", b"89"]
 
 

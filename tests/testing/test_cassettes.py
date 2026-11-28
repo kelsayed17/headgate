@@ -16,7 +16,7 @@ import httpx2
 import pytest
 import vcr
 
-from headgate import CachedTokenAuth, Client, HttpOptions, Minted, Rate, as_bytes
+from headgate import CachedTokenAuth, CallPolicy, Client, HttpOptions, Minted, Rate, as_bytes
 from headgate.testing import CassetteFilter
 from tests.support.tokens import premint
 
@@ -63,7 +63,7 @@ def _client(auth: CachedTokenAuth, cassettes: CassetteFilter, network: httpx2.Mo
     """Build a client signing with *auth* over *network*, with *cassettes* marking the auth's mints."""
     return Client(
         base_url=_BASE,
-        rate=Rate.per_second(1000),
+        policy=CallPolicy(rate=Rate.per_second(1000)),
         auth=auth,
         http=HttpOptions(transport=network),
         middleware=(cassettes,),

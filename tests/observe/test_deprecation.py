@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Deprecation (RFC 9745) and Sunset (RFC 8594) headers become one ``Deprecated`` event per call."""
+"""Deprecation (RFC 9745) and Sunset (RFC 8594) headers become one ``DeprecationNoticed`` event per call."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pytest
 
 from headgate import as_bytes, nothing
 from headgate._deprecation import parse_deprecation, parse_http_date
-from headgate.events import Deprecated
+from headgate.events import DeprecationNoticed
 from headgate.testing import FakeTransport
 from tests.observe._support import client
 from tests.support.events import Recorder
@@ -69,8 +69,8 @@ async def test_a_deprecated_endpoint_reports_its_date_sunset_and_links() -> None
     )
     await client(fake, recorder).get("old", expect=nothing)
 
-    (event,) = recorder.of(Deprecated)
-    assert event == Deprecated(
+    (event,) = recorder.of(DeprecationNoticed)
+    assert event == DeprecationNoticed(
         call=event.call,
         deprecated=True,
         deprecated_at=_WHEN,
@@ -97,7 +97,7 @@ async def test_link_relations_are_read_as_rfc_8288_writes_them(links: list[str])
     recorder = Recorder()
     await client(fake, recorder).get("old", expect=nothing)
 
-    (event,) = recorder.of(Deprecated)
+    (event,) = recorder.of(DeprecationNoticed)
     assert (event.link, event.sunset_link) == ("https://api.example.test/d", "https://api.example.test/d")
 
 
@@ -106,7 +106,7 @@ async def test_a_sunset_alone_is_reported_without_deprecation() -> None:
     fake, recorder = _headers_call({"Sunset": _SUNSET})
     await client(fake, recorder).get("old", expect=nothing)
 
-    (event,) = recorder.of(Deprecated)
+    (event,) = recorder.of(DeprecationNoticed)
     assert (event.deprecated, event.deprecated_at, event.sunset_at, event.link) == (False, None, _SUNSET_WHEN, None)
 
 
@@ -123,7 +123,7 @@ async def test_nothing_valid_announces_nothing(headers: dict[str, str]) -> None:
     """Emit no event without a valid ``Deprecation`` or ``Sunset`` header."""
     fake, recorder = _headers_call(headers)
     await client(fake, recorder).get("old", expect=nothing)
-    assert recorder.of(Deprecated) == []
+    assert recorder.of(DeprecationNoticed) == []
 
 
 async def test_a_streamed_call_reports_its_deprecation() -> None:
@@ -134,7 +134,7 @@ async def test_a_streamed_call_reports_its_deprecation() -> None:
         chunks = [chunk async for chunk in stream.aiter_bytes()]
 
     assert chunks == [b"a"]
-    (event,) = recorder.of(Deprecated)
+    (event,) = recorder.of(DeprecationNoticed)
     assert (event.deprecated, event.deprecated_at) == (True, None)
 
 
@@ -160,5 +160,5 @@ async def test_a_link_that_is_no_url_is_skipped(links: list[str], expected: str 
     recorder = Recorder()
     assert await client(fake, recorder).get("old", expect=as_bytes) == b"ok"
 
-    (event,) = recorder.of(Deprecated)
+    (event,) = recorder.of(DeprecationNoticed)
     assert (event.deprecated, event.link) == (True, expected)

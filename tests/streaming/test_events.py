@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, cast
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, Timeouts, TransportPolicy
+from headgate import CallPolicy, Client, HttpOptions, Timeouts
 
 if TYPE_CHECKING:
     from headgate.streaming import StreamOptions
@@ -44,7 +44,7 @@ def _client(recording: _Recording) -> Client:
     """Return a client over *recording*, with no deadline to cut the timeouts it sees."""
     return Client(
         base_url="https://api.example.test",
-        policy=TransportPolicy(deadline=None),
+        policy=CallPolicy(deadline=None),
         http=HttpOptions(transport=httpx2.MockTransport(recording)),
     )
 

@@ -3,17 +3,17 @@
   '''
   module headgate.breaker
   __all__ = ['BreakerRegistry', 'BreakerState', 'CircuitBreaker']
-  class BreakerRegistry(object)(*, max_hosts: 'int' = 1024, timing: 'Timing | None' = None) -> 'None'
-      def bind(self, *, failure_threshold: 'int', recovery_timeout: 'float') -> 'None'
-      def breaker_for(self, origin: 'httpx2.Origin | httpx2.URL | str', *, failure_threshold: 'int', recovery_timeout: 'float') -> 'CircuitBreaker'
+  class BreakerRegistry(object)(policy: 'BreakerPolicy' = BreakerPolicy(failure_threshold=5, recovery_timeout=60.0), *, max_hosts: 'int' = 1024) -> 'None'
+      def breaker_for(self, origin: 'httpx2.Origin | httpx2.URL | str') -> 'CircuitBreaker'
       def breakers(self, origin: 'httpx2.Origin | httpx2.URL | str | None' = None) -> 'tuple[CircuitBreaker, ...]'
       def clear(self) -> 'None'
       property max_hosts
+      property policy
   class BreakerState(StrEnum)(*values)
       CLOSED = 'closed'
       OPEN = 'open'
       HALF_OPEN = 'half_open'
-  class CircuitBreaker(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0, name: 'str' = '', timing: 'Timing | None' = None) -> 'None'
+  class CircuitBreaker(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0, name: 'str' = '') -> 'None'
       property failure_count
       property failure_threshold
       property name
@@ -32,7 +32,7 @@
       field validator: Validator
   class NotModified(object)(validator: 'Validator') -> 'None'
       field validator: Validator
-  class Partition(Enum)(*values)
+  class Partition(StrEnum)(*values)
       CREDENTIAL = 'credential'
       SHARED = 'shared'
   class Validator(object)(*, etag: 'str | None' = None, last_modified: 'str | None' = None) -> 'None'
@@ -79,7 +79,7 @@
       field detail: str | None = None
       field instance: str | None = None
       field extensions: Mapping[str, object] = <factory>
-  class RefusedError(Exception)(message: 'str', *, code: 'str | None' = None, kind: 'type[UpstreamStatusError]' = <class 'headgate.errors.UpstreamStatusError'>) -> 'None'
+  class RefusedError(Exception)(message: 'str', *, code: 'str | None' = None, kind: 'type[UpstreamStatusError]' = <class 'headgate.UpstreamStatusError'>) -> 'None'
       property code
       property kind
       property message
@@ -92,7 +92,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.events]
   '''
   module headgate.events
-  __all__ = ['AttemptFinished', 'BreakerChanged', 'CacheOutcome', 'CacheResult', 'CallEvent', 'CallFinished', 'CallInfo', 'CallStarted', 'CallView', 'Deprecated', 'Event', 'Observer', 'RateLimited', 'RetryScheduled']
+  __all__ = ['AttemptFinished', 'BreakerChanged', 'CacheChecked', 'CacheOutcome', 'CallEvent', 'CallFinished', 'CallInfo', 'CallStarted', 'CallView', 'DeprecationNoticed', 'Event', 'Observer', 'RateLimited', 'RetryScheduled']
   class AttemptFinished(CallEvent)(*, call: 'CallInfo', attempt: 'int', status_code: 'int | None' = None, error: 'str | None' = None, elapsed: 'float') -> 'None'
       field call: CallInfo
       field attempt: int
@@ -105,14 +105,14 @@
       field state: BreakerState
       field failures: int
       field call: CallInfo | None = None
+  class CacheChecked(CallEvent)(*, call: 'CallInfo', outcome: 'CacheOutcome') -> 'None'
+      field call: CallInfo
+      field outcome: CacheOutcome
   class CacheOutcome(StrEnum)(*values)
       HIT = 'hit'
       MISS = 'miss'
-      SHARED = 'shared'
+      COALESCED = 'coalesced'
       DEGRADED = 'degraded'
-  class CacheResult(CallEvent)(*, call: 'CallInfo', outcome: 'CacheOutcome') -> 'None'
-      field call: CallInfo
-      field outcome: CacheOutcome
   class CallEvent(object)(*, call: 'CallInfo') -> 'None'
       field call: CallInfo
   class CallFinished(CallEvent)(*, call: 'CallInfo', status_code: 'int | None' = None, error: 'str | None' = None, attempts: 'int', elapsed: 'float') -> 'None'
@@ -121,11 +121,11 @@
       field error: str | None = None
       field attempts: int
       field elapsed: float
-  class CallInfo(object)(*, method: 'str', url: 'str', route: 'str | None' = None, full_url: 'str | None' = None, call_id: 'int' = <factory>) -> 'None'
+  class CallInfo(object)(*, method: 'str', url: 'str', full_url: 'str', template: 'str | None' = None, call_id: 'int' = <factory>) -> 'None'
       field method: str
       field url: str
-      field route: str | None = None
-      field full_url: str | None = None
+      field full_url: str
+      field template: str | None = None
       field call_id: int = <factory>
   class CallStarted(CallEvent)(*, call: 'CallInfo') -> 'None'
       field call: CallInfo
@@ -133,14 +133,14 @@
       field call: CallInfo
       field attempt: int
       field remaining: float | None
-  class Deprecated(CallEvent)(*, call: 'CallInfo', deprecated: 'bool' = False, deprecated_at: 'datetime | None' = None, sunset_at: 'datetime | None' = None, link: 'str | None' = None, sunset_link: 'str | None' = None) -> 'None'
+  class DeprecationNoticed(CallEvent)(*, call: 'CallInfo', deprecated: 'bool' = False, deprecated_at: 'datetime | None' = None, sunset_at: 'datetime | None' = None, link: 'str | None' = None, sunset_link: 'str | None' = None) -> 'None'
       field call: CallInfo
       field deprecated: bool = False
       field deprecated_at: datetime | None = None
       field sunset_at: datetime | None = None
       field link: str | None = None
       field sunset_link: str | None = None
-  type Event = CallStarted | AttemptFinished | RetryScheduled | RateLimited | BreakerChanged | CacheResult | Deprecated | CallFinished
+  type Event = CallStarted | AttemptFinished | RetryScheduled | RateLimited | BreakerChanged | CacheChecked | DeprecationNoticed | CallFinished
   class Observer(Protocol)(*args, **kwargs)
       def notify(self, event: 'Event') -> 'None'
   class RateLimited(CallEvent)(*, call: 'CallInfo', delay: 'float', reason: 'str') -> 'None'
@@ -194,7 +194,8 @@
   '''
   module headgate.pagination
   __all__ = ['BodyCursor', 'BodyOffset', 'Cursor', 'Link', 'LinkHeader', 'NextUrl', 'Offset', 'PageNumber', 'PageRequest', 'Pager', 'WritingPager', 'parse_link_header']
-  class BodyCursor(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+  class BodyCursor(WritingPager, Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', put: 'Callable[[B, str], B]', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+      field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field put: Callable[[B, str], B]
@@ -203,7 +204,8 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class BodyOffset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]', total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
+  class BodyOffset(WritingPager, Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', page_size: 'int', offset: 'Callable[[B], int]', put: 'Callable[[B, int], B]', total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
+      field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field offset: Callable[[B], int]
@@ -213,7 +215,8 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Cursor(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+  class Cursor(WritingPager, Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', param: 'str', write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+      field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field param: str
@@ -226,20 +229,23 @@
       field target: str
       field params: Mapping[str, str]
       property rels
-  class LinkHeader(Generic)(*, items: 'Callable[[P], Sequence[I]]', stop_on_empty: 'bool' = True) -> 'None'
+  class LinkHeader(Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', stop_on_empty: 'bool' = True) -> 'None'
+      field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
       field stop_on_empty: bool = True
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class NextUrl(Generic)(*, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', stop_on_empty: 'bool' = True) -> 'None'
+  class NextUrl(Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', next: 'Callable[[P], str | None]', stop_on_empty: 'bool' = True) -> 'None'
+      field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
       field next: Callable[[P], str | None]
       field stop_on_empty: bool = True
       def first(self, request: 'PageRequest') -> 'PageRequest'
       def next_page(self, page: 'P', request: 'PageRequest', response: 'httpx2.Response') -> 'PageRequest | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class Offset(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', size_param: 'str | None' = None, start: 'int' = 0, total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
+  class Offset(WritingPager, Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', page_size: 'int', param: 'str' = 'offset', size_param: 'str | None' = None, start: 'int' = 0, total: 'Callable[[P], int | None] | None' = None, write: 'Writer[B] | None' = None) -> 'None'
+      field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
       field page_size: int
       field param: str = 'offset'
@@ -250,7 +256,8 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class PageNumber(WritingPager, Generic)(*, items: 'Callable[[P], Sequence[I]]', more: 'Callable[[P], bool]', param: 'str' = 'page', start: 'int' = 1, write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+  class PageNumber(WritingPager, Generic)(read: 'Reader[P] | Expect[P]', *, items: 'Callable[[P], Sequence[I]]', more: 'Callable[[P], bool]', param: 'str' = 'page', start: 'int' = 1, write: 'Writer[B] | None' = None, stop_on_empty: 'bool' = True) -> 'None'
+      field read: Reader[P] | Expect[P]
       field items: Callable[[P], Sequence[I]]
       field more: Callable[[P], bool]
       field param: str = 'page'
@@ -260,21 +267,21 @@
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Sequence[I]'
-  class PageRequest(Generic)(url: 'CallUrl', params: 'Mapping[str, object] | None' = None, body: 'B | None' = None) -> 'None'
+  class PageRequest(Generic)(url: 'CallUrl', params: 'Mapping[str, object] | None' = None, payload: 'B | None' = None) -> 'None'
       field url: CallUrl
       field params: Mapping[str, object] | None = None
-      field body: B | None = None
-      def with_body(self, body: 'B') -> 'PageRequest[B]'
+      field payload: B | None = None
       def with_param(self, name: 'str', value: 'object') -> 'PageRequest[B]'
+      def with_payload(self, payload: 'B') -> 'PageRequest[B]'
   class Pager(Protocol)(*args, **kwargs)
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Iterable[I]'
-  class WritingPager(Pager, ABC, Generic)(*args, **kwargs)
+      property read
+  class WritingPager(ABC, Generic)()
       def first(self, request: 'PageRequest[B]') -> 'PageRequest[B]'
       def next_page(self, page: 'P', request: 'PageRequest[B]', response: 'httpx2.Response') -> 'PageRequest[B] | None'
       def page_items(self, page: 'P') -> 'Iterable[I]'
-      property write
   def parse_link_header(value: 'str') -> 'list[Link]'
   '''
 # ---
@@ -326,7 +333,7 @@
   class Hedge(object)(*, after: 'float' = 0.5, max_extra: 'int' = 1) -> 'None'
       field after: float = 0.5
       field max_extra: int = 1
-  class RetryBudget(object)(share: 'RetryShare' = RetryShare(ratio=0.2, min_per_second=10.0, window=10.0), *, timing: 'Timing | None' = None) -> 'None'
+  class RetryBudget(object)(share: 'RetryShare' = RetryShare(ratio=0.2, min_per_second=10.0, window=10.0)) -> 'None'
       def record_first(self) -> 'None'
       def refund(self) -> 'None'
       property share
@@ -361,13 +368,13 @@
   __all__ = ['DEFAULT_MAX_EVENT_SIZE', 'Stream', 'StreamOptions']
   DEFAULT_MAX_EVENT_SIZE = 1048576
   class Stream(Protocol)(*args, **kwargs)
-      def aiter_bytes(self, chunk_size: 'int | None' = None) -> 'AsyncIterator[bytes]'
+      def aiter_bytes(self, *, chunk_size: 'int | None' = None) -> 'AsyncIterator[bytes]'
       def aiter_events(self, *, max_event_size: 'int | None' = 1048576) -> 'AsyncIterator[httpx2.ServerSentEvent]'
       def aiter_lines(self, *, max_line_size: 'int | None' = 1048576) -> 'AsyncIterator[str]'
       property headers
       property last_event_id
+      property reconnect_after
       property request_id
-      property retry
       property status_code
   class StreamOptions(dict)(no signature)
       closed
@@ -410,7 +417,7 @@
       field response: httpx2.Response | None = None
       field response_closed: bool | None = None
       field error: Exception | None = None
-  class FaultyTransport(AsyncBaseTransport)(*, schedule: 'list[Step]', sleep: 'Callable[[float], Awaitable[None]]' = <function sleep at 0x…>) -> 'None'
+  class FaultyTransport(AsyncBaseTransport)(*, schedule: 'list[Step]') -> 'None'
       def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
   class PoolFull(object)() -> 'None'
   class RecordedRequest(Protocol)(*args, **kwargs)
@@ -465,7 +472,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['Auth', 'AuthError', 'BearerAuth', 'Body', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'Client', 'ClientError', 'ClientTimeoutError', 'Codec', 'EncodedBody', 'Expect', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'Paginated', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_json', 'body_reader', 'call_info', 'decode_with', 'event_stream', 'nothing', 'reader_for', 'writer_for']
+  __all__ = ['Auth', 'AuthError', 'BearerAuth', 'Body', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CallPolicy', 'Client', 'ClientError', 'ClientTimeoutError', 'Codec', 'EncodedBody', 'Expect', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'Paginated', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_events', 'as_json', 'as_text', 'body_reader', 'call_view', 'decode_with', 'nothing', 'reader_for', 'writer_for']
   class Auth(Auth, ABC)()
       property credential_headers
       def credential_identity(self) -> 'bytes'
@@ -473,10 +480,9 @@
   class AuthError(UpstreamStatusError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
   class BearerAuth(StaticHeaderAuth)(token: 'str') -> 'None'
   type Body = EncodedBody | Json | Form | Multipart | Raw
-  class BreakerPolicy(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0, registry: 'BreakerRegistry | None' = None) -> 'None'
+  class BreakerPolicy(object)(*, failure_threshold: 'int' = 5, recovery_timeout: 'float' = 60.0) -> 'None'
       field failure_threshold: int = 5
       field recovery_timeout: float = 60.0
-      field registry: BreakerRegistry | None = None
   class CachedTokenAuth(Auth, Generic)()
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
       def attach(self, request: 'httpx2.Request', token: 'TokenT') -> 'None'
@@ -496,20 +502,28 @@
       key idempotency_key: str (optional)
       key cache_ttl: float | None (optional)
       key max_response_bytes: int (optional)
-  class Client(object)(*, base_url: 'str', rate: 'Rate | RateBudget | None' = None, auth: 'Auth | None' = None, policy: 'TransportPolicy' = TransportPolicy(retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryShare(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), timeout=Timeouts(connect=None, read=None, write=None, pool=None), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0, registry=None), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, response_check=None, security=SecurityOptions(trusted_origins=frozenset(), block_private_hosts=False, resolver=None), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')), observers: 'Sequence[Observer]' = (), middleware: 'Sequence[Middleware]' = ()) -> 'None'
+  class CallPolicy(object)(*, rate: 'Rate | RateBudget | None' = None, retry: 'RetryPolicy | None' = <factory>, timeout: 'Timeouts' = <factory>, deadline: 'float | None' = 60.0, breaker: 'BreakerPolicy | BreakerRegistry | None' = <factory>, cache: 'HttpCache | None' = None, idempotency: 'IdempotencyKeys | None' = None, routes: 'tuple[Route, ...]' = ()) -> 'None'
+      field rate: Rate | RateBudget | None = None
+      field retry: RetryPolicy | None = <factory>
+      field timeout: Timeouts = <factory>
+      field deadline: float | None = 60.0
+      field breaker: BreakerPolicy | BreakerRegistry | None = <factory>
+      field cache: HttpCache | None = None
+      field idempotency: IdempotencyKeys | None = None
+      field routes: tuple[Route, ...] = ()
+  class Client(object)(*, base_url: 'str', auth: 'Auth | None' = None, policy: 'CallPolicy' = CallPolicy(rate=None, retry=RetryPolicy(attempts=3, methods=frozenset({'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT', 'QUERY'}), statuses=frozenset({408, 425, 429, 500, 502, 503, 504}), backoff=Backoff(factor=0.5, max_wait=5.0), max_retry_after=30.0, budget=RetryShare(ratio=0.2, min_per_second=10.0, window=10.0), respect_should_retry=True, hedge=None, min_attempt_time=0.05), timeout=Timeouts(connect=None, read=None, write=None, pool=None), deadline=60.0, breaker=BreakerPolicy(failure_threshold=5, recovery_timeout=60.0), cache=None, idempotency=None, routes=()), http: 'HttpOptions' = HttpOptions(transport=None, headers=mappingproxy({}), follow_redirects=True, max_redirects=5, max_response_bytes=33554432, response_check=None, security=SecurityOptions(trusted_origins=frozenset(), block_private_hosts=False, resolver=None), ssl_context=None, limits=Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0), proxy=None, user_agent=None, cookies=False, request_id_headers=('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')), observers: 'Sequence[Observer]' = (), middleware: 'Sequence[Middleware]' = ()) -> 'None'
       def aclose(self) -> 'None'
       def delete(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def events(self, url: 'CallUrl', *, last_event_id: 'str | None' = None, **options: 'Unpack[StreamOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
       def get(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[CallOptions]') -> 'T'
       def head(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[CallOptions]') -> 'T'
-      def head(self, url: 'CallUrl', **options: 'Unpack[CallOptions]') -> 'None'
-      def paginate(self, url: 'CallUrl', *, expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, None]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
-      def paginate(self, url: 'CallUrl', *, query: 'B | None', expect: 'Reader[P] | Expect[P]', pages: 'Pager[P, I, B]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
+      def paginate(self, url: 'CallUrl', *, pager: 'Pager[I, P, None]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
+      def paginate(self, url: 'CallUrl', *, payload: 'B | None', pager: 'Pager[I, P, B]', max_pages: 'int | None' = None, on_limit: "Literal['raise', 'stop']" = 'raise', **options: 'Unpack[CallOptions]') -> 'Paginated[I, P]'
       def patch(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def post(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def put(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
       def query(self, url: 'CallUrl', *, expect: 'Reader[T] | Expect[T]', **options: 'Unpack[RequestOptions]') -> 'T'
-      def stream(self, url: 'CallUrl', *, method: 'Method' = 'GET', last_event_id: 'str | None' = None, **options: 'Unpack[StreamOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
+      def stream(self, url: 'CallUrl', *, method: 'Method' = 'GET', **options: 'Unpack[StreamOptions]') -> 'contextlib.AbstractAsyncContextManager[Stream]'
       def with_options(self, **options: 'Unpack[ViewOptions]') -> 'Self'
   class ClientError(Exception)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
       property attempts
@@ -530,21 +544,21 @@
   class EncodedBody(object)(content: 'bytes', content_type: 'str' = 'application/json') -> 'None'
       field content: bytes
       field content_type: str = 'application/json'
-  class Expect(Generic)(ok: 'Reader[T]', answers: 'Mapping[int, Reader[T]]' = <factory>, *, headers: 'Mapping[str, str]' = <factory>, accept: 'str | None' = None) -> 'None'
-      field ok: Reader[T]
-      field answers: Mapping[int, Reader[T]] = <factory>
-      field headers: Mapping[str, str] = <factory>
-      field accept: str | None = None
+  class Expect(Generic)(ok: 'Reader[T]', *, headers: 'Mapping[str, str]' = mappingproxy({}), accept: 'str | None' = None) -> 'None'
+      property accept
+      property answers
+      property headers
+      property ok
       def on(self, status: 'int', read: 'Reader[E]') -> 'Expect[T | E]'
   class Form(object)(fields: 'Mapping[str, object]') -> 'None'
       field fields: Mapping[str, object]
-  class HttpCache(object)(*, storage: 'AsyncBaseStorage', ttl: 'float | None' = None, partition: 'Partition' = <Partition.CREDENTIAL: 'credential'>, methods: 'Collection[str] | None' = None, paths: 'Collection[str | re.Pattern[str]] | None' = None, statuses: 'Collection[int] | None' = None) -> 'None'
+  class HttpCache(object)(*, storage: 'AsyncBaseStorage', ttl: 'float | None' = None, partition: 'Partition' = <Partition.CREDENTIAL: 'credential'>, methods: 'Collection[str]' = frozenset({'GET'}), paths: 'Collection[str | re.Pattern[str]] | None' = None, statuses: 'Collection[int]' = frozenset({200})) -> 'None'
       field storage: AsyncBaseStorage
       field ttl: float | None = None
       field partition: Partition = <Partition.CREDENTIAL: 'credential'>
-      field methods: Collection[str] | None = None
+      field methods: Collection[str] = frozenset({'GET'})
       field paths: Collection[str | re.Pattern[str]] | None = None
-      field statuses: Collection[int] | None = None
+      field statuses: Collection[int] = frozenset({200})
       def caches_request(self, method: 'str', path: 'str') -> 'bool'
       def stores_status(self, status: 'int') -> 'bool'
   class HttpOptions(object)(*, transport: 'httpx2.AsyncBaseTransport | None' = None, headers: 'Mapping[str, str]' = <factory>, follow_redirects: 'bool' = True, max_redirects: 'int' = 5, max_response_bytes: 'int' = 33554432, response_check: 'ResponseCheck | None' = None, security: 'SecurityOptions' = <factory>, ssl_context: 'ssl.SSLContext | None' = None, limits: 'httpx2.Limits' = <factory>, proxy: 'str | None' = None, user_agent: 'str | None' = None, cookies: 'bool' = False, request_id_headers: 'tuple[str, ...]' = ('x-request-id', 'request-id', 'x-amzn-requestid', 'x-ms-request-id', 'cf-ray')) -> 'None'
@@ -577,7 +591,7 @@
       field fields: Mapping[str, object] = <factory>
       property replayable
   type Next = Callable[[httpx2.Request], Awaitable[httpx2.Response]]
-  class Paginated(Protocol)(*args, **kwargs)
+  class Paginated(Generic)(pages: 'Callable[[], AsyncIterator[P]]', items_of: 'Callable[[P], Iterable[I]]', /) -> 'None'
       def collect(self, *, max_items: 'int | None' = None) -> 'list[I]'
       def pages(self) -> 'AsyncIterator[P]'
   class QueryParamAuth(Auth)(params: 'Mapping[str, str]') -> 'None'
@@ -593,7 +607,7 @@
       classmethod per_hour(cls, requests: 'float') -> 'Rate'
       classmethod per_minute(cls, requests: 'float') -> 'Rate'
       classmethod per_second(cls, requests: 'float') -> 'Rate'
-  class RateBudget(object)(rate: 'Rate', *, max_in_flight: 'int | None' = None, adaptive: 'Adaptive | None' = Adaptive(decrease=0.5, increase=0.1, min_rate=0.1), timing: 'Timing | None' = None) -> 'None'
+  class RateBudget(object)(rate: 'Rate', *, max_in_flight: 'int | None' = None, adaptive: 'Adaptive | None' = Adaptive(decrease=0.5, increase=0.1, min_rate=0.1)) -> 'None'
       property adaptive
       property effective_rate
       property in_flight
@@ -636,6 +650,7 @@
   class RouteOptions(dict)(no signature)
       closed
       key retry: RetryPolicy | None (optional)
+      key timeout: Timeouts (optional)
       key deadline: float | None (optional)
       key rate: Rate | RateBudget | None (optional)
       key cache: None (optional)
@@ -660,14 +675,6 @@
       field pool: float | None = None
       def over(self, base: 'Timeouts') -> 'Timeouts'
   class TransportError(ClientError)(message: 'str', **details: 'Unpack[ErrorDetails]') -> 'None'
-  class TransportPolicy(object)(*, retry: 'RetryPolicy | None' = <factory>, timeout: 'Timeouts' = <factory>, deadline: 'float | None' = 60.0, breaker: 'BreakerPolicy | None' = <factory>, cache: 'HttpCache | None' = None, idempotency: 'IdempotencyKeys | None' = None, routes: 'tuple[Route, ...]' = ()) -> 'None'
-      field retry: RetryPolicy | None = <factory>
-      field timeout: Timeouts = <factory>
-      field deadline: float | None = 60.0
-      field breaker: BreakerPolicy | None = <factory>
-      field cache: HttpCache | None = None
-      field idempotency: IdempotencyKeys | None = None
-      field routes: tuple[Route, ...] = ()
   class UpstreamStatusError(ClientError)(message: 'str', *, status_code: 'int | None', code: 'str | None' = None, body: 'str | None' = None, problem: 'Problem | None' = None, **details: 'Unpack[ErrorDetails]') -> 'None'
       property code
       property problem
@@ -681,11 +688,12 @@
       key follow_redirects: bool (optional)
   type Writer[T] = Callable[[T], EncodedBody]
   as_bytes: Reader[bytes] = Reader(as_bytes)
+  as_events: Reader[list[httpx2.ServerSentEvent]] = Reader(as_events)
   as_json: Reader[object] = Reader(as_json)
+  as_text: Reader[str] = Reader(as_text)
   def body_reader(decode: 'Callable[[bytes], T]', /, *, empty: 'bytes | None' = None, refuse: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
-  def call_info(request: 'httpx2.Request') -> 'CallView | None'
+  def call_view(request: 'httpx2.Request') -> 'CallView | None'
   def decode_with(codec: 'Codec', content: 'bytes', type_: 'TypeForm[T]') -> 'T'
-  event_stream: Reader[list[httpx2.ServerSentEvent]] = Reader(event_stream)
   nothing: Reader[None] = Reader(nothing)
   def reader_for(codec: 'Codec', type_: 'TypeForm[T]', *, allow_empty_body: 'bool' = False, refuse: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
   def writer_for(codec: 'Codec', type_: 'TypeForm[T]') -> 'Writer[T]'

@@ -17,15 +17,14 @@ import headgate
 import headgate.errors
 import headgate.msgspec
 import headgate.pydantic
-from headgate import Client, Expect, HttpOptions, Reader, as_bytes, body_reader, event_stream, nothing, reader_for
+from headgate import Client, Expect, HttpOptions, Reader, as_bytes, as_events, as_text, body_reader, nothing, reader_for
 from headgate.cache import conditional
+from headgate.errors import ResponseParseError
 from headgate.msgspec import CODEC
 from headgate.testing import FakeTransport
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-
-    from headgate.pagination import PageRequest
 
 
 class Order(msgspec.Struct, frozen=True):
@@ -115,13 +114,30 @@ def test_the_old_builders_are_gone() -> None:
 
 
 def test_stock_readers_are_readers() -> None:
-    """Ship ``nothing``, ``as_bytes`` and ``event_stream`` as readers, each named after itself."""
+    """Ship ``nothing``, ``as_bytes``, ``as_text`` and ``as_events`` as readers, each named after itself."""
     assert isinstance(nothing, Reader)
     assert isinstance(as_bytes, Reader)
-    assert isinstance(event_stream, Reader)
+    assert isinstance(as_text, Reader)
+    assert isinstance(as_events, Reader)
     assert repr(nothing) == "Reader(nothing)"
     assert repr(as_bytes) == "Reader(as_bytes)"
-    assert repr(event_stream) == "Reader(event_stream)"
+    assert repr(as_text) == "Reader(as_text)"
+    assert repr(as_events) == "Reader(as_events)"
+    assert not hasattr(headgate, "event_stream")
+
+
+@pytest.mark.parametrize(
+    ("content_type", "body", "text"),
+    [
+        ("text/plain; charset=iso-8859-1", "naïve".encode("latin-1"), "naïve"),
+        ("text/plain; charset=utf-8", "naïve".encode(), "naïve"),
+        ("text/csv", b"a,b\n1,2\n", "a,b\n1,2\n"),
+    ],
+    ids=["latin-1", "utf-8", "no-charset"],
+)
+def test_as_text_decodes_with_the_charset(content_type: str, body: bytes, text: str) -> None:
+    """Return the body as text, decoded by the response's own ``charset``."""
+    assert as_text(httpx2.Response(200, headers={"content-type": content_type}, content=body)) == text
 
 
 @_NOT_READERS
@@ -129,11 +145,10 @@ def test_stock_readers_are_readers() -> None:
     ("build", "option"),
     [
         (Expect, "ok= takes a Reader"),
-        (lambda value: Expect(nothing, {404: value}), "answers= takes a Reader for each status"),
         (lambda value: Expect(nothing).on(404, value), "read= takes a Reader"),
         (conditional, "reader= takes a Reader"),
     ],
-    ids=["ok", "answers", "on", "conditional"],
+    ids=["ok", "on", "conditional"],
 )
 def test_expect_refuses_a_callable_that_is_not_a_reader(
     build: Callable[[Any], object], option: str, value: object, named: str
@@ -144,21 +159,6 @@ def test_expect_refuses_a_callable_that_is_not_a_reader(
     assert str(caught.value) == f"{option} (got {named})"
 
 
-class _FirstRaises:
-    """Just enough of a pager to fail when asked for its first page, so a walk that asks it fails."""
-
-    def first(self, request: PageRequest[None]) -> PageRequest[None]:
-        """Fail: ``paginate`` must check its ``expect=`` before it runs the pager."""
-        del request
-        msg = "the pager ran before expect= was checked"
-        raise AssertionError(msg)
-
-
-async def _paginate(client: Client, expect: Reader[object]) -> object:
-    """Start a walk read through *expect*, whose pager fails if it is asked for a page."""
-    return client.paginate("x", expect=expect, pages=cast("Any", _FirstRaises()))
-
-
 #: Each call that takes ``expect=``, given one.
 _CALLS: dict[str, Callable[[Client, Any], Awaitable[object]]] = {
     "get": lambda c, e: c.get("x", expect=e),
@@ -167,17 +167,40 @@ _CALLS: dict[str, Callable[[Client, Any], Awaitable[object]]] = {
     "patch": lambda c, e: c.patch("x", expect=e),
     "delete": lambda c, e: c.delete("x", expect=e),
     "head": lambda c, e: c.head("x", expect=e),
-    "paginate": _paginate,
 }
 
 
 @_NOT_READERS
 @pytest.mark.parametrize("verb", list(_CALLS))
 async def test_every_call_refuses_a_non_reader_expect(verb: str, value: object, named: str) -> None:
-    """Refuse a non-reader ``expect=`` where the call is made, before the pager runs or anything is sent."""
+    """Refuse a non-reader ``expect=`` where the call is made, before anything is sent."""
     fake = FakeTransport()
     async with Client(base_url="https://api.test", http=HttpOptions(transport=fake)) as client:
         with pytest.raises(TypeError) as caught:
             await _CALLS[verb](client, cast("Any", value))
     assert str(caught.value) == f"expect= takes a Reader or an Expect (got {named})"
     assert not fake.calls
+
+
+@pytest.mark.parametrize("charset", ["base64", "rot13", "no-such-charset"])
+def test_as_text_reads_a_charset_that_names_no_text_encoding_as_utf_8(charset: str) -> None:
+    """Read UTF-8 where the ``charset`` decodes no text, as ``aiter_lines`` does, where ``response.text`` raises."""
+    content_type = f"text/plain; charset={charset}"
+    assert as_text(httpx2.Response(200, headers={"content-type": content_type}, content="naïve".encode())) == "naïve"
+
+
+@pytest.mark.parametrize("content_type", ["text/plain", "text/plain; charset=utf-8", "text/plain; charset=latin-1"])
+def test_as_text_strips_a_leading_byte_order_mark(content_type: str) -> None:
+    """Drop a UTF-8 byte order mark and read the rest as UTF-8, which the mark says it is, whatever the charset."""
+    body = b"\xef\xbb\xbf" + "naïve".encode()
+    assert as_text(httpx2.Response(200, headers={"content-type": content_type}, content=body)) == "naïve"
+
+
+async def test_as_text_reports_a_body_its_charset_cannot_decode() -> None:
+    """Raise ``ResponseParseError`` for a UTF-16 body without a byte order mark, which UTF-16 cannot decode at all."""
+    fake = FakeTransport().reply(
+        "GET", "/x", httpx2.Response(200, headers={"content-type": "text/plain; charset=utf-16"}, content=b"h\x00i\x00")
+    )
+    async with Client(base_url="https://api.test", http=HttpOptions(transport=fake)) as client:
+        with pytest.raises(ResponseParseError, match="utf-16"):
+            await client.get("x", expect=as_text)

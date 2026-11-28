@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Client, ClientError, HttpOptions, QueryParamAuth, Rate, RetryPolicy, TransportPolicy
+from headgate import CallPolicy, Client, ClientError, HttpOptions, QueryParamAuth, Rate, RetryPolicy
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
@@ -32,7 +32,7 @@ async def _raised(client: Client, param: str) -> ClientError:
 @pytest.mark.parametrize("case", ["429", "500", "404", "transport"])
 async def test_secret_query_param_never_in_error(httpx2_mock: HTTPXMock, param: str, case: str) -> None:
     """Keep the credential out of the message and the repr, for every way a request can fail."""
-    client = Client(rate=_RATE, base_url=_BASE_URL, policy=TransportPolicy(retry=RetryPolicy(attempts=2)))
+    client = Client(base_url=_BASE_URL, policy=CallPolicy(rate=_RATE, retry=RetryPolicy(attempts=2)))
     if case == "transport":
         httpx2_mock.add_exception(httpx2.ConnectError("boom"), is_reusable=True)
     else:
@@ -47,7 +47,7 @@ async def test_common_credential_names_are_redacted_whatever_their_case_or_separ
     httpx2_mock: HTTPXMock, param: str
 ) -> None:
     """Redact a listed name whatever its case or separator."""
-    client = Client(rate=_RATE, base_url=_BASE_URL, policy=TransportPolicy(retry=RetryPolicy(attempts=1)))
+    client = Client(base_url=_BASE_URL, policy=CallPolicy(rate=_RATE, retry=RetryPolicy(attempts=1)))
     httpx2_mock.add_response(status_code=429, text="slow", is_reusable=True)
     error = await _raised(client, param)
     assert _CREDENTIAL_VALUE not in str(error)
@@ -56,9 +56,8 @@ async def test_common_credential_names_are_redacted_whatever_their_case_or_separ
 async def test_a_name_the_auth_declares_is_redacted_even_if_unlisted(httpx2_mock: HTTPXMock) -> None:
     """Redact a name a ``QueryParamAuth`` injects, though no list names it."""
     client = Client(
-        rate=_RATE,
         base_url=_BASE_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
+        policy=CallPolicy(rate=_RATE, retry=RetryPolicy(attempts=1)),
         auth=QueryParamAuth({"zz_custom_credential": _CREDENTIAL_VALUE}),
     )
     httpx2_mock.add_response(status_code=503, text="down", is_reusable=True)
@@ -76,9 +75,8 @@ async def test_a_transport_message_that_echoes_the_url_is_redacted() -> None:
         raise httpx2.RemoteProtocolError(msg)
 
     client = Client(
-        rate=_RATE,
         base_url=_BASE_URL,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
+        policy=CallPolicy(rate=_RATE, retry=RetryPolicy(attempts=1)),
         http=HttpOptions(transport=httpx2.MockTransport(handler)),
     )
     with pytest.raises(ClientError) as info:

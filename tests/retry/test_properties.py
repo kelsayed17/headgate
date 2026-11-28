@@ -41,6 +41,7 @@ from headgate.testing import (
     TestClock,
 )
 from headgate.timing import Timing
+from tests.support.timing import built_on
 
 if TYPE_CHECKING:
     from headgate.testing import Step
@@ -146,13 +147,14 @@ async def _run(scenario: _Scenario) -> _Run:
         sleeps.append((clock(), seconds))
         await clock.sleep(seconds)
 
-    network = FaultyTransport(schedule=scenario.schedule, sleep=clock.sleep)
+    network = built_on(clock.timing, lambda: FaultyTransport(schedule=scenario.schedule))
     timed = _Timed(network, clock)
     policy = RetryPolicy(
         attempts=scenario.attempts,
         backoff=Backoff(),
-        budget=RetryBudget(
-            RetryShare(ratio=_RATIO, min_per_second=scenario.floor, window=_WINDOW), timing=Timing(clock=_frozen)
+        budget=built_on(
+            Timing(clock=_frozen),
+            lambda: RetryBudget(RetryShare(ratio=_RATIO, min_per_second=scenario.floor, window=_WINDOW)),
         ),
     )
     timing = Timing(clock=clock, sleep=retry_sleep, random=lambda: scenario.jitter)
@@ -161,7 +163,9 @@ async def _run(scenario: _Scenario) -> _Run:
         scenario.method, "https://api.test/orders", json={"qty": 1}, extensions={"timeout": dict(_TIMEOUTS)}
     )
     context = CallContext(
-        CallInfo(method=scenario.method, url="https://api.test/orders"), clock=clock, deadline_after=scenario.deadline
+        CallInfo(method=scenario.method, url="https://api.test/orders", full_url="https://api.test/orders"),
+        clock=clock,
+        deadline_after=scenario.deadline,
     )
     context.idempotency_key = "order-1" if scenario.keyed else None
     context.attach(request)

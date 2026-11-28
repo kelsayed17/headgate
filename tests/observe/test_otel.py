@@ -21,7 +21,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import SpanContext, SpanKind, StatusCode, format_span_id, format_trace_id
 
-from headgate import HttpOptions, QueryParamAuth, TransportError, TransportPolicy, UpstreamStatusError, nothing
+from headgate import CallPolicy, HttpOptions, QueryParamAuth, TransportError, UpstreamStatusError, nothing
 from headgate._user_agent import headgate_version
 from headgate.errors import ResponseParseError
 from headgate.events import AttemptFinished, CallFinished, CallInfo, CallStarted, RetryScheduled
@@ -173,9 +173,9 @@ async def test_a_transport_failure_is_named_by_its_error_class(telemetry: Teleme
     """Report a failure without a status as the ``ClientError`` class the call raised."""
     fake = FakeTransport().reply("GET", "/v1/x", _refuse)
     with pytest.raises(TransportError):
-        await client(
-            fake, telemetry.observer, policy=TransportPolicy(retry=None), middleware=(telemetry.observer,)
-        ).get("x", expect=nothing)
+        await client(fake, telemetry.observer, policy=CallPolicy(retry=None), middleware=(telemetry.observer,)).get(
+            "x", expect=nothing
+        )
 
     attributes = _attributes(telemetry.span())
     assert attributes["error.type"] == "TransportError"
@@ -304,24 +304,15 @@ def test_a_non_standard_method_is_other(telemetry: Telemetry) -> None:
     }
 
 
-@pytest.mark.parametrize(
-    ("full_url", "expected"),
-    [
-        pytest.param(None, {}, id="unknown"),
-        pytest.param("relative/x", {"url.full": "relative/x"}, id="no-host-no-scheme"),
-    ],
-)
-def test_a_url_without_a_server_reports_none(
-    telemetry: Telemetry, full_url: str | None, expected: dict[str, str]
-) -> None:
+def test_a_url_without_a_server_reports_none(telemetry: Telemetry) -> None:
     """Leave out the server attributes a call's URL does not give."""
-    _finish(telemetry.observer, CallInfo(method="GET", url="x", full_url=full_url))
-    assert _attributes(telemetry.span()) == {"http.request.method": "GET", **expected}
+    _finish(telemetry.observer, CallInfo(method="GET", url="x", full_url="relative/x"))
+    assert _attributes(telemetry.span()) == {"http.request.method": "GET", "url.full": "relative/x"}
 
 
 def test_a_cancelled_call_is_not_an_error(telemetry: Telemetry) -> None:
     """Leave a cancelled call's span status unset, with no ``error.type``."""
-    _finish(telemetry.observer, CallInfo(method="GET", url="x"), error="CancelledError")
+    _finish(telemetry.observer, CallInfo(method="GET", url="x", full_url="x"), error="CancelledError")
 
     span = telemetry.span()
     assert span.status.status_code is StatusCode.UNSET
@@ -330,13 +321,13 @@ def test_a_cancelled_call_is_not_an_error(telemetry: Telemetry) -> None:
 
 def test_a_finish_it_never_saw_start_is_ignored(telemetry: Telemetry) -> None:
     """Export nothing for a ``CallFinished`` whose ``CallStarted`` it did not receive."""
-    telemetry.observer.notify(CallFinished(call=CallInfo(method="GET", url="x"), attempts=1, elapsed=0.0))
+    telemetry.observer.notify(CallFinished(call=CallInfo(method="GET", url="x", full_url="x"), attempts=1, elapsed=0.0))
     assert telemetry.spans.get_finished_spans() == ()
 
 
 def test_events_it_does_not_use_are_ignored(telemetry: Telemetry) -> None:
     """Export nothing for an event that neither opens nor closes a span, or an attempt of an unknown call."""
-    info = CallInfo(method="GET", url="x")
+    info = CallInfo(method="GET", url="x", full_url="x")
     telemetry.observer.notify(RetryScheduled(call=info, attempt=1, delay=0.0, reason="503"))
     telemetry.observer.notify(AttemptFinished(call=info, attempt=1, status_code=503, elapsed=0.0))
     assert telemetry.spans.get_finished_spans() == ()
@@ -345,7 +336,7 @@ def test_events_it_does_not_use_are_ignored(telemetry: Telemetry) -> None:
 def test_the_global_providers_are_the_default() -> None:
     """Build on the global providers and the W3C propagator when given none."""
     observer = OpenTelemetryObserver()
-    _finish(observer, CallInfo(method="GET", url="x"))
+    _finish(observer, CallInfo(method="GET", url="x", full_url="x"))
 
 
 async def test_a_400_is_the_first_error_status(telemetry: Telemetry) -> None:

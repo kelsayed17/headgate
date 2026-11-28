@@ -21,6 +21,7 @@ import pytest
 
 from headgate import (
     AuthError,
+    CallPolicy,
     Client,
     ClientError,
     Expect,
@@ -30,7 +31,6 @@ from headgate import (
     RetryPolicy,
     StaticHeaderAuth,
     TransportError,
-    TransportPolicy,
     UpstreamStatusError,
 )
 from headgate._failures import MESSAGE_TEXT_LIMIT, CallSite, transport_error
@@ -56,7 +56,7 @@ def _client(
     """Return a client over *handler* that sends each request once."""
     return Client(
         base_url=f"https://{_HOST}",
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
+        policy=CallPolicy(retry=RetryPolicy(attempts=1)),
         http=HttpOptions(
             transport=httpx2.MockTransport(handler),
             response_check=response_check,
@@ -101,7 +101,7 @@ async def test_a_header_value_the_http_library_refuses_is_never_quoted(local_ser
     """
     client = Client(
         base_url=local_server,
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
+        policy=CallPolicy(retry=RetryPolicy(attempts=1)),
         auth=StaticHeaderAuth({"Authorization": f"Bearer {_CANARY}\n"}),
     )
     try:

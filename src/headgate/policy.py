@@ -1,13 +1,13 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Construct a client with its transport policy switched off.
+"""Construct a client with its call policy switched off.
 
 ``Client`` wraps every request in retry with backoff, a per-origin circuit breaker, and a rate budget. All
 three are right in production and wrong where the network is a fake (a mocked transport under a test) or where the job
 is to report the first failure (a connectivity probe).
 
-The knobs exist on ``Client.__init__`` (``TransportPolicy(retry=..., breaker=...)``, ``rate``), but an SDK usually
+The knobs exist on ``Client.__init__`` (``CallPolicy(rate=..., retry=..., breaker=...)``), but an SDK usually
 fixes its own policy where it builds its ``Client`` and exposes none of it. So the switch is read at
 construction from a context variable instead::
 
@@ -18,7 +18,7 @@ construction from a context variable instead::
 
     # or, for a whole test directory, in that directory's own conftest.py:
     @pytest.fixture(autouse=True)
-    def _no_transport_policy():
+    def _no_call_policy():
         with policy_disabled():
             yield
 
@@ -32,14 +32,17 @@ What "off" means:
 
 * no request is retried, whatever the policy, a route, a view or a call asks for. Stronger than an instant sleep,
   which keeps the retries and makes them instant; a suite testing retry behavior wants that instead. (Outside the
-  switch, ``TransportPolicy(retry=None)`` sends every call once unless the call, its view or its route gives a policy
+  switch, ``CallPolicy(retry=None)`` sends every call once unless the call, its view or its route gives a policy
   of its own.)
-* ``TransportPolicy(breaker=None)``: the client never reads a breaker registry, so it cannot be refused by a breaker
+* ``CallPolicy(breaker=None)``: the client never reads a breaker registry, so it cannot be refused by a breaker
   another client opened on the same host.
 * a budget that paces nothing, enforced where a budget is built, so it also covers the budgets a client's
   routes build from ``rate=``, and a shared ``RateBudget`` passed in.
 """
 
 from headgate._core import policy_disabled
+from headgate._core import rehome as _rehome
 
 __all__ = ["policy_disabled"]
+
+_rehome(__name__, globals())

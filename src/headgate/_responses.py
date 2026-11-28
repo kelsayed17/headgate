@@ -21,22 +21,20 @@ A reader's shape errors (a :class:`~headgate.errors.DecodeError`, or a ``ValueEr
 from code over ``response.json()``, or nesting too deep to parse) become ``ResponseParseError`` on a 2xx.
 """
 
-from __future__ import annotations
-
+import codecs
 import functools
 import json
 import math
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Final, NoReturn, final, override
+from typing import Final, NoReturn, cast, final, override
 
 import httpx2
 
 from headgate._core import check_kind
+from headgate._sse import EventParser, text_decoder
 from headgate.errors import DecodeError, RefusedError
-from headgate.streaming._events import EventParser
 
 __all__ = [
     "Expect",
@@ -44,10 +42,12 @@ __all__ = [
     "ResponseCheck",
     "accepts",
     "as_bytes",
+    "as_events",
     "as_json",
+    "as_text",
     "body_reader",
-    "event_stream",
     "nothing",
+    "with_answers",
 ]
 
 
@@ -136,8 +136,14 @@ follow redirects (the client enforces it), because the check sees only the final
 """
 
 
+#: The headers an ``Expect`` sends when it is given none: read-only, so one instance serves every ``Expect``.
+_NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+
+#: What ``copy.replace`` may change on an ``Expect``: its answers are declared with ``on()`` only.
+_REPLACEABLE: Final = frozenset({"ok", "headers", "accept"})
+
+
 @final
-@dataclass(frozen=True, slots=True)
 class Expect[T]:
     """One endpoint's documented responses: a success reader for any 2xx, plus exact-status answers.
 
@@ -150,9 +156,10 @@ class Expect[T]:
     ``Expect`` is deliberately not callable: reading a response is the client's dispatch, and a callable ``Expect``
     would be a second way to read one outside it.
 
-    ``ok`` and every reader in ``answers`` must be a :class:`Reader`. The constructor refuses exactly what :meth:`on`
-    refuses, since an ``Expect`` built with ``answers`` makes the same claim, and then freezes ``answers`` into a
-    read-only copy that neither the caller's dict nor the default can change.
+    ``ok`` must be a :class:`Reader`. ``answers`` is filled only by :meth:`on`, which widens the result type with each
+    answer it declares, and is a read-only mapping. An ``Expect`` is a frozen value: ``copy.replace`` (and
+    ``copy.copy``) keep its answers, and since it is not a dataclass, ``dataclasses.replace``, which would drop them,
+    raises ``TypeError``.
 
     ``headers`` are request headers the declaration needs sent (a conditional read's preconditions, see
     :func:`headgate.cache.conditional`); a header the call sets itself wins.
@@ -163,22 +170,41 @@ class Expect[T]:
     falls through to the status ladder, as an unreadable body does.
     """
 
-    ok: Reader[T]
-    answers: Mapping[int, Reader[T]] = field(default_factory=dict)
-    headers: Mapping[str, str] = field(default_factory=dict, kw_only=True)
-    accept: str | None = field(default=None, kw_only=True)
+    __slots__ = ("_accept", "_answers", "_headers", "_ok")
 
-    def __post_init__(self) -> None:
-        """Refuse a non-reader, an unclaimable status in ``answers`` or a malformed ``accept``; freeze the mappings."""
-        check_kind("ok", self.ok, Reader, "a Reader")
-        for status, read in self.answers.items():
-            _refuse_unclaimable(status)
-            check_kind("answers", read, Reader, "a Reader for each status")
-        # A frozen, slotted dataclass refuses plain assignment even here; object.__setattr__ is the documented route.
-        object.__setattr__(self, "answers", MappingProxyType(dict(self.answers)))
-        object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
-        if self.accept is not None:
-            _media_ranges(self.accept)
+    def __init__(self, ok: Reader[T], *, headers: Mapping[str, str] = _NO_HEADERS, accept: str | None = None) -> None:
+        """Read a 2xx with *ok*, sending *headers*, and accept *accept*'s media types; refuse a non-reader *ok*.
+
+        :raises TypeError: for an *ok* that is not a :class:`Reader`.
+        :raises ValueError: for a malformed *accept*.
+        """
+        check_kind("ok", ok, Reader, "a Reader")
+        if accept is not None:
+            _media_ranges(accept)
+        self._ok = ok
+        self._answers: Mapping[int, Reader[T]] = MappingProxyType({})
+        self._headers: Mapping[str, str] = MappingProxyType(dict(headers))
+        self._accept = accept
+
+    @property
+    def ok(self) -> Reader[T]:
+        """The reader of every 2xx the call does not declare as an answer."""
+        return self._ok
+
+    @property
+    def answers(self) -> Mapping[int, Reader[T]]:
+        """The exact statuses :meth:`on` declared, each with its reader; read-only."""
+        return self._answers
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        """The request headers the declaration needs sent; read-only."""
+        return self._headers
+
+    @property
+    def accept(self) -> str | None:
+        """The media types the endpoint answers with, sent as ``Accept`` and checked on each response."""
+        return self._accept
 
     def on[E](self, status: int, read: Reader[E]) -> Expect[T | E]:
         """Return a new ``Expect`` that also reads *status* with *read*, widening the result type to ``T | E``.
@@ -193,11 +219,53 @@ class Expect[T]:
         """
         check_kind("read", read, Reader, "a Reader")
         _refuse_unclaimable(status)
-        if status in self.answers:
+        if status in self._answers:
             msg = f"{status} is already declared on this Expect"
             raise ValueError(msg)
-        widened: dict[int, Reader[T | E]] = {**self.answers, status: read}
-        return Expect(self.ok, widened, headers=self.headers, accept=self.accept)
+        widened: Expect[T | E] = Expect(self._ok, headers=self._headers, accept=self._accept)
+        answers: dict[int, Reader[T | E]] = {**self._answers, status: read}
+        return with_answers(widened, answers)
+
+    def __replace__(self, **changes: object) -> Expect[T]:
+        """Return a copy with *changes* to ``ok``, ``headers`` or ``accept``, keeping the answers; for ``copy.replace``.
+
+        :raises TypeError: for any other name, ``answers`` included, which only :meth:`on` declares.
+        """
+        if unknown := sorted(changes.keys() - _REPLACEABLE):
+            msg = f"copy.replace() of an Expect takes ok=, headers= and accept= (got {', '.join(unknown)}=)"
+            if "answers" in unknown:
+                msg += ": declare an answer with .on(status, reader)"
+            raise TypeError(msg)
+        ok = cast("Reader[T]", changes.get("ok", self._ok))
+        headers = cast("Mapping[str, str]", changes.get("headers", self._headers))
+        accept = cast("str | None", changes.get("accept", self._accept))
+        return with_answers(Expect(ok, headers=headers, accept=accept), self._answers)
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Expect) and self._key() == other._key()
+
+    @override
+    def __hash__(self) -> int:
+        return hash(self._key())
+
+    @override
+    def __repr__(self) -> str:
+        return (
+            f"Expect({self._ok!r}, answers={dict(self._answers)!r}, headers={dict(self._headers)!r}, "
+            f"accept={self._accept!r})"
+        )
+
+    def _key(self) -> tuple[object, ...]:
+        """Return what two equal ``Expect`` objects share: their readers, answers, headers and accept."""
+        return (self._ok, tuple(sorted(self._answers.items())), tuple(sorted(self._headers.items())), self._accept)
+
+
+def with_answers[T](expect: Expect[T], answers: Mapping[int, Reader[T]]) -> Expect[T]:
+    """Return *expect*, freshly built with no answers, holding *answers*, which :meth:`Expect.on` already checked."""
+    # The answers are set once, here, on an Expect no one else holds yet; the class has no setter for them.
+    object.__setattr__(expect, "_answers", MappingProxyType(dict(answers)))
+    return expect
 
 
 def accepts[T](expect: Expect[T], resp: httpx2.Response) -> bool:
@@ -317,6 +385,23 @@ def _as_bytes(resp: httpx2.Response, /) -> bytes:
 as_bytes: Final[Reader[bytes]] = Reader(_as_bytes, name="as_bytes")
 
 
+def _as_text(resp: httpx2.Response, /) -> str:
+    content = resp.content
+    if content.startswith(codecs.BOM_UTF8):
+        return content.removeprefix(codecs.BOM_UTF8).decode("utf-8", "replace")
+    return text_decoder(resp.encoding).decode(content, final=True)
+
+
+#: Return the body as text, decoded by the response's ``charset``, as ``Stream.aiter_lines`` decodes it.
+#:
+#: A plain-text, CSV or HTML body a parser of text reads later. A leading UTF-8 byte order mark is dropped, and the
+#: rest read as UTF-8, which the mark says it is, whatever the ``charset``. A ``charset`` that names no text encoding
+#: (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is, where ``response.text`` raises, and bytes the charset
+#: decodes badly become replacement characters. A body the ``charset`` cannot decode at all (UTF-16 without a byte
+#: order mark) raises ``UnicodeDecodeError``, which the client reports as ``ResponseParseError``.
+as_text: Final[Reader[str]] = Reader(_as_text, name="as_text")
+
+
 #: What :data:`as_json` says of a body nested too deeply for ``json.loads``'s own stack.
 _NESTED_TOO_DEEPLY: Final = "not JSON: nested too deeply"
 
@@ -405,7 +490,7 @@ def _nothing(resp: httpx2.Response, /) -> None:
 nothing: Final[Reader[None]] = Reader(_nothing, name="nothing")
 
 
-def _event_stream(resp: httpx2.Response, /) -> list[httpx2.ServerSentEvent]:
+def _as_events(resp: httpx2.Response, /) -> list[httpx2.ServerSentEvent]:
     return list(EventParser().feed(resp.content))
 
 
@@ -416,4 +501,4 @@ def _event_stream(resp: httpx2.Response, /) -> list[httpx2.ServerSentEvent]:
 #: No per-event limit applies, because the body is already buffered and capped by the client, and a large reply is
 #: legitimately one event. Choosing whether a body is an event stream is the caller's job, usually by reading the
 #: ``content-type``.
-event_stream: Final[Reader[list[httpx2.ServerSentEvent]]] = Reader(_event_stream, name="event_stream")
+as_events: Final[Reader[list[httpx2.ServerSentEvent]]] = Reader(_as_events, name="as_events")

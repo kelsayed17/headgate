@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, ClassVar, cast, override
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, Json, Rate, RetryPolicy, TransportPolicy, call_info, nothing
+from headgate import CallPolicy, Client, HttpOptions, Json, Rate, RetryPolicy, call_view, nothing
 from headgate._core import CallContext
 from headgate.retry import Backoff, Hedge
 from headgate.testing import FakeTransport, Respond, TestClock
@@ -75,8 +75,7 @@ def _client(script: Script, *middleware: HmacSigner | Recorder | ShortCircuit) -
     """Build a client over *script* with *middleware*, retrying up to three sends."""
     return Client(
         base_url="https://api.example.test",
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=RetryPolicy(attempts=_ATTEMPTS)),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=RetryPolicy(attempts=_ATTEMPTS)),
         http=HttpOptions(transport=script.transport()),
         middleware=middleware,
     )
@@ -179,7 +178,7 @@ async def test_the_client_closes_the_network_under_the_middleware(count: int) ->
     middleware = (Recorder("r", []),) * count
     client = Client(
         base_url="https://api.example.test",
-        rate=Rate.per_second(1000),
+        policy=CallPolicy(rate=Rate.per_second(1000)),
         http=HttpOptions(transport=_Network(script)),
         observers=(_Silent(),) * count,
         middleware=middleware,
@@ -294,7 +293,7 @@ async def test_a_middleware_may_declare_through_properties() -> None:
     assert "X-Signature" not in hop.headers
 
 
-async def test_a_middleware_reads_its_call_through_call_info() -> None:
+async def test_a_middleware_reads_its_call_through_call_view() -> None:
     """Read the call's route template, attempt and time left in a middleware, fresh on every send."""
     seen: list[CallView | None] = []
 
@@ -303,15 +302,14 @@ async def test_a_middleware_reads_its_call_through_call_info() -> None:
         credential_params: ClassVar = frozenset[str]()
 
         async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
-            seen.append(call_info(request))
+            seen.append(call_view(request))
             return await call_next(request)
 
     clock = TestClock(random=lambda: 1.0)
     with clock.install():
         client = Client(
             base_url="https://h.test",
-            rate=Rate.per_second(1000),
-            policy=TransportPolicy(retry=RetryPolicy(backoff=Backoff(factor=1.0)), breaker=None),
+            policy=CallPolicy(rate=Rate.per_second(1000), retry=RetryPolicy(backoff=Backoff(factor=1.0)), breaker=None),
             http=HttpOptions(transport=FakeTransport().reply("GET", "/series/s1", 503, 200)),
             middleware=(_Reader(),),
         )
@@ -321,12 +319,12 @@ async def test_a_middleware_reads_its_call_through_call_info() -> None:
     first, second = seen
     assert first is not None
     assert second is not None
-    assert (first.call.route, first.attempt, second.attempt) == ("series/{series_id}", 1, 2)
+    assert (first.call.template, first.attempt, second.attempt) == ("series/{series_id}", 1, 2)
     assert first.call is second.call, "one call, the same record events carry"
     assert first.remaining == pytest.approx(30.0)
     assert clock.now > 0
     assert second.remaining == pytest.approx(30.0 - clock.now), "the time left fell by the backoff waited"
-    assert call_info(httpx2.Request("GET", "https://h.test/x")) is None
+    assert call_view(httpx2.Request("GET", "https://h.test/x")) is None
 
 
 async def test_a_hedged_send_reads_its_own_attempt() -> None:
@@ -349,8 +347,9 @@ async def test_a_hedged_send_reads_its_own_attempt() -> None:
 
     client = Client(
         base_url="https://h.test",
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=RetryPolicy(budget=None, hedge=Hedge(after=0.01)), breaker=None),
+        policy=CallPolicy(
+            rate=Rate.per_second(1000), retry=RetryPolicy(budget=None, hedge=Hedge(after=0.01)), breaker=None
+        ),
         http=HttpOptions(transport=FakeTransport().reply("GET", "/x", 200)),
         middleware=(_Reader(),),
     )
@@ -361,7 +360,7 @@ async def test_a_hedged_send_reads_its_own_attempt() -> None:
 
 def _attempt(request: httpx2.Request) -> int:
     """Return the attempt *request*'s send is, as a middleware reads it."""
-    view = call_info(request)
+    view = call_view(request)
     assert view is not None
     return view.attempt
 
@@ -417,3 +416,29 @@ async def test_an_async_function_middleware_and_a_partial_of_one_are_accepted() 
         await client.get("x", expect=nothing)
 
     assert seen == ["plain", "partial"]
+
+
+async def test_full_url_is_filled_without_observers() -> None:
+    """Fill the view's absolute, sanitized URL for a client with no observers, as for one with them."""
+    seen: list[CallView | None] = []
+
+    class _Reader:
+        credential_headers: ClassVar = frozenset[str]()
+        credential_params: ClassVar = frozenset[str]()
+
+        async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+            seen.append(call_view(request))
+            return await call_next(request)
+
+    client = Client(
+        base_url="https://h.test",
+        policy=CallPolicy(retry=None, breaker=None),
+        http=HttpOptions(transport=FakeTransport().reply("GET", "/items/a%2Fb", 200)),
+        middleware=(_Reader(),),
+    )
+    uid = "a/b"
+    await client.get(t"items/{uid}", expect=nothing, params={"api_key": "secret"})
+
+    (view,) = seen
+    assert view is not None
+    assert view.call.full_url == "https://h.test/items/a%2Fb?api_key=***"

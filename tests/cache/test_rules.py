@@ -9,11 +9,13 @@ Each rule reads only the method, the URL path or the status, never the body or a
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 from headgate import HttpCache
+from headgate.cache import Partition
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -34,6 +36,21 @@ async def test_a_cache_stores_the_200s_of_every_get_by_default(storage: AsyncSql
     assert not _keeps(cache, "HEAD", "/any/path", 200)
     assert not _keeps(cache, "POST", "/any/path", 200)
     assert not _keeps(cache, "GET", "/any/path", 404)
+
+
+async def test_the_cache_defaults_are_values(storage: AsyncSqliteStorage) -> None:
+    """Default to the values themselves, GET and 200, so ``None`` keeps meaning off and is refused here."""
+    cache = HttpCache(storage=storage)
+    assert (cache.methods, cache.paths, cache.statuses) == (frozenset({"GET"}), None, frozenset({200}))
+    for option in ("methods", "statuses"):
+        with pytest.raises(TypeError, match=rf"^{option}= takes "):
+            HttpCache(storage=storage, **cast("Any", {option: None}))
+
+
+def test_partition_is_a_str_enum() -> None:
+    """Make ``Partition`` a ``StrEnum``, as ``BreakerState`` and ``CacheOutcome`` are."""
+    assert issubclass(Partition, StrEnum)
+    assert (str(Partition.CREDENTIAL), str(Partition.SHARED)) == ("credential", "shared")
 
 
 async def test_a_cache_stores_what_its_methods_paths_and_statuses_name(storage: AsyncSqliteStorage) -> None:
@@ -63,14 +80,12 @@ async def test_a_cache_stores_the_paths_its_patterns_match(storage: AsyncSqliteS
     assert cache.paths == (archive, "series")
 
 
-async def test_empty_methods_paths_or_statuses_store_nothing(storage: AsyncSqliteStorage) -> None:
-    """Store nothing for an empty ``methods``, ``paths`` or ``statuses``: empty is not the default."""
-    for cache in (
-        HttpCache(storage=storage, methods=()),
-        HttpCache(storage=storage, statuses=()),
-        HttpCache(storage=storage, paths=()),
-    ):
-        assert not _keeps(cache, "GET", "/any/path", 200)
+@pytest.mark.parametrize("option", ["methods", "paths", "statuses"])
+async def test_an_empty_rule_is_refused(storage: AsyncSqliteStorage, option: str) -> None:
+    """Refuse an empty ``methods``, ``paths`` or ``statuses``, which would store nothing: ``cache=None`` is no cache."""
+    message = rf"^{option}= is empty, so the cache would store nothing: write cache=None for a client without a cache$"
+    with pytest.raises(ValueError, match=message):
+        HttpCache(storage=storage, **cast("Any", {option: ()}))
 
 
 @pytest.mark.parametrize(

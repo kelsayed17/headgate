@@ -7,23 +7,19 @@ Each layer that waits, measures or draws takes them as one :class:`Timing`, so a
 for it, and pins a draw instead of hoping. The shapes are protocols over plain callables, so ``time.monotonic``,
 ``time.time``, ``asyncio.sleep`` and ``random.random`` satisfy them as they are.
 
-A client (and the token auth it is given), and a shared budget or registry given no ``timing=``, read
-:func:`current_timing` when they are built. An SDK usually fixes its client's options and exposes none of them, so a
+A client (and the token auth it is given), and a shared budget or registry, read :func:`current_timing` when they are
+built. An SDK usually fixes its client's options and exposes none of them, so a
 test replaces the timing of everything it builds with :func:`timing_override` instead of reaching into each one.
 """
-
-from __future__ import annotations
 
 import asyncio
 import random
 import time
+from collections.abc import Awaitable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
-
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Generator
+from typing import Protocol
 
 __all__ = [
     "SYSTEM_TIMING",
@@ -96,7 +92,7 @@ _TIMING: ContextVar[Timing] = ContextVar("headgate_timing", default=SYSTEM_TIMIN
 
 
 def current_timing() -> Timing:
-    """Return the timing an object built right now with no ``timing=`` of its own takes."""
+    """Return the timing an object built right now takes."""
     return _TIMING.get()
 
 

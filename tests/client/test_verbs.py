@@ -17,7 +17,7 @@ wire.
 
 from __future__ import annotations
 
-from typing import assert_type
+from typing import Any, assert_type, cast
 
 import httpx2
 import msgspec
@@ -25,6 +25,7 @@ import pytest
 
 from headgate import (
     AuthError,
+    CallPolicy,
     EncodedBody,
     Expect,
     Form,
@@ -34,7 +35,6 @@ from headgate import (
     Rate,
     Raw,
     RetryPolicy,
-    TransportPolicy,
     UpstreamStatusError,
     Writer,
 )
@@ -85,8 +85,7 @@ def _client(wire: _Wire) -> Client:
     """Return an ``Client`` whose network is *wire*, sending each request once."""
     return Client(
         base_url="https://example.test",
-        rate=Rate.per_second(2),
-        policy=TransportPolicy(retry=RetryPolicy(attempts=1)),
+        policy=CallPolicy(rate=Rate.per_second(2), retry=RetryPolicy(attempts=1)),
         http=HttpOptions(transport=httpx2.MockTransport(wire)),
     )
 
@@ -257,14 +256,21 @@ async def test_head_maps_to_head_method() -> None:
     assert out.status_code == httpx2.codes.OK
 
 
-async def test_head_reads_nothing_by_default() -> None:
-    """Send a HEAD with no ``expect=`` and return ``None``, as ``expect=nothing`` would."""
+async def test_head_reads_nothing_when_told_to() -> None:
+    """Send a HEAD read through ``expect=nothing``, the one spelling of a HEAD whose answer is its status."""
     wire = _Wire()
     async with _client(wire) as c:
-        out = await c.head("thing")
+        out = await c.head("thing", expect=nothing)
 
     assert wire.last.method == "HEAD"
     assert out is None
+
+
+async def test_head_requires_expect() -> None:
+    """Refuse a HEAD without ``expect=``, as every verb does."""
+    async with _client(_Wire()) as c:
+        with pytest.raises(TypeError, match="expect"):
+            await cast("Any", c.head)("thing")
 
 
 @pytest.mark.parametrize(

@@ -4,8 +4,8 @@
 """Endpoint deprecation and sunset announcements: the ``Deprecation`` (RFC 9745) and ``Sunset`` (RFC 8594) headers.
 
 A provider retiring an endpoint says so on every response from it. :func:`deprecation_of` reads what a response
-announces into a :class:`~headgate.events.Deprecated` event, and :func:`announce_deprecation` emits it to the call's
-observers, once per call, from the final response's head.
+announces into a :class:`~headgate.events.DeprecationNoticed` event, and :func:`announce_deprecation` emits it to the
+call's observers, once per call, from the final response's head.
 
 Both formats of ``Deprecation`` are read: RFC 9745's structured-field date (``@1688169599``, seconds since the epoch)
 and the older drafts' ``true`` or HTTP-date. ``Sunset`` is an HTTP-date. A header whose value is neither is ignored, as
@@ -14,8 +14,6 @@ when either header is, resolved against the request URL and with any credential 
 URL is skipped.
 """
 
-from __future__ import annotations
-
 import re
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -23,7 +21,7 @@ from typing import TYPE_CHECKING, Final
 
 import httpx2
 
-from headgate._core import Deprecated
+from headgate._core import DeprecationNoticed
 from headgate._url import sanitize_url
 from headgate.pagination._link import parse_link_header
 
@@ -84,8 +82,8 @@ def _link(response: httpx2.Response, rel: str) -> str | None:
     return None
 
 
-def deprecation_of(response: httpx2.Response, call: CallInfo) -> Deprecated | None:
-    """Return the :class:`~headgate.events.Deprecated` event *response* announces for *call*, or ``None``.
+def deprecation_of(response: httpx2.Response, call: CallInfo) -> DeprecationNoticed | None:
+    """Return the :class:`~headgate.events.DeprecationNoticed` event *response* announces for *call*, or ``None``.
 
     ``None`` unless the response carries a valid ``Deprecation`` or ``Sunset`` header.
     """
@@ -97,7 +95,7 @@ def deprecation_of(response: httpx2.Response, call: CallInfo) -> Deprecated | No
     sunset_at = None if sunset is None else parse_http_date(sunset)
     if not deprecated and sunset_at is None:
         return None
-    return Deprecated(
+    return DeprecationNoticed(
         call=call,
         deprecated=deprecated,
         deprecated_at=deprecated_at,
@@ -108,6 +106,6 @@ def deprecation_of(response: httpx2.Response, call: CallInfo) -> Deprecated | No
 
 
 def announce_deprecation(context: CallContext, response: httpx2.Response) -> None:
-    """Emit the :class:`~headgate.events.Deprecated` event *response* announces, when the call has observers."""
+    """Emit the :class:`~headgate.events.DeprecationNoticed` event *response* announces, when the call has observers."""
     if context.observed and (event := deprecation_of(response, context.info)) is not None:
         context.emit(event)

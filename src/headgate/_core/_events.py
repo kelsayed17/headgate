@@ -16,17 +16,13 @@ The event set is defined here, below the policy subpackages, so that every layer
 the call's :class:`~headgate._core.CallContext`.
 """
 
-from __future__ import annotations
-
 import contextlib
 import itertools
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol
-
-if TYPE_CHECKING:
-    from datetime import datetime
+from typing import Protocol
 
 __all__ = [
     "OBSERVER_FAILURES",
@@ -34,13 +30,13 @@ __all__ = [
     "AttemptFinished",
     "BreakerChanged",
     "BreakerState",
+    "CacheChecked",
     "CacheOutcome",
-    "CacheResult",
     "CallEvent",
     "CallFinished",
     "CallInfo",
     "CallStarted",
-    "Deprecated",
+    "DeprecationNoticed",
     "Emitter",
     "Event",
     "Observer",
@@ -56,16 +52,17 @@ _CALL_IDS = itertools.count(1)
 class CallInfo:
     """What identifies one logical call in every event about it.
 
-    ``url`` is the URL the call was given, sanitized and bounded; ``route`` is the t-string template the URL was
-    rendered from (``"series/{series_id}"``), or ``None`` for a literal string or an ``httpx2.URL``. ``full_url`` is the
-    absolute URL of the request as first built (before any redirect), sanitized: what an observer needs to name the
-    server, as an OpenTelemetry span does. It is ``None`` when the client has no observers.
+    ``url`` is the URL the call was given, sanitized and bounded; ``template`` is the t-string template the URL was
+    rendered from (``"series/{series_id}"``), OpenTelemetry's ``url.template``, or ``None`` for a literal string or an
+    ``httpx2.URL``. ``full_url`` is the absolute URL of the request as first built (before any redirect), sanitized:
+    what an observer needs to name the server, as an OpenTelemetry span does, and a middleware to read where its call
+    goes. Every call has one.
     """
 
     method: str
     url: str
-    route: str | None = None
-    full_url: str | None = None
+    full_url: str
+    template: str | None = None
     call_id: int = field(default_factory=lambda: next(_CALL_IDS))
 
 
@@ -82,7 +79,7 @@ class CacheOutcome(StrEnum):
 
     * ``HIT``: a stored response answered it;
     * ``MISS``: it went to the network (and its response may have been stored);
-    * ``SHARED``: it waited on an identical request's download and got a copy of its response, or its failure;
+    * ``COALESCED``: it waited on an identical request's download and got a copy of its response, or its failure;
     * ``DEGRADED``: the storage failed, so it went to the network uncached.
 
     The cache is TTL-only and never revalidates an entry with the origin, so there is no revalidated outcome.
@@ -90,7 +87,7 @@ class CacheOutcome(StrEnum):
 
     HIT = "hit"
     MISS = "miss"
-    SHARED = "shared"
+    COALESCED = "coalesced"
     DEGRADED = "degraded"
 
 
@@ -143,14 +140,14 @@ class RateLimited(CallEvent):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class CacheResult(CallEvent):
-    """What the HTTP cache did for the call."""
+class CacheChecked(CallEvent):
+    """The HTTP cache checked the call: ``outcome`` says what it did."""
 
     outcome: CacheOutcome
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class Deprecated(CallEvent):
+class DeprecationNoticed(CallEvent):
     """The call's response announced that its endpoint is deprecated (RFC 9745) or will be sunset (RFC 8594).
 
     * ``deprecated``: the response carried a valid ``Deprecation`` header;
@@ -198,8 +195,8 @@ type Event = (
     | RetryScheduled
     | RateLimited
     | BreakerChanged
-    | CacheResult
-    | Deprecated
+    | CacheChecked
+    | DeprecationNoticed
     | CallFinished
 )
 """Every event a client emits."""

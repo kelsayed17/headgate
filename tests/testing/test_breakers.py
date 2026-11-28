@@ -5,14 +5,17 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 import headgate.breaker
 import headgate.testing
-from headgate import BreakerPolicy, Client, HttpOptions, Rate, TransportPolicy, UpstreamStatusError, nothing
+from headgate import BreakerPolicy, CallPolicy, Client, HttpOptions, Rate, RateBudget, UpstreamStatusError, nothing
 from headgate.breaker import BreakerRegistry, BreakerState, CircuitBreaker
 from headgate.errors import CircuitOpenError
 from headgate.health import BreakerSnapshot, breaker_states
+from headgate.retry import RetryBudget, RetryShare
 from headgate.testing import FakeTransport, TestClock, breakers_of
 from tests.support.breakers import registry_of
 
@@ -23,12 +26,11 @@ _COOLDOWN = 30.0
 _TRIP_AT_ONCE = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN)
 
 
-def _client(fake: FakeTransport, breaker: BreakerPolicy | None = _TRIP_AT_ONCE) -> Client:
+def _client(fake: FakeTransport, breaker: BreakerPolicy | BreakerRegistry | None = _TRIP_AT_ONCE) -> Client:
     """Build a client for :data:`_HOST` that sends once and trips its breaker on the first failure."""
     return Client(
         base_url=_ORIGIN,
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(retry=None, breaker=breaker),
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=None, breaker=breaker),
         http=HttpOptions(transport=fake),
     )
 
@@ -52,10 +54,9 @@ async def test_two_clients_given_no_registry_keep_a_breaker_each() -> None:
 
 async def test_two_clients_given_one_registry_share_its_breakers() -> None:
     """Refuse the second client's call once the first client's failure opened the breaker they share."""
-    shared = BreakerRegistry()
-    policy = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=shared)
+    shared = BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN))
     second_fake = FakeTransport().reply("GET", "/x", 200)
-    first, second = _client(FakeTransport().reply("GET", "/x", 503), policy), _client(second_fake, policy)
+    first, second = _client(FakeTransport().reply("GET", "/x", 503), shared), _client(second_fake, shared)
     await _fail(first)
 
     with pytest.raises(CircuitOpenError):
@@ -66,18 +67,26 @@ async def test_two_clients_given_one_registry_share_its_breakers() -> None:
     assert breaker_states(shared)[_ORIGIN].state is BreakerState.OPEN
 
 
-def test_a_registry_refuses_a_client_with_other_thresholds() -> None:
-    """Raise when the second client is built, naming the thresholds the registry trips at and the ones asked."""
-    shared = BreakerRegistry()
-    _client(FakeTransport(), BreakerPolicy(failure_threshold=5, recovery_timeout=30.0, registry=shared))
-    expected = (
-        r"^this BreakerRegistry's breakers trip after 5 failures with a 30s cooldown, so a client with "
-        r"BreakerPolicy\(failure_threshold=3, recovery_timeout=30\) cannot share it: give that client the same "
-        r"thresholds, or a registry of its own$"
-    )
+def test_a_registry_carries_its_thresholds() -> None:
+    """Build every breaker with the registry's own policy, so no client or lookup passes the thresholds again."""
+    policy = BreakerPolicy(failure_threshold=3, recovery_timeout=_COOLDOWN)
+    registry = BreakerRegistry(policy)
+    breaker = registry.breaker_for(_ORIGIN)
 
-    with pytest.raises(ValueError, match=expected):
-        _client(FakeTransport(), BreakerPolicy(failure_threshold=3, recovery_timeout=30.0, registry=shared))
+    assert registry.policy is policy
+    assert (breaker.failure_threshold, breaker.recovery_timeout) == (3, _COOLDOWN)
+    assert BreakerRegistry().policy == BreakerPolicy()
+    assert not hasattr(registry, "bind")
+
+
+def test_a_policy_names_no_registry_and_a_registry_takes_a_policy() -> None:
+    """Refuse ``BreakerPolicy(registry=)``, now ``breaker=registry``, and a registry given anything but a policy."""
+    with pytest.raises(TypeError, match="registry"):
+        BreakerPolicy(**cast("Any", {"registry": BreakerRegistry()}))
+    with pytest.raises(
+        TypeError, match=r"^policy= takes a BreakerPolicy, such as BreakerPolicy\(failure_threshold=3\)"
+    ):
+        BreakerRegistry(cast("Any", 3))
 
 
 def test_a_client_without_a_breaker_has_no_registry() -> None:
@@ -111,3 +120,12 @@ def _only(registry: BreakerRegistry) -> CircuitBreaker:
     """Return the one breaker *registry* holds for the test origin."""
     (breaker,) = registry.breakers(_ORIGIN)
     return breaker
+
+
+def test_the_shared_live_objects_take_their_value_alike() -> None:
+    """Take the value a registry, a rate budget and a retry budget are built from by position or by name alike."""
+    policy = BreakerPolicy(failure_threshold=3)
+
+    assert BreakerRegistry(policy=policy).policy is BreakerRegistry(policy).policy is policy
+    assert RateBudget(rate=Rate.per_second(1)).rate == RateBudget(Rate.per_second(1)).rate
+    assert RetryBudget(share=RetryShare(ratio=0.1)).share == RetryBudget(RetryShare(ratio=0.1)).share

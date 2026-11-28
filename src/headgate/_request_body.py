@@ -16,8 +16,6 @@ of its files is a file object that cannot be rewound, such as a pipe. :attr:`Raw
 :attr:`Multipart.replayable` say which; every other body is bytes in memory.
 """
 
-from __future__ import annotations
-
 import enum
 import json
 import os

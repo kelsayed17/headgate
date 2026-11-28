@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, Rate, RetryPolicy, TransportPolicy, UpstreamStatusError, nothing
+from headgate import CallPolicy, Client, HttpOptions, Rate, RetryPolicy, UpstreamStatusError, nothing
 from headgate.pagination import NextUrl
 from tests.support.wire import Script
 
@@ -42,15 +42,14 @@ def _no_next(_page: None) -> None:
     """Name no next page."""
 
 
-_ONE_PAGE: Final = NextUrl[None, object](items=_no_items, next=_no_next)
+_ONE_PAGE: Final = NextUrl[object, None](nothing, items=_no_items, next=_no_next)
 
 
 def _client(script: Script) -> Client:
     """Return a client over *script* under the default retry policy and no breaker."""
     return Client(
         base_url=_BASE,
-        rate=Rate.per_second(1000),
-        policy=TransportPolicy(breaker=None),
+        policy=CallPolicy(rate=Rate.per_second(1000), breaker=None),
         http=HttpOptions(transport=script.transport()),
     )
 
@@ -160,7 +159,7 @@ async def test_a_streams_last_event_id_joins_the_calls_own_headers() -> None:
     """Send ``Last-Event-ID`` beside the headers the call passed, not instead of them."""
     script = Script()
 
-    async with _client(script).stream("events", headers={"X-Trace": "t-1"}, last_event_id="41"):
+    async with _client(script).events("events", headers={"X-Trace": "t-1"}, last_event_id="41"):
         pass
 
     sent = script.sent[0].headers
@@ -169,16 +168,16 @@ async def test_a_streams_last_event_id_joins_the_calls_own_headers() -> None:
 
 async def test_paginate_refuses_a_request_body_with_its_reason() -> None:
     """Refuse a body option no pager can rewrite on ``paginate``, naming the ones a walk takes."""
-    message = r"^paginate\(\) got an unexpected keyword argument 'data': a walk's body is query=, the value its pager"
+    message = r"^paginate\(\) got an unexpected keyword argument 'data': a walk's body is payload=, the value its pager"
     form: dict[str, Any] = {"data": {"a": 1}}
     with pytest.raises(TypeError, match=message):
-        _client(Script()).paginate("orders", expect=nothing, pages=_ONE_PAGE, **form)
+        _client(Script()).paginate("orders", pager=_ONE_PAGE, **form)
 
 
 async def test_paginate_sends_each_page_once_with_retry_none() -> None:
     """Fetch a page with one send under ``retry=None``, raising the 503."""
     script = Script(*_FLAKY)
-    pages = _client(script).paginate("orders", expect=nothing, pages=_ONE_PAGE, retry=None)
+    pages = _client(script).paginate("orders", pager=_ONE_PAGE, retry=None)
 
     with pytest.raises(UpstreamStatusError):
         await anext(aiter(pages.pages()))
@@ -224,7 +223,7 @@ def test_a_view_cannot_follow_redirects_under_a_response_check() -> None:
     """Refuse a following view on a client with a ``response_check``, as every call of it would be refused."""
     client = Client(
         base_url=_BASE,
-        rate=Rate.per_second(1000),
+        policy=CallPolicy(rate=Rate.per_second(1000)),
         http=HttpOptions(transport=Script().transport(), response_check=_accept_all, follow_redirects=False),
     )
     with pytest.raises(
@@ -270,7 +269,7 @@ def test_a_stream_a_walk_and_a_view_refuse_an_old_override_value(options: dict[s
     with pytest.raises(TypeError, match=message):
         client.stream(_PATH, **options)
     with pytest.raises(TypeError, match=message):
-        client.paginate(_PATH, expect=nothing, pages=_ONE_PAGE, **options)
+        client.paginate(_PATH, pager=_ONE_PAGE, **options)
     with pytest.raises(TypeError, match=message):
         client.with_options(**options)
 
@@ -307,7 +306,7 @@ async def test_an_unknown_keyword_is_refused() -> None:
     with pytest.raises(TypeError, match=r"^stream\(\) got an unexpected keyword argument 'retires'$"):
         client.stream(_PATH, **typo)
     with pytest.raises(TypeError, match=r"^paginate\(\) got an unexpected keyword argument 'retires'$"):
-        client.paginate(_PATH, expect=nothing, pages=_ONE_PAGE, **typo)
+        client.paginate(_PATH, pager=_ONE_PAGE, **typo)
     with pytest.raises(TypeError, match=r"^with_options\(\) got an unexpected keyword argument 'retires'$"):
         client.with_options(**typo)
     with pytest.raises(TypeError, match=r"^stream\(\) got an unexpected keyword argument 'cache_ttl'$"):

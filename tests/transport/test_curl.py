@@ -29,7 +29,7 @@ from hishel import AsyncSqliteStorage
 from hishel.httpx2 import AsyncCacheTransport
 
 import headgate.curl
-from headgate import Client, HttpOptions, Rate, RetryPolicy, _curl, nothing
+from headgate import CallPolicy, Client, HttpOptions, Rate, RetryPolicy, _curl, nothing
 from headgate._core import CallContext
 from headgate.cache._transport import served_from_cache
 from headgate.curl import AsyncCurlTransport
@@ -415,7 +415,7 @@ async def test_default_headers_drop_headgates_own_user_agent(
     transport, session = _transport(sessions, default_headers=True)
     client = Client(
         base_url="https://api.example.test",
-        rate=Rate.per_second(1000),
+        policy=CallPolicy(rate=Rate.per_second(1000)),
         http=HttpOptions(transport=transport, user_agent=product),
     )
     async with client:

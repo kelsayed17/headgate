@@ -9,22 +9,16 @@ cache it keeps (and, through :meth:`~headgate.HttpCache.caches_request` and
 anything.
 """
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
+from headgate import Client, HttpCache
 from headgate._client import built_with
-
-if TYPE_CHECKING:
-    from headgate import Client, HttpCache
-    from headgate.breaker import BreakerRegistry
-    from headgate.ratelimit._budget import RateBudget
+from headgate.breaker import BreakerRegistry
+from headgate.ratelimit._budget import RateBudget
 
 __all__ = ["breakers_of", "budget_for", "cache_of"]
 
 
 def cache_of(client: Client) -> HttpCache | None:
-    """Return the :class:`~headgate.HttpCache` *client* was built with (``TransportPolicy(cache=...)``), or ``None``."""
+    """Return the :class:`~headgate.HttpCache` *client* was built with (``CallPolicy(cache=...)``), or ``None``."""
     return built_with(client).cache
 
 
@@ -46,7 +40,8 @@ def budget_for(client: Client, url: str | None = None) -> RateBudget:
 def breakers_of(client: Client) -> BreakerRegistry | None:
     """Return the :class:`~headgate.breaker.BreakerRegistry` *client*'s breakers live in, or ``None`` without a breaker.
 
-    It is the client's own, or the shared one its ``BreakerPolicy(registry=...)`` names. Read a breaker's state from it
-    (``breakers_of(client).breakers(url)``), or pass it to :func:`headgate.health.breaker_states`.
+    It is the client's own, built from its ``BreakerPolicy``, or the shared one it was given as ``breaker=``. Read a
+    breaker's state from it (``breakers_of(client).breakers(url)``), or pass it to
+    :func:`headgate.health.breaker_states`.
     """
     return built_with(client).breakers

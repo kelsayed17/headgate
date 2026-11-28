@@ -20,6 +20,7 @@ import pytest
 from headgate import (
     AuthError,
     BreakerPolicy,
+    CallPolicy,
     Client,
     ClientError,
     HttpOptions,
@@ -27,7 +28,6 @@ from headgate import (
     RateLimitError,
     RetryPolicy,
     SecurityOptions,
-    TransportPolicy,
     UpstreamStatusError,
     as_bytes,
     body_reader,
@@ -59,11 +59,13 @@ def _answering(status: int) -> httpx2.MockTransport:
     return httpx2.MockTransport(lambda _request: httpx2.Response(status, content=b"[1]"))
 
 
-def _client(status: int, *, http: HttpOptions | None = None, breaker: BreakerPolicy | None = None) -> Client:
+def _client(
+    status: int, *, http: HttpOptions | None = None, breaker: BreakerPolicy | BreakerRegistry | None = None
+) -> Client:
     """Return a client whose every request is answered *status*, retried once without waiting."""
     return Client(
         base_url=_BASE,
-        policy=TransportPolicy(retry=_ONCE_MORE, breaker=breaker),
+        policy=CallPolicy(retry=_ONCE_MORE, breaker=breaker),
         http=http or HttpOptions(transport=_answering(status)),
     )
 
@@ -145,7 +147,7 @@ _COOLDOWN = 3600.0
 
 def _broken(status: int = 503) -> Client:
     """Return a client whose breaker opens on its first failure and stays open for :data:`_COOLDOWN`."""
-    breaker = BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN, registry=BreakerRegistry())
+    breaker = BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout=_COOLDOWN))
     return _client(status, breaker=breaker)
 
 
@@ -166,10 +168,10 @@ async def test_a_walk_past_its_page_limit_is_not_retryable_and_sent_nothing_of_i
     """Say a page budget's refusal is not retryable, and leave ``sent`` unknown: no send of it failed."""
     transport = httpx2.MockTransport(lambda _request: httpx2.Response(200, json=[1]))
     client = Client(base_url=_BASE, http=HttpOptions(transport=transport))
-    pages = Offset(items=lambda page: page, page_size=1)
+    pages = Offset(body_reader(lambda body: [body]), items=lambda page: page, page_size=1)
 
     with pytest.raises(PageLimitError) as raised:
-        await client.paginate("orders", expect=body_reader(lambda body: [body]), pages=pages, max_pages=1).collect()
+        await client.paginate("orders", pager=pages, max_pages=1).collect()
 
     assert (raised.value.retryable, raised.value.sent) == (False, None)
 

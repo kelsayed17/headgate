@@ -3,7 +3,7 @@
 
 """The opt-in HTTP response cache, and conditional reads.
 
-A client caches when its ``TransportPolicy(cache=HttpCache(storage=..., ttl=...))`` says so. The cache sits
+A client caches when its ``CallPolicy(cache=HttpCache(storage=..., ttl=...))`` says so. The cache sits
 below retry and above the rate budget, so a hit spends no rate token and is not charged to the circuit breaker; a
 storage fault degrades to the network instead of failing the call.
 
@@ -19,6 +19,7 @@ storage fault degrades to the network instead of failing the call.
   :class:`NotModified`.
 """
 
+from headgate._core import rehome as _rehome
 from headgate.cache._conditional import Fresh, NotModified, Validator, conditional
 from headgate.cache._policy import Partition
 
@@ -29,3 +30,5 @@ __all__ = [
     "Validator",
     "conditional",
 ]
+
+_rehome(__name__, globals())

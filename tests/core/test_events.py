@@ -5,6 +5,10 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
+import pytest
+
 from headgate._core import OBSERVER_FAILURES, SILENT, CallInfo, CallStarted, Emitter, Event
 from tests.support.events import Recorder
 
@@ -22,7 +26,7 @@ def test_a_failing_observer_is_counted_and_the_next_still_receives_the_event() -
     """Count the broken observer's failure by its class and still deliver to the observers after it."""
     before = OBSERVER_FAILURES[_Broken.__qualname__]
     recorder = Recorder()
-    event = CallStarted(call=CallInfo(method="GET", url="https://a.test/x"))
+    event = CallStarted(call=CallInfo(method="GET", url="https://a.test/x", full_url="https://a.test/x"))
 
     Emitter((_Broken(), recorder)).emit(event)
 
@@ -33,13 +37,21 @@ def test_a_failing_observer_is_counted_and_the_next_still_receives_the_event() -
 def test_the_silent_emitter_has_no_listeners() -> None:
     """Report no listeners, so the client can skip building events."""
     assert not SILENT.active
-    SILENT.emit(CallStarted(call=CallInfo(method="GET", url="https://a.test/x")))
+    SILENT.emit(CallStarted(call=CallInfo(method="GET", url="https://a.test/x", full_url="https://a.test/x")))
 
 
 def test_an_observer_that_takes_the_event_is_not_counted_as_failing() -> None:
     """Count nothing for an observer whose ``notify`` returns normally."""
     before = OBSERVER_FAILURES[Recorder.__qualname__]
 
-    Emitter((Recorder(),)).emit(CallStarted(call=CallInfo(method="GET", url="https://a.test/x")))
+    Emitter((Recorder(),)).emit(
+        CallStarted(call=CallInfo(method="GET", url="https://a.test/x", full_url="https://a.test/x"))
+    )
 
     assert OBSERVER_FAILURES[Recorder.__qualname__] == before
+
+
+def test_a_call_info_requires_its_full_url() -> None:
+    """Refuse a ``CallInfo`` built without ``full_url``: a client fills it for every call, so it is never ``None``."""
+    with pytest.raises(TypeError, match="full_url"):
+        CallInfo(**cast("Any", {"method": "GET", "url": "x"}))

@@ -37,8 +37,6 @@ Every attempt adds a history line to the call's notes, which the client attaches
 Lines name statuses and exception types only, never a URL, header or message, so they carry no credential.
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 from dataclasses import dataclass, replace
@@ -58,6 +56,7 @@ from headgate._core import (
     RetryScheduled,
     Sleep,
     Timing,
+    timing_override,
 )
 from headgate.retry._classify import Attempted, Verdict, classify, nothing_sent
 from headgate.retry._policy import (
@@ -549,7 +548,9 @@ class RetryTransport(httpx2.AsyncBaseTransport):
             return budget
         own = self._budgets.get(budget)
         if own is None:
-            own = self._budgets[budget] = RetryBudget(budget, timing=self._timing)
+            # A budget reads the current timing when it is built: this one is built on the client's.
+            with timing_override(self._timing):
+                own = self._budgets[budget] = RetryBudget(budget)
         return own
 
     @override

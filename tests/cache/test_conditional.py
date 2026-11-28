@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate import Client, Expect, HttpCache, HttpOptions, TransportPolicy, as_bytes
+from headgate import CallPolicy, Client, Expect, HttpCache, HttpOptions, as_bytes
 from headgate.cache import Fresh, NotModified, Validator, conditional
 from tests.cache._helpers import every_get_rules
 
@@ -46,7 +46,7 @@ def _client(origin: _Origin, cache: HttpCache | None = None) -> Client:
     """Build a client over *origin*, caching through *cache* when given."""
     return Client(
         base_url="https://x",
-        policy=TransportPolicy(cache=cache),
+        policy=CallPolicy(cache=cache),
         http=HttpOptions(transport=httpx2.MockTransport(origin)),
     )
 
