@@ -305,6 +305,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- `copy.copy()` and `copy.deepcopy()` of a `RateBudget`, a `RetryBudget` or a `BreakerRegistry` return the object
+  itself, so a deep copy of a `CallPolicy`, or of anything else holding one, keeps sharing it. A copy was a new object
+  without the pacer, ledger or breakers the stack finds it by, which failed later with a bare `KeyError`, and a deep
+  copy failed with `cannot pickle '_thread.lock' object`. Nothing to write differently.
 - The value of every exported type alias evaluates at runtime: `headgate.Next.__value__`,
   `headgate.security.Resolver.__value__` and `headgate.security.AddressCheck.__value__` raised `NameError` for
   `Callable`, which their modules imported only for the type checker, so a library that reads an alias's value
