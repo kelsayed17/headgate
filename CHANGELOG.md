@@ -295,6 +295,14 @@ change the public API; such changes are listed under **Changed** and **Removed**
   a `bool`, each a `TypeError` naming the field. `paginate(pager=)` refuses an object without callable `first`,
   `page_items` and `next_page`, naming the first it lacks, where `pager=None` raised an `AttributeError`. Pass the
   page reader first: `Cursor(reader(Page), items=..., next=..., param=...)`.
+- `BearerAuth(token)` refuses an empty or blank token with `ValueError`, where it sent `Authorization: Bearer ` (the
+  unset environment variable), and a token that already starts with `Bearer `, in any case, where it sent
+  `Bearer Bearer abc`; a token that is not a `str` is a `TypeError`. Pass the token alone: `BearerAuth(token)`.
+- `StaticHeaderAuth` and `QueryParamAuth` take a mapping of names to `str` values with at least one entry. An empty
+  mapping, which stamped nothing, raises `ValueError`: build a client with no key with `auth=None` for
+  `StaticHeaderAuth({})`. A value of the wrong kind, a list of pairs, a bare `str` (`QueryParamAuth("key")` raised a
+  `ValueError` about a dictionary update sequence) or a value that is not a `str`, raises `TypeError` naming the
+  option.
 
 ### Removed
 

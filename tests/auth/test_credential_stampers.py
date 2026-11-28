@@ -64,7 +64,7 @@ class _InheritsAttach(_PairToken):
 
 @pytest.mark.parametrize(
     "auth",
-    [StaticHeaderAuth({}), QueryParamAuth({}), _Bearer()],
+    [StaticHeaderAuth({"X-Api-Key": "k"}), QueryParamAuth({"api_key": "k"}), _Bearer()],
     ids=["static-header", "query-param", "cached-token"],
 )
 def test_every_auth_is_a_credential_stamper(auth: httpx2.Auth) -> None:
