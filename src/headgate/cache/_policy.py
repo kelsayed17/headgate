@@ -27,7 +27,15 @@ from urllib.parse import unquote
 import httpx2
 from hishel import AsyncBaseStorage
 
-from headgate._core import check_collection, check_fragment, check_names, path_has_fragment, refuse_subclass
+from headgate._core import (
+    check_collection,
+    check_fragment,
+    check_names,
+    check_number,
+    check_statuses,
+    path_has_fragment,
+    refuse_subclass,
+)
 
 __all__ = ["HttpCache", "Partition", "caches_request", "stores_status"]
 
@@ -94,6 +102,8 @@ class HttpCache:
 
         The collections are frozen.
         """
+        if self.ttl is not None:
+            check_number("ttl", self.ttl, "seconds, a positive finite number, or None for no lifetime limit")
         if self.ttl is not None and not (self.ttl > 0 and math.isfinite(self.ttl)):
             msg = f"ttl must be a positive finite number of seconds, or None (got {self.ttl})"
             raise ValueError(msg)
@@ -116,7 +126,7 @@ class HttpCache:
                 _check_path(path)
             object.__setattr__(self, "paths", paths)
         _refuse_none("statuses", self.statuses, "(200,)", "200")
-        check_collection("statuses", self.statuses, "a collection of statuses, such as (200,)")
+        check_statuses("statuses", self.statuses, "a collection of statuses, such as (200,)")
         statuses = frozenset(self.statuses)
         _refuse_empty("statuses", statuses)
         if unstorable := sorted(status for status in statuses if not _storable(status)):

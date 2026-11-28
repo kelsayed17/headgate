@@ -1002,6 +1002,14 @@ class _NoReader:
         msg = "the pager ran before its read was checked"
         raise AssertionError(msg)
 
+    def page_items(self, page: object) -> list[object]:
+        """Never called, as :meth:`first` is not."""
+        raise AssertionError(page)
+
+    def next_page(self, page: object, request: object, response: object) -> None:
+        """Never called, as :meth:`first` is not."""
+        raise AssertionError(page, request, response)
+
 
 @dataclass(frozen=True)
 class _WrongReader(_NoReader):

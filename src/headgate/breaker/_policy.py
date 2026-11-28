@@ -6,6 +6,8 @@
 import math
 from dataclasses import dataclass
 
+from headgate._core import check_int, check_number
+
 __all__ = ["BreakerPolicy"]
 
 
@@ -23,7 +25,9 @@ class BreakerPolicy:
     recovery_timeout: float = 60.0
 
     def __post_init__(self) -> None:
-        """Refuse a threshold below one, and a negative, NaN or infinite cooldown."""
+        """Refuse a value of the wrong kind, a threshold below one, and a negative, NaN or infinite cooldown."""
+        check_int("failure_threshold", self.failure_threshold, "a number of failures, an int of at least 1")
+        check_number("recovery_timeout", self.recovery_timeout, "seconds, a finite number of 0 or more")
         if self.failure_threshold < 1:
             msg = f"failure_threshold must be >= 1 (got {self.failure_threshold})"
             raise ValueError(msg)

@@ -38,6 +38,7 @@ from headgate._core import (
     check_kind,
     check_names,
     check_not_letters,
+    check_number,
     check_options,
     origin_of,
     origin_text,
@@ -149,8 +150,9 @@ class Timeouts:
     pool: float | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a timeout that is not positive."""
+        """Refuse a timeout that is not a number, a ``bool`` included, or not positive."""
         for name, value in _set_phases(self):
+            check_number(name, value, "seconds, a number, or None to inherit")
             _check_positive(name, value)
 
     def over(self, base: Timeouts) -> Timeouts:
@@ -502,8 +504,16 @@ def check_middleware(middleware: Iterable[object]) -> None:
 
 
 def check_observers(observers: Iterable[object]) -> None:
-    """Refuse an observer whose ``notify`` is a coroutine function: the client calls it and never awaits it."""
+    """Refuse an observer with no callable ``notify``, or whose ``notify`` is a coroutine function.
+
+    Without one, every event would fail into ``observer_failures()``; a coroutine function's events would be dropped,
+    since the client calls ``notify`` and never awaits it.
+    """
     for item in observers:
+        if not callable(getattr(item, "notify", None)):
+            name = getattr(item, "__qualname__", type(item).__qualname__)
+            msg = f"observers= takes Observers, each with a notify(event) method (got {name}, which has none)"
+            raise TypeError(msg)
         if inspect.iscoroutinefunction(getattr(item, "notify", None)):
             msg = (
                 f"observer {type(item).__qualname__}'s notify is a coroutine function, so its events would be dropped "

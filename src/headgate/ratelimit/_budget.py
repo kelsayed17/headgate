@@ -37,7 +37,15 @@ from typing import TYPE_CHECKING, Final, Self, override
 
 import httpx2
 
-from headgate._core import SYSTEM_TIMING, BudgetBacklogError, BudgetPausedError, RateLimited, current_timing
+from headgate._core import (
+    SYSTEM_TIMING,
+    BudgetBacklogError,
+    BudgetPausedError,
+    RateLimited,
+    check_int,
+    check_kind,
+    current_timing,
+)
 from headgate.ratelimit._feedback import read_feedback
 from headgate.ratelimit._inflight import InFlightLimit
 from headgate.ratelimit._rate import Adaptive, Rate
@@ -389,6 +397,8 @@ class RateBudget:
     throttling, how many requests are in flight, how long a server pause has left) is read here; what spends from it is
     the client's own.
 
+    :raises TypeError: for a *rate* that is not a :class:`~headgate.Rate`, a *max_in_flight* that is not an ``int``,
+        and an *adaptive* that is neither an :class:`~headgate.ratelimit.Adaptive` nor ``None``.
     :raises ValueError: for a *max_in_flight* below one.
     """
 
@@ -402,6 +412,10 @@ class RateBudget:
         adaptive: Adaptive | None = DEFAULT_ADAPTIVE,
     ) -> None:
         """Build a budget and the pacer it spends through; see the class docstring for the parameters."""
+        check_kind("rate", rate, Rate, "a Rate, such as Rate.per_second(10)")
+        if max_in_flight is not None:
+            check_int("max_in_flight", max_in_flight, "a number of requests, an int of at least 1, or None")
+        check_kind("adaptive", adaptive, (Adaptive, type(None)), "an Adaptive, or None to never slow down")
         self._pacer = Pacer(rate, max_in_flight=max_in_flight, adaptive=adaptive, timing=current_timing())
         _PACERS[self] = self._pacer
 

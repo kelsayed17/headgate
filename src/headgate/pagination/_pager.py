@@ -28,10 +28,11 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, replace
 from types import MappingProxyType
-from typing import Protocol, override
+from typing import Final, Protocol, override
 
 import httpx2
 
+from headgate._core import check_callable, check_int, check_kind
 from headgate._request_body import Writer
 from headgate._responses import Expect, Reader
 from headgate._url import CallUrl
@@ -150,8 +151,38 @@ class WritingPager[I, P, B](ABC):
         """Return the request for the page after *page* (fetched by *request*, answered by *response*), or ``None``."""
 
 
+#: What each pager hook takes, for the refusal of one that cannot be called.
+_HOOKS: Final = {
+    "items": "a function returning a page's items",
+    "next": "a function returning a page's cursor or next URL",
+    "more": "a function saying whether a page follows",
+    "total": "a function returning the collection's exact size, or None",
+    "offset": "a function returning a body's offset",
+    "put": "a function returning the body for the next page",
+    "write": "a writer, such as a flavor's writer(Query), or None to send builtins as JSON",
+}
+
+
+def _check_pager(pager: object) -> None:
+    """Refuse a built-in *pager* whose reader, hooks, numbers or names are of the wrong kind, naming the field.
+
+    A pager is a value built at import, so a page reader passed in the wrong place, or a hook that is not a function,
+    fails there rather than at the first page of the first walk.
+    """
+    read: object = getattr(pager, "read", None)
+    check_kind("read", read, (Reader, Expect), "the page reader, a Reader or an Expect, such as reader(Page)")
+    for name, wanted in _HOOKS.items():
+        if (hook := getattr(pager, name, None)) is not None:
+            check_callable(name, hook, wanted)
+    for name in ("page_size", "start"):
+        if hasattr(pager, name):
+            check_int(name, getattr(pager, name), "a number of items or pages, an int")
+    check_kind("stop_on_empty", getattr(pager, "stop_on_empty", True), bool, "a bool")
+
+
 def _check_param(param: str) -> None:
-    """Refuse an empty query parameter name."""
+    """Refuse a query parameter name that is not a ``str``, or is empty."""
+    check_kind("param", param, str, "the name of a query parameter, a str")
     if not param:
         msg = "param must name a query parameter"
         raise ValueError(msg)
@@ -226,7 +257,8 @@ class Cursor[I, P, B = None](WritingPager[I, P, B]):
     stop_on_empty: bool = True
 
     def __post_init__(self) -> None:
-        """Refuse an empty parameter name."""
+        """Refuse a field of the wrong kind and an empty parameter name."""
+        _check_pager(self)
         _check_param(self.param)
 
     @override
@@ -280,7 +312,11 @@ class Offset[I, P, B = None](WritingPager[I, P, B]):
     write: Writer[B] | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a page size below one, a negative start, and a parameter name that is empty or used twice."""
+        """Refuse a field of the wrong kind, a page size below one, a negative start, and a bad parameter name.
+
+        A parameter name is bad when it is empty, or when ``param`` and ``size_param`` name the same one.
+        """
+        _check_pager(self)
         if self.page_size < 1:
             msg = f"page_size must be >= 1 (got {self.page_size})"
             raise ValueError(msg)
@@ -349,7 +385,8 @@ class PageNumber[I, P, B = None](WritingPager[I, P, B]):
     stop_on_empty: bool = True
 
     def __post_init__(self) -> None:
-        """Refuse a negative start and an empty parameter name."""
+        """Refuse a field of the wrong kind, a negative start and an empty parameter name."""
+        _check_pager(self)
         if self.start < 0:
             msg = f"start must be >= 0 (got {self.start})"
             raise ValueError(msg)
@@ -389,6 +426,10 @@ class LinkHeader[I, P]:
     items: Callable[[P], Sequence[I]]
     stop_on_empty: bool = True
 
+    def __post_init__(self) -> None:
+        """Refuse a field of the wrong kind."""
+        _check_pager(self)
+
     def first(self, request: PageRequest) -> PageRequest:
         """Return *request* unchanged, refusing one with a body: a ``Link`` target is fetched with a GET."""
         _check_get(request, "LinkHeader")
@@ -420,6 +461,10 @@ class NextUrl[I, P]:
     items: Callable[[P], Sequence[I]]
     next: Callable[[P], str | None]
     stop_on_empty: bool = True
+
+    def __post_init__(self) -> None:
+        """Refuse a field of the wrong kind."""
+        _check_pager(self)
 
     def first(self, request: PageRequest) -> PageRequest:
         """Return *request* unchanged, refusing one with a body: a next URL is fetched with a GET."""
@@ -458,6 +503,10 @@ class BodyCursor[I, P, B](WritingPager[I, P, B]):
     put: Callable[[B, str], B]
     write: Writer[B] | None = None
     stop_on_empty: bool = True
+
+    def __post_init__(self) -> None:
+        """Refuse a field of the wrong kind."""
+        _check_pager(self)
 
     @override
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
@@ -504,7 +553,8 @@ class BodyOffset[I, P, B](WritingPager[I, P, B]):
     write: Writer[B] | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a page size below one."""
+        """Refuse a field of the wrong kind and a page size below one."""
+        _check_pager(self)
         if self.page_size < 1:
             msg = f"page_size must be >= 1 (got {self.page_size})"
             raise ValueError(msg)

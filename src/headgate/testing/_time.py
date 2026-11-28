@@ -16,7 +16,15 @@ from contextlib import contextmanager
 from dataclasses import replace
 from typing import Final, Self
 
-from headgate._core import RandomSource, Timing, current_timing, system_random, timing_override
+from headgate._core import (
+    RandomSource,
+    Timing,
+    check_callable,
+    check_number,
+    current_timing,
+    system_random,
+    timing_override,
+)
 
 __all__ = ["TestClock", "instant_retries"]
 
@@ -47,7 +55,14 @@ class TestClock:
     def __init__(
         self, start: float = 0.0, *, epoch: float = 1_800_000_000.0, random: RandomSource = system_random
     ) -> None:
-        """Start the clock at *start*, its wall clock at *epoch* plus that, drawing jitter from *random*."""
+        """Start the clock at *start*, its wall clock at *epoch* plus that, drawing jitter from *random*.
+
+        :raises TypeError: for a *start* or *epoch* that is not a number, a ``bool`` included, and a *random* that
+            cannot be called.
+        """
+        check_number("start", start, "seconds, a number")
+        check_number("epoch", epoch, "Unix seconds, a number")
+        check_callable("random", random, "a function returning a draw in [0, 1)")
         self.now = start
         self.epoch = epoch
         self._random = random
