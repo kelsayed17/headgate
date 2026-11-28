@@ -71,8 +71,10 @@ member (ruff `SLF001`, which applies to `tests/` too).
    as it is imported. Its docstring takes what `headgate.policy`'s said about what "off" means. `headgate.policy`
    goes; CI's core-install import smoke test and the upstream-httpx isolation test import `headgate.testing` in its
    place (added during implementation), so the module the switch now lives in is still checked there.
-8. **`SecurityOptions(check: AddressCheck | None = None)`**, `None` being `forbidden_reason`, accepted only with
-   `block_private_hosts=True` (`ValueError`, as `resolver=`) and refused with `TypeError` when not callable.
+8. **`SecurityOptions(check: AddressCheck = forbidden_reason)`**: the default is the value itself, which needs no
+   guard; a check of your own is accepted only with `block_private_hosts=True` (`ValueError`, as `resolver=`),
+   `None` is a `TypeError` naming the default, and a value that is not callable a `TypeError`. (Changed with the
+   phase 4 review: the first cut defaulted to `None`, standing for `forbidden_reason`.)
    `AddressGuard`, `PinnedHTTPTransport` and `resolve_with_loop` stay in their private modules.
 9. **A curl transport holds a `GuardBinding` (`headgate._curl`) in its own instance dictionary**, which
    `guard_binding(transport)` reads with `vars()` and an `isinstance` check, so a wrapper forwarding attributes, or an

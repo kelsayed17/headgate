@@ -112,7 +112,7 @@ requests and credentials may go:
 | `trusted_origins` | `frozenset()` | origins besides `base_url`'s that may receive credentials |
 | `block_private_hosts` | `False` | `True` turns on the SSRF guard |
 | `resolver` | `None` | how the SSRF guard resolves names; only with the guard on |
-| `check` | `None` | which addresses the SSRF guard refuses (`forbidden_reason` when `None`); only with the guard on |
+| `check` | `forbidden_reason` | which addresses the SSRF guard refuses; one of your own only with the guard on |
 
 `ssl_context`, `limits` and `proxy` configure the default transport, so passing any of them with `transport=` is a
 `ValueError`; a custom transport owns its own TLS, pool and proxy. The SSRF guard cannot be combined with `proxy=`.

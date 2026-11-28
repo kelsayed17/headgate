@@ -117,10 +117,10 @@ name, so TLS still sends it as SNI and verifies the certificate against it, and 
 - `HttpOptions(security=SecurityOptions(resolver=...))` replaces the event loop's `getaddrinfo` (an async function of
   host and port returning addresses as text), and is accepted only with the guard on.
 - `SecurityOptions(check=...)` replaces the judgment of each address, a function of the address as text returning why
-  it is refused, or `None` to admit it, also accepted only with the guard on. Every hop, over every transport, is
-  judged by it. The default is `headgate.security.forbidden_reason`, which says why an address is refused
-  (`"loopback"`, `"site-local"`, ...), so a check can decide a few addresses and defer to it for the rest, such as a
-  test that reaches a loopback server:
+  it is refused, or `None` to admit it; one of your own is accepted only with the guard on. Every hop, over every
+  transport, is judged by it. The default is `headgate.security.forbidden_reason` itself, which says why an address is
+  refused (`"loopback"`, `"site-local"`, ...), so a check can decide a few addresses and defer to it for the rest, such
+  as a test that reaches a loopback server:
 
   ```python
   from headgate import HttpOptions, SecurityOptions
