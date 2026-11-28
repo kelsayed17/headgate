@@ -308,6 +308,21 @@ change the public API; such changes are listed under **Changed** and **Removed**
   raised the standard library's `Object of type Order is not JSON serializable` from inside the call; `NaN` and the
   infinities raise `ValueError` there too. Write `body=writer(Order)(order)` with a flavor's writer, or
   `body=Json(to_builtins(order))`.
+- `Reader` refuses a class with `TypeError` where it is built: `Reader(str)` type-checked and returned
+  `'<Response [200 OK]>'`. Write `expect=as_text` for the body as text, and `Reader(lambda r: Cls(r))` for a class
+  that is built from a response.
+- A codec's `decoder()` raises `TypeError` for a type it cannot decode, and `check_codec` asks it to, so a reader of
+  such a type fails where it is built. `headgate.msgspec.reader(Model)` of a pydantic model, or of a plain class
+  anywhere in the type (`list[Plain]`, `dict[str, Plain] | None`), built, and every 200 then raised
+  `ResponseParseError` as an unreadable body; it names the class, and a pydantic model's flavor:
+  write `headgate.pydantic.reader(Model)`. `headgate.pydantic` raises `TypeError` naming the class for one it has no
+  schema for, where it raised pydantic's `PydanticSchemaGenerationError`: catch `TypeError`. A codec of your own
+  whose `decoder()` builds for a plain class now fails `check_codec`: raise `TypeError` there.
+- A reader's `refuse=` that returns anything but a `RefusedError` or `None` raises `TypeError` naming `refuse=`, where
+  a call raised `ResponseParseError` ("unreadable 200 body") for the caller's own bug; a `response_check=` that does
+  the same raises `TypeError` naming `response_check=`, where it raised an `AttributeError`. `RefusedError(kind=)`
+  takes an `UpstreamStatusError` subclass, checked when it is built, where `kind=ValueError` was accepted and failed
+  when the refusal was raised: write `kind=UpstreamStatusError` or one of its subclasses.
 
 ### Removed
 

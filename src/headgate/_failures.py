@@ -50,6 +50,7 @@ __all__ = [
     "NESTED_TOO_DEEPLY",
     "SHAPE_ERRORS",
     "CallSite",
+    "ReaderMisuseError",
     "body_snippet",
     "is_transient_status",
     "loggable_url",
@@ -93,6 +94,15 @@ _AUTH_STATUSES = frozenset({httpx2.codes.UNAUTHORIZED, httpx2.codes.FORBIDDEN})
 #: index past the end, or indexing the wrong container; or nesting too deep to parse, which ``json.loads`` raises as
 #: ``RecursionError``).
 SHAPE_ERRORS: tuple[type[Exception], ...] = (DecodeError, ValueError, LookupError, TypeError, RecursionError)
+
+
+class ReaderMisuseError(TypeError):
+    """A reader's own hook broke its contract: the caller's bug, raised as it is, never as a body of the wrong shape.
+
+    A ``TypeError`` is otherwise a shape error (a decode function's ``Model(**data)`` raises one for a body of another
+    shape), so the client and the token mint let this one through before they map the rest.
+    """
+
 
 #: What every reader says of a body nested too deeply for its parser, whichever parser it is and whatever its format: a
 #: ``RecursionError``'s own message reports a stack size that varies by machine.
@@ -441,7 +451,7 @@ def mint_error(exc: Exception, *, source: str) -> Exception:
     if isinstance(exc, httpx2.HTTPError | OSError):
         method, log_url = _request_line(exc)
         return transport_error(exc, CallSite(source, method, f"{log_url} (token mint)"))
-    if isinstance(exc, SHAPE_ERRORS + _MISREAD_RESPONSE_ERRORS):
+    if isinstance(exc, SHAPE_ERRORS + _MISREAD_RESPONSE_ERRORS) and not isinstance(exc, ReaderMisuseError):
         too_deep = isinstance(exc, RecursionError)
         detail = NESTED_TOO_DEEPLY if too_deep else shorten(redact_secrets(str(exc))) or type(exc).__name__
         return ResponseParseError(f"unreadable token response: {detail}", source=source)

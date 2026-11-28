@@ -8,6 +8,7 @@ from typing import ClassVar, Final, cast, overload
 
 try:
     import msgspec
+    import msgspec.inspect
 except ImportError as exc:
     msg = "headgate.msgspec needs msgspec: pip install headgate[msgspec]"
     raise ImportError(msg) from exc
@@ -59,7 +60,11 @@ class MsgspecCodec:
 
         msgspec's stubs type a non-``type[T]`` argument as ``Any``; the cast records that the decoder decodes into
         exactly the type expression it was built from.
+
+        :raises TypeError: for a type that holds, anywhere, a class msgspec does not know (a pydantic model, a plain
+            class), which msgspec would build a decoder for and then refuse every body with: here, naming the class.
         """
+        _refuse_unknown_classes(type_)
         json_decoder = cast("msgspec.json.Decoder[T]", msgspec.json.Decoder(type_, strict=self._strict))
         return json_decoder.decode
 
@@ -76,6 +81,42 @@ class MsgspecCodec:
     def describe(self, error: Exception, /) -> str:
         """Return msgspec's diagnosis with any input it quotes dropped."""
         return _QUOTED_INPUT.sub(r"\1", str(error))
+
+
+def _refuse_unknown_classes(type_: object) -> None:
+    """Refuse *type_* when it holds a class msgspec reports as a custom type, which it cannot decode without a hook.
+
+    ``object`` is a custom type to :func:`msgspec.inspect.type_info` too, but msgspec decodes it as any value. The
+    walk keeps the nodes it has seen, so a recursive struct ends.
+
+    :raises TypeError: naming the class: a pydantic model is pointed to the pydantic flavor.
+    """
+    pending: list[object] = [msgspec.inspect.type_info(type_)]
+    seen: set[int] = set()
+    while pending:
+        node = pending.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, msgspec.inspect.CustomType):
+            if node.cls is not object:
+                raise TypeError(_unknown_class(node.cls))
+            continue
+        for field in msgspec.structs.fields(cast("msgspec.Struct", node)):
+            value = getattr(node, field.name)
+            items = value if isinstance(value, tuple) else (value,)
+            pending.extend(item for item in items if isinstance(item, msgspec.inspect.Type | msgspec.inspect.Field))
+
+
+def _unknown_class(cls: type) -> str:
+    """Describe *cls*, a class headgate.msgspec cannot decode, and what to write instead."""
+    name = cls.__qualname__
+    if any(base.__module__.partition(".")[0] == "pydantic" for base in cls.__mro__):
+        return f"headgate.msgspec cannot decode {name}, a pydantic model: use headgate.pydantic.reader({name})"
+    return (
+        f"headgate.msgspec cannot decode {name}, a class msgspec does not know: declare it as a msgspec.Struct, a "
+        f"dataclass or a TypedDict, or read it with Reader(lambda r: {name}(...))"
+    )
 
 
 #: msgspec, decoding strictly: the codec every shortcut here uses unless told otherwise.

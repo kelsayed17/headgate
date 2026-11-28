@@ -42,10 +42,29 @@ def _refused(codec: Codec, content: bytes, type_: TypeForm[object], what: str) -
     raise AssertionError(msg)
 
 
+class _Opaque:
+    """A class no serialization library can build from bytes: no fields, no schema, no hook."""
+
+
+def _refuses_unknown_classes(codec: Codec) -> None:
+    """Fail unless building *codec*'s decoder for a class it cannot decode raises ``TypeError``."""
+    try:
+        codec.decoder(_Opaque)
+    except TypeError:
+        return
+    msg = (
+        f"{type(codec).__name__} built a decoder for a class it cannot decode, so a reader of it would blame every "
+        "body on the server: its decoder() must raise TypeError for a type it does not support"
+    )
+    raise AssertionError(msg)
+
+
 def check_codec(codec: Codec, *, record: TypeForm[object] | None = None) -> None:
     """Check that *codec* keeps the promises headgate's own codecs keep; raise ``AssertionError`` at the first broken.
 
     * its ``media_type`` is a media type;
+    * building a decoder for a class it cannot decode (a plain class with no fields) raises ``TypeError``, so a reader
+      of a type the codec does not support fails where it is built, not at its first body as an unreadable response;
     * a value it writes reads back equal;
     * a value of the wrong type is refused, not coerced: a string where an ``int`` is declared, even ``"1"``;
     * malformed bytes (a body cut short at its middle, so a final delimiter is not all that is lost) are refused;
@@ -61,6 +80,7 @@ def check_codec(codec: Codec, *, record: TypeForm[object] | None = None) -> None
     if not _MEDIA_TYPE.fullmatch(codec.media_type):
         msg = f"{name}.media_type {codec.media_type!r} is not a media type, such as 'application/json'"
         raise AssertionError(msg)
+    _refuses_unknown_classes(codec)
 
     counts = codec.encoder(dict[str, int])({"a": 1})
     if (read := decode_with(codec, counts, dict[str, int])) != {"a": 1}:

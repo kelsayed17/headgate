@@ -4,10 +4,11 @@
 """The implementation of :mod:`headgate.pydantic`, which exports it and documents it."""
 
 import functools
+import re
 from typing import Any, ClassVar, Final, cast, overload
 
 try:
-    from pydantic import BaseModel, RootModel, TypeAdapter, ValidationError
+    from pydantic import BaseModel, PydanticSchemaGenerationError, RootModel, TypeAdapter, ValidationError
     from pydantic_core import PydanticKnownError, to_json, to_jsonable_python
 except ImportError as exc:
     msg = "headgate.pydantic needs pydantic: pip install headgate[pydantic]"
@@ -21,12 +22,16 @@ from typing_extensions import TypeForm
 
 from headgate._codec import decode_with, reader_for, writer_for
 from headgate._codec import drop_none as _drop_none
+from headgate._core import type_text
 from headgate._failures import NESTED_TOO_DEEPLY
 from headgate._request_body import Writer
 from headgate._responses import Reader
 from headgate.errors import RefusedError
 
 __all__ = ["CODEC", "PydanticCodec", "decode", "reader", "to_builtins", "writer"]
+
+#: The class pydantic names when it has no schema for one, as ``<class 'module.Name'>``.
+_SCHEMALESS: Final = re.compile(r"<class '([^']+)'>")
 
 #: How many of a validation's failures a ``DecodeError`` message names; the count of the rest follows them.
 _ERRORS_SHOWN = 5
@@ -76,9 +81,22 @@ def _cached_adapter(type_: TypeForm[object]) -> TypeAdapter[Any]:
 
 
 def _adapter[T](type_: TypeForm[T]) -> TypeAdapter[T]:
-    """Return the cached ``TypeAdapter`` for the type expression *type_*, typed by it."""
-    # The cache key is the type expression itself, so the entry it returns was built from exactly ``TypeForm[T]``.
-    return cast("TypeAdapter[T]", _cached_adapter(type_))
+    """Return the cached ``TypeAdapter`` for the type expression *type_*, typed by it.
+
+    :raises TypeError: for a type that holds a class pydantic has no schema for (a plain class, a msgspec struct),
+        naming the class, as the msgspec flavor refuses a class it does not know.
+    """
+    try:
+        # The cache key is the type expression itself, so the entry it returns was built from exactly ``TypeForm[T]``.
+        return cast("TypeAdapter[T]", _cached_adapter(type_))
+    except PydanticSchemaGenerationError as exc:
+        found = _SCHEMALESS.search(str(exc))
+        name = type_text(type_) if found is None else found[1].rpartition(".")[2]
+        msg = (
+            f"headgate.pydantic cannot decode {name}, a class pydantic has no schema for: declare it as a pydantic "
+            "model, a dataclass or a TypedDict, and read a msgspec.Struct with headgate.msgspec.reader"
+        )
+        raise TypeError(msg) from None
 
 
 class PydanticCodec:
