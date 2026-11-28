@@ -35,6 +35,9 @@ import headgate.retry
 import headgate.testing
 from tests.package.test_api_surface import _PUBLIC_MODULES
 
+if typing.TYPE_CHECKING:
+    from collections.abc import Iterator
+
 
 def _public_modules() -> list[str]:
     """Return every public module of headgate, the package first."""
@@ -150,8 +153,9 @@ def test_the_errors_guide_names_each_errors_one_home() -> None:
 
 def test_the_types_public_signatures_use_are_exported() -> None:
     """Export, beside ``Method``, ``Raw`` and ``Multipart``, the types their signatures name, so a wrapper can too."""
-    assert {"CallUrl", "RawContent", "UploadFiles"} <= set(headgate.__all__)
+    assert {"CallUrl", "RawContent", "UploadFile", "UploadFiles"} <= set(headgate.__all__)
     assert isinstance(headgate.RawContent, typing.TypeAliasType)
+    assert isinstance(headgate.UploadFile, typing.TypeAliasType)
     assert isinstance(headgate.UploadFiles, typing.TypeAliasType)
 
 
@@ -164,6 +168,66 @@ def test_call_url_stays_a_plain_union() -> None:
 def test_raw_content_names_only_what_can_be_imported() -> None:
     """Spell ``RawContent``'s factory out, rather than name a private alias a reader cannot import."""
     assert "BodyFactory" not in repr(headgate.RawContent.__value__)
+
+
+def _exported() -> set[int]:
+    """Return the ids of every object a public module exports."""
+    found: set[int] = set()
+    for name in _public_modules():
+        module = importlib.import_module(name)
+        found.update(id(getattr(module, export)) for export in module.__all__)
+    return found
+
+
+def _unexported_in(hint: object, exported: set[int], depth: int = 0) -> Iterator[str]:
+    """Yield each headgate class or type alias *hint* names, at any depth, that no public module exports."""
+    if depth > _MAX_HINT_DEPTH:
+        return
+    if isinstance(hint, typing.TypeAliasType | type):
+        name = getattr(hint, "__qualname__", hint.__name__)
+        if (hint.__module__ or "").startswith("headgate") and id(hint) not in exported:
+            yield f"{hint.__module__}.{name}"
+        if isinstance(hint, typing.TypeAliasType):
+            yield from _unexported_in(hint.__value__, exported, depth + 1)
+        return
+    origin = typing.get_origin(hint)
+    for part in (*typing.get_args(hint), *(() if origin is None or origin is hint else (origin,))):
+        yield from _unexported_in(part, exported, depth + 1)
+
+
+def _public_hints() -> Iterator[tuple[str, object]]:
+    """Yield every type a public signature, field or exported alias names, with where it is named."""
+    for module_name in _public_modules():
+        module = importlib.import_module(module_name)
+        for export in module.__all__:
+            value = getattr(module, export)
+            where = f"{module_name}.{export}"
+            if isinstance(value, typing.TypeAliasType):
+                yield where, value.__value__
+                continue
+            members = [value, *(vars(value).items() if isinstance(value, type) else ())]
+            for member in members:
+                name, func = member if isinstance(member, tuple) else ("", member)
+                func = func.fget if isinstance(func, property) else func
+                if name.startswith("_") and name not in {"", "__init__", "__call__"}:
+                    continue
+                if isinstance(func, type | types.FunctionType):
+                    for key, hint in typing.get_type_hints(func).items():
+                        yield f"{where}.{name or ''}:{key}", hint
+
+
+#: How deep a type expression is walked, past what any public signature nests.
+_MAX_HINT_DEPTH = 8
+
+
+def test_every_public_signature_names_only_exported_types() -> None:
+    """Name only exported headgate types in every public signature, field and alias, so a wrapper can write them."""
+    exported = _exported()
+    unexported = sorted(
+        {f"{found} <- {where}" for where, hint in _public_hints() for found in _unexported_in(hint, exported)}
+    )
+
+    assert not unexported
 
 
 @pytest.mark.parametrize(
@@ -242,7 +306,8 @@ async def test_what_a_client_hands_out_reports_its_home_after_a_bare_import() ->
 
 
 #: A script that resolves, after a bare ``import headgate``, the type hints of every class and function each public
-#: module exports, and of each function a class defines, and prints one line per one whose hints do not resolve.
+#: module exports, and of each function a class defines, and the value of every type alias it exports, and prints one
+#: line per one that does not resolve.
 _HINTS = """
 import importlib, sys, types, typing
 import headgate
@@ -251,6 +316,11 @@ for name in sys.argv[1:]:
     module = importlib.import_module(name)
     for export in module.__all__:
         value = getattr(module, export)
+        if isinstance(value, typing.TypeAliasType):
+            try:
+                value.__value__
+            except Exception as error:
+                failed.append(f"{name}.{export}.__value__: {type(error).__name__}: {error}")
         if isinstance(value, type | types.FunctionType):
             members = [value, *(vars(value).values() if isinstance(value, type) else ())]
             for member in members:
@@ -265,7 +335,7 @@ print("\\n".join(failed))
 
 
 async def test_every_exports_type_hints_resolve() -> None:
-    """Resolve ``typing.get_type_hints`` of every exported class and function, as msgspec and pydantic read them.
+    """Resolve ``typing.get_type_hints`` of every exported class and function, and every exported alias's value.
 
     It runs in a fresh process after a bare ``import headgate``, so a hint is only resolved by the names its own module
     binds at runtime: a name imported only for the type checker would fail here, as it would for a user.

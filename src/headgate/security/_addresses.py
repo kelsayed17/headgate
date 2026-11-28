@@ -15,12 +15,10 @@ or are reserved, so they are refused outright.
 import asyncio
 import ipaddress
 import socket
-from typing import TYPE_CHECKING, Final, override
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Final, override
 
 from headgate.errors import ForbiddenDestinationError
-
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Sequence
 
 __all__ = ["AddressCheck", "AddressGuard", "Resolver", "forbidden_reason", "resolve_with_loop"]
 

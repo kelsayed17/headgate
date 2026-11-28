@@ -21,7 +21,8 @@ client is written with, and each name only here:
 * codecs: :class:`Codec`, and :func:`reader_for`, :func:`writer_for` and :func:`decode_with`, which build a reader, a
   writer and a decode on any codec;
 * request bodies: :data:`Body`, one of :class:`Json`, :class:`Form`, :class:`Multipart` (its files an
-  :data:`UploadFiles`), :class:`Raw` (its content a :data:`RawContent`) and a :data:`Writer`'s :class:`EncodedBody`;
+  :data:`UploadFiles` of :data:`UploadFile` entries), :class:`Raw` (its content a :data:`RawContent`) and a
+  :data:`Writer`'s :class:`EncodedBody`;
 * auth: :class:`Auth`, the one type ``auth=`` takes, and :class:`BearerAuth`, :class:`StaticHeaderAuth`,
   :class:`QueryParamAuth`, :class:`SigningAuth`, :class:`CachedTokenAuth` and :class:`Minted`;
 * pages: :meth:`Client.paginate`'s :class:`Paginated`;
@@ -68,7 +69,18 @@ from headgate._options import (
     SecurityOptions,
     Timeouts,
 )
-from headgate._request_body import Body, EncodedBody, Form, Json, Multipart, Raw, RawContent, UploadFiles, Writer
+from headgate._request_body import (
+    Body,
+    EncodedBody,
+    Form,
+    Json,
+    Multipart,
+    Raw,
+    RawContent,
+    UploadFile,
+    UploadFiles,
+    Writer,
+)
 from headgate._responses import (
     Expect,
     Reader,
@@ -133,6 +145,7 @@ __all__ = [
     "StaticHeaderAuth",
     "Timeouts",
     "TransportError",
+    "UploadFile",
     "UploadFiles",
     "UpstreamStatusError",
     "ViewOptions",
