@@ -355,7 +355,6 @@ class Client:
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
         self._source = httpx2.URL(base_url).netloc.decode("ascii")  # host, and a port other than the default
         self._timing = current_timing()
-        hold_timing(auth, self._timing)
         self._breakers = _registry_of(policy, self._timing)
         self._response_check = http.response_check
         self._max_response_bytes = http.max_response_bytes
@@ -374,6 +373,8 @@ class Client:
             base_url=base_url, credentials=credentials, http=http, timeout=policy.timeout, transport=stack
         )
         vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client, breakers=self._breakers)
+        # Last, so a client refused above leaves the auth's clock unfixed.
+        hold_timing(auth, self._timing)
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse a subclass: an SDK holds a ``Client`` and calls it."""

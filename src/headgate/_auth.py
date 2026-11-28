@@ -676,6 +676,8 @@ class _TokenState[T]:
     attempts: int = 0
     minting: bool = False
     failed: _Failed | None = None
+    #: Whether a client fixed :attr:`clock` (:func:`hold_timing`), rather than a first call or seed.
+    held_by_client: bool = False
 
 
 #: The instance attribute a :class:`CachedTokenAuth`'s :class:`_TokenState` is kept under.
@@ -699,10 +701,25 @@ def hold_timing(auth: Auth | None, timing: Timing) -> None:
     """Have a :class:`CachedTokenAuth` given to a client run its token lifetimes on the client's *timing*.
 
     A client is built inside ``TestClock.install()`` and may be called after the block, so its auth's clock is fixed
-    when the client is built, unless the auth was already used.
+    when the client is built. An auth already on *timing*'s clock is left as it is, and one whose state was made by a
+    first use that holds no token and started no mint moves to it.
+
+    :raises TypeError: when the auth already runs on another clock: a client was built with it on another timing, or
+        it holds a token or minted on another, whose lifetime that clock measures.
     """
-    if isinstance(auth, CachedTokenAuth):
-        _state_of(auth, timing)
+    if not isinstance(auth, CachedTokenAuth):
+        return
+    state = _state_of(auth, timing)
+    if state.clock != timing.clock:
+        if state.held_by_client or state.held is not None or state.attempts:
+            msg = (
+                f"{type(auth).__name__} already runs its token lifetimes on another timing, which a client built with "
+                "it or the token it holds was measured on: build all of its clients under one timing (one "
+                "TestClock.install() block), and seed it inside the same block"
+            )
+            raise TypeError(msg)
+        state.clock = timing.clock
+    state.held_by_client = True
 
 
 def _check_margin(cls: type[CachedTokenAuth[Any]]) -> None:
@@ -751,9 +768,10 @@ class CachedTokenAuth[TokenT = str](Auth):
     obtained elsewhere.
 
     **It has no constructor to call.** The cache and its lock are made on first use, so a subclass's ``__init__`` sets
-    only its own state. A token's lifetime runs on the timing of the first client built with the auth
-    (:func:`headgate.timing.current_timing` then), so one given to a client built inside ``TestClock.install()``
-    expires on the test clock; an auth seeded or called before any client is built runs on the timing current then.
+    only its own state. A token's lifetime runs on the timing of the clients built with the auth
+    (:func:`headgate.timing.current_timing` when each is built), so one given to a client built inside
+    ``TestClock.install()`` expires on the test clock. Its clients share that one timing: a client built on another,
+    or on another than a token was seeded or minted on, raises ``TypeError`` (see :func:`hold_timing`).
 
     **What it stamps is declared**, in :attr:`credential_headers` and :attr:`credential_params`, the names every
     :class:`Auth` and middleware declares with: the headers :meth:`attach` sets (``authorization`` by default) and the
