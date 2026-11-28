@@ -71,7 +71,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `async def mint(self, request)` where you wrote `async def mint_flow(self, request)`. A mint that makes no request of
   its own yields only the `Minted`: where `mint_token()` returned `(token, lifetime)`, write
   `async def mint(self, request): yield Minted(token, lifetime)`. A subclass without a `mint` raises `TypeError` when
-  it is built, naming `mint`, instead of when it is defined.
+  it is built, naming `mint`, instead of when it is defined. A `mint` that is not an async generator function (a
+  coroutine that does `return Minted(...)`, a sync generator) raises `TypeError` when the class is defined, showing that
+  spelling, where the first call died with `'coroutine' object has no attribute 'aclose'`.
 - `CachedTokenAuth.seed()` takes the shape a mint ends with: write `auth.seed(Minted(token, lifetime))` for
   `auth.seed(token, lifetime)`.
 - `CachedTokenAuth` has no constructor: its cache and lock are made on first use, so a subclass whose `__init__`

@@ -792,6 +792,32 @@ class TestNoBaseConstructor:
         assert auth.mints == _MINT_AND_RE_MINT
 
 
+async def _coroutine_mint(_self: object, _request: httpx2.Request) -> Minted[str]:
+    """Mint with ``return``, not ``yield``."""
+    return Minted("tok", 3600.0)
+
+
+def _generator_mint(_self: object, _request: httpx2.Request) -> Iterator[Minted[str]]:
+    """Mint as a sync generator."""
+    yield Minted("tok", 3600.0)
+
+
+def _plain_mint(_self: object, _request: httpx2.Request) -> None:
+    """Mint as a plain function, which yields nothing."""
+
+
+@pytest.mark.parametrize(
+    ("mint", "kind"),
+    [(_coroutine_mint, "coroutine function"), (_generator_mint, "generator function"), (_plain_mint, "plain function")],
+    ids=["coroutine", "sync-generator", "plain"],
+)
+def test_a_mint_that_is_not_an_async_generator_is_refused_when_defined(mint: object, kind: str) -> None:
+    """Refuse a mint the flow cannot drive (R1), showing the spelling to write; it died at the first call."""
+    refusal = rf"_Wrong\.mint is a {kind}: write async def mint\(self, request\): \.\.\. yield Minted"
+    with pytest.raises(TypeError, match=refusal):
+        type("_Wrong", (CachedTokenAuth,), {"mint": mint})
+
+
 @pytest.mark.parametrize("hook", ["skips", "attach"])
 def test_an_async_token_hook_is_refused_when_defined(hook: str) -> None:
     """Refuse a coroutine-function ``skips`` or ``attach`` (R2): a coroutine is truthy, and is never awaited."""

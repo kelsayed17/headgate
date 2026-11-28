@@ -57,8 +57,9 @@ class _Bearer(CachedTokenAuth):
     """A bearer auth whose exchange never runs: it is seeded."""
 
     @override
-    def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         raise NotImplementedError
+        yield  # unreachable: the yield makes this the async generator a mint is
 
 
 def _auth(kind: str) -> StaticHeaderAuth | QueryParamAuth | CachedTokenAuth:
