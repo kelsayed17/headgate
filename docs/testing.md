@@ -5,8 +5,12 @@ with nothing private patched. Two seams make that possible:
 
 - **the network**: `fake_network(transport)` sends every `Client` built in its block on *transport*, in place of the
   network, even one the SDK gave a transport of its own (`HttpOptions(transport=AsyncCurlTransport(...))`). Only the
-  network is replaced: the SDK's rate budget, cache, retries and breaker run over the fake as they would in production,
-  and so do the requests a `CachedTokenAuth` mints with;
+  network is replaced: the SDK's rate budget, cache, retries, breaker and SSRF guard run over the fake as they would in
+  production, and so do the requests a `CachedTokenAuth` mints with. It is the network only: a transport of the SDK's
+  that does more than send (one that adds a header, say) is replaced too, so that behavior belongs in middleware.
+  The guard resolves names inside the fake network, so a guarded SDK needs no DNS (see
+  [names](#names-inside-the-fake-network)). `with fake_network(fake) as net:` yields a `FakeNetwork`: `net.transport`
+  is the fake, and `net.clients` the clients built in the block, in order;
 - **time**: `TestClock.install()` and `instant_retries()` set the timing the clients built in their block run on.
 
 All three are read when a client is **constructed**, so build the SDK inside them; entering one around a client that
@@ -52,6 +56,20 @@ fake = (
 - A request with no route raises `UnmatchedRequestError`, an `AssertionError` the client neither retries nor maps, naming
   the request and the routes there are.
 
+## Names inside the fake network
+
+A client with the SSRF guard on (`SecurityOptions(block_private_hosts=True)`) resolves each host before it sends.
+Inside `fake_network`, the guard resolves through the fake network instead of the system's resolver, and instead of a
+`resolver=` the SDK set itself: every name resolves to one public address, so the test makes no DNS query and passes
+offline. `FakeTransport.resolve(host, *addresses)` gives a host the answer a test needs, so the guard's refusals can
+be tested too: a private address among them is refused with `ForbiddenDestinationError`, and no address at all is a
+name that does not resolve, a `TransportError`. The guard's checks still run, so a private IP literal is refused
+without any lookup.
+
+```python
+fake = FakeTransport().reply("GET", "/v1/ping", 200).resolve("internal.example.com", "10.0.0.7")
+```
+
 ## TestClock and instant retries
 
 `TestClock(start=0.0, *, epoch=..., random=...)` is a monotonic clock that moves only when told: `clock.now`,
@@ -95,7 +113,8 @@ returns that registry (or `None` for a client without a breaker); assert on it w
 
 ## What a client was built with
 
-A client fixes its options in its `__init__`, so a test of its configuration reads them back. `cache_of(client)` returns
+A client fixes its options in its `__init__`, so a test of its configuration reads them back, from the `Client` the SDK
+built, which `fake_network`'s handle holds: `net.clients`, so the test never reaches into the SDK. `cache_of(client)` returns
 the `HttpCache` it was built with (or `None`), whose `methods`, `paths` and `statuses` say what it stores.
 `budget_for(client, url)` returns the `RateBudget` a request to `url` spends from: that of the first `Route` that
 matches it, when that route sets `rate=`, or the default; without a `url`, the default budget, built from the policy's
@@ -107,23 +126,25 @@ from headgate.testing import FakeTransport, budget_for, cache_of, fake_network
 
 
 def test_candles_have_a_budget_of_their_own() -> None:
-    client = ExchangeClient(api_key="test")
+    with fake_network(FakeTransport()) as net:
+        ExchangeClient(api_key="test")
+    [client] = net.clients
     assert budget_for(client, "products/BTC-USD/candles") is not budget_for(client)
     assert budget_for(client).rate == Rate.per_second(10)
 
 
-async def test_only_the_archives_are_cached(storage) -> None:
+async def test_only_the_archives_are_cached(storage: AsyncSqliteStorage) -> None:
     fake = FakeTransport().reply("GET", "/archives/2025.zip", 200).reply("GET", "/status", 200)
-    with fake_network(fake):
-        client = ArchiveClient(cache_storage=storage)
-    async with client:
+    with fake_network(fake) as net:
+        archive = ArchiveClient(cache_storage=storage)
+    async with archive:
         for _ in range(2):
-            await client.archive("2025.zip")
-            await client.status()
+            await archive.archive("2025.zip")
+            await archive.status()
 
     assert len(fake.calls_to("GET", "/archives/2025.zip")) == 1, "the second came from the cache"
     assert len(fake.calls_to("GET", "/status")) == 2, "the status is never cached"
-    cache = cache_of(client)
+    cache = cache_of(net.clients[0])
     assert cache is not None and cache.ttl == 86_400.0
 ```
 

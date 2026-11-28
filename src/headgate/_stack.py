@@ -39,7 +39,7 @@ cookie jar refuses every cookie unless ``HttpOptions(cookies=True)``.
 
 import sys
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import TYPE_CHECKING, Final, cast
 
@@ -57,7 +57,7 @@ from headgate.ratelimit._transport import RateLimitTransport
 from headgate.retry._policy import SEND_ONCE
 from headgate.retry._tracking import SendTrackingTransport
 from headgate.retry._transport import RetryTransport
-from headgate.security._addresses import AddressGuard, resolve_with_loop
+from headgate.security._addresses import AddressGuard, Resolver, resolve_with_loop
 from headgate.security._credentials import CredentialGuard
 from headgate.security._downgrade import refuse_https_downgrade
 from headgate.security._transport import PinnedHTTPTransport, address_hook
@@ -71,11 +71,25 @@ if TYPE_CHECKING:
     from headgate._options import CallPolicy, HttpOptions, Timeouts
     from headgate.ratelimit._budgets import PathBudgets
 
-__all__ = ["NETWORK_OVERRIDE", "Credentials", "build_http_client", "build_transport_stack"]
+__all__ = ["NETWORK_OVERRIDE", "Credentials", "NetworkOverride", "build_http_client", "build_transport_stack"]
 
-#: The network transport every client built while it is set sends on, in place of its own:
-#: :func:`headgate.testing.fake_network` sets it.
-NETWORK_OVERRIDE: Final = ContextVar[httpx2.AsyncBaseTransport | None]("headgate_network_override", default=None)
+
+@dataclass(frozen=True, slots=True)
+class NetworkOverride:
+    """The network a client built while :data:`NETWORK_OVERRIDE` is set runs on, in place of its own.
+
+    ``transport`` replaces the network transport, even one the client was given; ``resolver`` replaces the SSRF
+    guard's resolver, even one the client was given, so no name is looked up on the real network; and ``clients``
+    collects each client whose construction finished, in order.
+    """
+
+    transport: httpx2.AsyncBaseTransport
+    resolver: Resolver
+    clients: list[object] = field(default_factory=list)
+
+
+#: The network every client built while it is set runs on: :func:`headgate.testing.fake_network` sets it.
+NETWORK_OVERRIDE: Final = ContextVar[NetworkOverride | None]("headgate_network_override", default=None)
 
 #: The response hooks, in the order they run on every hop.
 _RESPONSE_HOOKS = (refuse_https_downgrade, refuse_unreplayable_redirect, drop_followed_redirect_body)
@@ -183,7 +197,7 @@ def build_transport_stack(
 def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
     """Return the network transport: a test's override, the caller's own, or an HTTP/2 pool reading no environment."""
     if (override := NETWORK_OVERRIDE.get()) is not None:
-        return override
+        return override.transport
     if (transport := http.transport) is not None:
         if (bind := _guard_binder(transport)) is not None:
             bind(_address_guard(http))
@@ -212,11 +226,17 @@ def _guard_binder(transport: httpx2.AsyncBaseTransport) -> Callable[[AddressGuar
 
 
 def _address_guard(http: HttpOptions) -> AddressGuard | None:
-    """Return the SSRF guard *http* asks for, or ``None`` when it allows private hosts."""
+    """Return the SSRF guard *http* asks for, or ``None`` when it allows private hosts.
+
+    Under a test's fake network, the guard resolves names through the fake, in place of the client's own resolver.
+    """
     security = http.security
     if not security.block_private_hosts:
         return None
-    resolver = resolve_with_loop if security.resolver is None else security.resolver
+    if (override := NETWORK_OVERRIDE.get()) is not None:
+        resolver = override.resolver
+    else:
+        resolver = resolve_with_loop if security.resolver is None else security.resolver
     return AddressGuard(resolver, check=security.check)
 
 
@@ -226,7 +246,8 @@ def _request_hooks(
     """Return the request hooks: the credential guard, then the SSRF guard when the network transport cannot pin."""
     hooks: list[Callable[[httpx2.Request], Awaitable[None]]] = [credentials]
     addresses = _address_guard(http)
-    network = NETWORK_OVERRIDE.get() or http.transport
+    override = NETWORK_OVERRIDE.get()
+    network = http.transport if override is None else override.transport
     unpinned = network is not None and _guard_binder(network) is None
     if addresses is not None and unpinned:
         hooks.append(address_hook(addresses))
