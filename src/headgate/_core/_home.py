@@ -8,6 +8,7 @@ A class defined in a private module would otherwise name that module in its ``re
 """
 
 import types
+import typing
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
@@ -25,4 +26,9 @@ def rehome(module: str, namespace: Mapping[str, object]) -> None:
     for name in cast("list[str]", namespace["__all__"]):
         value = namespace[name]
         if isinstance(value, type | types.FunctionType):
+            # typing files overloads under their function's module, so they move with it.
+            overloads = typing.get_overloads(value) if isinstance(value, types.FunctionType) else []
             value.__module__ = module
+            for form in overloads:
+                form.__module__ = module
+                typing.overload(form)

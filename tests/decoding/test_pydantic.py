@@ -23,8 +23,9 @@ from pydantic_core import PydanticCustomError
 from headgate import Client, HttpOptions
 from headgate import msgspec as msgspec_flavor
 from headgate._failures import MESSAGE_TEXT_LIMIT
+from headgate._pydantic import _schema_names
 from headgate.errors import DecodeError, RefusedError, ResponseParseError
-from headgate.pydantic import PydanticCodec, _schema_names, decode, reader, to_builtins, writer
+from headgate.pydantic import PydanticCodec, decode, reader, to_builtins, writer
 from headgate.testing import FakeTransport
 from tests.support.responses import response
 
@@ -207,6 +208,7 @@ def test_importing_without_pydantic_names_the_extra(monkeypatch: pytest.MonkeyPa
     monkeypatch.setitem(sys.modules, "pydantic", None)
     monkeypatch.setitem(sys.modules, "pydantic_core", None)
     monkeypatch.delitem(sys.modules, "headgate.pydantic")
+    monkeypatch.delitem(sys.modules, "headgate._pydantic")
     with pytest.raises(ImportError, match=r"pip install headgate\[pydantic\]") as caught:
         importlib.import_module("headgate.pydantic")
     assert isinstance(caught.value.__cause__, ImportError)

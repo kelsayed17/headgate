@@ -40,8 +40,9 @@ What "off" means:
   routes build from ``rate=``, and a shared ``RateBudget`` passed in.
 """
 
-from headgate._core import policy_disabled, rehome
+from headgate._core import policy_disabled
+from headgate._core import rehome as _rehome
 
 __all__ = ["policy_disabled"]
 
-rehome(__name__, globals())
+_rehome(__name__, globals())

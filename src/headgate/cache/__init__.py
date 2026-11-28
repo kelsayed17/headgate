@@ -19,7 +19,7 @@ storage fault degrades to the network instead of failing the call.
   :class:`NotModified`.
 """
 
-from headgate._core import rehome
+from headgate._core import rehome as _rehome
 from headgate.cache._conditional import Fresh, NotModified, Validator, conditional
 from headgate.cache._policy import Partition
 
@@ -31,4 +31,4 @@ __all__ = [
     "conditional",
 ]
 
-rehome(__name__, globals())
+_rehome(__name__, globals())

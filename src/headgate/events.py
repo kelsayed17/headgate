@@ -28,8 +28,8 @@ from headgate._core import (
     Observer,
     RateLimited,
     RetryScheduled,
-    rehome,
 )
+from headgate._core import rehome as _rehome
 
 __all__ = [
     "AttemptFinished",
@@ -48,4 +48,4 @@ __all__ = [
     "RetryScheduled",
 ]
 
-rehome(__name__, globals())
+_rehome(__name__, globals())

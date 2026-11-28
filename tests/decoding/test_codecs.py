@@ -392,6 +392,7 @@ def test_importing_without_msgspec_names_the_extra(monkeypatch: pytest.MonkeyPat
     """Fail the import with the install hint when msgspec is missing, chained to the original ``ImportError``."""
     monkeypatch.setitem(sys.modules, "msgspec", None)
     monkeypatch.delitem(sys.modules, "headgate.msgspec")
+    monkeypatch.delitem(sys.modules, "headgate._msgspec")
     with pytest.raises(ImportError, match=r"pip install headgate\[msgspec\]") as caught:
         importlib.import_module("headgate.msgspec")
     assert isinstance(caught.value.__cause__, ImportError)

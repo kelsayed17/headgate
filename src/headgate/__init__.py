@@ -47,7 +47,8 @@ from headgate._auth import (
 from headgate._call_options import CallOptions, RequestOptions
 from headgate._client import Client, Method
 from headgate._codec import Codec, decode_with, reader_for, writer_for
-from headgate._core import call_view, rehome
+from headgate._core import call_view
+from headgate._core import rehome as _rehome
 from headgate._errors import (
     AuthError,
     ClientError,
@@ -143,4 +144,4 @@ __all__ = [
     "writer_for",
 ]
 
-rehome(__name__, globals())
+_rehome(__name__, globals())
