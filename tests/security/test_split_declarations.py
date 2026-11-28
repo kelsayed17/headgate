@@ -63,7 +63,7 @@ def _split_auth() -> type:
 
 def _split_signer() -> type:
     class SplitSigner(SigningAuth):
-        signed_headers: ClassVar = frozenset("X-Api-Key")
+        credential_headers: ClassVar = frozenset("X-Api-Key")
 
         @override
         def sign(self, request: httpx2.Request) -> None:

@@ -17,6 +17,7 @@ import pytest
 from headgate import (
     Auth,
     AuthError,
+    CachedTokenAuth,
     Client,
     HttpCache,
     HttpOptions,
@@ -47,7 +48,7 @@ _SIGNED_AND_RE_SIGNED = 2
 class _Signer(SigningAuth):
     """Signs each request with a counter and the body it covers, so each signature differs from the last."""
 
-    signed_headers: ClassVar = frozenset({"X-Signature", "X-Nonce"})
+    credential_headers: ClassVar = frozenset({"X-Signature", "X-Nonce"})
 
     def __init__(self) -> None:
         """Count from 1."""
@@ -73,7 +74,7 @@ class _PublicReads(_Signer):
 class _QuerySigner(SigningAuth):
     """Signs into the query, as an exchange's ``signature`` parameter."""
 
-    signed_params: ClassVar = frozenset({"signature"})
+    credential_params: ClassVar = frozenset({"signature"})
 
     @override
     def sign(self, request: httpx2.Request) -> None:
@@ -371,11 +372,11 @@ async def test_a_signed_parameter_is_declared_and_its_presence_skips() -> None:
     assert is_secret_param("signature")
 
 
-def test_it_declares_its_headers_lower_cased_and_is_a_credential_stamper() -> None:
-    """Report the signed headers lower-cased, as the guard and the cache compare them."""
+def test_it_declares_its_headers_as_written_and_is_a_credential_stamper() -> None:
+    """Report the signed headers as declared: the guard and the cache compare them case-insensitively."""
     auth = _Signer()
     assert isinstance(auth, CredentialStamper)
-    assert auth.credential_headers == {"x-signature", "x-nonce"}
+    assert auth.credential_headers == {"X-Signature", "X-Nonce"}
     assert auth.credential_params == frozenset()
 
 
@@ -413,20 +414,20 @@ def test_a_signer_declaring_nothing_fails_when_it_is_defined() -> None:
                 return "k"
 
     class _Declared(_Base):
-        signed_headers: ClassVar = frozenset({"X-Key"})
-        signed_params: ClassVar = frozenset({f"headgate_test_{uuid.uuid4().hex}"})
+        credential_headers: ClassVar = frozenset({"X-Key"})
+        credential_params: ClassVar = frozenset({f"headgate_test_{uuid.uuid4().hex}"})
 
         @override
         def key(self) -> str:
             return "k"
 
-    assert _Declared().credential_headers == {"x-key"}
+    assert _Declared().credential_headers == {"X-Key"}
 
 
 class _ClockSigner(SigningAuth):
     """Signs each attempt with the time on *clock*, as a timestamp a server checks for freshness."""
 
-    signed_headers: ClassVar = frozenset({"X-Signed-At"})
+    credential_headers: ClassVar = frozenset({"X-Signed-At"})
 
     def __init__(self, clock: TestClock) -> None:
         """Read the time from *clock*."""
@@ -481,3 +482,52 @@ async def test_a_cached_clients_401_is_signed_again_once(auth: type[SigningAuth]
             await client.get("orders", expect=RESPONSE)
 
     assert len(sent) == _SIGNED_AND_RE_SIGNED
+
+
+class _MixedCaseSigner(SigningAuth):
+    """Declares what it signs with the names every seam uses, in mixed case."""
+
+    credential_headers: ClassVar = frozenset({"X-Sig"})
+
+    @override
+    def sign(self, request: httpx2.Request) -> None:
+        request.headers["X-Sig"] = "signed"
+
+
+async def test_a_signer_declares_with_the_names_every_seam_uses() -> None:
+    """Accept a signer declaring ``credential_headers`` (E6), and withhold it from a cross-origin redirect hop."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        if request.url.host == "api.example":
+            return httpx2.Response(302, headers={"Location": "https://other.example/landing"})
+        return httpx2.Response(200)
+
+    client, sent = _client(_MixedCaseSigner(), answer)
+    async with client:
+        await client.get("orders", expect=RESPONSE)
+        await client.get("orders", headers={"x-sig": "mine"}, expect=RESPONSE)
+
+    assert [(request.url.host, request.headers.get("x-sig")) for request in sent] == [
+        ("api.example", "signed"),
+        ("other.example", None),
+        ("api.example", "mine"),
+        ("other.example", None),
+    ]
+
+
+def _declared_headers(_self: object) -> frozenset[str]:
+    return frozenset({"x-sig"})
+
+
+@pytest.mark.parametrize(
+    "define",
+    [
+        lambda: type("_P", (SigningAuth,), {"credential_headers": property(_declared_headers), "sign": print}),
+        lambda: type("_P", (CachedTokenAuth,), {"credential_headers": property(_declared_headers), "attach": print}),
+    ],
+    ids=["signing", "cached-token"],
+)
+def test_a_declaration_through_a_property_is_refused_when_defined(define: Callable[[], type]) -> None:
+    """Refuse a ``credential_headers`` property on a signer or a token auth: they declare in class attributes."""
+    with pytest.raises(TypeError, match=r"credential_headers is declared through a property: declare it as a class"):
+        define()

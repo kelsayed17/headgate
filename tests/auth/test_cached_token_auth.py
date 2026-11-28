@@ -478,7 +478,7 @@ class TestRotationRefusal:
 class _HoppingAuth(CachedTokenAuth[tuple[str, str]]):
     """Mint through requests the flow yields (a cookie-plus-crumb exchange) and ride as a header pair."""
 
-    token_headers = frozenset({"X-Cookie", "X-Crumb"})
+    credential_headers = frozenset({"X-Cookie", "X-Crumb"})
 
     def __init__(self) -> None:
         """Start with no mints counted."""

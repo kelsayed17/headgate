@@ -70,7 +70,7 @@ async def test_a_generic_subclass_is_refused_at_the_first_attach() -> None:
 class _StructWithAttach(CachedTokenAuth[dict[str, str]]):
     """Mints a struct token and attaches its access half."""
 
-    token_headers: ClassVar = frozenset({"Authorization"})
+    credential_headers: ClassVar = frozenset({"Authorization"})
 
     @override
     async def mint_token(self) -> tuple[dict[str, str], float]:
