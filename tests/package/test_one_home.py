@@ -10,10 +10,16 @@ share a name but are two readers.
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import dataclasses
 import importlib
+import pickle
 import pkgutil
 import re
+import sys
+import traceback
+import types
 from collections import defaultdict
 from pathlib import Path
 
@@ -69,15 +75,57 @@ def test_a_top_level_name_is_not_re_exported_by_its_subpackage(module_name: str,
     assert name not in module.__all__
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["ClientError", "TransportError", "ClientTimeoutError", "UpstreamStatusError", "AuthError", "RateLimitError"],
-)
-def test_a_top_level_error_is_defined_in_errors_but_exported_from_the_top_level(name: str) -> None:
-    """Keep the error importable from ``headgate.errors``, its defining module, but list it in ``headgate`` only."""
-    assert getattr(headgate.errors, name) is getattr(headgate, name)
-    assert name not in headgate.errors.__all__
+_TOP_LEVEL_ERRORS = [
+    "ClientError",
+    "TransportError",
+    "ClientTimeoutError",
+    "UpstreamStatusError",
+    "AuthError",
+    "RateLimitError",
+]
+
+
+@pytest.mark.parametrize("name", _TOP_LEVEL_ERRORS)
+async def test_a_top_level_error_has_one_home(name: str) -> None:
+    """Export the error from ``headgate`` only: importing it from ``headgate.errors`` raises ``ImportError``."""
     assert name in headgate.__all__
+    assert name not in headgate.errors.__all__
+    assert not hasattr(headgate.errors, name)
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", f"from headgate.errors import {name}", stderr=asyncio.subprocess.PIPE
+    )
+    _, stderr = await process.communicate()
+    assert process.returncode != 0
+    assert f"ImportError: cannot import name '{name}' from 'headgate.errors'" in stderr.decode()
+
+
+@pytest.mark.parametrize("module_name", _public_modules())
+def test_every_export_reports_its_home(module_name: str) -> None:
+    """Report, in ``__module__``, the public module every exported class and function is imported from."""
+    module = importlib.import_module(module_name)
+    exported = [getattr(module, name) for name in module.__all__]
+    homes = {value.__qualname__: value.__module__ for value in exported if isinstance(value, type | types.FunctionType)}
+
+    assert homes == dict.fromkeys(homes, module_name)
+
+
+def test_a_traceback_names_the_public_home() -> None:
+    """Print ``headgate.UpstreamStatusError`` and ``headgate.testing.UnmatchedRequestError``, what a user imports."""
+    status = headgate.UpstreamStatusError("boom", status_code=500)
+    unmatched = headgate.testing.UnmatchedRequestError("no reply for GET /x")
+
+    assert "".join(traceback.format_exception(status)).startswith("headgate.UpstreamStatusError: ")
+    assert "".join(traceback.format_exception(unmatched)).startswith("headgate.testing.UnmatchedRequestError: ")
+
+
+@pytest.mark.parametrize("name", _TOP_LEVEL_ERRORS)
+def test_a_top_level_error_pickles_by_its_public_home(name: str) -> None:
+    """Pickle the class by the home it reports, which ``pickle`` refuses unless that name is the class."""
+    kind = getattr(headgate, name)
+    error = kind("boom", status_code=503) if issubclass(kind, headgate.UpstreamStatusError) else kind("boom")
+
+    assert f"headgate\n{name}".encode() in pickle.dumps(kind, protocol=0)
+    assert type(copy.deepcopy(error)) is kind
 
 
 def test_the_errors_guide_names_each_errors_one_home() -> None:
@@ -117,3 +165,25 @@ def test_the_fault_steps_live_in_the_testing_kit() -> None:
         importlib.import_module("headgate.testing.faults")
     faults = importlib.import_module("headgate.testing._faults")
     assert set(faults.__all__) <= set(headgate.testing.__all__)
+
+
+async def test_what_a_client_hands_out_reports_its_home_after_a_bare_import() -> None:
+    """Name the public homes of the events, errors and timing a client hands out, with only ``headgate`` imported.
+
+    An observer receives events, and a caller errors, from a client whose module may be all the program imported.
+    """
+    code = (
+        "import headgate, headgate._core as core, headgate._errors as errors\n"
+        "print(core.CallStarted.__module__, core.CallView.__module__, core.Timing.__module__,"
+        " errors.CircuitOpenError.__module__, errors.UpstreamStatusError.__module__)"
+    )
+    process = await asyncio.create_subprocess_exec(sys.executable, "-c", code, stdout=asyncio.subprocess.PIPE)
+    stdout, _ = await process.communicate()
+
+    assert stdout.decode().split() == [
+        "headgate.events",
+        "headgate.events",
+        "headgate.timing",
+        "headgate.errors",
+        "headgate",
+    ]

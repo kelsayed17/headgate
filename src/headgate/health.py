@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, NamedTuple
 
-from headgate._core import OBSERVER_FAILURES, BreakerState
+from headgate._core import OBSERVER_FAILURES, BreakerState, rehome
 from headgate.cache._transport import CACHE_DEGRADATIONS
 
 if TYPE_CHECKING:
@@ -58,3 +58,6 @@ def cache_degradations() -> dict[str, int]:
 def observer_failures() -> dict[str, int]:
     """Return, per observer class, how many events its ``notify`` raised on, which headgate swallowed."""
     return dict(OBSERVER_FAILURES)
+
+
+rehome(__name__, globals())

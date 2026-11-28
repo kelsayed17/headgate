@@ -28,6 +28,7 @@ from headgate._core._events import (
     RateLimited,
     RetryScheduled,
 )
+from headgate._core._home import rehome
 from headgate._core._kinds import (
     check_callable,
     check_collection,
@@ -117,6 +118,7 @@ __all__ = [
     "policy_disabled",
     "policy_is_disabled",
     "progress_of",
+    "rehome",
     "retry_after_of",
     "segments_hold",
     "system_random",

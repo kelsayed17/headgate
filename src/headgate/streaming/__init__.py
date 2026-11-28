@@ -8,6 +8,9 @@ instead of being buffered and capped like a verb's. :class:`StreamOptions` are t
 """
 
 from headgate._call_options import StreamOptions
+from headgate._core import rehome
 from headgate.streaming._stream import DEFAULT_MAX_EVENT_SIZE, Stream
 
 __all__ = ["DEFAULT_MAX_EVENT_SIZE", "Stream", "StreamOptions"]
+
+rehome(__name__, globals())

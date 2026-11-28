@@ -10,6 +10,7 @@ custom scheme implements too, and those that can carry a body :class:`WritingPag
 :func:`parse_link_header` is the RFC 8288 parser :class:`LinkHeader` reads with.
 """
 
+from headgate._core import rehome
 from headgate.pagination._link import Link, parse_link_header
 from headgate.pagination._pager import (
     BodyCursor,
@@ -38,3 +39,5 @@ __all__ = [
     "WritingPager",
     "parse_link_header",
 ]
+
+rehome(__name__, globals())

@@ -28,6 +28,8 @@ from __future__ import annotations
 import functools
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, overload
 
+from headgate._core import rehome
+
 try:
     from pydantic import BaseModel, RootModel, TypeAdapter, ValidationError
     from pydantic_core import PydanticKnownError, to_json, to_jsonable_python
@@ -246,3 +248,6 @@ def to_builtins(value: object, *, drop_none: bool = False) -> object:
     """
     out = to_jsonable_python(value, by_alias=True)
     return _drop_none(out) if drop_none else out
+
+
+rehome(__name__, globals())

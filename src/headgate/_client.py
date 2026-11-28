@@ -57,23 +57,18 @@ from headgate._core import (
     BREAKER_GATE,
     EXPLICIT_HEADERS,
     SILENT,
-    BreakerChanged,
     BudgetBacklogError,
     CallContext,
-    CallFinished,
-    CallInfo,
-    CallStarted,
     Emitter,
     ExplicitHeaders,
     Slot,
     check_kind,
-    current_timing,
     named,
     policy_is_disabled,
-    timing_override,
     url_path,
 )
 from headgate._deprecation import announce_deprecation
+from headgate._errors import ClientError, ClientTimeoutError, RateLimitError
 from headgate._failures import (
     SHAPE_ERRORS,
     CallSite,
@@ -118,21 +113,15 @@ from headgate.cache._transport import (
     stamp_ttl,
     store_accepted,
 )
-from headgate.errors import (
-    CircuitOpenError,
-    ClientError,
-    ClientTimeoutError,
-    DecodeError,
-    ForbiddenDestinationError,
-    RateLimitError,
-    RefusedError,
-)
+from headgate.errors import CircuitOpenError, DecodeError, ForbiddenDestinationError, RefusedError
+from headgate.events import BreakerChanged, CallFinished, CallInfo, CallStarted
 from headgate.pagination import PageRequest, WritingPager
 from headgate.pagination._paginated import PageWalk, Paginated, check_page_budget
 from headgate.ratelimit._budget import BudgetPausedError
 from headgate.ratelimit._budgets import CALL_BUDGET, Lane, PathBudgets
 from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOME, RETRY_POLICY, SEND_ONCE
 from headgate.streaming._stream import OpenStream
+from headgate.timing import current_timing, timing_override
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Mapping, Sequence

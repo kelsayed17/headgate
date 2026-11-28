@@ -187,6 +187,17 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `with clock.install(): shared = RateBudget(rate)` for `RateBudget(rate, timing=clock.timing)`, and
   `with clock.install(): network = FaultyTransport(schedule=[...])` for
   `FaultyTransport(schedule=[...], sleep=clock.sleep)`.
+- Every exported class and function reports, in `__module__`, the public module it is imported from, so a traceback,
+  a `repr` and `help()` name the one import: `headgate.UpstreamStatusError`, `headgate.testing.UnmatchedRequestError`
+  and `headgate.Client`, where they named `headgate.errors.UpstreamStatusError`,
+  `headgate.testing._transport.UnmatchedRequestError` and `headgate._client.Client`. Pickles name the same homes.
+  Code that compared `__module__` to a private module's name compares it to the public one. A cache partition keyed
+  by an auth's class name is keyed by its public name now, so an entry a credential-partitioned cache stored before
+  is not found again, and is fetched afresh.
+- The six top-level errors (`ClientError`, `TransportError`, `ClientTimeoutError`, `UpstreamStatusError`,
+  `AuthError` and `RateLimitError`) have one home, `headgate`: `from headgate.errors import ClientError` raises
+  `ImportError`, so write `from headgate import ClientError`. `headgate.errors` keeps every other error,
+  `ErrorDetails` and `Problem`.
 
 ### Removed
 

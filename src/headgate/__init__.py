@@ -47,7 +47,15 @@ from headgate._auth import (
 from headgate._call_options import CallOptions, RequestOptions
 from headgate._client import Client, Method
 from headgate._codec import Codec, decode_with, reader_for, writer_for
-from headgate._core import call_view
+from headgate._core import call_view, rehome
+from headgate._errors import (
+    AuthError,
+    ClientError,
+    ClientTimeoutError,
+    RateLimitError,
+    TransportError,
+    UpstreamStatusError,
+)
 from headgate._middleware import Middleware, Next
 from headgate._options import (
     CallPolicy,
@@ -73,14 +81,6 @@ from headgate._responses import (
 from headgate._view import ViewOptions
 from headgate.breaker._policy import BreakerPolicy
 from headgate.cache._policy import HttpCache
-from headgate.errors import (
-    AuthError,
-    ClientError,
-    ClientTimeoutError,
-    RateLimitError,
-    TransportError,
-    UpstreamStatusError,
-)
 from headgate.pagination._paginated import Paginated
 from headgate.ratelimit._budget import RateBudget
 from headgate.ratelimit._rate import Rate
@@ -142,3 +142,5 @@ __all__ = [
     "reader_for",
     "writer_for",
 ]
+
+rehome(__name__, globals())

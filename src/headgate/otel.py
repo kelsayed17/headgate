@@ -50,6 +50,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Final
 from urllib.parse import urlsplit
 
+from headgate._core import rehome
+
 try:
     from opentelemetry import context as otel_context
     from opentelemetry import metrics, trace
@@ -239,3 +241,6 @@ class OpenTelemetryObserver:
             return await call_next(request)
         finally:
             otel_context.detach(token)
+
+
+rehome(__name__, globals())
