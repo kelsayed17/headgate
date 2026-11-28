@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Final, Literal, Self, Unpack, cast, final, ove
 
 import httpx2
 
-from headgate._auth import MINTING, Auth, failed_on_auth_hop, hold_timing, mint_hop_failure, was_checked
+from headgate._auth import MINTING, Auth, check_timing, failed_on_auth_hop, hold_timing, mint_hop_failure, was_checked
 from headgate._body import read_capped, read_head
 from headgate._call_options import (
     BODY_HINTS,
@@ -355,6 +355,7 @@ class Client:
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
         self._source = httpx2.URL(base_url).netloc.decode("ascii")  # host, and a port other than the default
         self._timing = current_timing()
+        check_timing(auth, self._timing)
         self._breakers = _registry_of(policy, self._timing)
         self._response_check = http.response_check
         self._max_response_bytes = http.max_response_bytes
@@ -373,7 +374,7 @@ class Client:
             base_url=base_url, credentials=credentials, http=http, timeout=policy.timeout, transport=stack
         )
         vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client, breakers=self._breakers)
-        # Last, so a client refused above leaves the auth's clock unfixed.
+        # Last, so a client refused above leaves the auth's clock unfixed; check_timing refused a clash before.
         hold_timing(auth, self._timing)
 
     def __init_subclass__(cls, **kwargs: object) -> None:
