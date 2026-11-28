@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 from contextlib import aclosing
+from dataclasses import replace
 from typing import TYPE_CHECKING, Final, Literal, Protocol, final
 
 import httpx2
@@ -14,7 +15,7 @@ import httpx2
 from headgate._core import check_int
 from headgate._failures import loggable_url, shorten
 from headgate._url import redact_secrets
-from headgate.errors import ClientError, PageLimitError
+from headgate.errors import ClientError, ForbiddenDestinationError, PageLimitError
 from headgate.pagination._pager import BodyOffset, Offset, PageNumber, WritingPager
 
 if TYPE_CHECKING:
@@ -161,6 +162,8 @@ class PageWalk[P, I, B]:
                 raise self._repeat_error(request, fetched, response)
             try:
                 request = self._pager.next_page(page, request, response)
+                if request is not None:
+                    request = _resolved(request, response)
             except httpx2.InvalidURL as exc:
                 raise self._invalid_error(request, fetched, exc) from exc
             del response
@@ -220,6 +223,24 @@ class PageWalk[P, I, B]:
         where = "" if url is None else f" ({url})"
         msg = f"pagination loop: the page after page {fetched} repeats an earlier page's request{where}"
         return ClientError(msg, source=self._source, method=_method(request), url=url)
+
+
+def _resolved[B](request: PageRequest[B], response: httpx2.Response) -> PageRequest[B]:
+    """Return *request* with an ``httpx2.URL`` resolved against the URL that answered *response*, the page before it.
+
+    A pager forwards a URL from the wire as an ``httpx2.URL``, absolute or relative; a ``str`` or a template is the
+    caller's own, and the client joins it onto ``base_url`` as it does any call's.
+
+    :raises ForbiddenDestinationError: for a plain ``http`` URL after an ``https`` page, which would send the next
+        request (its credentials and cursor) in cleartext.
+    """
+    if not isinstance(request.url, httpx2.URL):
+        return request
+    url = response.url.join(request.url)
+    if response.url.scheme == "https" and url.scheme == "http":
+        msg = f"refused to follow a next page from https to {loggable_url(str(url))}"
+        raise ForbiddenDestinationError(msg)
+    return replace(request, url=url)
 
 
 def _loggable[B](request: PageRequest[B]) -> str | None:

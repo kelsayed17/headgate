@@ -128,8 +128,9 @@ FILING_PAGES = PageNumber(items=results_of, more=more)
 ```
 
 Asking for the next number on your own request, rather than following the link, keeps every page on your URL with
-your whole query, where a link the server built may drop a filter, or name another host. A next URL from the wire (`LinkHeader`, `NextUrl`) is resolved against the URL that answered
-and sent as an absolute URL, under the usual rules: credentials go only to [trusted origins](security.md), and the SSRF
+your whole query, where a link the server built may drop a filter, or name another host. A next URL from the wire
+(`LinkHeader`, `NextUrl`, or your own pager's) is resolved against the URL that answered, refused when it would take
+an `https` walk to plain `http`, and sent as an absolute URL, under the usual rules: credentials go only to [trusted origins](security.md), and the SSRF
 guard vets it when it is on.
 
 Each strategy is a frozen value: build it once, next to the client, as with readers.
@@ -270,7 +271,9 @@ class SearchPages(WritingPager[SearchPage, Item, Query]):
 A pager speaks `PageRequest`: `paginate` builds the first from its URL, `params=` and body, `first` prepares it once
 (so its refusals raise from `paginate`, and it depends on the request alone), and the pager returns each next.
 `PageRequest(url, params)` is the GET for one page, and `PageRequest(url, params, body=)` the POST. A pager that
-returns a next URL it read from the wire wraps it in `httpx2.URL`; a literal or a t-string is as valid as in a verb.
+returns a next URL it read from the wire wraps it in `httpx2.URL`, absolute or relative, and returns it as it is: the
+walk resolves it against the URL that answered the page and refuses a step from `https` to `http`, for every pager.
+A literal or a t-string is as valid as in a verb.
 How a body is sent is the walk's, not the request's: a writing pager's `write` encodes every page's body, whatever
 request the pager returns. Every page with a body is held to the same rules as the first, so a pager that turns a walk
 of GETs into POSTs halfway raises `ValueError` from the iteration if its body cannot be sent.

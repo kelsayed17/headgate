@@ -15,9 +15,10 @@ the request for the page after it. The client does the fetching (:meth:`Client.p
 * :class:`BodyCursor`: like :class:`Cursor`, but the cursor is put into the POSTed request body.
 * :class:`BodyOffset`: like :class:`Offset`, but the offset is put into the POSTed request body.
 
-A next-page URL from the wire is resolved against the URL that answered and sent as an absolute URL, which the client
-treats like any other: credentials go only to the origins the client trusts. A next page that would take an ``https``
-walk down to plain ``http`` is refused, as a redirect would be.
+A pager returns a next-page URL from the wire as an ``httpx2.URL``, absolute or relative, and the walk resolves it
+against the URL that answered and sends it as an absolute URL, which the client treats like any other: credentials go
+only to the origins the client trusts. A next page that would take an ``https`` walk down to plain ``http`` is refused,
+as a redirect would be. Both are the walk's, so they hold for every pager.
 """
 
 from __future__ import annotations
@@ -27,14 +28,12 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, override
 
-from headgate._failures import loggable_url
-from headgate.errors import ForbiddenDestinationError
+import httpx2
+
 from headgate.pagination._link import next_link
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
-
-    import httpx2
 
     from headgate._request_body import Writer
     from headgate._url import CallUrl
@@ -180,17 +179,9 @@ def _position[B](request: PageRequest[B], param: str, default: int, what: str, *
     raise ValueError(msg)
 
 
-def _absolute(response: httpx2.Response, target: str) -> PageRequest:
-    """Return the request for *target*, resolved against the URL that sent *response*, as an absolute URL.
-
-    :raises ForbiddenDestinationError: for a plain ``http`` *target* named by an ``https`` page, which would send the
-        next request (its credentials and cursor) in cleartext.
-    """
-    url = response.url.join(target)
-    if response.url.scheme == "https" and url.scheme == "http":
-        msg = f"refused to follow a next page from https to {loggable_url(str(url))}"
-        raise ForbiddenDestinationError(msg)
-    return PageRequest(url)
+def _wire_url(target: str) -> PageRequest:
+    """Return the request for *target*, a next-page URL from the wire, which the walk resolves and vets."""
+    return PageRequest(httpx2.URL(target))
 
 
 def _check_get[B](request: PageRequest[B], pager: str) -> None:
@@ -398,7 +389,7 @@ class LinkHeader[P, I]:
         if self.stop_on_empty and not self.items(page):
             return None
         target = next_link(response.headers, response.url)
-        return None if target is None else _absolute(response, target)
+        return None if target is None else _wire_url(target)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -424,11 +415,11 @@ class NextUrl[P, I]:
 
     def next_page(self, page: P, request: PageRequest, response: httpx2.Response) -> PageRequest | None:
         """Return the request for *page*'s next URL, or ``None`` when it names none or (by default) has no items."""
-        del request
+        del request, response
         if self.stop_on_empty and not self.items(page):
             return None
         target = self.next(page)
-        return _absolute(response, target) if bool(target) else None
+        return _wire_url(target) if bool(target) else None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
