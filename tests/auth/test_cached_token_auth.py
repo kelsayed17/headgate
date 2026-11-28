@@ -11,6 +11,7 @@ is built under ``TestClock.install()``, so the token's lifetime runs on the test
 from __future__ import annotations
 
 import asyncio
+import copy
 import math
 from typing import TYPE_CHECKING, Any, cast, override
 
@@ -909,3 +910,15 @@ class TestOneTiming:
             await client.get("x", expect=RESPONSE)
 
         assert auth.mints == _MINT_AND_RE_MINT
+
+
+async def test_a_copy_keeps_a_cache_of_its_own(client_factory: _Factory) -> None:
+    """Give ``copy.copy(auth)`` its own token cache, lock and identity, not the original's."""
+    auth = _CountingAuth()
+    await client_factory(auth, _ok).get("/x")
+    duplicate = copy.copy(auth)
+    await client_factory(duplicate, _ok).get("/x")
+    await client_factory(auth, _ok).get("/x")
+
+    assert (auth.mints, duplicate.mints) == (1, 2)
+    assert duplicate.credential_identity() != auth.credential_identity()
