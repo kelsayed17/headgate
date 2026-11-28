@@ -48,9 +48,9 @@ class _KeyedBearer(_Bearer):
 
 
 class _PairToken(_Bearer):
-    """A credential riding two headers, declared in ``token_headers``."""
+    """A credential riding two headers, declared in ``credential_headers``."""
 
-    token_headers: ClassVar = frozenset({"X-Cookie", "X-Crumb"})
+    credential_headers: ClassVar = frozenset({"X-Cookie", "X-Crumb"})
 
     @override
     def attach(self, request: httpx2.Request, token: str) -> None:
@@ -59,19 +59,6 @@ class _PairToken(_Bearer):
 
 class _InheritsAttach(_PairToken):
     """A subclass of a declaring class, which declares nothing itself."""
-
-
-class _DeclaredByProperty(_Bearer):
-    """A custom ``attach`` declared by overriding ``credential_headers`` instead of ``token_headers``."""
-
-    @property
-    @override
-    def credential_headers(self) -> frozenset[str]:
-        return frozenset({"x-signed"})
-
-    @override
-    def attach(self, request: httpx2.Request, token: str) -> None:
-        request.headers["X-Signed"] = token
 
 
 @pytest.mark.parametrize(
@@ -111,19 +98,14 @@ async def test_a_token_auth_declares_exactly_what_it_stamps(auth: CachedTokenAut
     stamped = await anext(flow)
     await flow.aclose()
 
-    assert auth.credential_headers == headers
+    assert {name.lower() for name in auth.credential_headers} == headers
     assert {name.lower() for name in stamped.headers} - {"host"} == headers
     assert auth.credential_params == frozenset()
 
 
-def test_a_token_auth_may_declare_through_credential_headers() -> None:
-    """Accept a custom ``attach`` whose class overrides ``credential_headers`` rather than ``token_headers``."""
-    assert _DeclaredByProperty().credential_headers == {"x-signed"}
-
-
 def test_an_undeclared_attach_fails_when_the_class_is_defined() -> None:
     """Refuse a subclass whose ``attach`` sets headers it has not declared, naming the fix."""
-    with pytest.raises(TypeError, match="token_headers"):
+    with pytest.raises(TypeError, match="credential_headers"):
 
         class _Undeclared(_Bearer):
             @override
@@ -134,36 +116,26 @@ def test_an_undeclared_attach_fails_when_the_class_is_defined() -> None:
 
 
 def test_the_declaration_is_checked_where_attach_is_overridden() -> None:
-    """Accept ``token_headers`` or ``credential_headers`` on the overriding class; refuse it only on a parent.
+    """Accept ``credential_headers`` declared on the overriding class; refuse it declared only on a parent.
 
     The classes are defined inside the test, so the check runs while the test does.
     """
 
-    class _ByTokenHeaders(_Bearer):
-        token_headers: ClassVar = frozenset({"X-One"})
+    class _ByClassAttribute(_Bearer):
+        credential_headers: ClassVar = frozenset({"X-One"})
 
         @override
         def attach(self, request: httpx2.Request, token: str) -> None:
             request.headers["X-One"] = token
 
-    class _ByProperty(_Bearer):
-        @property
-        @override
-        def credential_headers(self) -> frozenset[str]:
-            return frozenset({"x-two"})
-
-        @override
-        def attach(self, request: httpx2.Request, token: str) -> None:
-            request.headers["X-Two"] = token
-
-    class _Inherits(_ByTokenHeaders):
+    class _Inherits(_ByClassAttribute):
         """Inherit the declaring class's ``attach`` and its declaration."""
 
-    assert (_ByTokenHeaders().credential_headers, _ByProperty().credential_headers) == ({"x-one"}, {"x-two"})
-    assert _Inherits().credential_headers == {"x-one"}
+    assert _ByClassAttribute().credential_headers == {"X-One"}
+    assert _Inherits().credential_headers == {"X-One"}
     with pytest.raises(TypeError, match=r"_Overrides overrides attach, so it must declare"):
 
-        class _Overrides(_ByTokenHeaders):
+        class _Overrides(_ByClassAttribute):
             @override
             def attach(self, request: httpx2.Request, token: str) -> None:
                 request.headers["X-Three"] = token
@@ -253,10 +225,10 @@ _QUERY_PARAM = "headgate_test_access_token"
 
 
 class _QueryToken(_Bearer):
-    """A token riding the query (``?access_token=``), declared in ``token_params``."""
+    """A token riding the query (``?access_token=``), declared in ``credential_params``."""
 
-    token_headers: ClassVar = frozenset[str]()
-    token_params: ClassVar = frozenset({_QUERY_PARAM})
+    credential_headers: ClassVar = frozenset[str]()
+    credential_params: ClassVar = frozenset({_QUERY_PARAM})
 
     @override
     def attach(self, request: httpx2.Request, token: str) -> None:
@@ -264,7 +236,7 @@ class _QueryToken(_Bearer):
 
 
 async def test_a_query_token_is_declared_registered_as_secret_and_its_presence_skips() -> None:
-    """Report ``token_params`` as the credential parameters, redact them, and skip a request that already has one."""
+    """Report the declared parameters, redact them, and skip a request that already has one."""
     auth = premint(_QueryToken())
     request = httpx2.Request("GET", "https://api.example/x", params={_QUERY_PARAM: "mine"})
     flow = auth.async_auth_flow(request)
@@ -297,7 +269,10 @@ async def test_a_401_to_a_query_token_re_mints_once() -> None:
 
 @pytest.mark.parametrize(
     "declaration",
-    [{"token_headers": frozenset[str]()}, {"token_headers": frozenset[str](), "token_params": frozenset[str]()}],
+    [
+        {"credential_headers": frozenset[str]()},
+        {"credential_headers": frozenset[str](), "credential_params": frozenset[str]()},
+    ],
     ids=["no-headers", "nothing"],
 )
 def test_an_attach_that_declares_nothing_fails_when_the_class_is_defined(declaration: dict[str, object]) -> None:
@@ -306,7 +281,7 @@ def test_an_attach_that_declares_nothing_fails_when_the_class_is_defined(declara
     def attach(_self: CachedTokenAuth, request: httpx2.Request, token: str) -> None:
         request.url = request.url.copy_set_param("access_token", token)
 
-    with pytest.raises(TypeError, match="token_headers or token_params"):
+    with pytest.raises(TypeError, match="credential_headers or credential_params"):
         type("_DeclaresNothing", (_Bearer,), {**declaration, "attach": attach})
 
 
@@ -321,10 +296,10 @@ def _sign_nothing(_self: SigningAuth, _request: httpx2.Request) -> None:
 @pytest.mark.parametrize(
     "define",
     [
-        lambda: type("_Misdeclared", (_Bearer,), {"attach": _attach_key, "token_headers": "x-api-key"}),
-        lambda: type("_Misdeclared", (_Bearer,), {"attach": _attach_key, "token_params": "api_key"}),
-        lambda: type("_Misdeclared", (SigningAuth,), {"sign": _sign_nothing, "signed_headers": "x-signature"}),
-        lambda: type("_Misdeclared", (SigningAuth,), {"sign": _sign_nothing, "signed_params": ["signature"]}),
+        lambda: type("_Misdeclared", (_Bearer,), {"attach": _attach_key, "credential_headers": "x-api-key"}),
+        lambda: type("_Misdeclared", (_Bearer,), {"attach": _attach_key, "credential_params": "api_key"}),
+        lambda: type("_Misdeclared", (SigningAuth,), {"sign": _sign_nothing, "credential_headers": "x-signature"}),
+        lambda: type("_Misdeclared", (SigningAuth,), {"sign": _sign_nothing, "credential_params": ["signature"]}),
     ],
     ids=["token-headers", "token-params", "signed-headers", "signed-params"],
 )

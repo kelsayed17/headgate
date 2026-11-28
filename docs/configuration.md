@@ -175,7 +175,7 @@ from headgate import SigningAuth
 
 class HmacSigner(SigningAuth):
     # What it stamps: withheld from any hop to an origin other than base_url's and the trusted ones.
-    signed_headers: ClassVar = frozenset({"X-Timestamp", "X-Signature"})
+    credential_headers: ClassVar = frozenset({"X-Timestamp", "X-Signature"})
 
     def __init__(self, secret: bytes) -> None:
         self._secret = secret

@@ -480,9 +480,7 @@
   class CachedTokenAuth(Auth, Generic)(*, refresh_margin: 'float' = 120.0, timing: 'Timing | None' = None) -> 'None'
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
       def attach(self, request: 'httpx2.Request', token: 'TokenT') -> 'None'
-      property credential_headers
       def credential_identity(self) -> 'bytes'
-      property credential_params
       def mint_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request | Minted[TokenT], httpx2.Response]'
       def mint_token(self) -> 'tuple[TokenT, float]'
       def reject_credential_rotation(self, returned: 'str | None', configured: 'str', *, setting: 'str') -> 'None'
@@ -648,9 +646,7 @@
       field resolver: Resolver | None = None
   class SigningAuth(Auth)(*args, **kwargs)
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
-      property credential_headers
       def credential_identity(self) -> 'bytes'
-      property credential_params
       def sign(self, request: 'httpx2.Request') -> 'None'
       def skips(self, request: 'httpx2.Request') -> 'bool'
   class StaticHeaderAuth(Auth)(headers: 'Mapping[str, str]') -> 'None'

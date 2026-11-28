@@ -108,7 +108,7 @@ from headgate import SigningAuth
 
 
 class ExchangeAuth(SigningAuth):
-    signed_headers: ClassVar = frozenset({"X-Api-Key", "X-Timestamp", "X-Signature"})
+    credential_headers: ClassVar = frozenset({"X-Api-Key", "X-Timestamp", "X-Signature"})
 
     def __init__(self, api_key: str, secret: bytes) -> None:
         self._api_key, self._secret = api_key, secret
@@ -133,9 +133,10 @@ class ExchangeAuth(SigningAuth):
 - A `SigningAuth` signs only when it is the client's own `auth=` under a headgate client. Given to a bare
   `httpx2.AsyncClient`, or wrapped inside another `httpx2.Auth`, its requests go out unsigned, and a 401 is not
   re-sent.
-- `signed_headers` and `signed_params` declare what `sign` sets, so the credential guard withholds exactly those from
-  an origin you do not trust, and the cache keeps them out of storage. A subclass that declares neither fails when
-  it is defined. Signed parameters are registered as secret, so error messages redact them.
+- `credential_headers` and `credential_params` declare what `sign` sets, the same two names every auth and middleware
+  declares with, so the credential guard withholds exactly those from an origin you do not trust, and the cache keeps
+  them out of storage. A subclass that declares neither fails when it is defined. Signed parameters are registered as
+  secret, so error messages redact them.
 - `skips(request)` says a request is sent unsigned: by default, one already carrying a signed header or parameter.
   Override it for requests that need no signature, such as a provider's public reads.
 - `credential_identity()` names the key for the cache partition. By default each instance is its own identity; return
@@ -216,9 +217,9 @@ endpoint. The API host's breaker records nothing for it.
 ### Other credential shapes
 
 - `attach(request, token)` decides how a token is put on a request (`Authorization: Bearer` by default). A subclass
-  that overrides it declares the headers it sets in `token_headers` and the query parameters in `token_params` (for a
-  provider that takes `?access_token=`), not both empty, or the class definition fails: an undeclared credential would
-  follow a request anywhere. The parameters are withheld from untrusted origins like the headers, a 401 to a request
+  that overrides it declares the headers it sets in `credential_headers` and the query parameters in
+  `credential_params` (for a provider that takes `?access_token=`), not both empty, or the class definition fails: an
+  undeclared credential would follow a request anywhere. The default declares `frozenset({"authorization"})`. The parameters are withheld from untrusted origins like the headers, a 401 to a request
   carrying one re-mints, and error messages redact them.
 - `skips(request)` says a request needs no token (by default, one that already carries a token header or parameter).
 - `seed(token, lifetime)` caches a token obtained elsewhere, such as one restored from storage or a test's fixed bearer.

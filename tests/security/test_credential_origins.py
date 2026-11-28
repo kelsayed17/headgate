@@ -51,9 +51,9 @@ class _Bearer(CachedTokenAuth):
 
 
 class _HeaderToken(CachedTokenAuth):
-    """A token riding its own header, declared in ``token_headers``."""
+    """A token riding its own header, declared in ``credential_headers``."""
 
-    token_headers: ClassVar = frozenset({"X-Token"})
+    credential_headers: ClassVar = frozenset({"X-Token"})
 
     @override
     async def mint_token(self) -> tuple[str, float]:
@@ -65,10 +65,10 @@ class _HeaderToken(CachedTokenAuth):
 
 
 class _QueryToken(CachedTokenAuth):
-    """A token riding the query, as a provider taking ``?access_token=`` wants, declared in ``token_params``."""
+    """A token riding the query, as a provider taking ``?access_token=`` wants, declared in ``credential_params``."""
 
-    token_headers: ClassVar = frozenset[str]()
-    token_params: ClassVar = frozenset({"access_token"})
+    credential_headers: ClassVar = frozenset[str]()
+    credential_params: ClassVar = frozenset({"access_token"})
 
     @override
     async def mint_token(self) -> tuple[str, float]:

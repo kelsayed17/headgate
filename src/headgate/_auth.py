@@ -302,6 +302,37 @@ def _is_descriptor(value: object) -> bool:
     return hasattr(type(value), "__get__")
 
 
+#: The two declarations every auth makes.
+_DECLARATIONS: Final = ("credential_headers", "credential_params")
+
+
+def _declares_names(cls: type) -> bool:
+    """Return whether *cls* declares a header or parameter, and register the parameters as secret, for redaction.
+
+    :raises TypeError: for a declaration through a property: a ``SigningAuth`` or ``CachedTokenAuth`` declares in
+        class attributes, which are checked when the class is defined.
+    """
+    headers, params = (getattr(cls, name) for name in _DECLARATIONS)
+    for name, value in zip(_DECLARATIONS, (headers, params), strict=True):
+        # Auth.__init_subclass__ refused any other class attribute that is not a frozenset of names.
+        if not isinstance(value, frozenset):
+            msg = (
+                f"{cls.__name__}.{name} is declared through a property: declare it as a class attribute, such as "
+                f"{name} = frozenset({{'X-Signature'}}), which is checked when the class is defined"
+            )
+            raise TypeError(msg)
+    register_secret_params(params)
+    return bool(headers or params)
+
+
+def _carries(auth: Auth, request: httpx2.Request) -> bool:
+    """Return whether *request* carries any of the headers or query parameters *auth* declares."""
+    params = request.url.params
+    return any(name in request.headers for name in auth.credential_headers) or any(
+        name in params for name in auth.credential_params
+    )
+
+
 class StaticHeaderAuth(Auth):
     """Stamp a fixed set of headers onto every request, without overriding a header the caller set.
 
@@ -414,10 +445,10 @@ class SigningAuth(Auth):
       ``AuthError``. A 401 to a request this flow did not sign, or one sent without its signature (withheld from an
       origin the client does not trust), is not re-sent.
 
-    **What it stamps is declared.** :attr:`signed_headers` and :attr:`signed_params` name what :meth:`sign` sets, and
-    are what :attr:`credential_headers` and :attr:`credential_params` report, so the client withholds exactly those
-    from an untrusted origin and the cache keeps them out of storage. A subclass that declares neither fails when it is
-    defined. The parameters are registered as secret, so error messages redact them.
+    **What it stamps is declared**, in :attr:`credential_headers` and :attr:`credential_params`, the names every
+    :class:`Auth` and middleware declares with: what :meth:`sign` sets. The client withholds exactly those from an
+    untrusted origin and the cache keeps them out of storage. A subclass that declares neither fails when it is defined.
+    The parameters are registered as secret, so error messages redact them.
 
     **Its identity is the long-lived key.** :meth:`credential_identity` names the credential the signatures stand for,
     so a cache keeps one key's responses apart from another's. By default each instance is its own identity (random
@@ -425,35 +456,23 @@ class SigningAuth(Auth):
     the key's secret material.
     """
 
-    #: The headers :meth:`sign` sets.
-    signed_headers: ClassVar[frozenset[str]] = frozenset[str]()
+    #: The headers :meth:`sign` sets (compared case-insensitively).
+    credential_headers: ClassVar[frozenset[str]] = frozenset[str]()
     #: The query parameters :meth:`sign` sets.
-    signed_params: ClassVar[frozenset[str]] = frozenset[str]()
+    credential_params: ClassVar[frozenset[str]] = frozenset[str]()
 
     _identity: bytes | None = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse a concrete subclass that declares nothing it signs with, and register its parameters as secret."""
         super().__init_subclass__(**kwargs)
-        check_declarations(cls.__name__, signed_headers=cls.signed_headers, signed_params=cls.signed_params)
-        register_secret_params(cls.signed_params)
-        if not inspect.isabstract(cls) and not (cls.signed_headers or cls.signed_params):
+        declared = _declares_names(cls)
+        if not inspect.isabstract(cls) and not declared:
             msg = (
-                f"{cls.__name__} must declare the headers or parameters sign() sets, in signed_headers or signed_params"
+                f"{cls.__name__} must declare the headers or parameters sign() sets, in credential_headers or "
+                "credential_params"
             )
             raise TypeError(msg)
-
-    @property
-    @override
-    def credential_headers(self) -> frozenset[str]:
-        """The headers :meth:`sign` sets (:attr:`signed_headers`), lower-cased."""
-        return frozenset(name.lower() for name in self.signed_headers)
-
-    @property
-    @override
-    def credential_params(self) -> frozenset[str]:
-        """The query parameters :meth:`sign` sets (:attr:`signed_params`)."""
-        return self.signed_params
 
     @override
     def credential_identity(self) -> bytes:
@@ -476,10 +495,7 @@ class SigningAuth(Auth):
 
     def _carries(self, request: httpx2.Request) -> bool:
         """Return whether *request* carries any of the signed headers or parameters."""
-        params = request.url.params
-        return any(name in request.headers for name in self.signed_headers) or any(
-            name in params for name in self.signed_params
-        )
+        return _carries(self, request)
 
     @override
     async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
@@ -563,13 +579,12 @@ class CachedTokenAuth[TokenT = str](Auth):
     type is bound further down, as ``class Mid[T](CachedTokenAuth[T])``, its first call). :meth:`seed` caches a token
     obtained elsewhere.
 
-    **What it stamps is declared.** :attr:`token_headers` names the headers :meth:`attach` sets (``Authorization`` by
-    default) and :attr:`token_params` the query parameters (none by default, ``access_token`` for a provider that takes
-    the token in the query). They are what :attr:`credential_headers` and :attr:`credential_params` report, so the
-    client withholds exactly those from an untrusted origin, and the parameters are registered as secret, so error
-    messages redact them. A subclass that overrides :meth:`attach` must declare its own :attr:`token_headers` or
-    :attr:`token_params`, not both empty (or override :attr:`credential_headers` or :attr:`credential_params`), or the
-    class definition fails: an undeclared credential would follow a request anywhere.
+    **What it stamps is declared**, in :attr:`credential_headers` and :attr:`credential_params`, the names every
+    :class:`Auth` and middleware declares with: the headers :meth:`attach` sets (``authorization`` by default) and the
+    query parameters (none by default, ``access_token`` for a provider that takes the token in the query). The client
+    withholds exactly those from an untrusted origin, and the parameters are registered as secret, so error messages
+    redact them. A subclass that overrides :meth:`attach` must declare them again, on that class or one below it, not
+    both empty, or the class definition fails: an undeclared credential would follow a request anywhere.
 
     **Its identity is the long-lived credential, not the token.** :meth:`credential_identity` names what the minted
     tokens stand for, so a cache keeps one credential's responses apart from another's across token refreshes. The base
@@ -608,11 +623,12 @@ class CachedTokenAuth[TokenT = str](Auth):
     ``TransportError``.
     """
 
-    #: The headers :meth:`attach` sets. A subclass whose :meth:`attach` sets others declares them here.
-    token_headers: ClassVar[frozenset[str]] = frozenset({"Authorization"})
+    #: The headers :meth:`attach` sets (compared case-insensitively). A subclass whose :meth:`attach` sets others
+    #: declares them here.
+    credential_headers: ClassVar[frozenset[str]] = frozenset({"authorization"})
     #: The query parameters :meth:`attach` sets. A subclass whose :meth:`attach` puts the token in the query declares
     #: them here.
-    token_params: ClassVar[frozenset[str]] = frozenset[str]()
+    credential_params: ClassVar[frozenset[str]] = frozenset[str]()
 
     def __init__(self, *, refresh_margin: float = 120.0, timing: Timing | None = None) -> None:
         """Start with an empty cache that refreshes *refresh_margin* seconds before a token expires.
@@ -636,13 +652,11 @@ class CachedTokenAuth[TokenT = str](Auth):
         """Refuse a subclass with no mint, or whose :meth:`attach` sets a credential it has not declared.
 
         A subclass must inherit a :meth:`mint_token` or a :meth:`mint_flow` override; and when it overrides
-        :meth:`attach`, that class or one below it must declare a non-empty :attr:`token_headers` or
-        :attr:`token_params`, or override :attr:`credential_headers` or :attr:`credential_params`. Its parameters are
-        registered as secret.
+        :meth:`attach`, that class or one below it must declare :attr:`credential_headers` or
+        :attr:`credential_params`, not both empty. Its parameters are registered as secret.
         """
         super().__init_subclass__(**kwargs)
-        check_declarations(cls.__name__, token_headers=cls.token_headers, token_params=cls.token_params)
-        register_secret_params(cls.token_params)
+        declared = _declares_names(cls)
         # Not @abstractmethod: either of two methods satisfies the contract.
         supplied = any(getattr(cls, name) is not getattr(CachedTokenAuth, name) for name in ("mint_token", "mint_flow"))
         if not supplied:
@@ -651,12 +665,11 @@ class CachedTokenAuth[TokenT = str](Auth):
         mro = cls.__mro__
         attaching = next(klass for klass in mro if "attach" in vars(klass))
         below = [vars(klass) for klass in mro[: mro.index(attaching) + 1]]
-        by_property = any("credential_headers" in names or "credential_params" in names for names in below)
-        by_token = any("token_headers" in names or "token_params" in names for names in below)
-        if not (by_property or (by_token and (cls.token_headers or cls.token_params))):
+        redeclared = any(name in names for names in below for name in _DECLARATIONS)
+        if not (redeclared and declared):
             msg = (
-                f"{cls.__name__} overrides attach, so it must declare what attach sets in token_headers or "
-                f"token_params (or override credential_headers)"
+                f"{cls.__name__} overrides attach, so it must declare what attach sets in credential_headers or "
+                "credential_params"
             )
             raise TypeError(msg)
         token_type = _token_type(cls)
@@ -668,18 +681,6 @@ class CachedTokenAuth[TokenT = str](Auth):
             raise TypeError(msg)
 
     # -- What it stamps (CredentialStamper) ----------------------------------
-
-    @property
-    @override
-    def credential_headers(self) -> frozenset[str]:
-        """The headers :meth:`attach` sets (:attr:`token_headers`), lower-cased."""
-        return frozenset(name.lower() for name in self.token_headers)
-
-    @property
-    @override
-    def credential_params(self) -> frozenset[str]:
-        """The query parameters :meth:`attach` sets (:attr:`token_params`): none by default."""
-        return self.token_params
 
     @override
     def credential_identity(self) -> bytes:
@@ -718,7 +719,7 @@ class CachedTokenAuth[TokenT = str](Auth):
     def attach(self, request: httpx2.Request, token: TokenT) -> None:
         """Put *token* on *request*, replacing any earlier one: the re-send after a 401 calls this a second time.
 
-        An override declares the headers it sets in :attr:`token_headers`. The default sends a ``str`` token as
+        An override declares the headers it sets in :attr:`credential_headers`. The default sends a ``str`` token as
         ``Authorization: Bearer <token>``, and raises ``TypeError`` for any other, before setting anything: a token of
         another type is attached by an override.
         """
@@ -732,10 +733,7 @@ class CachedTokenAuth[TokenT = str](Auth):
 
     def skips(self, request: httpx2.Request) -> bool:
         """Return whether *request* needs no credential from this auth: by default, one carrying its token's name."""
-        params = request.url.params
-        return any(name in request.headers for name in self.token_headers) or any(
-            name in params for name in self.token_params
-        )
+        return _carries(self, request)
 
     def reject_credential_rotation(self, returned: str | None, configured: str, *, setting: str) -> None:
         """Raise ``ClientConfigurationError`` when a token endpoint returns a replacement for the configured credential.
@@ -805,13 +803,6 @@ class CachedTokenAuth[TokenT = str](Auth):
         """
         held = self._held
         return held is not None and token == held.token and self._clock() - held.minted_at < FRESH_TOKEN_S
-
-    def _carried(self, request: httpx2.Request) -> bool:
-        """Return whether *request*, as it was sent, carried any of the headers or parameters the token rides on."""
-        params = request.url.params
-        return any(name in request.headers for name in self.credential_headers) or any(
-            name in params for name in self.credential_params
-        )
 
     async def _mint_step[T](self, step: Awaitable[T]) -> T:
         """Await a *step* of the mint, raising a failure in it as the ``ClientError`` it means.
@@ -923,7 +914,7 @@ class CachedTokenAuth[TokenT = str](Auth):
         if (
             response.status_code != httpx2.codes.UNAUTHORIZED
             or rejected is not None
-            or not self._carried(response.request)
+            or not _carries(self, response.request)
             or self._is_fresh(token)
         ):
             return False

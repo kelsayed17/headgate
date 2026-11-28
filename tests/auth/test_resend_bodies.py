@@ -34,7 +34,7 @@ _CHUNKS = 64
 class _Signer(SigningAuth):
     """Signs with a fixed header."""
 
-    signed_headers: ClassVar = frozenset({"X-Signature"})
+    credential_headers: ClassVar = frozenset({"X-Signature"})
 
     @override
     def sign(self, request: httpx2.Request) -> None:

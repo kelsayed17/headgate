@@ -54,6 +54,15 @@ change the public API; such changes are listed under **Changed** and **Removed**
   checking would empty) raises `TypeError` naming the option: write `methods=("GET",)` (`frozenset({"GET"})` for a
   `RetryPolicy`) or `statuses=(503,)`, and turn a generator into a tuple. `RetryPolicy(methods="GET")` retried no GET,
   and `HttpCache(methods="GET")` raised a `ValueError` that named the letters.
+- `SigningAuth` and `CachedTokenAuth` declare what they stamp in `credential_headers` and `credential_params`, the two
+  names every `Auth` and middleware declares with. `signed_headers` and `signed_params`, `token_headers` and
+  `token_params`, and the properties that mapped them onto `credential_*`, are removed: write
+  `credential_headers = frozenset({"X-Signature"})` where you wrote `signed_headers = ...` or `token_headers = ...`.
+  `CachedTokenAuth` declares `frozenset({"authorization"})` by default. The names are reported as declared, no longer
+  lower-cased (the guard, the cache and `CassetteFilter` compare them case-insensitively). A `SigningAuth` that
+  declares no name, and a `CachedTokenAuth` that overrides `attach` without declaring again what it sets, still fail
+  when the class is defined. Both declare in class attributes: a `credential_headers` or `credential_params` property,
+  which `CachedTokenAuth` accepted in place of `token_headers`, raises `TypeError` when the class is defined.
 - `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.
@@ -81,9 +90,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   to write: `frozenset("X-Api-Key")` is a `frozenset[str]` of eight letters, so it type-checked and withheld no real
   header. Write `frozenset({"X-Api-Key"})` (`frozenset({"api_key"})` for a parameter). A lone one-character name
   (`headers=["x"]`) is refused too, since no header or query credential is one character long. It is checked for a
-  middleware when the client is built, for an `Auth` subclass's class attribute (`credential_headers`, `signed_headers`,
-  `token_headers` and the `_params`) when the class is defined, for a declaration through a property when the client is
-  built, and for `CassetteFilter(headers=, params=)` and its auths' declarations when the filter is built.
+  middleware when the client is built, for an `Auth` subclass's class attribute (`credential_headers` and
+  `credential_params`, the one spelling `SigningAuth` and `CachedTokenAuth` declare with too) when the class is defined,
+  for a declaration through a property when the client is built, and for `CassetteFilter(headers=, params=)` and its auths' declarations when the filter is built.
 - The cache never looks up, stores or shares a call given a body, whatever its method and whatever `Content-Length` the
   caller wrote: a GET stream opened with `body=` was served the entry stored for its URL. No GET or HEAD takes a body
   now; this is the cache's own defense.
