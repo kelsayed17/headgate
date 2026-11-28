@@ -448,7 +448,7 @@ def _timed(read: float) -> httpx2.Request:
 def _retried(policy: RetryPolicy) -> httpx2.Request:
     """Return a GET of the shared URL whose call carries its own retry *policy*."""
     request = httpx2.Request("GET", _URL)
-    context = CallContext(CallInfo(method="GET", url=_URL))
+    context = CallContext(CallInfo(method="GET", url=_URL, full_url=_URL))
     context.put(RETRY_POLICY, policy)
     context.attach(request)
     return request
@@ -542,7 +542,7 @@ async def test_gets_whose_timeouts_the_deadline_cut_still_share(storage: AsyncSq
 def _due_in(seconds: float) -> httpx2.Request:
     """Return a GET of the shared URL asking for a 60 s read timeout, fitted to a deadline *seconds* away."""
     request = httpx2.Request("GET", _URL, extensions={"timeout": {"read": 60.0}})
-    context = CallContext(CallInfo(method="GET", url=_URL), deadline_after=seconds)
+    context = CallContext(CallInfo(method="GET", url=_URL, full_url=_URL), deadline_after=seconds)
     context.attach(request)
     context.fit_timeouts(request)
     return request
@@ -613,7 +613,7 @@ async def test_timeout_sharing_uses_only_the_failed_phase(
     transport = cache_transport(storage, network, rules=_store_nothing())
     requests = [httpx2.Request("GET", _URL, extensions={"timeout": dict(limits)}) for _ in range(_CONCURRENT)]
     for request in requests:
-        context = CallContext(CallInfo(method="GET", url=_URL), deadline_after=60.0)
+        context = CallContext(CallInfo(method="GET", url=_URL, full_url=_URL), deadline_after=60.0)
         context.attach(request)
         context.fit_timeouts(request)
     tasks = [asyncio.create_task(transport.handle_async_request(request)) for request in requests]

@@ -55,14 +55,14 @@ class CallInfo:
     ``url`` is the URL the call was given, sanitized and bounded; ``template`` is the t-string template the URL was
     rendered from (``"series/{series_id}"``), OpenTelemetry's ``url.template``, or ``None`` for a literal string or an
     ``httpx2.URL``. ``full_url`` is the absolute URL of the request as first built (before any redirect), sanitized:
-    what an observer needs to name the server, as an OpenTelemetry span does. A client fills it for every call; it is
-    ``None`` only on a ``CallInfo`` built by hand.
+    what an observer needs to name the server, as an OpenTelemetry span does, and a middleware to read where its call
+    goes. Every call has one.
     """
 
     method: str
     url: str
+    full_url: str
     template: str | None = None
-    full_url: str | None = None
     call_id: int = field(default_factory=lambda: next(_CALL_IDS))
 
 

@@ -163,7 +163,9 @@ async def _run(scenario: _Scenario) -> _Run:
         scenario.method, "https://api.test/orders", json={"qty": 1}, extensions={"timeout": dict(_TIMEOUTS)}
     )
     context = CallContext(
-        CallInfo(method=scenario.method, url="https://api.test/orders"), clock=clock, deadline_after=scenario.deadline
+        CallInfo(method=scenario.method, url="https://api.test/orders", full_url="https://api.test/orders"),
+        clock=clock,
+        deadline_after=scenario.deadline,
     )
     context.idempotency_key = "order-1" if scenario.keyed else None
     context.attach(request)

@@ -82,7 +82,7 @@ async def _answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
 
 def _tracked(request: httpx2.Request) -> CallContext:
     """Stamp a fresh context on *request*, its first attempt begun, and return it."""
-    context = CallContext(CallInfo(method=request.method, url=str(request.url)))
+    context = CallContext(CallInfo(method=request.method, url=str(request.url), full_url=str(request.url)))
     context.attach(request)
     context.begin_attempt()
     return context
