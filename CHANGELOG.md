@@ -157,6 +157,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
   a constructor argument, and stays readable. Write `Expect(reader(Order)).on(404, nothing)` for
   `Expect(reader(Order), {404: nothing})`.
 - `head()` requires `expect=`, as every verb does: write `head(url, expect=nothing)` for `head(url)`.
+- A middleware reads its call with `headgate.call_view(request)`, which returns a `CallView`: write `call_view` for
+  `call_info`. `CallView.call` is `CallView.info`, and `CallInfo.route`, the t-string template, is
+  `CallInfo.template`, OpenTelemetry's `url.template`, since a `Route` is the per-path rule: write
+  `call_view(request).info.template` for `call_info(request).call.route`, and `event.call.template` for
+  `event.call.route`.
 
 ### Removed
 
@@ -185,6 +190,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `TypeError` when the class is defined. It sent the bearer undeclared, and its 401s never re-minted, since a 401
   re-mints only for a request that carried a declared name. Keep `authorization` in the declaration, or override
   `attach` to put the token where the declaration says.
+- `CallInfo.full_url` is filled for every call, so a middleware reads the absolute URL of a client with no observers
+  too, where it read `None`.
 
 ### Security
 

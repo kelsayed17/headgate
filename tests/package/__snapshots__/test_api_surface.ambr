@@ -121,16 +121,16 @@
       field error: str | None = None
       field attempts: int
       field elapsed: float
-  class CallInfo(object)(*, method: 'str', url: 'str', route: 'str | None' = None, full_url: 'str | None' = None, call_id: 'int' = <factory>) -> 'None'
+  class CallInfo(object)(*, method: 'str', url: 'str', template: 'str | None' = None, full_url: 'str | None' = None, call_id: 'int' = <factory>) -> 'None'
       field method: str
       field url: str
-      field route: str | None = None
+      field template: str | None = None
       field full_url: str | None = None
       field call_id: int = <factory>
   class CallStarted(CallEvent)(*, call: 'CallInfo') -> 'None'
       field call: CallInfo
-  class CallView(object)(call: 'CallInfo', attempt: 'int', remaining: 'float | None') -> 'None'
-      field call: CallInfo
+  class CallView(object)(info: 'CallInfo', attempt: 'int', remaining: 'float | None') -> 'None'
+      field info: CallInfo
       field attempt: int
       field remaining: float | None
   class Deprecated(CallEvent)(*, call: 'CallInfo', deprecated: 'bool' = False, deprecated_at: 'datetime | None' = None, sunset_at: 'datetime | None' = None, link: 'str | None' = None, sunset_link: 'str | None' = None) -> 'None'
@@ -474,7 +474,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate]
   '''
   module headgate
-  __all__ = ['Auth', 'AuthError', 'BearerAuth', 'Body', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CallPolicy', 'Client', 'ClientError', 'ClientTimeoutError', 'Codec', 'EncodedBody', 'Expect', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'Paginated', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_json', 'body_reader', 'call_info', 'decode_with', 'event_stream', 'nothing', 'reader_for', 'writer_for']
+  __all__ = ['Auth', 'AuthError', 'BearerAuth', 'Body', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'CallPolicy', 'Client', 'ClientError', 'ClientTimeoutError', 'Codec', 'EncodedBody', 'Expect', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'Paginated', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_json', 'body_reader', 'call_view', 'decode_with', 'event_stream', 'nothing', 'reader_for', 'writer_for']
   class Auth(Auth, ABC)()
       property credential_headers
       def credential_identity(self) -> 'bytes'
@@ -692,7 +692,7 @@
   as_bytes: Reader[bytes] = Reader(as_bytes)
   as_json: Reader[object] = Reader(as_json)
   def body_reader(decode: 'Callable[[bytes], T]', /, *, empty: 'bytes | None' = None, refuse: 'Callable[[T], RefusedError | None] | None' = None) -> 'Reader[T]'
-  def call_info(request: 'httpx2.Request') -> 'CallView | None'
+  def call_view(request: 'httpx2.Request') -> 'CallView | None'
   def decode_with(codec: 'Codec', content: 'bytes', type_: 'TypeForm[T]') -> 'T'
   event_stream: Reader[list[httpx2.ServerSentEvent]] = Reader(event_stream)
   nothing: Reader[None] = Reader(nothing)

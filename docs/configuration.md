@@ -209,13 +209,13 @@ The two declarations are the `headgate.security.CredentialCarrier` protocol, and
 `credential_identity()` (so a cache can partition by it) is a `headgate.security.CredentialStamper`; implement either
 from `headgate.security`, never from a private module. An auth subclasses [`headgate.Auth`](auth.md#your-own-auth).
 
-A middleware reads its call through `headgate.call_info(request)`, a `headgate.events.CallView` taken when asked: the
-call's `CallInfo` (method, URL and route template, the same record events carry), its `attempt` (1 on the first send,
+A middleware reads its call through `headgate.call_view(request)`, a `headgate.events.CallView` taken when asked: its
+`info`, the call's `CallInfo` (method, URL, absolute URL and `template`, the same record events carry), its `attempt` (1 on the first send,
 2 on the first retry or hedge) and the seconds `remaining` before its deadline, or `None` without one. It returns
 `None` for a request no client call built.
 
 ```python
-from headgate import call_info
+from headgate import call_view
 
 
 class TracesFirstReportSends:
@@ -223,8 +223,8 @@ class TracesFirstReportSends:
     credential_params = frozenset[str]()
 
     async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
-        view = call_info(request)
-        if view is not None and view.call.route == "reports/{report_id}" and view.attempt == 1:
+        view = call_view(request)
+        if view is not None and view.info.template == "reports/{report_id}" and view.attempt == 1:
             request.headers["X-Trace-Report"] = "1"
         return await call_next(request)
 ```

@@ -53,7 +53,10 @@ a public module exports, and the six top-level errors move to a private module t
    checked them, with the values `frozenset({"GET"})` and `frozenset({200})` as defaults; the fields hold frozensets.
    `None` for either raises `TypeError` saying to leave the option out, or to write `cache=None` for no cache.
    (Amends 3.5's `frozenset` spelling of the type, not the defaults.)
-6. **`CallInfo.full_url` is a required `str`**, since it is always filled; `CallInfo.template` replaces `route`.
+6. **A client fills `CallInfo.full_url` for every call; its type stays `str | None`** (changed during
+   implementation: the plan first made it a required `str`). `None` is left for a `CallInfo` built by hand, as tests
+   of observers and every layer's own test build one, so no test of the retry properties changes beyond spellings.
+   `CallInfo.template` replaces `route`.
 7. **`as_text` lands here**: it is `Reader(lambda r: r.text)`, one line beside `as_events`, and 3.5's rename names it.
    5.3's refusal of `Reader(str)` pointing to it stays phase 5's.
 8. **The six top-level errors move to `headgate/_errors.py`, with every other error, `ErrorDetails` and `Problem`.**

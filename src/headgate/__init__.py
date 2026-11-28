@@ -11,7 +11,7 @@ client is written with, and each name only here:
 * the client: :class:`Client`, :data:`Method`, :class:`RequestOptions`, :class:`CallOptions`, :class:`ViewOptions`;
 * configuration: :class:`CallPolicy`, :class:`HttpOptions`, :class:`SecurityOptions`, :class:`Timeouts` (with
   :attr:`Timeouts.DEFAULT`), :class:`Route`, :class:`RouteOptions`, :class:`IdempotencyKeys`, :data:`ResponseCheck`;
-* middleware: :class:`Middleware`, :data:`Next` (what a middleware calls to continue) and :func:`call_info` (what it
+* middleware: :class:`Middleware`, :data:`Next` (what a middleware calls to continue) and :func:`call_view` (what it
   reads of its call);
 * the policy values a client usually sets: :class:`RetryPolicy`, :class:`BreakerPolicy`, :class:`Rate`,
   :class:`RateBudget` and :class:`HttpCache`;
@@ -47,7 +47,7 @@ from headgate._auth import (
 from headgate._call_options import CallOptions, RequestOptions
 from headgate._client import Client, Method
 from headgate._codec import Codec, decode_with, reader_for, writer_for
-from headgate._core import call_info
+from headgate._core import call_view
 from headgate._middleware import Middleware, Next
 from headgate._options import (
     CallPolicy,
@@ -133,7 +133,7 @@ __all__ = [
     "as_bytes",
     "as_json",
     "body_reader",
-    "call_info",
+    "call_view",
     "decode_with",
     "event_stream",
     "nothing",

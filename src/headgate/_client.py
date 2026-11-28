@@ -868,9 +868,8 @@ class Client:
                 view=frozenset(name.lower() for name, _ in self._view.headers),
                 call=frozenset(name.lower() for name in own),
             )
-        # The absolute URL is for observers only (an OpenTelemetry span's url.full and server.address).
-        full_url = sanitize_url(str(request.url)) if self._emitter.active else None
-        info = CallInfo(method=call.method, url=log_url, route=route, full_url=full_url)
+        # The absolute URL names the server to an observer (an OpenTelemetry span's url.full) and to a middleware.
+        info = CallInfo(method=call.method, url=log_url, template=route, full_url=sanitize_url(str(request.url)))
         # The call's route is matched once, here; every layer reads what it set from the call's context.
         path = url_path(request.url)
         route_policy = match_route(self._policy.routes, path)

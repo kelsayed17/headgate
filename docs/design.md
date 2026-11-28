@@ -97,7 +97,7 @@ A request travels through httpx2, hooks, a cache that rebuilds it, and transport
 per-call state they share rides on the request as a single extension, a `CallContext`, which httpx2 copies to every
 redirect hop and the cache layer restores below hishel. Every layer finds it with `CallContext.of(request)`:
 
-- what the call is: `info` (method, sanitized URL, route template, absolute URL, call id);
+- what the call is: `info` (method, sanitized URL, template, absolute URL, call id);
 - when it must end: `deadline`, absolute on the client's clock, `remaining()`, and `fit_timeouts(request)`, which cuts a
   send's timeouts to the time left;
 - its sends: `begin_attempt()`, `attempt`, and the current attempt's `progress` (connected, bytes sent);

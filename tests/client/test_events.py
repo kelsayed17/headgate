@@ -103,7 +103,7 @@ async def test_a_call_reports_its_start_each_send_and_its_end_under_one_call_inf
     assert info == CallInfo(
         method="GET",
         url="series/GDP%2Freal",
-        route="series/{series_id}",
+        template="series/{series_id}",
         full_url=f"{_BASE}/series/GDP%2Freal?token=***",
         call_id=info.call_id,
     )
@@ -119,7 +119,7 @@ async def test_a_str_url_has_no_route() -> None:
     await _client(_get("series"), recorder).get("series", expect=nothing)
     started = recorder.events[0]
     assert isinstance(started, CallStarted)
-    assert started.call.route is None
+    assert started.call.template is None
 
 
 async def test_each_retry_is_its_own_attempt() -> None:
