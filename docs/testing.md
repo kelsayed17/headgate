@@ -203,7 +203,7 @@ it first.
 ## Switching the policy off
 
 Some tests, and connectivity probes, want the first failure as it is: no retries, no breaker, no pacing.
-`headgate.policy.policy_disabled()` builds the clients constructed in its block with retries off (whatever a call or
+`headgate.testing.policy_disabled()` builds the clients constructed in its block with retries off (whatever a call or
 route asks for), no breaker (the client never reads a registry, so it cannot be refused by one another client opened),
 and a budget that paces nothing, also for its routes' `rate=` and a shared `RateBudget` passed in.
 
@@ -212,7 +212,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from headgate.policy import policy_disabled
+from headgate.testing import policy_disabled
 
 
 @pytest.fixture(autouse=True)

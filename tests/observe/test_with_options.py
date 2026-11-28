@@ -24,8 +24,7 @@ from headgate import (
     nothing,
 )
 from headgate.errors import CircuitOpenError
-from headgate.policy import policy_disabled
-from headgate.testing import FakeTransport
+from headgate.testing import FakeTransport, policy_disabled
 from tests.observe._support import client
 
 #: Long enough that a short deadline expires first, short enough to keep the suite fast when one does not.

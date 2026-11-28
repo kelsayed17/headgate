@@ -169,6 +169,18 @@ def test_the_fault_steps_live_in_the_testing_kit() -> None:
     assert set(faults.__all__) <= set(headgate.testing.__all__)
 
 
+async def test_policy_disabled_lives_in_the_testing_kit() -> None:
+    """Report ``headgate.testing`` as the switch's home once that alone is imported; ``headgate.policy`` is gone."""
+    code = (
+        "import importlib.util, headgate.testing\n"
+        "print(headgate.testing.policy_disabled.__module__, importlib.util.find_spec('headgate.policy'))"
+    )
+    process = await asyncio.create_subprocess_exec(sys.executable, "-c", code, stdout=asyncio.subprocess.PIPE)
+    stdout, _ = await process.communicate()
+
+    assert stdout.decode().split() == ["headgate.testing", "None"]
+
+
 async def test_what_a_client_hands_out_reports_its_home_after_a_bare_import() -> None:
     """Name the public homes of the events, errors and timing a client hands out, with only ``headgate`` imported.
 

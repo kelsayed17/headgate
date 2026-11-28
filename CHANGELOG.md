@@ -221,6 +221,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - A cache write that fails, or outlasts its call's deadline, after the call accepted a miss is reported as a
   `CacheChecked` event with outcome `DEGRADED`, after that call's `MISS`, where it was only counted: a call whose
   answer was not stored says so. An observer that took one `CacheChecked` per call as given may now see two.
+- `policy_disabled()` lives in the testing kit, beside `instant_retries()`, and `headgate.policy`, a module for one
+  function, is removed: write `from headgate.testing import policy_disabled` for
+  `from headgate.policy import policy_disabled`. It reports `headgate.testing` as its home.
 - `headgate.health.BreakerSnapshot` is a frozen dataclass with `state`, `refusing` and `failures` (the consecutive
   failures since the last success, which only the live breaker showed), built by keyword, rather than a named tuple:
   write `snapshot.state, snapshot.refusing` for `state, refusing = snapshot`, and compare a snapshot with

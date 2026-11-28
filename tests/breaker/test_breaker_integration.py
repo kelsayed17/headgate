@@ -42,7 +42,7 @@ from headgate import (
 from headgate.breaker import BreakerRegistry, BreakerState
 from headgate.breaker._registry import table_of
 from headgate.errors import CircuitOpenError, ClientConfigurationError, ResponseTooLargeError
-from headgate.policy import policy_disabled
+from headgate.testing import policy_disabled
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:

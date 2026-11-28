@@ -43,7 +43,6 @@ _PUBLIC_MODULES = (
     "headgate.msgspec",
     "headgate.pagination",
     "headgate.otel",
-    "headgate.policy",
     "headgate.pydantic",
     "headgate.ratelimit",
     "headgate.retry",
