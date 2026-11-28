@@ -57,7 +57,7 @@ an `X-API-Key`, on every hop, next-page links included: see [security](security.
 | :lucide-gauge: Rate limits | aiolimiter, pyrate-limiter, limits | [`RateBudget`](rate-budgets.md) |
 | :lucide-database-zap: Caching | hishel, requests-cache, aiohttp-client-cache, CacheControl | [`HttpCache`](caching.md), on hishel |
 | :lucide-zap-off: Circuit breaking | pybreaker, aiobreaker, purgatory, circuitbreaker | [`BreakerPolicy`](breaker.md) |
-| :lucide-radio: Server-sent events | httpx-sse, aiohttp-sse-client | [`stream().aiter_events()`](streaming.md#server-sent-events) |
+| :lucide-radio: Server-sent events | httpx-sse, aiohttp-sse-client | [`events()`](streaming.md#server-sent-events) |
 | :lucide-list-ordered: Pagination | a loop you write per endpoint | [`paginate()`](pagination.md) |
 | :lucide-flask-conical: Test doubles | respx, pytest-httpx, aioresponses, responses | [`headgate.testing`](testing.md); vcrpy cassettes work too |
 | :lucide-activity: Telemetry | OpenTelemetry instrumentation packages | [typed events and an OpenTelemetry observer](observability.md) |

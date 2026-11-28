@@ -56,30 +56,38 @@ the dev group for the docs' codec.
 5. **Retry statuses are 100–599 and nothing narrower**: a `RetryPolicy` may retry a 202 a polling API answers while a
    job runs. `HttpCache(statuses=)` checks kinds and range with the same helper before its 2xx rule.
 6. **`Expect.on(status=)` takes an `int`** (`check_int`), so `True` and `"404"` are `TypeError`s naming `status=`.
-7. **An observer needs a callable `notify`** (`check_observers`): `observers=[print]` and one whose method is misspelled are
-   `TypeError`s naming the entry.
+7. **An observer needs a callable `notify`** (`check_observers`): `observers=[print]` and one whose method is
+   misspelled are `TypeError`s naming the entry.
 8. **A pager is checked twice**: each of the seven strategies refuses, when built, a `read` that is not a `Reader` or
    an `Expect` and a hook (`items`, `next`, `more`, `put`, `offset`, `total`, `write`) that cannot be called; and
    `paginate()` refuses a `pager=` without callable `first`, `page_items` and `next_page`, naming what is missing,
    before `read`. (Amends spec 5.1, which named only `paginate`'s pager.)
-9. **`Json` encodes its value when built (5.2)** into a private field (`init=False`, `repr=False`, `compare=False`),
-   which `lowered` sends, so a body is encoded once. A value JSON's encoder cannot take raises `TypeError` naming the
-   type and pointing to a flavor's `writer(Type)` or `to_builtins(value)`; `NaN` and the infinities raise `ValueError`
-   where the `Json` is built, not at the call.
+9. **`Json` encodes its value when built (5.2)**, and a call encodes it again as it is sent. A value JSON's encoder
+   cannot take raises `TypeError` naming the type and pointing to a flavor's `writer(Type)` or `to_builtins(value)`;
+   `NaN` and the infinities raise `ValueError` where the `Json` is built, not at the call. (Changed during
+   implementation: the plan kept the bytes in a private field, but a dataclass field, even `init=False`, is in
+   `dataclasses.fields()`, `asdict()` and the API snapshot, mechanism in the public surface; a JSON body is small, and
+   a large one is a writer's `EncodedBody`.)
 10. **`Reader` refuses a class** (`isinstance(read, type)`), pointing to `as_text` for `str` and to
     `Reader(lambda r: Cls(r))` for a class that really takes a response.
 11. **`headgate.msgspec`'s `decoder()` walks `msgspec.inspect.type_info`** and refuses every `CustomType` but `object`
     (which msgspec decodes as any value): a pydantic model points to `headgate.pydantic.reader(Model)`, any other class
-    to a `msgspec.Struct`, a dataclass or builtins. `check_codec` asks `decoder()` for a private plain class and fails
-    unless building it raises (any exception: pydantic raises a `RuntimeError` subclass there).
+    to a `msgspec.Struct`, a dataclass or a TypedDict. `headgate.pydantic` turns pydantic's
+    `PydanticSchemaGenerationError` into a `TypeError` naming the class, so both flavors refuse the same way, and the
+    `Codec` contract is that `decoder()` raises `TypeError` for a type it cannot decode. `check_codec` asks `decoder()`
+    for a private plain class and fails unless that raises `TypeError`. (Changed during implementation: the plan
+    accepted any exception, which needs a blind `except Exception`; one contract is also the more elegant API.)
 12. **A misused `refuse=` is a private `ReaderMisuseError(TypeError)`** in `headgate._responses`, raised by the body
     reader when `refuse` returns neither a `RefusedError` nor `None`, and re-raised as it is by `Client._dispatch` and
     `mint_error` ahead of the shape errors. `TypeError` stays a shape error otherwise. `RefusedError(kind=)` is
     checked with `issubclass(kind, UpstreamStatusError)` when built. A `response_check` that returns neither is the
     same misuse, a `TypeError` naming `response_check=` (an adjacent gap, closed here; amends spec 5.3).
-13. **A declared redirect on a following call (5.4)** is refused in `Client._request`, so verbs and pages alike: when
-    the call follows redirects and its `Expect` declares 301, 302, 303, 307 or 308, `ValueError` names the statuses and
-    says to pass `follow_redirects=False`. A stream has no `Expect`.
+13. **A declared redirect on a following call (5.4)** is refused in `Client._request`, and for a walk in `paginate()`
+    itself: when the call follows redirects and its `Expect` declares 301, 302, 303, 307 or 308, `ValueError` names the
+    statuses and says to pass `follow_redirects=False`. A redirect that would send a one-shot body again (a 307 or 308,
+    or a 301 or 302 that keeps the method) is not followed, so it reaches the call and may be declared:
+    `_redirects.redirect_method(method, status)` says which. A stream has no `Expect`. (Changed during
+    implementation: the existing `test_a_declared_redirect_answer_reads_the_unfollowed_hop` pins that case.)
 14. **Auth values (5.1, 5.4):** `BearerAuth(token)` takes a `str` (`TypeError`) that is not empty or blank and does not
     start with `Bearer ` in any case (`ValueError`). `StaticHeaderAuth` and `QueryParamAuth` take a `check_text_map`
     mapping (`TypeError`) with at least one entry (`ValueError` saying to pass `auth=None`). The docs' "an empty
@@ -87,12 +95,17 @@ the dev group for the docs' codec.
 15. **`cache_ttl=` on a client without a cache** is a `ValueError` at the call, in `_prepare`.
 16. **The loop guard runs for every pager (5.5):** `PageWalk` remembers each page's body when `pager.page_items(page)`
     yields an item (read with `next(iter(...), sentinel)`, so an iterator is not consumed for the walk), and the
-    `isinstance` on `Offset`, `PageNumber` and `BodyOffset` goes.
+    `isinstance` on `Offset`, `PageNumber` and `BodyOffset` goes. `test_link_header_pages_with_the_same_body_are_walked`
+    pinned the old exemption and becomes its opposite; three tests of the repeated-request check get pages that
+    differ, since the body check now catches their loop one page sooner.
 17. **`fake_network` yields a `FakeNetwork[T]` (6.1)**, a final class exported by `headgate.testing`, with `transport`
     (the `T` given) and `clients`, a tuple read afresh, of the `Client`s whose construction finished in the block, in
-    order. A view (`with_options`) is not a new client. `NETWORK_OVERRIDE` holds the handle, typed by a private
-    `NetworkOverride` protocol in `_stack.py` (`transport`, `resolve(host, port)`, `built(client)`), and
-    `Client.__init__` calls `built(self)` as its last step. (Amends spec 6.1, which named no type.)
+    order, and a `repr`. A view (`with_options`) is not a new client. `NETWORK_OVERRIDE` holds a private
+    `NetworkOverride` dataclass of `_stack.py` (`transport`, `resolver`, `clients`), which `Client.__init__` appends
+    itself to as its last step; a handle finds its own through a private weak map, as a `RateBudget` its pacer, so the
+    handle shows only what a test reads. (Amends spec 6.1, which named no type. Changed during implementation: the plan
+    made the override a protocol with `resolve` and `built` methods, which would have put the stack's mechanism on
+    the public handle.)
 18. **Names resolve inside the fake network (6.2):** under `fake_network`, the SSRF guard resolves through the handle,
     replacing even an SDK's own `resolver=`, as the transport replaces an SDK's own. A host resolves to
     `FakeTransport.resolve(host, *addresses)`'s answer (case-insensitive; no addresses is a name that does not resolve,
@@ -100,13 +113,17 @@ the dev group for the docs' codec.
     `1.2.3.4`, a globally routable address the guard admits. The check keeps running, so a private literal or a
     `resolve("api.example", "10.0.0.1")` is refused. (Amends spec 6.2 with the override and the empty answer.)
 19. **The docs test's marker is an HTML comment on the line before the fence**: `<!-- docs-test: run -->` (type-check
-    and execute) or `<!-- docs-test: check -->` (type-check only, for a block that needs a server). It renders as
-    nothing on GitHub, PyPI and the site. Each page's marked blocks, in order, form one module after the shared context
-    `tests/examples/doc_context.py` (its source inlined, so line numbers map back), a block with a top-level `await`
-    wrapped in an `async def`. One `ty check` runs over every page module. The run blocks of a page execute in one
-    namespace, in a temporary directory, inside `fake_network(FakeTransport())` and `TestClock().install()`, so a
-    client built at import is on a fake network and nothing reaches the internet; then every zero-argument `test_*`
-    function they defined is called (awaited when async), so the codec guide's `check_codec` test runs.
+    and execute) or `<!-- docs-test: check -->` (type-check only, for a block that calls a server). It renders as
+    nothing on GitHub, PyPI and the site. Each page's marked blocks, in order, form one module after
+    `from headgate import *` and `from tests.examples.doc_context import *` (the domain types, values and SDKs a block
+    names without defining, all real); a block's statements from its first top-level `await` on are wrapped in an
+    `async def`, so the imports and definitions before it stay at the top for the page's later blocks, and each line
+    maps back to `page:line`. One `ty check` (every rule an error) runs over every page's module. For the run, the
+    page's module is written out without the awaiting tails of its check blocks and imported, in a temporary directory,
+    inside `fake_network(FakeTransport())` and `TestClock().install()`; then every argument-free wrapped block and
+    `test_*` function it defined is called (awaited when async), so the codec guide's `check_codec` test and the
+    testing guide's budget test run. The context's own clients are built on a fake network too, so a block run by
+    mistake raises rather than reaching the internet. A run is an import, not `exec`, which the lint rules refuse.
 20. **The README is covered by its excerpt test**: each README block is, statement by statement, code of a module in
     `examples/` or `tests/examples/` that the suite runs and ty checks, which is stronger than running the block on its
     own; its blocks are not marked. (Amends spec 7, which named the README among the marked pages.)
@@ -263,4 +280,11 @@ str) -> Self`; `NetworkOverride` protocol in `_stack.py`.
 
 ## Unmarked blocks
 
-Filled in by Task 10: each block left without a marker, and why.
+None. Of the guides' 61 Python blocks, 46 are marked `run` and 15 `check`; the 6 README blocks are covered by the
+excerpt test (Decision 20). Every block that calls a server is `check`: the per-call options, a view's call and the
+wrapper's calls in `configuration.md`; the deadline calls and the bounded stream in `deadlines.md`; the error handler
+in `errors.md`; the SDK in use on `index.md`; the walks in `pagination.md` (its first, `collect()`, the page budget,
+the body cursor); the delete in `security.md`; every block of `streaming.md`. Four blocks that could not run as they
+stood were rewritten to run or check rather than left unmarked: the request-body fragment of `streaming.md` (a method
+body with `self` and `...`), the wrapper method of `configuration.md` (now a small class), the `HeaderTokens` and
+`SearchPages` pagers (a truthiness test of `str | None`, and a page type that clashed with the page's other one).
