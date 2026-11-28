@@ -110,35 +110,10 @@ ignore = ["COM812", "D203", "D213"]
 [tool.ruff.lint.per-file-ignores]
 # pytest's assertions are plain ``assert`` statements.
 "tests/**" = ["S101"]
-# These modules define exports whose annotations resolve at runtime (``typing.get_type_hints``, msgspec, pydantic), so
-# the names those annotations use are imported at runtime, which flake8-type-checking would move behind
-# ``TYPE_CHECKING``. tests/package/test_one_home.py resolves every export's hints, and names a module that needs adding.
-"src/headgate/_auth.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/_call_options.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/_client.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/_codec.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/_core/_context.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/_core/_events.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/_core/_switch.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/_core/_time.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/_curl.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/_health.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/_msgspec.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/_options.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/_otel.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/_pydantic.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/_view.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/breaker/_registry.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/cache/_policy.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/pagination/_link.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/pagination/_pager.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/pagination/_paginated.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/security/_transport.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/streaming/_stream.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/testing/_faults.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/testing/_inspect.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/testing/_recording.py" = ["TC001", "TC002", "TC003"]
-"src/headgate/testing/_time.py" = ["TC001", "TC002", "TC003"]
+# Every export's type hints resolve at runtime (``typing.get_type_hints``, msgspec, pydantic), so the names its
+# annotations use are imported at runtime, which flake8-type-checking would move behind ``TYPE_CHECKING``.
+# tests/package/test_one_home.py's hint test resolves every export's hints, so an import moved back fails it.
+"src/**" = ["TC001", "TC002", "TC003"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "pep257"
