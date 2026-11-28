@@ -857,3 +857,55 @@ async def test_an_instance_margin_does_not_skip_the_check(client_factory: _Facto
     await client.get("/x")
 
     assert auth.mints == _MINT_AND_RE_MINT
+
+
+def _client_for(auth: CachedTokenAuth) -> Client:
+    """Build a client for *auth* over a transport that answers 200."""
+    return Client(base_url="https://api.example", auth=auth, http=HttpOptions(transport=httpx2.MockTransport(_ok)))
+
+
+class TestOneTiming:
+    """A token auth runs on one timing: its clients' (R6). A second timing is refused once the first was used."""
+
+    def test_clients_on_two_timings_are_refused(self) -> None:
+        """Refuse a second client built on another timing than the first one's."""
+        auth = _CountingAuth()
+        with TestClock().install():
+            _client_for(auth)
+        with pytest.raises(TypeError, match=r"_CountingAuth already runs its token lifetimes on another timing"):
+            _client_for(auth)
+
+    def test_a_token_seeded_on_another_timing_is_refused(self) -> None:
+        """Refuse a client on a test clock for an auth seeded before the block, and say to seed inside it."""
+        auth = _CountingAuth()
+        auth.seed(Minted("seeded", 600.0))
+        with TestClock().install(), pytest.raises(TypeError, match=r"seed it inside the same block"):
+            _client_for(auth)
+
+    async def test_clients_and_a_seed_under_one_timing_are_accepted(self) -> None:
+        """Accept a seed and two clients in one block, all on its clock."""
+        clock = TestClock(1000.0)
+        with clock.install():
+            auth = _CountingAuth()
+            auth.seed(Minted("seeded", _LIFETIME_S))
+            first, second = _client_for(auth), _client_for(auth)
+        async with first, second:
+            await first.get("x", expect=RESPONSE)
+            clock.advance(_LIFETIME_S)
+            await second.get("x", expect=RESPONSE)
+
+        assert auth.mints == 1
+
+    async def test_an_auth_touched_before_any_client_takes_the_clients_timing(self) -> None:
+        """Rebind an auth that holds no token and minted none to the timing of the client it is given."""
+        clock = TestClock(1000.0)
+        auth = _CountingAuth()
+        auth.credential_identity()  # makes its state on the system timing
+        with clock.install():
+            client = _client_for(auth)
+        async with client:
+            await client.get("x", expect=RESPONSE)
+            clock.advance(_LIFETIME_S - _MARGIN_S)
+            await client.get("x", expect=RESPONSE)
+
+        assert auth.mints == _MINT_AND_RE_MINT

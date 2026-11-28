@@ -81,9 +81,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `super().__init__()` may stay, and does nothing. `refresh_margin` is a class attribute, a finite number of seconds of
   0 or more checked when the class is defined, and the class's value is the one read, not an instance's: write
   `refresh_margin = 30.0` in the class body for `super().__init__(refresh_margin=30.0)`. `CachedTokenAuth(timing=)` is
-  removed: a token's lifetime runs on the timing
-  of the first client built with the auth, so build it, or the client, inside `timing_override()` or
-  `TestClock.install()`.
+  removed: a token's lifetime runs on the timing of the clients built with the auth, so build the client inside
+  `timing_override()` or `TestClock.install()` (building the auth there alone does nothing). Its clients share one
+  timing: a client built on another timing than an earlier one's, or than the one a token was seeded or minted on,
+  raises `TypeError`, so build them, and seed the auth, inside one block.
 - `async_auth_flow` is `@final` on `SigningAuth` and `CachedTokenAuth`, and so is `reject_credential_rotation`: a
   subclass that overrides one raises `TypeError` when it is defined, and ty reports `override-of-final-method`. An
   override of the flow type-checked and failed inside the call (`'NoneType' object has no attribute 'status_code'`).
