@@ -6,6 +6,15 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-28
+
+The second pass over the public API, and a breaking release with no aliases: every entry under **Changed** and
+**Removed** says what to write instead. A wrong argument fails where it is written, naming the option and what it
+takes. An auth declares the headers and parameters it stamps, and the client refuses one that stamps anything else.
+Each concept has one name and one public home. Live objects such as budgets and breaker registries show only what a
+caller uses. `fake_network` tests an SDK through its front door with the SSRF guard still running, and every Python
+sample in the docs is type-checked, most of them run.
+
 ### Added
 
 - `headgate.Auth`, the one type `Client(auth=)` takes: an `httpx2.Auth` that declares the headers and query parameters
@@ -1684,7 +1693,8 @@ Python 3.14.
 - The `headgate.msgspec` and `headgate.pydantic` codec flavors, the optional `AsyncCurlTransport` (`headgate[curl]`),
   `headgate.health` snapshots and `headgate.policy.policy_disabled()`.
 
-[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/kelsayed17/headgate/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/kelsayed17/headgate/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/kelsayed17/headgate/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/kelsayed17/headgate/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/kelsayed17/headgate/compare/v0.10.0...v0.11.0
