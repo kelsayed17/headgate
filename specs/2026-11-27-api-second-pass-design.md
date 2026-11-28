@@ -184,6 +184,11 @@ module that exports it, and the one-home test checks it. The six top-level error
 `headgate.UpstreamStatusError`. The same applies to the testing kit (`headgate.testing.UnmatchedRequestError`).
 `Paginated` becomes the concrete final class the walk is, so `await client.paginate(...)` names `Paginated`.
 (F5's alternative, moving all fifteen errors to `headgate.errors`, re-opens design 8 and was not taken.)
+The cost is that `inspect.getsource` (and IPython's `Client??`) cannot find a class's source: it looks the class up in
+the module `__module__` names, where only the import is. Functions, and every traceback, keep their real file paths,
+since those come from the code object. The public home wins because it is what a user reads and copies: a traceback, a
+`repr`, `help()` and a pickle name the one import that works, and the private module is no second home. trio and numpy
+pay the same cost for the same reason. (Amended with the phase 3 review.)
 
 ### 4. The surface is what users use
 
