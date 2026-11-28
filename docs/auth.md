@@ -127,8 +127,9 @@ class ExchangeAuth(SigningAuth):
         return self._secret
 ```
 
-- `now` is the attempt's wall-clock time in Unix seconds, read from the client's timing, so a signer built under
-  `TestClock.install()` signs on the test clock. Sign with it, not `time.time()`.
+- `now` is the attempt's wall-clock time in Unix seconds, read from the client's timing, so a signer given to a client
+  built under `TestClock.install()` signs on the test clock, wherever the signer itself was built. Sign with it, not
+  `time.time()`.
 - `sign` replaces what an earlier call set, since it runs once per attempt, and again on the re-send after a 401. An
   exception it raises surfaces from inside the retry layer as it was raised: the attempt counts (observers see an
   `AttemptFinished` with its type as the error), the request is not sent, and it is not retried. An `httpx2.HTTPError`
