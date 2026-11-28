@@ -113,16 +113,26 @@ def check_names(option: str, value: object, wanted: str) -> None:
 
 
 def check_not_letters(where: str, names: Collection[str]) -> None:
-    """Refuse credential *names* that are all one character long: one name split into its letters.
+    """Refuse credential *names* that are all one character long: one name split into its letters, or a lone letter.
 
     ``frozenset("X-Api-Key")`` is a ``frozenset[str]`` of eight letters, so it type-checks and withholds no real header.
-    No real header or query credential is one character long, so a non-empty set of nothing else is that mistake.
+    No real header or query credential is one character long, so a non-empty set of nothing else is that mistake, or
+    a name cut short. *where* names a declaration; one that ends in ``params`` is shown a query parameter's spelling.
 
-    :raises TypeError: naming *where* the names were declared, the letters, and the spelling to write.
+    :raises TypeError: naming *where*, the names, and the spelling to write.
     """
-    if names and all(len(name) == 1 for name in names):
+    if not (names and all(len(name) == 1 for name in names)):
+        return
+    example = "api_key" if where.rstrip("=)").endswith("params") else "X-Api-Key"
+    if len(names) == 1:
+        (name,) = names
         msg = (
-            f"{where} holds only one-character names ({', '.join(sorted(names))}), as frozenset('X-Api-Key') does, "
-            "which splits a name into its letters: write frozenset({'X-Api-Key'})"
+            f"{where} names only {name!r}, one character long, which no header or query credential is: write the "
+            f"whole name, such as frozenset({{{example!r}}})"
         )
-        raise TypeError(msg)
+    else:
+        msg = (
+            f"{where} holds only one-character names ({', '.join(sorted(names))}), as frozenset({example!r}) does, "
+            f"which splits a name into its letters: write frozenset({{{example!r}}})"
+        )
+    raise TypeError(msg)

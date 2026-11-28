@@ -76,12 +76,13 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - An auth's own header or query parameter no longer follows a request to another origin. A plain `httpx2.Auth` that set
   `X-Api-Key` sent it on a cross-origin redirect and to an absolute URL on another host, since the guard withheld only
   `Authorization`, `Proxy-Authorization` and `Cookie` for an auth that declared nothing; such an auth is now refused.
-- A credential declaration whose names are all one character long is refused with a `TypeError` that shows the
-  spelling to write: `frozenset("X-Api-Key")` is a `frozenset[str]` of eight letters, so it type-checked and withheld
-  no real header. Write `frozenset({"X-Api-Key"})`. It is checked for a middleware when the client is built, for an
-  `Auth` subclass's class attribute (`credential_headers`, `signed_headers`, `token_headers` and the `_params`) when the
-  class is defined, for a declaration through a property when the client is built, and for
-  `CassetteFilter(headers=, params=)` and its auths' declarations when the filter is built.
+- A credential declaration whose names are all one character long is refused with a `TypeError` that shows the spelling
+  to write: `frozenset("X-Api-Key")` is a `frozenset[str]` of eight letters, so it type-checked and withheld no real
+  header. Write `frozenset({"X-Api-Key"})` (`frozenset({"api_key"})` for a parameter). A lone one-character name
+  (`headers=["x"]`) is refused too, since no header or query credential is one character long. It is checked for a
+  middleware when the client is built, for an `Auth` subclass's class attribute (`credential_headers`, `signed_headers`,
+  `token_headers` and the `_params`) when the class is defined, for a declaration through a property when the client is
+  built, and for `CassetteFilter(headers=, params=)` and its auths' declarations when the filter is built.
 - The cache never looks up, stores or shares a request with a body, whatever its method, so a GET stream opened with
   `body=` is no longer served the entry stored for its URL. It goes to the network as it arrives.
 - `CassetteFilter(headers="x-api-key")` no longer records the header it was asked to scrub: it filtered the letters
@@ -1060,7 +1061,8 @@ configuration that could never work an error, so this is a minor release: see **
 
 ### Added
 
-- `headgate.ratelimit.BudgetBacklogError`, raised by `RateBudget.wait` when a call's paced turn comes after its deadline.
+- `headgate.ratelimit.BudgetBacklogError`, raised by `RateBudget.wait` when a call's paced turn comes after its
+  deadline.
 
 ### Changed
 

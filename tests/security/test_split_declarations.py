@@ -97,15 +97,10 @@ def test_an_auth_declaring_a_list_is_refused_when_defined() -> None:
         _not_a_frozenset()
 
 
-@pytest.mark.parametrize(
-    "build",
-    [lambda: CassetteFilter(headers=frozenset("X-Api-Key")), lambda: CassetteFilter(params=frozenset("X-Api-Key"))],
-    ids=["headers", "params"],
-)
-def test_a_cassette_filter_refuses_letters(build: Callable[[], object]) -> None:
+def test_a_cassette_filter_refuses_letters() -> None:
     """Refuse names the filter would scrub one letter at a time, so the credential would be recorded."""
     with pytest.raises(TypeError, match=_LETTERS):
-        build()
+        CassetteFilter(headers=frozenset("X-Api-Key"))
 
 
 #: An auth declaring a split name through a property, which only an instance reads.
@@ -149,3 +144,15 @@ async def test_one_real_one_character_name_beside_others_passes() -> None:
         await client.get(httpx2.URL("https://other.example/x"), expect=as_json)
 
     assert "x-api-key" not in fake.calls[0].headers
+
+
+def test_a_split_parameter_shows_a_parameter_spelling() -> None:
+    """Show a query parameter's spelling for a split ``credential_params``, not a header's."""
+    with pytest.raises(TypeError, match=r"write frozenset\(\{'api_key'\}\)"):
+        CassetteFilter(params=frozenset("api_key"))
+
+
+def test_a_lone_one_character_name_is_refused_in_its_own_words() -> None:
+    """Refuse a single one-character name, saying no credential is one character long, not that a name was split."""
+    with pytest.raises(TypeError, match=r"names only 'x', one character long, which no header or query credential is"):
+        CassetteFilter(headers=["x"])

@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, ClassVar, Protocol
 from headgate._auth import AUTH_HOP
 from headgate._core import CredentialCarrier, check_kind, check_names, check_not_letters
 from headgate._url import sanitize_url
-from headgate.security._credentials import check_names as check_declared
+from headgate.security._credentials import check_declarations
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterable, MutableMapping
@@ -103,7 +103,7 @@ class CassetteFilter:
                 CredentialCarrier,
                 "auths or middleware that declare credential_headers and credential_params",
             )
-            check_declared(
+            check_declarations(
                 type(auth).__qualname__,
                 credential_headers=auth.credential_headers,
                 credential_params=auth.credential_params,

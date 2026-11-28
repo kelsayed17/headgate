@@ -41,7 +41,7 @@ from headgate._failures import CallSite, loggable_url, mint_error, shorten, tran
 from headgate._url import redact_secrets, register_secret_params
 from headgate.errors import ClientConfigurationError, ClientError
 from headgate.retry._policy import REPLAYABLE_BODY
-from headgate.security._credentials import CHAIN_ORIGIN, check_names
+from headgate.security._credentials import CHAIN_ORIGIN, check_declarations
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable, Mapping
@@ -275,7 +275,9 @@ class Auth(httpx2.Auth, CredentialStamper, ABC):
         super().__init_subclass__(**kwargs)
         declared = {name: getattr(cls, name) for name in ("credential_headers", "credential_params")}
         # A property (or other descriptor) reads per instance, so the client checks it when it is built.
-        check_names(cls.__name__, **{name: value for name, value in declared.items() if not _is_descriptor(value)})
+        check_declarations(
+            cls.__name__, **{name: value for name, value in declared.items() if not _is_descriptor(value)}
+        )
 
     @property
     @abstractmethod
@@ -433,7 +435,7 @@ class SigningAuth(Auth):
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse a concrete subclass that declares nothing it signs with, and register its parameters as secret."""
         super().__init_subclass__(**kwargs)
-        check_names(cls.__name__, signed_headers=cls.signed_headers, signed_params=cls.signed_params)
+        check_declarations(cls.__name__, signed_headers=cls.signed_headers, signed_params=cls.signed_params)
         register_secret_params(cls.signed_params)
         if not inspect.isabstract(cls) and not (cls.signed_headers or cls.signed_params):
             msg = (
@@ -639,7 +641,7 @@ class CachedTokenAuth[TokenT = str](Auth):
         registered as secret.
         """
         super().__init_subclass__(**kwargs)
-        check_names(cls.__name__, token_headers=cls.token_headers, token_params=cls.token_params)
+        check_declarations(cls.__name__, token_headers=cls.token_headers, token_params=cls.token_params)
         register_secret_params(cls.token_params)
         # Not @abstractmethod: either of two methods satisfies the contract.
         supplied = any(getattr(cls, name) is not getattr(CachedTokenAuth, name) for name in ("mint_token", "mint_flow"))
@@ -722,7 +724,7 @@ class CachedTokenAuth[TokenT = str](Auth):
         """
         if not isinstance(token, str):
             msg = (
-                f"{type(self).__name__} minted a {type(token).__name__} token, which the default attach cannot send "
+                f"{type(self).__name__} holds a {type(token).__name__} token, which the default attach cannot send "
                 "as Authorization: Bearer: override attach to put it on the request"
             )
             raise TypeError(msg)

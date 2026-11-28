@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     from headgate._middleware import Middleware
     from headgate._options import HttpOptions
 
-__all__ = ["CHAIN_ORIGIN", "CredentialGuard", "check_names"]
+__all__ = ["CHAIN_ORIGIN", "CredentialGuard", "check_declarations"]
 
 #: The request extension holding the origin (as :func:`~headgate._core.origin_text`) a hop chain may carry credentials
 #: to besides the trusted ones. An auth flow sets it on each request it yields; httpx2 hands a request's extensions to
@@ -78,7 +78,7 @@ _ALWAYS_WITHHELD: Final = frozenset({"authorization", "proxy-authorization", "co
 _NEVER_CREDENTIALS: Final = frozenset({"user-agent", "content-type", "accept", "accept-encoding", "accept-language"})
 
 
-def check_names(owner: str, **declared: object) -> None:
+def check_declarations(owner: str, **declared: object) -> None:
     """Raise ``TypeError`` unless every value in *declared* is a frozenset of names (``str``), naming *owner*.
 
     A bare ``str`` iterates as its letters, so ``credential_headers = "x-api-key"`` would withhold no real header, and
@@ -122,7 +122,7 @@ class CredentialGuard:
         headers.update({name.lower() for name in http.headers} - _NEVER_CREDENTIALS)
         params = frozenset[str]()
         if auth is not None:
-            check_names(
+            check_declarations(
                 type(auth).__name__,
                 credential_headers=auth.credential_headers,
                 credential_params=auth.credential_params,

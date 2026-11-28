@@ -61,7 +61,7 @@ async def test_a_generic_subclass_is_refused_at_the_first_attach() -> None:
     fake = FakeTransport().reply("GET", "/x", Respond(json={}))
     client = Client(base_url="https://api.example", auth=_Leaf(_TOKEN), http=HttpOptions(transport=fake))
     async with client:
-        with pytest.raises(TypeError, match=r"_Leaf minted a dict token, which the default attach cannot send"):
+        with pytest.raises(TypeError, match=r"_Leaf holds a dict token, which the default attach cannot send"):
             await client.get("x", expect=as_json)
 
     assert fake.calls == ()
@@ -114,3 +114,15 @@ async def test_a_token_type_that_may_be_text_keeps_the_default_attach(auth: Cach
         await client.get("x", expect=as_json)
 
     assert fake.calls[0].headers["Authorization"] == "Bearer abc"
+
+
+async def test_a_seeded_token_that_is_not_text_is_refused_without_saying_minted() -> None:
+    """Refuse a seeded token the default attach cannot send, in words that fit a token it did not mint."""
+    auth = _Leaf(_TOKEN)
+    auth.seed(_TOKEN, 3600.0)
+    fake = FakeTransport().reply("GET", "/x", Respond(json={}))
+    async with Client(base_url="https://api.example", auth=auth, http=HttpOptions(transport=fake)) as client:
+        with pytest.raises(TypeError, match=r"^_Leaf holds a dict token") as raised:
+            await client.get("x", expect=as_json)
+
+    assert "minted" not in str(raised.value)
