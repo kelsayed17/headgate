@@ -59,7 +59,7 @@ dev = [
     "httpx2-pytest>=2.0.0",
     "time-machine>=2.14.0",
     "ruff>=0.15.11",
-    "ty>=0.0.93",
+    "ty>=0.0.99",
     "headgate[msgspec,pydantic,curl,otel,cache]",
     "opentelemetry-sdk>=1.45.1",
     "pytest-cov>=7",
@@ -69,7 +69,7 @@ dev = [
     "vcrpy>=8.3",
     "typos>=1.51.1",
     "cattrs>=25.1",
-    "orjson>=3.10",
+    "orjson>=3.11.1",
 ]
 docs = ["zensical>=0.0.72"]
 

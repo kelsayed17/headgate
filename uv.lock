@@ -358,7 +358,7 @@ dev = [
     { name = "hypothesis", specifier = ">=6.170" },
     { name = "mutmut", specifier = ">=3.8" },
     { name = "opentelemetry-sdk", specifier = ">=1.45.1" },
-    { name = "orjson", specifier = ">=3.10" },
+    { name = "orjson", specifier = ">=3.11.1" },
     { name = "pytest", specifier = ">=9.1" },
     { name = "pytest-asyncio", specifier = ">=1.4" },
     { name = "pytest-codspeed", specifier = ">=5.0.3" },
@@ -366,7 +366,7 @@ dev = [
     { name = "ruff", specifier = ">=0.15.11" },
     { name = "syrupy", specifier = ">=6.1.1" },
     { name = "time-machine", specifier = ">=2.14.0" },
-    { name = "ty", specifier = ">=0.0.93" },
+    { name = "ty", specifier = ">=0.0.99" },
     { name = "typos", specifier = ">=1.51.1" },
     { name = "vcrpy", specifier = ">=8.3" },
 ]
