@@ -16,8 +16,9 @@ response, body already read and capped, because some readers need a header too. 
 | `body_reader(decode)` | what `decode(body_bytes)` returns | a decoder of your own in any format: JSON, XLS, fixed-width TXT, CSV |
 | `as_json` | the body as builtins, typed `object` | JSON without a codec, on a core-only install |
 | `as_bytes` | the body, undecoded | CSV, ZIP, PDF, a dump another parser reads |
+| `as_text` | the body as text, decoded by its `charset` (UTF-8 without one, or for one that names no text encoding) | plain text, CSV, HTML a text parser reads |
 | `nothing` | `None` | a void write (`DELETE`, a cancel) or a `HEAD` |
-| `event_stream` | each server-sent event (`event`, `data`, `id`, `retry`), in order | a buffered `text/event-stream` body |
+| `as_events` | each server-sent event (`event`, `data`, `id`, `retry`), in order | a buffered `text/event-stream` body |
 
 A reader that finds the body is not the shape it expected raises: a codec raises `DecodeError`, and the `ValueError`,
 `LookupError` or `TypeError` hand-written code over `response.json()` raises, or nesting too deep to parse, counts the

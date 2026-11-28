@@ -36,7 +36,7 @@ import httpx2
 
 from headgate._core import check_kind
 from headgate.errors import DecodeError, RefusedError
-from headgate.streaming._events import EventParser
+from headgate.streaming._events import EventParser, text_decoder
 
 __all__ = [
     "Expect",
@@ -44,9 +44,10 @@ __all__ = [
     "ResponseCheck",
     "accepts",
     "as_bytes",
+    "as_events",
     "as_json",
+    "as_text",
     "body_reader",
-    "event_stream",
     "nothing",
     "with_answers",
 ]
@@ -319,6 +320,18 @@ def _as_bytes(resp: httpx2.Response, /) -> bytes:
 as_bytes: Final[Reader[bytes]] = Reader(_as_bytes, name="as_bytes")
 
 
+def _as_text(resp: httpx2.Response, /) -> str:
+    return text_decoder(resp.encoding).decode(resp.content, final=True)
+
+
+#: Return the body as text, decoded by the response's ``charset``, as ``Stream.aiter_lines`` decodes it.
+#:
+#: A plain-text, CSV or HTML body a parser of text reads later. It never raises: a ``charset`` that names no text
+#: encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is, and bytes the charset cannot decode become
+#: replacement characters. Where ``response.text`` raises for such a ``charset``, this reader does not.
+as_text: Final[Reader[str]] = Reader(_as_text, name="as_text")
+
+
 #: What :data:`as_json` says of a body nested too deeply for ``json.loads``'s own stack.
 _NESTED_TOO_DEEPLY: Final = "not JSON: nested too deeply"
 
@@ -407,7 +420,7 @@ def _nothing(resp: httpx2.Response, /) -> None:
 nothing: Final[Reader[None]] = Reader(_nothing, name="nothing")
 
 
-def _event_stream(resp: httpx2.Response, /) -> list[httpx2.ServerSentEvent]:
+def _as_events(resp: httpx2.Response, /) -> list[httpx2.ServerSentEvent]:
     return list(EventParser().feed(resp.content))
 
 
@@ -418,4 +431,4 @@ def _event_stream(resp: httpx2.Response, /) -> list[httpx2.ServerSentEvent]:
 #: No per-event limit applies, because the body is already buffered and capped by the client, and a large reply is
 #: legitimately one event. Choosing whether a body is an event stream is the caller's job, usually by reading the
 #: ``content-type``.
-event_stream: Final[Reader[list[httpx2.ServerSentEvent]]] = Reader(_event_stream, name="event_stream")
+as_events: Final[Reader[list[httpx2.ServerSentEvent]]] = Reader(_as_events, name="as_events")

@@ -77,7 +77,7 @@ seconds like every other duration (the wire's `retry:` is in milliseconds), `Non
 across blocks, a `retry:` alone included, as a browser keeps it, while an event's own `retry` is only the field its
 block named, in milliseconds. A `retry:` past 2**63 - 1 is held at that. Wait that long before re-opening.
 
-For an event stream that is short and bounded, the buffered `event_stream` reader returns every event in a body, parsed
+For an event stream that is short and bounded, the buffered `as_events` reader returns every event in a body, parsed
 the same way (see [responses](responses.md#readers)).
 
 ## Request bodies
