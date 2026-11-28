@@ -12,8 +12,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
   it stamps (`credential_headers`, `credential_params`, each a `frozenset` of names, as class attributes or
   properties) and names its credential (`credential_identity()`). A subclass that leaves one out cannot be built.
   `BearerAuth`, `StaticHeaderAuth`, `QueryParamAuth`, `SigningAuth` and `CachedTokenAuth` all derive from it. It is
-  `headgate.security.CredentialStamper` made a base class, and derives from it, so the contract is defined once; the
-  protocol remains for a middleware that has a credential identity of its own.
+  `headgate.security.CredentialStamper` made a base class: an `Auth` is a `CredentialStamper` by its shape, which a
+  type check pins, and the protocol remains for a middleware that has a credential identity of its own. `Auth` does
+  not derive from the protocol, so `Auth()`, `SigningAuth()` and `CachedTokenAuth()` read as taking nothing
+  (`inspect.signature`, `help()`), and a base listed after `Auth`, such as `httpx2.DigestAuth` or a cooperative
+  mixin, keeps its own constructor.
 
 ### Changed
 
@@ -54,6 +57,57 @@ change the public API; such changes are listed under **Changed** and **Removed**
   checking would empty) raises `TypeError` naming the option: write `methods=("GET",)` (`frozenset({"GET"})` for a
   `RetryPolicy`) or `statuses=(503,)`, and turn a generator into a tuple. `RetryPolicy(methods="GET")` retried no GET,
   and `HttpCache(methods="GET")` raised a `ValueError` that named the letters.
+- `SigningAuth` and `CachedTokenAuth` declare what they stamp in `credential_headers` and `credential_params`, the two
+  names every `Auth` and middleware declares with. `signed_headers` and `signed_params`, `token_headers` and
+  `token_params`, and the properties that mapped them onto `credential_*`, are removed: write
+  `credential_headers = frozenset({"X-Signature"})` where you wrote `signed_headers = ...` or `token_headers = ...`.
+  `CachedTokenAuth` declares `frozenset({"authorization"})` by default. The names are reported as declared, no longer
+  lower-cased (the guard, the cache and `CassetteFilter` compare them case-insensitively). A `SigningAuth` that
+  declares no name, and a `CachedTokenAuth` that overrides `attach` without declaring again what it sets, still fail
+  when the class is defined. Both declare in class attributes: a `credential_headers` or `credential_params` property,
+  which `CachedTokenAuth` accepted in place of `token_headers`, raises `TypeError` when the class is defined. For names
+  that differ per instance, write a subclass per set of names, each with its own class attribute, or a plain `Auth`,
+  which may still declare through a property.
+- `CachedTokenAuth` mints through one abstract hook, `mint(request)`: an async generator that yields each request the
+  exchange needs and ends by yielding `Minted(token, lifetime)`. It is `mint_flow` renamed: write
+  `async def mint(self, request)` where you wrote `async def mint_flow(self, request)`. A mint that makes no request of
+  its own yields only the `Minted`: where `mint_token()` returned `(token, lifetime)`, write
+  `async def mint(self, request): yield Minted(token, lifetime)`. A subclass without a `mint` raises `TypeError` when
+  it is built, naming `mint`, instead of when it is defined. A `mint` that is not an async generator function (a
+  coroutine that does `return Minted(...)`, a sync generator) raises `TypeError` when the class is defined, showing that
+  spelling, where the first call died with `'coroutine' object has no attribute 'aclose'`.
+- `CachedTokenAuth.seed()` takes the shape a mint ends with: write `auth.seed(Minted(token, lifetime))` for
+  `auth.seed(token, lifetime)`.
+- `CachedTokenAuth` has no constructor: its cache and lock are made on first use, so a subclass whose `__init__`
+  forgets `super().__init__()` works, where it failed at its first call with an `AttributeError` naming private state.
+  `super().__init__()` may stay, and does nothing. `refresh_margin` is a class attribute, a finite number of seconds of
+  0 or more checked when the class is defined, and the class's value is the one read, not an instance's: write
+  `refresh_margin = 30.0` in the class body for `super().__init__(refresh_margin=30.0)`. `CachedTokenAuth(timing=)` is
+  removed: a token's lifetime runs on the timing of the clients built with the auth, so build the client inside
+  `timing_override()` or `TestClock.install()` (building the auth there alone does nothing). Its clients share one
+  timing: a client built on another timing than an earlier one's, or than the one a token was seeded or minted on,
+  raises `TypeError` before it builds anything, leaving the auth as it was, so build them, and seed the auth, inside
+  one block. A copy of an auth (`copy.copy`) starts with a cache, lock and identity of its own, empty, rather than
+  sharing the original's.
+- `async_auth_flow` is `@final` on `SigningAuth` and `CachedTokenAuth`, and so is `reject_credential_rotation`: a
+  subclass that overrides one raises `TypeError` when it is defined, and ty reports `override-of-final-method`. An
+  override of the flow type-checked and failed inside the call (`'NoneType' object has no attribute 'status_code'`).
+  Their hooks are `sign` and `skips`, and `mint`, `attach` and `skips`; add a per-request header, such as a tenant id,
+  in a middleware.
+- `SigningAuth.sign(request, now)` is handed the attempt's wall-clock time in Unix seconds, from the client's timing, so
+  a signer whose client is built under `TestClock.install()` runs on the test clock like the rest of the client. Write
+  `def sign(self, request, now)` and sign with `now` where you called `time.time()`.
+- A hook of the wrong color is refused where it is given, as ty already reported it: a `SigningAuth` whose `sign` is
+  a coroutine function raises `TypeError` when the class is defined (its requests went out unsigned, with only a
+  "never awaited" warning): write `def sign(self, request, now)`. `Client()` raises `TypeError` for an observer whose
+  `notify` is a coroutine function (its events were dropped): write `def notify(self, event)`; and for a middleware
+  whose `__call__` is not one (it failed at the first call): write `async def __call__(self, request, call_next)`. A
+  coroutine-function `skips`, on either auth base, and `attach` on a `CachedTokenAuth`, are refused when the class is
+  defined too: an `async def skips` returned a coroutine, which is truthy, so every request went out unsigned or
+  without its token. Write `def skips(self, request)` and `def attach(self, request, token)`.
+- `Minted(token, lifetime)` refuses, when it is built, a lifetime that is not a number of seconds above 0 (`0`, a
+  negative number, NaN, `True`, a `str`) with a `TypeError`, where a mint or a `seed()` cached a token already due.
+  `math.inf` is a token that never expires. Pass the provider's `expires_in` as a number.
 - `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.
@@ -62,6 +116,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 - The cache's `ClientConfigurationError` for an auth that does not declare its credentials, which no auth can now
   reach. `Partition.SHARED` remains the opt-in for public data.
+- `CachedTokenAuth.mint_token()`, which made the exchange on an `httpx2.AsyncClient` of its own: outside the client's
+  stack, so its rate budget, retries, SSRF guard, redirect hardening and deadline did not reach it, and outside
+  `fake_network`, so a test sent its client secret to the real token host. Yield the exchange's request from `mint`
+  instead (see the auth guide), or, for a mint that is not an HTTP request, yield only the `Minted`. The guide's recipe
+  for it, and the testing guide's note that it does not reach the fake, are gone with it.
 
 ### Fixed
 
@@ -71,6 +130,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
   defined, and the default `attach` raises `TypeError` for a token that is not a `str`, before anything is sent, where
   the type is bound further down, or may be text (`CachedTokenAuth[Any]`, `CachedTokenAuth[str | None]`). Override
   `attach` to put the token on the request.
+- A `CachedTokenAuth` that keeps the default `attach`, which sets `Authorization`, must name `authorization`
+  (in any case) in `credential_headers`: a narrowed declaration (`credential_headers = frozenset({"x-other"})`) raises
+  `TypeError` when the class is defined. It sent the bearer undeclared, and its 401s never re-minted, since a 401
+  re-mints only for a request that carried a declared name. Keep `authorization` in the declaration, or override
+  `attach` to put the token where the declaration says.
 
 ### Security
 
@@ -81,9 +145,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
   to write: `frozenset("X-Api-Key")` is a `frozenset[str]` of eight letters, so it type-checked and withheld no real
   header. Write `frozenset({"X-Api-Key"})` (`frozenset({"api_key"})` for a parameter). A lone one-character name
   (`headers=["x"]`) is refused too, since no header or query credential is one character long. It is checked for a
-  middleware when the client is built, for an `Auth` subclass's class attribute (`credential_headers`, `signed_headers`,
-  `token_headers` and the `_params`) when the class is defined, for a declaration through a property when the client is
-  built, and for `CassetteFilter(headers=, params=)` and its auths' declarations when the filter is built.
+  middleware when the client is built, for an `Auth` subclass's class attribute (`credential_headers` and
+  `credential_params`, the one spelling `SigningAuth` and `CachedTokenAuth` declare with too) when the class is defined,
+  for a plain `Auth`'s declaration through a property when the client is built (a property on a `SigningAuth` or
+  `CachedTokenAuth` is refused when the class is defined), and for `CassetteFilter(headers=, params=)` and its auths'
+  declarations when the filter is built.
 - The cache never looks up, stores or shares a call given a body, whatever its method and whatever `Content-Length` the
   caller wrote: a GET stream opened with `body=` was served the entry stored for its URL. No GET or HEAD takes a body
   now; this is the cache's own defense.
@@ -96,6 +162,15 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `PageRequest(httpx2.URL(target))`, as before, and need not resolve it. An absolute URL a pager forwards as a `str`
   (read from a JSON body, say) is checked the same way; a relative `str` is still joined onto `base_url`, as a call's
   own URL is.
+- An auth whose class escaped the class-definition checks is refused by `Client()` with a `TypeError`. A base class
+  whose `__init_subclass__` did not call `super().__init_subclass__()` let every subclass below it skip them all: an
+  undeclared or misdeclared credential, an `async def sign`, an overridden flow. Call
+  `super().__init_subclass__(**kwargs)` in every `__init_subclass__` of an auth class.
+- What an auth's hook stamps must be what it declares. A `SigningAuth.sign` or a `CachedTokenAuth.attach` that sets a
+  header or query parameter it does not declare raises `TypeError` naming it, before the request is sent: the guard
+  withholds only declared names, so a signer that also set `X-Api-Key` sent that long-lived key along a cross-origin
+  redirect. Add every name the hook sets to `credential_headers` or `credential_params` (headers compared
+  case-insensitively); a name the request already carried is not counted.
 
 ## [0.12.1] - 2026-11-16
 

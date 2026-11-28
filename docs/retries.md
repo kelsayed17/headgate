@@ -164,9 +164,9 @@ The refusals headgate makes itself, before the request leaves, are retryable aft
 `CircuitOpenError` after the breaker's cooldown, a `RateLimitError` from a [rate budget](rate-budgets.md) paused past
 the deadline, and a `ClientTimeoutError` whose budget turn came after it. Errors that sending again cannot cure are not:
 `ForbiddenDestinationError`, `ResponseTooLargeError`, `ResponseParseError`, `ClientConfigurationError` and
-`PageLimitError`. A token mint on a client of its own, which no retry layer judged, is retryable for any network
-failure but those re-sending cannot cure. Whether a call that is not retryable may still have been processed is
-[`sent`](errors.md#what-every-error-carries).
+`PageLimitError`. A network failure a token mint raises itself (from a vendor SDK it calls), which no retry layer
+judged, is retryable for any failure but those re-sending cannot cure. Whether a call that is not retryable may still
+have been processed is [`sent`](errors.md#what-every-error-carries).
 
 ## Attempt history
 

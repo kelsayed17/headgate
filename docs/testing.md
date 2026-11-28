@@ -5,9 +5,8 @@ with nothing private patched. Two seams make that possible:
 
 - **the network**: `fake_network(transport)` sends every `Client` built in its block on *transport*, in place of the
   network, even one the SDK gave a transport of its own (`HttpOptions(transport=AsyncCurlTransport(...))`). Only the
-  network is replaced: the SDK's rate budget, cache, retries and breaker run over the fake as they would in production;
-  a token an auth mints on an `httpx2.AsyncClient` of its own (`mint_token`) does not reach the fake, while one minted
-  through `mint_flow` does;
+  network is replaced: the SDK's rate budget, cache, retries and breaker run over the fake as they would in production,
+  and so do the requests a `CachedTokenAuth` mints with;
 - **time**: `TestClock.install()` and `instant_retries()` set the timing the clients built in their block run on.
 
 All three are read when a client is **constructed**, so build the SDK inside them; entering one around a client that
@@ -61,14 +60,18 @@ instead of waiting. Its wall clock reads `epoch` plus the reading, so a `Retry-A
 is the backoff's jitter draw: pass `random=lambda: 1.0` for a full backoff a test can predict.
 
 Everything built inside `clock.install()` with no `timing=` of its own runs on it: a client's deadlines, events, retry
-backoff and retry budget, a `CachedTokenAuth`'s token lifetimes, a `RateBudget` the block builds (shared by any number
-of clients), and a `BreakerRegistry`'s cooldowns. So a test of a 60-second cooldown, or of a token that expires in an
-hour, runs in no time. What was built before the block keeps the clock it was built with.
+backoff and retry budget, the token lifetimes of the `CachedTokenAuth` it is given, a `RateBudget` the block builds
+(shared by any number of clients), and a `BreakerRegistry`'s cooldowns. So a test of a 60-second cooldown, or of a
+token that expires in an hour, runs in no time. What was built before the block keeps the clock it was built with. A
+`CachedTokenAuth` runs on its clients' one timing: giving it to a second client built on another, or to a client on
+another timing than the one a token was seeded on, raises `TypeError`, so build its clients and seed it in one
+block.
 
 `install()` is `headgate.timing.timing_override(clock.timing)`. The seam is public, so a test kit of your own can
 install a clock the same way: a `Timing(clock=..., sleep=..., wall_clock=..., random=...)`, whose four fields satisfy
 the `Clock`, `Sleep` and `RandomSource` protocols, set for a block with `timing_override`, and read back with
-`current_timing()`. Each object takes `timing=` too, to run on one timing whatever block it is built in.
+`current_timing()`. A budget and a registry take `timing=` too, to run on one timing whatever block they are built
+in.
 
 Concurrent sleeps overlap as they would in real time: each sleeper wakes at the reading it began at plus its delay.
 The clock moves to the earliest wake after 16 turns of the event loop in which no sleep begins or ends, room for the
@@ -164,9 +167,10 @@ auth or a middleware; anything that declares nothing raises `TypeError`) and the
 `("x-partner-signature",)`: a bare `str` raises `TypeError`, since it would be read one letter at a time), redacts
 secret query values and userinfo before a request is recorded or matched, and drops `Set-Cookie` from recorded
 responses. Installed as middleware, it marks a `CachedTokenAuth` mint's hops so they are not recorded: a token response
-is a credential. When replaying, seed the auth with a token (`auth.seed("test-token", 3600)`). A custom transport
-(`FakeTransport`, the curl transport) is not patched by vcrpy, so it is neither recorded nor replayed. `RecordedRequest`
-is the protocol of the vcrpy request `before_record_request` reads, for a hook of your own that calls it first.
+is a credential. When replaying, seed the auth with a token (`auth.seed(Minted("test-token", 3600))`). A custom
+transport (`FakeTransport`, the curl transport) is not patched by vcrpy, so it is neither recorded nor replayed.
+`RecordedRequest` is the protocol of the vcrpy request `before_record_request` reads, for a hook of your own that calls
+it first.
 
 ## Switching the policy off
 

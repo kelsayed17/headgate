@@ -56,11 +56,11 @@ class _MintsOver(CachedTokenAuth):
         self._handler = handler
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(self._handler)) as client:
             response = await client.post(_EXCHANGE_URL)
         response.raise_for_status()
-        return str(response.json()["access_token"]), 3600.0
+        yield Minted(str(response.json()["access_token"]), 3600.0)
 
 
 class _Raises(CachedTokenAuth):
@@ -72,15 +72,16 @@ class _Raises(CachedTokenAuth):
         self._exc = exc
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         raise self._exc
+        yield  # unreachable: the yield makes this the async generator a mint is
 
 
 class _FlowReadsJson(CachedTokenAuth):
     """Mint through the owning client's stack, reading the token out of the hop's JSON body."""
 
     @override
-    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         response = yield httpx2.Request("POST", f"https://{_API_HOST}/token")
         yield Minted(response.json()["access_token"], 3600.0)
 
@@ -235,7 +236,7 @@ async def test_a_token_response_nested_too_deeply_is_a_parse_error() -> None:
     assert str(raised.value) == "[_Raises] unreadable token response: nested too deeply"
 
 
-async def test_an_unreadable_token_response_from_a_mint_flow_is_a_parse_error() -> None:
+async def test_an_unreadable_token_response_from_a_mint_hop_is_a_parse_error() -> None:
     """Map a mint flow's ``response.json()`` failure on its hop the same way."""
     hop_body = b"not json"
     with pytest.raises(ResponseParseError):
@@ -279,7 +280,7 @@ class _ThreeHops(CachedTokenAuth):
     hops = 3
 
     @override
-    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         del request
         for hop in range(self.hops):
             yield httpx2.Request("GET", f"https://login.example.test/step/{hop}")
@@ -349,7 +350,7 @@ def _token_host(body: httpx2.AsyncByteStream) -> Callable[[httpx2.Request], http
     return handle
 
 
-async def test_a_mint_flow_is_handed_its_hops_body_read() -> None:
+async def test_a_mint_is_handed_its_hops_body_read() -> None:
     """Hand the flow its hop's response already read, so ``response.json()`` works on a streamed body."""
     async with _api(_FlowReadsJson(), _token_host(_Streamed(b'{"access_', b'token": "t-1"}'))) as client:
         bearer = await client.get("series", expect=as_bytes)
@@ -427,7 +428,7 @@ class _OneHop(CachedTokenAuth):
         self._extensions = extensions or {}
 
     @override
-    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         response = yield httpx2.Request("POST", f"https://{_API_HOST}/token", extensions=self._extensions)
         yield Minted(response.text, 3600.0)
 
@@ -508,7 +509,7 @@ async def test_a_token_response_refused_by_its_length_closes_its_stream() -> Non
 
 
 async def test_a_mint_hops_network_failure_names_the_token_endpoint_not_the_api_call() -> None:
-    """Report a ``mint_flow`` hop that cannot connect as the token endpoint's failure, named for the auth class.
+    """Report a ``mint`` hop that cannot connect as the token endpoint's failure, named for the auth class.
 
     httpx2 raises the hop's error outside the auth flow, so the client maps it, as a mint's failure, not the call's.
     """

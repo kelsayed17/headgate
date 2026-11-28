@@ -47,8 +47,9 @@ class _Bearer(CachedTokenAuth):
     """A bearer auth whose exchange never runs: tests seed it."""
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         raise NotImplementedError
+        yield  # unreachable: the yield makes this the async generator a mint is
 
 
 class _Echo:
@@ -174,7 +175,7 @@ class _Minting(CachedTokenAuth):
     """Mint with one hop to a token host, so its flow yields two requests."""
 
     @override
-    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         response = yield httpx2.Request("POST", "https://login.example/token")
         yield Minted(response.text, 3600.0)
 

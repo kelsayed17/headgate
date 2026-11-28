@@ -157,6 +157,10 @@ class AttemptId:
         return await call_next(request)
 ```
 
+A middleware is async: an object whose `__call__` is a coroutine function, or an `async def` function (or a
+`functools.partial` of one) with the two declarations set on it. `Client()` refuses one that is not, since it awaits
+the response a middleware returns.
+
 A signature that must be fresh on every attempt (a timestamp, a nonce) belongs in a
 [`SigningAuth`](auth.md#signingauth) passed as the client's `auth=`, not in a middleware: it signs each attempt inside
 the retry layer too, after the last middleware and the rate-limit wait, and the class refuses a signer that declares
@@ -165,7 +169,6 @@ nothing it stamps.
 ```python
 import hashlib
 import hmac
-import time
 from typing import ClassVar, override
 
 import httpx2
@@ -175,14 +178,14 @@ from headgate import SigningAuth
 
 class HmacSigner(SigningAuth):
     # What it stamps: withheld from any hop to an origin other than base_url's and the trusted ones.
-    signed_headers: ClassVar = frozenset({"X-Timestamp", "X-Signature"})
+    credential_headers: ClassVar = frozenset({"X-Timestamp", "X-Signature"})
 
     def __init__(self, secret: bytes) -> None:
         self._secret = secret
 
     @override
-    def sign(self, request: httpx2.Request) -> None:
-        stamp = str(int(time.time()))
+    def sign(self, request: httpx2.Request, now: float) -> None:
+        stamp = str(int(now))
         payload = b"\n".join((request.method.encode(), request.url.raw_path, stamp.encode(), request.content))
         request.headers["X-Timestamp"] = stamp
         request.headers["X-Signature"] = hmac.new(self._secret, payload, hashlib.sha256).hexdigest()

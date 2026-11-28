@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, override
 import httpx2
 import pytest
 
-from headgate import Auth, HttpCache, QueryParamAuth, StaticHeaderAuth, TransportPolicy, as_bytes
+from headgate import Auth, HttpCache, Minted, QueryParamAuth, StaticHeaderAuth, TransportPolicy, as_bytes
 from headgate.testing import CassetteFilter, FakeTransport
 from tests.cache._helpers import every_get_rules
 from tests.integration._support import Bearer, client, seeded
@@ -45,7 +45,7 @@ class _KeyedBearer(Bearer):
 def _keyed_bearer(api_key: str) -> Auth:
     """Return a :class:`_KeyedBearer` for *api_key* holding a token of its own, as a fresh mint would."""
     auth = _KeyedBearer(api_key)
-    auth.seed(f"token-{id(auth)}", math.inf)
+    auth.seed(Minted(f"token-{id(auth)}", math.inf))
     return auth
 
 

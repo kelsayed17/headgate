@@ -29,14 +29,14 @@ import inspect
 import math
 import secrets
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import UnionType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, get_args, get_origin, override
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, final, get_args, get_origin, override
 
 import httpx2
 
 from headgate._body import read_capped
-from headgate._core import CallContext, CredentialStamper, Slot, current_timing, origin_text, type_text
+from headgate._core import CallContext, Slot, current_timing, origin_text, type_text
 from headgate._failures import CallSite, loggable_url, mint_error, shorten, transport_error
 from headgate._url import redact_secrets, register_secret_params
 from headgate.errors import ClientConfigurationError, ClientError
@@ -46,7 +46,7 @@ from headgate.security._credentials import CHAIN_ORIGIN, check_declarations
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable, Mapping
 
-    from headgate._core import Timing
+    from headgate._core import Clock, Timing
 
 __all__ = [
     "AUTH_HOP",
@@ -60,12 +60,17 @@ __all__ = [
     "QueryParamAuth",
     "SigningAuth",
     "StaticHeaderAuth",
+    "check_timing",
     "failed_on_auth_hop",
+    "hold_timing",
     "mint_hop_failure",
+    "refuse_undeclared",
+    "stamped_names",
+    "was_checked",
 ]
 
 #: The request extension marking a request an auth flow yields to acquire a credential, as opposed to the call's own
-#: request. :class:`CachedTokenAuth` sets it on every request its :meth:`~CachedTokenAuth.mint_flow` yields. A fixture
+#: request. :class:`CachedTokenAuth` sets it on every request its :meth:`~CachedTokenAuth.mint` yields. A fixture
 #: recorder can read it to skip the hop, which is not the endpoint's answer.
 AUTH_HOP = "headgate.auth_hop"
 
@@ -253,11 +258,12 @@ def _prepare_hop(hop: httpx2.Request, call: httpx2.Request, source: str) -> None
         context.fit_timeouts(hop)
 
 
-class Auth(httpx2.Auth, CredentialStamper, ABC):
+class Auth(httpx2.Auth, ABC):
     """An ``httpx2.Auth`` that declares what it stamps: the one type ``Client(auth=)`` takes.
 
     It is the :class:`~headgate.security.CredentialStamper` contract made a base class, so its three members are
-    abstract here.
+    abstract here. It is a ``CredentialStamper`` by its shape, not by deriving from the protocol, which would put the
+    protocol's ``(*args, **kwargs)`` constructor in every subclass's place and shadow a sibling base's.
 
     A subclass declares the headers and query parameters its flow sets, in :attr:`credential_headers` and
     :attr:`credential_params` (a ``frozenset`` of names each, as class attributes or properties, empty when it stamps
@@ -271,35 +277,166 @@ class Auth(httpx2.Auth, CredentialStamper, ABC):
     """
 
     def __init_subclass__(cls, **kwargs: object) -> None:
-        """Refuse a declaration given as a class attribute that is not a frozenset of names, or splits a name."""
+        """Refuse a declaration given as a class attribute that is not a frozenset of names, or splits a name.
+
+        It marks *cls* as checked (:func:`was_checked`), so a class below a base whose ``__init_subclass__`` skips
+        ``super()``, and so escapes every check here and in ``SigningAuth`` and ``CachedTokenAuth``, is refused by
+        ``Client()``.
+        """
         super().__init_subclass__(**kwargs)
         declared = {name: getattr(cls, name) for name in ("credential_headers", "credential_params")}
         # A property (or other descriptor) reads per instance, so the client checks it when it is built.
         check_declarations(
             cls.__name__, **{name: value for name, value in declared.items() if not _is_descriptor(value)}
         )
+        setattr(cls, _CHECKED, True)
 
     @property
     @abstractmethod
-    @override
     def credential_headers(self) -> frozenset[str]:
         """The headers this auth sets (compared case-insensitively)."""
 
     @property
     @abstractmethod
-    @override
     def credential_params(self) -> frozenset[str]:
         """The query parameters this auth sets."""
 
     @abstractmethod
-    @override
     def credential_identity(self) -> bytes:
         """Return stable bytes naming the credential (its secret material); never stored, only hashed."""
+
+
+#: The class attribute :meth:`Auth.__init_subclass__` sets on each class it checks, read from the class's own namespace.
+_CHECKED: Final = "_headgate_checked"
+
+
+def was_checked(auth: Auth) -> bool:
+    """Return whether *auth*'s own class went through :meth:`Auth.__init_subclass__` when it was defined."""
+    return vars(type(auth)).get(_CHECKED) is True
 
 
 def _is_descriptor(value: object) -> bool:
     """Return whether *value*, read off a class, is a descriptor such as a property, not a declared value."""
     return hasattr(type(value), "__get__")
+
+
+#: The two declarations every auth makes.
+_DECLARATIONS: Final = ("credential_headers", "credential_params")
+
+
+def _declares_names(cls: type) -> bool:
+    """Return whether *cls* declares a header or parameter, and register the parameters as secret, for redaction.
+
+    :raises TypeError: for a declaration through a property: a ``SigningAuth`` or ``CachedTokenAuth`` declares in
+        class attributes, which are checked when the class is defined.
+    """
+    headers, params = (getattr(cls, name) for name in _DECLARATIONS)
+    for name, value in zip(_DECLARATIONS, (headers, params), strict=True):
+        # Auth.__init_subclass__ refused any other class attribute that is not a frozenset of names.
+        if not isinstance(value, frozenset):
+            msg = (
+                f"{cls.__name__}.{name} is declared through a property: declare it as a class attribute, such as "
+                f"{name} = frozenset({{'X-Signature'}}), which is checked when the class is defined"
+            )
+            raise TypeError(msg)
+    register_secret_params(params)
+    return bool(headers or params)
+
+
+def _refuse_final_overrides(cls: type, base: type, hooks: str) -> None:
+    """Refuse *cls* overriding a member *base* marks ``@final``, as ty does, naming its *hooks*.
+
+    The flow holds the guarantees the hooks rely on (every attempt signed, one re-send on a 401), and an override of it
+    failed deep inside the call.
+    """
+    for name, member in vars(base).items():
+        if getattr(member, "__final__", False) and getattr(cls, name) is not member:
+            msg = (
+                f"{cls.__name__} overrides {name}, which {base.__name__} runs itself: its hooks are {hooks}, and a "
+                "per-request header belongs in a middleware"
+            )
+            raise TypeError(msg)
+
+
+#: How each synchronous hook is written, for the refusal of a coroutine function in its place.
+_SYNC_HOOKS: Final = {
+    "sign": "def sign(self, request, now)",
+    "skips": "def skips(self, request)",
+    "attach": "def attach(self, request, token)",
+}
+
+
+def _refuse_async_hooks(cls: type, base: type, *hooks: str) -> None:
+    """Refuse *cls* when one of its *hooks* is a coroutine function: *base*'s flow calls each and never awaits it.
+
+    An ``async def sign`` or ``attach`` would set nothing, and an ``async def skips`` returns a coroutine, which is
+    truthy, so every request would be skipped. ty reports each; this refuses them for an untyped caller too.
+    """
+    for hook in hooks:
+        if inspect.iscoroutinefunction(getattr(cls, hook)):
+            msg = (
+                f"{cls.__name__}.{hook} is a coroutine function, which {base.__name__} calls without awaiting, so it "
+                f"would never run: write {_SYNC_HOOKS[hook]}, and fetch anything slow it needs before the call"
+            )
+            raise TypeError(msg)
+
+
+def _check_mint(cls: type[CachedTokenAuth[Any]]) -> None:
+    """Refuse a ``mint`` *cls* defines that is not an async generator function, which the flow alone can drive."""
+    mint = cls.mint
+    if getattr(mint, "__isabstractmethod__", False) or inspect.isasyncgenfunction(mint):
+        return
+    if inspect.iscoroutinefunction(mint):
+        kind = "coroutine function"
+    elif inspect.isgeneratorfunction(mint):
+        kind = "generator function"
+    else:
+        kind = "plain function"
+    msg = (
+        f"{cls.__name__}.mint is a {kind}: write async def mint(self, request): ... yield Minted(token, lifetime), "
+        "an async generator that yields each request the exchange needs and ends with the Minted"
+    )
+    raise TypeError(msg)
+
+
+#: What a request carries before a hook stamps it: its header names (lower case, as httpx2 keys them) and its raw query.
+type Stamped = tuple[frozenset[str], bytes]
+
+
+def stamped_names(request: httpx2.Request) -> Stamped:
+    """Return what :func:`refuse_undeclared` compares *request* against after a hook stamps it."""
+    return frozenset(request.headers.keys()), request.url.query
+
+
+def refuse_undeclared(auth: Auth, hook: str, request: httpx2.Request, before: Stamped) -> None:
+    """Raise ``TypeError`` when *hook* set a header or query parameter on *request* that *auth* does not declare.
+
+    *before* is :func:`stamped_names` of the request before the hook ran. The guard withholds only what is declared,
+    so an undeclared name would follow the request to any origin; it is refused before anything is sent. Header names
+    are compared case-insensitively. The query is parsed only when the hook changed it, since this runs on every
+    attempt.
+    """
+    headers, query = before
+    added = frozenset(request.headers.keys()) - headers
+    undeclared = set(added - {name.lower() for name in auth.credential_headers}) if added else set[str]()
+    if request.url.query != query:
+        params = frozenset(request.url.params) - frozenset(httpx2.QueryParams(query))
+        undeclared |= params - auth.credential_params
+    if undeclared:
+        msg = (
+            f"{type(auth).__name__}.{hook} set {', '.join(sorted(undeclared))}, which it does not declare, so the "
+            "client could not withhold it from an origin it does not trust: add it to credential_headers (a header) "
+            "or credential_params (a query parameter)"
+        )
+        raise TypeError(msg)
+
+
+def _carries(auth: Auth, request: httpx2.Request) -> bool:
+    """Return whether *request* carries any of the headers or query parameters *auth* declares."""
+    params = request.url.params
+    return any(name in request.headers for name in auth.credential_headers) or any(
+        name in params for name in auth.credential_params
+    )
 
 
 class StaticHeaderAuth(Auth):
@@ -414,10 +551,10 @@ class SigningAuth(Auth):
       ``AuthError``. A 401 to a request this flow did not sign, or one sent without its signature (withheld from an
       origin the client does not trust), is not re-sent.
 
-    **What it stamps is declared.** :attr:`signed_headers` and :attr:`signed_params` name what :meth:`sign` sets, and
-    are what :attr:`credential_headers` and :attr:`credential_params` report, so the client withholds exactly those
-    from an untrusted origin and the cache keeps them out of storage. A subclass that declares neither fails when it is
-    defined. The parameters are registered as secret, so error messages redact them.
+    **What it stamps is declared**, in :attr:`credential_headers` and :attr:`credential_params`, the names every
+    :class:`Auth` and middleware declares with: what :meth:`sign` sets. The client withholds exactly those from an
+    untrusted origin and the cache keeps them out of storage. A subclass that declares neither fails when it is defined.
+    The parameters are registered as secret, so error messages redact them.
 
     **Its identity is the long-lived key.** :meth:`credential_identity` names the credential the signatures stand for,
     so a cache keeps one key's responses apart from another's. By default each instance is its own identity (random
@@ -425,35 +562,25 @@ class SigningAuth(Auth):
     the key's secret material.
     """
 
-    #: The headers :meth:`sign` sets.
-    signed_headers: ClassVar[frozenset[str]] = frozenset[str]()
+    #: The headers :meth:`sign` sets (compared case-insensitively).
+    credential_headers: ClassVar[frozenset[str]] = frozenset[str]()
     #: The query parameters :meth:`sign` sets.
-    signed_params: ClassVar[frozenset[str]] = frozenset[str]()
+    credential_params: ClassVar[frozenset[str]] = frozenset[str]()
 
     _identity: bytes | None = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse a concrete subclass that declares nothing it signs with, and register its parameters as secret."""
         super().__init_subclass__(**kwargs)
-        check_declarations(cls.__name__, signed_headers=cls.signed_headers, signed_params=cls.signed_params)
-        register_secret_params(cls.signed_params)
-        if not inspect.isabstract(cls) and not (cls.signed_headers or cls.signed_params):
+        _refuse_final_overrides(cls, SigningAuth, "sign and skips")
+        _refuse_async_hooks(cls, SigningAuth, "sign", "skips")
+        declared = _declares_names(cls)
+        if not inspect.isabstract(cls) and not declared:
             msg = (
-                f"{cls.__name__} must declare the headers or parameters sign() sets, in signed_headers or signed_params"
+                f"{cls.__name__} must declare the headers or parameters sign() sets, in credential_headers or "
+                "credential_params"
             )
             raise TypeError(msg)
-
-    @property
-    @override
-    def credential_headers(self) -> frozenset[str]:
-        """The headers :meth:`sign` sets (:attr:`signed_headers`), lower-cased."""
-        return frozenset(name.lower() for name in self.signed_headers)
-
-    @property
-    @override
-    def credential_params(self) -> frozenset[str]:
-        """The query parameters :meth:`sign` sets (:attr:`signed_params`)."""
-        return self.signed_params
 
     @override
     def credential_identity(self) -> bytes:
@@ -463,24 +590,21 @@ class SigningAuth(Auth):
         return self._identity
 
     @abstractmethod
-    def sign(self, request: httpx2.Request) -> None:
-        """Sign *request* as it stands, at the current time, replacing any signature an earlier attempt set.
+    def sign(self, request: httpx2.Request, now: float) -> None:
+        """Sign *request* as it stands, at *now*, replacing any signature an earlier attempt set.
 
-        It runs once per attempt, so it may run several times on one request. The body is read (``request.content``).
-        Set only the headers and parameters this class declares.
+        *now* is the attempt's wall-clock time in Unix seconds, read from the client's timing (its ``wall_clock``), so
+        a signer whose client is built under ``TestClock.install()`` signs on the test clock: sign with it rather than
+        ``time.time()``. It
+        runs once per attempt, so it may run several times on one request. The body is read (``request.content``). Set
+        only the headers and parameters this class declares.
         """
 
     def skips(self, request: httpx2.Request) -> bool:
         """Return whether *request* is sent unsigned: by default, one already carrying a signed header or parameter."""
-        return self._carries(request)
+        return _carries(self, request)
 
-    def _carries(self, request: httpx2.Request) -> bool:
-        """Return whether *request* carries any of the signed headers or parameters."""
-        params = request.url.params
-        return any(name in request.headers for name in self.signed_headers) or any(
-            name in params for name in self.signed_params
-        )
-
+    @final
     @override
     async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         if self.skips(request):
@@ -493,7 +617,7 @@ class SigningAuth(Auth):
         response = yield request
         # A 401 to a request its signature never reached (the credential guard withheld it) judged no signature, so it
         # is not re-sent.
-        if response.status_code == httpx2.codes.UNAUTHORIZED and self._carries(response.request):
+        if response.status_code == httpx2.codes.UNAUTHORIZED and _carries(self, response.request):
             await _drop_body(response)
             yield request
 
@@ -504,6 +628,13 @@ class Minted[TokenT]:
 
     token: TokenT
     lifetime: float
+
+    def __post_init__(self) -> None:
+        """Refuse a lifetime that is not a number of seconds above 0; ``math.inf`` is a token that never expires."""
+        lifetime: object = self.lifetime
+        if isinstance(lifetime, bool) or not isinstance(lifetime, int | float) or not lifetime > 0:
+            msg = f"Minted(lifetime=) takes the seconds the token lives, a number above 0 (got {lifetime!r})"
+            raise TypeError(msg)
 
 
 #: What a token type may be read as that does not say it is not text: ``Any``, and a union, which may hold ``str``.
@@ -527,6 +658,98 @@ def _token_type(cls: type) -> object | None:
     return None
 
 
+@dataclass(slots=True, kw_only=True)
+class _TokenState[T]:
+    """A :class:`CachedTokenAuth`'s cache: the clock its lifetimes run on, the token held, the mint lock and its record.
+
+    ``attempts`` counts the mints started so far and ``failed`` holds the last that failed, so a call that queued
+    behind a failed mint raises its error. ``identity`` is the instance's own credential identity, drawn once.
+    """
+
+    clock: Clock
+    #: The ``id()`` of the auth this state belongs to: a copy of the auth shares the attribute, not the state.
+    owner: int
+    identity: bytes = field(default_factory=lambda: secrets.token_bytes(32))
+    held: _Held[T] | None = None
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    attempts: int = 0
+    minting: bool = False
+    failed: _Failed | None = None
+    #: Whether a client fixed :attr:`clock` (:func:`hold_timing`), rather than a first call or seed.
+    held_by_client: bool = False
+
+
+#: The instance attribute a :class:`CachedTokenAuth`'s :class:`_TokenState` is kept under.
+_STATE: Final = "_headgate_token_state"
+
+
+def _state_of[T](auth: CachedTokenAuth[T], timing: Timing | None = None) -> _TokenState[T]:
+    """Return *auth*'s state, made now if it has none, on *timing*'s clock or the timing current now.
+
+    The base class has no constructor for a subclass to forget, so the state is made on first use: when a client is
+    built with the auth (:func:`hold_timing`), or at its first call or :meth:`~CachedTokenAuth.seed` if that comes
+    first. A copy of the auth (``copy.copy``) starts with a state of its own: two copies sharing one cache, lock and
+    identity would be one auth under two names.
+    """
+    state = _existing_state(auth)
+    if state is None:
+        clock = (current_timing() if timing is None else timing).clock
+        state = vars(auth)[_STATE] = _TokenState[T](clock=clock, owner=id(auth))
+    return state
+
+
+def _existing_state[T](auth: CachedTokenAuth[T]) -> _TokenState[T] | None:
+    """Return *auth*'s own state, or ``None`` when it has none yet, or holds only the state of the auth it copies."""
+    state = vars(auth).get(_STATE)
+    return cast("_TokenState[T]", state) if isinstance(state, _TokenState) and state.owner == id(auth) else None
+
+
+def check_timing(auth: Auth | None, timing: Timing) -> None:
+    """Refuse a :class:`CachedTokenAuth` that already runs on another clock than *timing*'s, changing nothing.
+
+    ``Client()`` calls it before it builds anything, so a refused client leaves no ``httpx2.AsyncClient`` behind, and
+    :func:`hold_timing` last, once nothing else can fail. An auth with no state yet, or whose state holds no token,
+    started no mint and was given to no client, may move to *timing*.
+
+    :raises TypeError: when the auth already runs on another clock: a client was built with it on another timing, or
+        it holds a token or minted on another, whose lifetime that clock measures.
+    """
+    state = _existing_state(auth) if isinstance(auth, CachedTokenAuth) else None
+    if state is None or state.clock == timing.clock:
+        return
+    if state.held_by_client or state.held is not None or state.attempts:
+        msg = (
+            f"{type(auth).__name__} already runs its token lifetimes on another timing, which a client built with "
+            "it or the token it holds was measured on: build all of its clients under one timing (one "
+            "TestClock.install() block), and seed it inside the same block"
+        )
+        raise TypeError(msg)
+
+
+def hold_timing(auth: Auth | None, timing: Timing) -> None:
+    """Have a :class:`CachedTokenAuth` given to a client run its token lifetimes on the client's *timing*.
+
+    A client is built inside ``TestClock.install()`` and may be called after the block, so its auth's clock is fixed
+    when the client is built. :func:`check_timing` refused, before the client was built, an auth this would move off
+    another clock it already runs on.
+    """
+    if isinstance(auth, CachedTokenAuth):
+        state = _state_of(auth, timing)
+        state.clock = timing.clock
+        state.held_by_client = True
+
+
+def _check_margin(cls: type[CachedTokenAuth[Any]]) -> None:
+    """Refuse a ``refresh_margin`` that is not a finite number of seconds, 0 or more, naming *cls*."""
+    margin: object = cls.refresh_margin
+    if isinstance(margin, bool) or not isinstance(margin, int | float) or not 0 <= margin < math.inf:
+        msg = (
+            f"{cls.__name__}.refresh_margin takes the seconds before expiry to refresh, a finite number of 0 or more "
+            f"(got {margin!r})"
+        )
+        raise TypeError(msg)
+
+
 class CachedTokenAuth[TokenT = str](Auth):
     """Bearer auth for providers that mint a short-lived token over the network.
 
@@ -548,28 +771,32 @@ class CachedTokenAuth[TokenT = str](Auth):
       its 401 reaches the caller, and the rejected token is dropped so the next call mints.
 
     The exchange itself is the subclass's, because that is where providers differ (form-encoded or JSON, a separate
-    sign-in host, their own field names). It supplies one of:
+    sign-in host, their own field names). It supplies :meth:`mint`, an async generator that yields the requests the
+    exchange needs, so they travel through the owning client's own stack (its transport, rate budget, retries and error
+    mapping, and a test's ``fake_network``), marked :data:`AUTH_HOP`, and ends by yielding :class:`Minted`. A mint that
+    makes no request of its own (a vendor SDK's call) yields only the :class:`Minted`. A subclass without one cannot
+    be built.
 
-    * :meth:`mint_token`, a coroutine that makes the exchange on a client of its own and returns
-      ``(token, lifetime)``. The usual shape.
-    * :meth:`mint_flow`, an async generator that yields the requests the exchange needs, so they travel through the
-      owning client's own stack (its transport, rate budget, retries and error mapping), marked :data:`AUTH_HOP`. It
-      ends by yielding :class:`Minted`. A cookie-plus-crumb exchange has this shape.
-
-    Supplying neither fails when the class is defined; with both, the flow runs :meth:`mint_flow`. Two more hooks let a
+    Two more hooks let a
     credential that is not an ``Authorization`` bearer ride the same cache: :meth:`attach` (how a token is put on a
     request) and :meth:`skips` (a request that needs none). ``TokenT`` is the credential's type, ``str`` for every
     bearer; a subclass whose token is of another type overrides :meth:`attach`, or its definition fails (or, when the
     type is bound further down, as ``class Mid[T](CachedTokenAuth[T])``, its first call). :meth:`seed` caches a token
     obtained elsewhere.
 
-    **What it stamps is declared.** :attr:`token_headers` names the headers :meth:`attach` sets (``Authorization`` by
-    default) and :attr:`token_params` the query parameters (none by default, ``access_token`` for a provider that takes
-    the token in the query). They are what :attr:`credential_headers` and :attr:`credential_params` report, so the
-    client withholds exactly those from an untrusted origin, and the parameters are registered as secret, so error
-    messages redact them. A subclass that overrides :meth:`attach` must declare its own :attr:`token_headers` or
-    :attr:`token_params`, not both empty (or override :attr:`credential_headers` or :attr:`credential_params`), or the
-    class definition fails: an undeclared credential would follow a request anywhere.
+    **It has no constructor to call.** The cache and its lock are made on first use, so a subclass's ``__init__`` sets
+    only its own state. A token's lifetime runs on the timing of the clients built with the auth
+    (:func:`headgate.timing.current_timing` when each is built), so one given to a client built inside
+    ``TestClock.install()`` expires on the test clock. Its clients share that one timing: a client built on another,
+    or on another than a token was seeded or minted on, raises ``TypeError`` (see :func:`hold_timing`). A copy
+    (``copy.copy``) starts with an empty cache of its own.
+
+    **What it stamps is declared**, in :attr:`credential_headers` and :attr:`credential_params`, the names every
+    :class:`Auth` and middleware declares with: the headers :meth:`attach` sets (``authorization`` by default) and the
+    query parameters (none by default, ``access_token`` for a provider that takes the token in the query). The client
+    withholds exactly those from an untrusted origin, and the parameters are registered as secret, so error messages
+    redact them. A subclass that overrides :meth:`attach` must declare them again, on that class or one below it, not
+    both empty, or the class definition fails: an undeclared credential would follow a request anywhere.
 
     **Its identity is the long-lived credential, not the token.** :meth:`credential_identity` names what the minted
     tokens stand for, so a cache keeps one credential's responses apart from another's across token refreshes. The base
@@ -578,7 +805,7 @@ class CachedTokenAuth[TokenT = str](Auth):
     A subclass that wants them to overrides :meth:`credential_identity` to return its long-lived secret material (the
     API key, or client id and secret), never the short-lived token.
 
-    The hops a :meth:`mint_flow` yields are addressed by the subclass's own code, so each may carry credentials to the
+    The hops a :meth:`mint` yields are addressed by the subclass's own code, so each may carry credentials to the
     origin it names, and the redirects it is answered with stay pinned to that origin: one to another origin is refused
     as ``ForbiddenDestinationError`` rather than followed, since the hop's own headers and body may carry the long-lived
     credential (see :mod:`headgate.security`).
@@ -598,65 +825,59 @@ class CachedTokenAuth[TokenT = str](Auth):
     by httpx2 outside the flow, so it is neither shared nor answered with the held token.
 
     **A failed mint is reported as the token endpoint's failure**, never the API call's (see
-    :func:`~headgate._failures.mint_error`): an exception the mint code raises (a ``ConnectError`` on its own client,
+    :func:`~headgate._failures.mint_error`): an exception the mint code raises (a ``ConnectError`` from a vendor SDK,
     a ``raise_for_status()``, an unreadable token response) becomes the ``ClientError`` it means, named for this auth
     class and the token endpoint, chained to the original. It is raised from the auth flow, so the API host's circuit
-    breaker records nothing for it. A hop :meth:`mint_flow` yields travels the owning client's stack; a network
+    breaker records nothing for it. A hop :meth:`mint` yields travels the owning client's stack; a network
     failure there is reported the same way, as ``TransportError`` naming this auth class and the hop's endpoint
     (:func:`mint_hop_failure`), and reading its response (bounded at 1 MiB) fails
     through the same mapping, so a body that is too large is ``ResponseTooLargeError`` and a dropped connection
     ``TransportError``.
     """
 
-    #: The headers :meth:`attach` sets. A subclass whose :meth:`attach` sets others declares them here.
-    token_headers: ClassVar[frozenset[str]] = frozenset({"Authorization"})
+    #: The headers :meth:`attach` sets (compared case-insensitively). A subclass whose :meth:`attach` sets others
+    #: declares them here.
+    credential_headers: ClassVar[frozenset[str]] = frozenset({"authorization"})
     #: The query parameters :meth:`attach` sets. A subclass whose :meth:`attach` puts the token in the query declares
     #: them here.
-    token_params: ClassVar[frozenset[str]] = frozenset[str]()
+    credential_params: ClassVar[frozenset[str]] = frozenset[str]()
 
-    def __init__(self, *, refresh_margin: float = 120.0, timing: Timing | None = None) -> None:
-        """Start with an empty cache that refreshes *refresh_margin* seconds before a token expires.
-
-        A token's lifetime runs on *timing*'s clock, or, without one, on the timing current when the auth is built
-        (:func:`headgate.timing.current_timing`), so one built inside ``TestClock.install()`` expires on the test clock.
-        """
-        self._clock = (current_timing() if timing is None else timing).clock
-        self._identity = secrets.token_bytes(32)
-        self._refresh_margin_s = refresh_margin
-        self._held: _Held[TokenT] | None = None
-        self._lock = asyncio.Lock()
-        # Mints started so far, and the last that failed: a call that queued behind a failed mint raises its error.
-        self._attempts = 0
-        self._minting = False
-        self._failed: _Failed | None = None
+    #: Seconds before a token expires that it is re-minted, at half its life when that is shorter. A subclass sets its
+    #: own as a class attribute, checked when the class is defined (:func:`_check_margin`).
+    refresh_margin: ClassVar[float] = 120.0
 
     # -- Subclass contract ---------------------------------------------------
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse a subclass with no mint, or whose :meth:`attach` sets a credential it has not declared.
 
-        A subclass must inherit a :meth:`mint_token` or a :meth:`mint_flow` override; and when it overrides
-        :meth:`attach`, that class or one below it must declare a non-empty :attr:`token_headers` or
-        :attr:`token_params`, or override :attr:`credential_headers` or :attr:`credential_params`. Its parameters are
-        registered as secret.
+        When a subclass overrides :meth:`attach`, that class or one below it must declare :attr:`credential_headers` or
+        :attr:`credential_params`, not both empty; when it keeps the default, :attr:`credential_headers` must name
+        ``authorization``. Its parameters are registered as secret, and its
+        :attr:`refresh_margin` is checked.
         """
         super().__init_subclass__(**kwargs)
-        check_declarations(cls.__name__, token_headers=cls.token_headers, token_params=cls.token_params)
-        register_secret_params(cls.token_params)
-        # Not @abstractmethod: either of two methods satisfies the contract.
-        supplied = any(getattr(cls, name) is not getattr(CachedTokenAuth, name) for name in ("mint_token", "mint_flow"))
-        if not supplied:
-            msg = f"{cls.__name__} must override mint_token or mint_flow"
-            raise TypeError(msg)
+        _refuse_final_overrides(cls, CachedTokenAuth, "mint, attach and skips")
+        _refuse_async_hooks(cls, CachedTokenAuth, "attach", "skips")
+        _check_mint(cls)
+        declared = _declares_names(cls)
+        _check_margin(cls)
         mro = cls.__mro__
         attaching = next(klass for klass in mro if "attach" in vars(klass))
-        below = [vars(klass) for klass in mro[: mro.index(attaching) + 1]]
-        by_property = any("credential_headers" in names or "credential_params" in names for names in below)
-        by_token = any("token_headers" in names or "token_params" in names for names in below)
-        if not (by_property or (by_token and (cls.token_headers or cls.token_params))):
+        # The default attach sets Authorization, and a 401 re-mints only for a request that carried a declared name.
+        if attaching is CachedTokenAuth and "authorization" not in {name.lower() for name in cls.credential_headers}:
             msg = (
-                f"{cls.__name__} overrides attach, so it must declare what attach sets in token_headers or "
-                f"token_params (or override credential_headers)"
+                f"{cls.__name__} keeps the default attach, which sets Authorization, so credential_headers must name "
+                f"authorization (got {sorted(cls.credential_headers)}): add it, or override attach to put the token "
+                "where the declaration says"
+            )
+            raise TypeError(msg)
+        below = [vars(klass) for klass in mro[: mro.index(attaching) + 1]]
+        redeclared = any(name in names for names in below for name in _DECLARATIONS)
+        if not (redeclared and declared):
+            msg = (
+                f"{cls.__name__} overrides attach, so it must declare what attach sets in credential_headers or "
+                "credential_params"
             )
             raise TypeError(msg)
         token_type = _token_type(cls)
@@ -667,19 +888,7 @@ class CachedTokenAuth[TokenT = str](Auth):
             )
             raise TypeError(msg)
 
-    # -- What it stamps (CredentialStamper) ----------------------------------
-
-    @property
-    @override
-    def credential_headers(self) -> frozenset[str]:
-        """The headers :meth:`attach` sets (:attr:`token_headers`), lower-cased."""
-        return frozenset(name.lower() for name in self.token_headers)
-
-    @property
-    @override
-    def credential_params(self) -> frozenset[str]:
-        """The query parameters :meth:`attach` sets (:attr:`token_params`): none by default."""
-        return self.token_params
+    # -- What it stamps -------------------------------------------------------
 
     @override
     def credential_identity(self) -> bytes:
@@ -688,37 +897,30 @@ class CachedTokenAuth[TokenT = str](Auth):
         A subclass whose instances should share a cache partition when they hold the same credential returns that
         credential's secret material here, never the short-lived token, which changes on every refresh.
         """
-        return self._identity
+        return self.__state.identity
 
-    async def mint_token(self) -> tuple[TokenT, float]:
-        """Exchange the provider's long-lived credential for ``(access_token, lifetime_seconds)``.
+    @property
+    def __state(self) -> _TokenState[TokenT]:
+        """The token cache and its lock, made on first use (see :func:`_state_of`)."""
+        return _state_of(self)
 
-        Called with the lock held, so an implementation need not guard against concurrent mints. Raise rather than
-        return an empty token. An implementation whose provider may rotate its long-lived credential calls
-        :meth:`reject_credential_rotation` with the returned value.
+    @abstractmethod
+    def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[TokenT], httpx2.Response]:
+        """Mint a token: yield each request the exchange needs, and end by yielding :class:`Minted`.
+
+        Write it as an ``async def`` that yields. Each request travels the owning client's stack, and its response is
+        sent back in already read (up to 1 MiB), so ``.content`` and ``.json()`` work on it. A hop that sets no
+        ``timeout`` extension is sent with the call's timeouts, and every hop's timeouts are cut to what the call's
+        deadline leaves. A mint with no request of its own yields only the :class:`Minted`. *request* is the call that
+        needs the credential, for a hop that wants another of its extensions. Called with the lock held, so an
+        implementation need not guard against concurrent mints. Raise rather than yield an empty token. A mint whose
+        provider may rotate its long-lived credential calls :meth:`reject_credential_rotation` with the returned value.
         """
-        msg = f"{type(self).__name__} mints through mint_flow, not mint_token"
-        raise NotImplementedError(msg)
-
-    async def mint_flow(
-        self, request: httpx2.Request
-    ) -> AsyncGenerator[httpx2.Request | Minted[TokenT], httpx2.Response]:
-        """Mint through the owning client's stack: yield each request the exchange needs, end with :class:`Minted`.
-
-        Each response is sent back in already read (up to 1 MiB), so ``.content`` and
-        ``.json()`` work on it. A hop that sets no ``timeout`` extension is sent with the call's timeouts, and every
-        hop's timeouts are cut to what the call's deadline leaves. *request* is the call that needs the credential, for
-        a hop that wants another of its extensions. Called with the lock held, like :meth:`mint_token`; the default
-        delegates to it.
-        """
-        del request  # only a flow that yields its own requests needs the call it is minting for
-        token, lifetime = await self.mint_token()
-        yield Minted(token, lifetime)
 
     def attach(self, request: httpx2.Request, token: TokenT) -> None:
         """Put *token* on *request*, replacing any earlier one: the re-send after a 401 calls this a second time.
 
-        An override declares the headers it sets in :attr:`token_headers`. The default sends a ``str`` token as
+        An override declares the headers it sets in :attr:`credential_headers`. The default sends a ``str`` token as
         ``Authorization: Bearer <token>``, and raises ``TypeError`` for any other, before setting anything: a token of
         another type is attached by an override.
         """
@@ -732,11 +934,9 @@ class CachedTokenAuth[TokenT = str](Auth):
 
     def skips(self, request: httpx2.Request) -> bool:
         """Return whether *request* needs no credential from this auth: by default, one carrying its token's name."""
-        params = request.url.params
-        return any(name in request.headers for name in self.token_headers) or any(
-            name in params for name in self.token_params
-        )
+        return _carries(self, request)
 
+    @final
     def reject_credential_rotation(self, returned: str | None, configured: str, *, setting: str) -> None:
         """Raise ``ClientConfigurationError`` when a token endpoint returns a replacement for the configured credential.
 
@@ -760,25 +960,28 @@ class CachedTokenAuth[TokenT = str](Auth):
 
     # -- Cache ---------------------------------------------------------------
 
-    def seed(self, token: TokenT, lifetime: float) -> None:
-        """Cache *token*, obtained outside this auth, with *lifetime* seconds left to live.
+    def seed(self, minted: Minted[TokenT]) -> None:
+        """Cache *minted*, a token obtained outside this auth with its lifetime left to live, in seconds.
 
         For a token restored from storage, or a test's fixed bearer. Its age is unknown, so it never counts as fresh:
         a 401 on it re-mints.
         """
-        self._cache(token, lifetime, minted_at=-math.inf)
+        self._cache(minted.token, minted.lifetime, minted_at=-math.inf)
 
     def _cache(self, token: TokenT, lifetime: float, *, minted_at: float) -> None:
         # A lifetime at or under the margin would read as due the moment it was cached, so every request would mint
         # again: refresh at half-life instead.
-        margin = min(self._refresh_margin_s, lifetime / 2)
-        now = self._clock()
-        self._held = _Held(token=token, minted_at=minted_at, due_at=now + lifetime - margin, expires_at=now + lifetime)
+        # The class's margin, which was checked: an instance's own assignment is not read.
+        margin = min(type(self).refresh_margin, lifetime / 2)
+        now = self.__state.clock()
+        self.__state.held = _Held(
+            token=token, minted_at=minted_at, due_at=now + lifetime - margin, expires_at=now + lifetime
+        )
 
     def _usable(self, rejected: TokenT | None) -> TokenT | None:
         """Return the cached token unless it is absent, the one a 401 just rejected, or within the refresh margin."""
-        held = self._held
-        if held is not None and held.token != rejected and self._clock() < held.due_at:
+        held = self.__state.held
+        if held is not None and held.token != rejected and self.__state.clock() < held.due_at:
             return held.token
         return None
 
@@ -787,15 +990,15 @@ class CachedTokenAuth[TokenT = str](Auth):
 
         A refresh inside the margin that fails falls back to it: it still carries the authority it was minted with.
         """
-        held = self._held
-        if held is not None and held.token != rejected and self._clock() < held.expires_at:
+        held = self.__state.held
+        if held is not None and held.token != rejected and self.__state.clock() < held.expires_at:
             return held.token
         return None
 
     def _forget(self, token: TokenT) -> None:
         """Drop *token* from the cache if it is still the cached one, so the next call mints."""
-        if self._held is not None and self._held.token == token:
-            self._held = None
+        if self.__state.held is not None and self.__state.held.token == token:
+            self.__state.held = None
 
     def _is_fresh(self, token: TokenT) -> bool:
         """Return whether *token* is still the cached one and was minted within :data:`FRESH_TOKEN_S`.
@@ -803,15 +1006,8 @@ class CachedTokenAuth[TokenT = str](Auth):
         A rejected token that is no longer cached was already replaced by another request, so the replacement is worth
         a retry, and the cache hands it over without minting.
         """
-        held = self._held
-        return held is not None and token == held.token and self._clock() - held.minted_at < FRESH_TOKEN_S
-
-    def _carried(self, request: httpx2.Request) -> bool:
-        """Return whether *request*, as it was sent, carried any of the headers or parameters the token rides on."""
-        params = request.url.params
-        return any(name in request.headers for name in self.credential_headers) or any(
-            name in params for name in self.credential_params
-        )
+        held = self.__state.held
+        return held is not None and token == held.token and self.__state.clock() - held.minted_at < FRESH_TOKEN_S
 
     async def _mint_step[T](self, step: Awaitable[T]) -> T:
         """Await a *step* of the mint, raising a failure in it as the ``ClientError`` it means.
@@ -830,6 +1026,7 @@ class CachedTokenAuth[TokenT = str](Auth):
             mapped.add_note(f"from {type(exc).__name__}: {shorten(detail)}" if detail else f"from {type(exc).__name__}")
         raise mapped
 
+    @final
     @override
     async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         if self.skips(request):
@@ -844,18 +1041,18 @@ class CachedTokenAuth[TokenT = str](Auth):
         while True:
             _mark_minting(context, minting=True)
             # The mint this call waits behind: the one in flight, or else the next to start.
-            behind = self._attempts if self._minting else self._attempts + 1
-            async with self._lock:
+            behind = self.__state.attempts if self.__state.minting else self.__state.attempts + 1
+            async with self.__state.lock:
                 token = self._usable(rejected)
                 if token is None:
                     token = self._after_failed_wait(rejected, behind)
                 if token is None:
-                    self._attempts += 1
-                    self._minting = True
+                    self.__state.attempts += 1
+                    self.__state.minting = True
                     try:
                         # Only this generator can yield to the client, so it drives the mint flow: httpx2 sends each
                         # request the mint yields and hands its response back in.
-                        mint = self.mint_flow(request)
+                        mint = self.mint(request)
                         try:
                             step = await self._mint_step(anext(mint))
                             while isinstance(step, httpx2.Request):
@@ -864,20 +1061,22 @@ class CachedTokenAuth[TokenT = str](Auth):
                                 hop_response = await self._mint_step(_read_hop(hop_response, type(self).__name__))
                                 step = await self._mint_step(mint.asend(hop_response))
                         except StopAsyncIteration:
-                            msg = f"{type(self).__name__}.mint_flow ended without yielding Minted"
+                            msg = f"{type(self).__name__}.mint ended without yielding Minted"
                             raise RuntimeError(msg) from None
                         finally:
                             await mint.aclose()
                     except ClientError as exc:
                         token = self._after_failed_mint(exc, rejected)
                     else:
-                        self._failed = None
+                        self.__state.failed = None
                         token = step.token
-                        self._cache(token, step.lifetime, minted_at=self._clock())
+                        self._cache(token, step.lifetime, minted_at=self.__state.clock())
                     finally:
-                        self._minting = False
+                        self.__state.minting = False
             _mark_minting(context, minting=False)
+            before = stamped_names(request)
             self.attach(request, token)
+            refuse_undeclared(self, "attach", request, before)
             response = yield request
             # ``rejected`` is set only after the first 401, so this re-sends at most once. A 401 to a request the token
             # never reached (the credential guard withheld it from an untrusted origin, or httpx2 from a cross-origin
@@ -892,7 +1091,7 @@ class CachedTokenAuth[TokenT = str](Auth):
         When that mint failed, its error is this call's answer too (raised as a copy), unless the held token has not
         expired yet: then that token is used, as it is by the call whose mint failed.
         """
-        failed = self._failed
+        failed = self.__state.failed
         if failed is None or failed.attempt < behind:
             return None
         token = self._unexpired(rejected)
@@ -905,7 +1104,7 @@ class CachedTokenAuth[TokenT = str](Auth):
 
         :raises ClientError: *error*, when there is no such token.
         """
-        self._failed = _Failed(self._attempts, _copied(error))
+        self.__state.failed = _Failed(self.__state.attempts, _copied(error))
         token = self._unexpired(rejected)
         if token is None:
             raise error
@@ -923,7 +1122,7 @@ class CachedTokenAuth[TokenT = str](Auth):
         if (
             response.status_code != httpx2.codes.UNAUTHORIZED
             or rejected is not None
-            or not self._carried(response.request)
+            or not _carries(self, response.request)
             or self._is_fresh(token)
         ):
             return False

@@ -12,7 +12,7 @@ refuses hosts that are, or resolve to, addresses that are not globally routable,
 :class:`CredentialCarrier` and :class:`CredentialStamper` declare the headers and query parameters a seam stamps, so
 the guard keeps them on trusted origins and the cache partitions by them: a middleware implements the first, or the
 second when it has a credential identity of its own, and every :class:`~headgate.Auth` is a ``CredentialStamper`` by
-its bases.
+its shape.
 
 What else is public here plugs into the guard: a :data:`Resolver` (``SecurityOptions(resolver=...)``), and
 :class:`AddressGuard` and :class:`PinnedHTTPTransport`, so that a test can reach a loopback server through the real

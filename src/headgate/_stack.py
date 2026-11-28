@@ -159,7 +159,9 @@ def build_transport_stack(
     """
     layer = SendTrackingTransport(transport=_network(http))
     if isinstance(signer := credentials.auth, SigningAuth):
-        layer = MiddlewareTransport(transport=layer, middleware=(), guard=credentials.guard, signer=signer)
+        layer = MiddlewareTransport(
+            transport=layer, middleware=(), guard=credentials.guard, signer=(signer, timing.wall_clock)
+        )
     layer = RateLimitTransport(budgets=budgets, transport=layer)
     if (cache := policy.cache) is not None:
         scope = credential_scope(

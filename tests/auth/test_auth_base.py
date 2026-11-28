@@ -9,6 +9,10 @@ origin: the client refuses it when it is built, ``httpx2.BasicAuth`` and ``httpx
 
 from __future__ import annotations
 
+import annotationlib
+import asyncio
+import inspect
+import sys
 from typing import TYPE_CHECKING, Any, ClassVar, cast, override
 
 import httpx2
@@ -30,6 +34,7 @@ from headgate.testing import FakeTransport, Respond
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+    from pathlib import Path
 
 
 class _PlainKeyAuth(httpx2.Auth):
@@ -139,9 +144,45 @@ def test_a_virtual_subclass_is_refused() -> None:
         Client(base_url="https://api.example", auth=cast("Any", Registered()))
 
 
-def test_an_auth_is_a_credential_stamper_by_its_bases() -> None:
-    """Define the contract once: ``Auth`` derives from ``CredentialStamper``, the protocol the guard and cache read."""
-    assert CredentialStamper in headgate.Auth.__mro__
+def test_an_auth_is_a_credential_stamper_by_its_shape() -> None:
+    """Keep ``Auth`` a ``CredentialStamper`` structurally, not by a protocol base, so its constructor stays its own."""
+    assert CredentialStamper not in headgate.Auth.__mro__
+    assert isinstance(_Digest("user", "pass"), CredentialStamper)
+
+
+async def test_an_auth_is_assignable_to_a_credential_stamper(tmp_path: Path) -> None:
+    """Have ty accept an ``Auth`` where a ``CredentialStamper`` goes, so the base and the protocol stay in step."""
+    module = tmp_path / "probe.py"
+    module.write_text(
+        "from headgate import Auth\n"
+        "from headgate.security import CredentialStamper\n\n\n"
+        "def stamper(auth: Auth) -> CredentialStamper:\n"
+        "    return auth\n"
+    )
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "ty", "check", str(module), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await process.communicate()
+
+    assert process.returncode == 0, stdout.decode() + stderr.decode()
+
+
+def test_a_cooperative_mixin_constructor_still_runs() -> None:
+    """Run a mixin's ``__init__`` listed after an auth base: ``Auth`` defines none to shadow it (R10)."""
+
+    class _Mixin:
+        def __init__(self) -> None:
+            super().__init__()
+            self.mixed = True
+
+    class _Mixed(SigningAuth, _Mixin):
+        credential_headers: ClassVar = frozenset({"X-Sig"})
+
+        @override
+        def sign(self, request: httpx2.Request, now: float) -> None:
+            request.headers["X-Sig"] = "sig"
+
+    assert _Mixed().mixed
 
 
 class _Digest(headgate.Auth, httpx2.DigestAuth):
@@ -178,3 +219,42 @@ async def test_digest_auth_is_three_lines_of_auth() -> None:
     assert challenged[1] is not None
     assert challenged[1].startswith("Digest ")
     assert hop == ("cdn.example", None)
+
+
+@pytest.mark.parametrize(
+    ("auth_class", "signature"),
+    [
+        (headgate.Auth, "()"),
+        (SigningAuth, "()"),
+        (CachedTokenAuth, "()"),
+        (StaticHeaderAuth, "(headers: 'Mapping[str, str]') -> 'None'"),
+        (BearerAuth, "(token: 'str') -> 'None'"),
+        (QueryParamAuth, "(params: 'Mapping[str, str]') -> 'None'"),
+    ],
+    ids=lambda value: getattr(value, "__name__", ""),
+)
+def test_each_auth_reads_as_what_its_constructor_takes(auth_class: type, signature: str) -> None:
+    """Show each constructor's own parameters, not the ``(*args, **kwargs)`` the protocol base put there."""
+    assert str(inspect.signature(auth_class, annotation_format=annotationlib.Format.STRING)) == signature
+
+
+def test_an_auth_whose_class_escaped_the_checks_is_refused() -> None:
+    """Refuse at ``Client()`` a leaf below a base whose ``__init_subclass__`` skips ``super()`` (R4)."""
+
+    class _Quiet(SigningAuth):
+        def __init_subclass__(cls, **kwargs: object) -> None:
+            del cls, kwargs  # skips super().__init_subclass__(), so no check runs for a subclass
+
+    class _Leaf(_Quiet):
+        @override
+        def sign(self, request: httpx2.Request, now: float) -> None:
+            request.headers["X-Key"] = "secret"  # declared nowhere
+
+    with pytest.raises(TypeError, match=r"_Leaf was not checked when it was defined: .*super\(\)\.__init_subclass__"):
+        Client(base_url="https://api.example", auth=_Leaf())
+
+
+def test_every_auth_headgate_ships_was_checked() -> None:
+    """Accept the shipped auths and a well-behaved subclass, each checked when its class was defined."""
+    for auth in (BearerAuth("t"), StaticHeaderAuth({}), QueryParamAuth({}), _Digest("user", "pass")):
+        Client(base_url="https://api.example", auth=auth)

@@ -466,7 +466,7 @@
   '''
   module headgate
   __all__ = ['Auth', 'AuthError', 'BearerAuth', 'Body', 'BreakerPolicy', 'CachedTokenAuth', 'CallOptions', 'Client', 'ClientError', 'ClientTimeoutError', 'Codec', 'EncodedBody', 'Expect', 'Form', 'HttpCache', 'HttpOptions', 'IdempotencyKeys', 'Json', 'Method', 'Middleware', 'Minted', 'Multipart', 'Next', 'Paginated', 'QueryParamAuth', 'Rate', 'RateBudget', 'RateLimitError', 'Raw', 'Reader', 'RequestOptions', 'ResponseCheck', 'RetryPolicy', 'Route', 'RouteOptions', 'SecurityOptions', 'SigningAuth', 'StaticHeaderAuth', 'Timeouts', 'TransportError', 'TransportPolicy', 'UpstreamStatusError', 'ViewOptions', 'Writer', 'as_bytes', 'as_json', 'body_reader', 'call_info', 'decode_with', 'event_stream', 'nothing', 'reader_for', 'writer_for']
-  class Auth(Auth, CredentialStamper, ABC)(*args, **kwargs)
+  class Auth(Auth, ABC)()
       property credential_headers
       def credential_identity(self) -> 'bytes'
       property credential_params
@@ -477,16 +477,13 @@
       field failure_threshold: int = 5
       field recovery_timeout: float = 60.0
       field registry: BreakerRegistry | None = None
-  class CachedTokenAuth(Auth, Generic)(*, refresh_margin: 'float' = 120.0, timing: 'Timing | None' = None) -> 'None'
+  class CachedTokenAuth(Auth, Generic)()
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
       def attach(self, request: 'httpx2.Request', token: 'TokenT') -> 'None'
-      property credential_headers
       def credential_identity(self) -> 'bytes'
-      property credential_params
-      def mint_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request | Minted[TokenT], httpx2.Response]'
-      def mint_token(self) -> 'tuple[TokenT, float]'
+      def mint(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request | Minted[TokenT], httpx2.Response]'
       def reject_credential_rotation(self, returned: 'str | None', configured: 'str', *, setting: 'str') -> 'None'
-      def seed(self, token: 'TokenT', lifetime: 'float') -> 'None'
+      def seed(self, minted: 'Minted[TokenT]') -> 'None'
       def skips(self, request: 'httpx2.Request') -> 'bool'
   class CallOptions(dict)(no signature)
       closed
@@ -646,12 +643,10 @@
       field trusted_origins: frozenset[str] = frozenset()
       field block_private_hosts: bool = False
       field resolver: Resolver | None = None
-  class SigningAuth(Auth)(*args, **kwargs)
+  class SigningAuth(Auth)()
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
-      property credential_headers
       def credential_identity(self) -> 'bytes'
-      property credential_params
-      def sign(self, request: 'httpx2.Request') -> 'None'
+      def sign(self, request: 'httpx2.Request', now: 'float') -> 'None'
       def skips(self, request: 'httpx2.Request') -> 'bool'
   class StaticHeaderAuth(Auth)(headers: 'Mapping[str, str]') -> 'None'
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'

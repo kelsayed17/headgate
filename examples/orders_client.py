@@ -78,7 +78,6 @@ class ShopTokenAuth(CachedTokenAuth):
 
     def __init__(self, client_id: str, client_secret: str) -> None:
         """Mint with *client_id* and *client_secret*."""
-        super().__init__()
         self._form = {"grant_type": "client_credentials", "client_id": client_id, "client_secret": client_secret}
 
     @override
@@ -87,7 +86,7 @@ class ShopTokenAuth(CachedTokenAuth):
         return f"{self._form['client_id']}\0{self._form['client_secret']}".encode()
 
     @override
-    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         del request  # the hop needs nothing of the call: it is sent with the call's timeouts already
         # The client's stack paces the hop, retries it when safe, maps its failures, and hands the response back read.
         response = yield httpx2.Request("POST", MINT_ENDPOINT, data=self._form)

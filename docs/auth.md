@@ -39,7 +39,9 @@ class KeyAuth(Auth):
 
 A subclass that leaves a member out cannot be built, and a declaration that is not a `frozenset` of names, or whose
 names are all one character long (`frozenset("x-api-key")` is a set of its letters, not one name), fails when the
-class is defined (or, for a property, when the client is built). A fixed header needs no class: `StaticHeaderAuth`.
+class is defined (or, for a property, when the client is built). A base class of your own whose `__init_subclass__`
+skips `super().__init_subclass__()` cuts its subclasses off from those checks, so `Client()` refuses them. A fixed
+header needs no class: `StaticHeaderAuth`.
 For basic auth, `StaticHeaderAuth({"Authorization": "Basic " + base64.b64encode(b"user:pass").decode()})`.
 
 Digest auth is httpx2's own flow with the declarations added, since `httpx2.DigestAuth` declares nothing:
@@ -80,8 +82,8 @@ the cache; prefer a header where the provider allows one (see [security](securit
 ## SigningAuth
 
 For a provider that signs every request with a long-lived key: a JWT bound to the method and path, an HMAC or Ed25519
-signature over a timestamp and the body. A subclass supplies the signer, `sign(request)`, and declares what it sets;
-the base class gives it:
+signature over a timestamp and the body. A subclass supplies the signer, `sign(request, now)`, and declares what it
+sets; the base class gives it:
 
 - **every send signed afresh**, inside the retry layer. Each attempt is signed as it leaves the rate budget: after the
   last [middleware](configuration.md#middleware), the cache and the rate-limit wait, just before it goes to the network.
@@ -99,7 +101,6 @@ the base class gives it:
 ```python
 import hashlib
 import hmac
-import time
 from typing import ClassVar, override
 
 import httpx2
@@ -108,14 +109,14 @@ from headgate import SigningAuth
 
 
 class ExchangeAuth(SigningAuth):
-    signed_headers: ClassVar = frozenset({"X-Api-Key", "X-Timestamp", "X-Signature"})
+    credential_headers: ClassVar = frozenset({"X-Api-Key", "X-Timestamp", "X-Signature"})
 
     def __init__(self, api_key: str, secret: bytes) -> None:
         self._api_key, self._secret = api_key, secret
 
     @override
-    def sign(self, request: httpx2.Request) -> None:
-        timestamp = str(int(time.time()))
+    def sign(self, request: httpx2.Request, now: float) -> None:
+        timestamp = str(int(now))
         message = timestamp.encode() + request.method.encode() + request.url.raw_path + request.content
         request.headers["X-Api-Key"] = self._api_key
         request.headers["X-Timestamp"] = timestamp
@@ -126,6 +127,9 @@ class ExchangeAuth(SigningAuth):
         return self._secret
 ```
 
+- `now` is the attempt's wall-clock time in Unix seconds, read from the client's timing, so a signer given to a client
+  built under `TestClock.install()` signs on the test clock, wherever the signer itself was built. Sign with it, not
+  `time.time()`.
 - `sign` replaces what an earlier call set, since it runs once per attempt, and again on the re-send after a 401. An
   exception it raises surfaces from inside the retry layer as it was raised: the attempt counts (observers see an
   `AttemptFinished` with its type as the error), the request is not sent, and it is not retried. An `httpx2.HTTPError`
@@ -133,11 +137,16 @@ class ExchangeAuth(SigningAuth):
 - A `SigningAuth` signs only when it is the client's own `auth=` under a headgate client. Given to a bare
   `httpx2.AsyncClient`, or wrapped inside another `httpx2.Auth`, its requests go out unsigned, and a 401 is not
   re-sent.
-- `signed_headers` and `signed_params` declare what `sign` sets, so the credential guard withholds exactly those from
-  an origin you do not trust, and the cache keeps them out of storage. A subclass that declares neither fails when
-  it is defined. Signed parameters are registered as secret, so error messages redact them.
+- `credential_headers` and `credential_params` declare what `sign` sets, the same two names every auth and middleware
+  declares with, so the credential guard withholds exactly those from an origin you do not trust, and the cache keeps
+  them out of storage. A subclass that declares neither fails when it is defined. Signed parameters are registered as
+  secret, so error messages redact them. A `sign` that sets a header or parameter it does not declare raises
+  `TypeError` naming it, before the request is sent; the same holds for a `CachedTokenAuth`'s `attach`.
 - `skips(request)` says a request is sent unsigned: by default, one already carrying a signed header or parameter.
   Override it for requests that need no signature, such as a provider's public reads.
+- `sign` and `skips` are the hooks. The flow, `async_auth_flow`, is final: it holds the guarantees above, so a subclass
+  that overrides it fails when it is defined, and ty reports `override-of-final-method`. A header every request needs,
+  such as a tenant id, belongs in a [middleware](configuration.md#middleware).
 - `credential_identity()` names the key for the cache partition. By default each instance is its own identity; return
   the key's secret material (hashed, never stored) to let instances holding the same key share entries.
 
@@ -149,9 +158,10 @@ it:
 - **one mint at a time.** Concurrent requests that need a token wait for a single mint instead of each firing one.
   When that mint fails, every request that waited for it fails with the same error, rather than each trying again in
   turn; a request that starts later mints afresh;
-- **refresh before expiry**, `refresh_margin` (120 s) before the token expires, or at half its life when that is
-  shorter, because a token expiring mid-flight fails a request that may be a write. A refresh that fails while the
-  held token has not expired yet sends that token instead of failing the call;
+- **refresh before expiry**, `refresh_margin` (120 s, a class attribute a subclass may set, `refresh_margin = 30.0`)
+  before the token expires, or at half its life when that is shorter, because a token expiring mid-flight fails a
+  request that may be a write. A refresh that fails while the held token has not expired yet sends that token instead
+  of failing the call;
 - **one re-mint on a 401**, for a token revoked early, and never a loop. A token minted in the last 60 seconds is not
   re-minted: a 401 on it is a permissions problem, which reaches the caller as the `AuthError` it is. Nor is a token
   re-minted for a 401 to a request sent without it, such as a call to an origin you do not trust, where the credential
@@ -159,15 +169,18 @@ it:
   one-shot stream (`body=Raw(...)` of an async iterable) is streamed as it is produced, never held in memory, so its
   401 reaches the caller and the next call mints a new token. Give `Raw` a factory to have it re-sent.
 
-The exchange is one of two methods. `mint_token()` makes it on a client of its own and returns `(token, lifetime)`:
+The exchange is the subclass's `mint(request)`: an async generator that yields the requests the exchange needs, so
+they travel through the owning client's own stack (its transport, rate budget, retries, error mapping and, in a test,
+`fake_network`), and ends by yielding `Minted(token, lifetime)`:
 
 ```python
+from collections.abc import AsyncGenerator
 from typing import override
 
 import httpx2
 import msgspec
 
-from headgate import CachedTokenAuth
+from headgate import CachedTokenAuth, Minted
 from headgate.msgspec import decode
 
 
@@ -178,20 +191,19 @@ class Token(msgspec.Struct, frozen=True):
 
 class PartnerAuth(CachedTokenAuth):
     def __init__(self, client_id: str, client_secret: str) -> None:
-        super().__init__()
-        self._credentials = (client_id, client_secret)
+        self._form = {"grant_type": "client_credentials", "client_id": client_id, "client_secret": client_secret}
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
-        async with httpx2.AsyncClient(timeout=10.0, trust_env=False) as http:  # read no proxy from the environment
-            response = await http.post("https://login.partner.example/token", auth=self._credentials)
-            response.raise_for_status()
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+        response = yield httpx2.Request("POST", "https://login.partner.example/token", data=self._form)
+        response.raise_for_status()
         token = decode(response.content, Token)
-        return token.access_token, token.expires_in
+        yield Minted(token.access_token, token.expires_in)
 ```
 
-Or `mint_flow(request)` yields the requests the exchange needs, so they travel through the owning client's own stack
-(its transport, rate budget, retries and error mapping), and ends by yielding `Minted(token, lifetime)`.
+The base class has no constructor to call: its token cache is made on first use, so `__init__` sets only your
+own state. A mint that makes no request of its own, such as one that calls a vendor SDK, yields only the `Minted`:
+`yield Minted(await vendor.fetch_token(), 3600.0)`. A subclass without a `mint` cannot be built.
 [`examples/orders_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/orders_client.py) has a complete
 one. What the flow can count on:
 
@@ -215,19 +227,25 @@ endpoint. The API host's breaker records nothing for it.
 
 ### Other credential shapes
 
-- `attach(request, token)` decides how a token is put on a request (`Authorization: Bearer` by default). A subclass
-  that overrides it declares the headers it sets in `token_headers` and the query parameters in `token_params` (for a
-  provider that takes `?access_token=`), not both empty, or the class definition fails: an undeclared credential would
-  follow a request anywhere. The parameters are withheld from untrusted origins like the headers, a 401 to a request
-  carrying one re-mints, and error messages redact them.
+- `attach(request, token)` decides how a token is put on a request (`Authorization: Bearer` by default). A subclass that
+  overrides it declares the headers it sets in `credential_headers` and the query parameters in `credential_params` (for
+  a provider that takes `?access_token=`), not both empty, or the class definition fails: an undeclared credential would
+  follow a request anywhere. The default declares `frozenset({"authorization"})`, and a class that keeps the default
+  `attach` must keep `authorization` in its declaration, or the class definition fails: a 401 re-mints only for a
+  request that carried a declared name. The parameters are withheld from untrusted origins like the headers, a 401 to a
+  request carrying one re-mints, and error messages redact them.
 - `skips(request)` says a request needs no token (by default, one that already carries a token header or parameter).
-- `seed(token, lifetime)` caches a token obtained elsewhere, such as one restored from storage or a test's fixed bearer.
+- `mint`, `attach` and `skips` are the hooks. The flow, `async_auth_flow`, and `reject_credential_rotation` are final:
+  a subclass that overrides either fails when it is defined, and ty reports `override-of-final-method`. A header every
+  request needs belongs in a [middleware](configuration.md#middleware).
+- `seed(Minted(token, lifetime))` caches a token obtained elsewhere, such as one restored from storage or a test's fixed
+  bearer.
 - `CachedTokenAuth[TokenT]` is generic in the token's type, `str` by default. The default `attach` sends only a `str`,
   so a subclass whose token is another type (`CachedTokenAuth[dict[str, str]]`) overrides `attach`; one that does not
   fails when it is defined, or, when a generic subclass binds the type further down, at its first call.
 - `credential_identity()` names the long-lived credential for the cache partition. By default each instance is its own
   identity; return the client id and secret (hashed, never stored) to let instances holding the same credential share
   entries. Never return the short-lived token, which changes on every refresh.
-- `self.reject_credential_rotation(returned, configured, setting=...)`, called from your `mint_token`, raises
+- `self.reject_credential_rotation(returned, configured, setting=...)`, called from your `mint`, raises
   `ClientConfigurationError` when a token endpoint hands back a replacement for the long-lived credential, which an
   in-memory cache cannot persist.

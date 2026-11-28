@@ -16,7 +16,7 @@ cannot see what a middleware adds or what a ``SigningAuth`` signs per attempt; :
 again below the last middleware and the signature, on every attempt of every hop.
 A middleware declares the headers and query parameters it stamps (``credential_headers`` and ``credential_params``, the
 shape every headgate auth has, empty when it stamps none), and has them removed from a hop addressed to any origin other
-than ``base_url``'s and ``SecurityOptions.trusted_origins``. ``HttpOptions`` refuses a middleware that declares neither.
+than ``base_url``'s and ``SecurityOptions.trusted_origins``. ``Client()`` refuses a middleware that declares neither.
 """
 
 from __future__ import annotations
@@ -25,11 +25,13 @@ from typing import TYPE_CHECKING, Protocol, override
 
 import httpx2
 
-from headgate._auth import SIGNER_EXT, SigningAuth
+from headgate._auth import SIGNER_EXT, SigningAuth, refuse_undeclared, stamped_names
 from headgate._core import CredentialCarrier
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+    from headgate._core import Clock
 
 __all__ = ["Middleware", "MiddlewareTransport", "Next"]
 
@@ -44,7 +46,7 @@ class Middleware(CredentialCarrier, Protocol):
     properties: ``credential_headers: frozenset[str]``, the names of the headers it sets (compared case-insensitively),
     and ``credential_params: frozenset[str]``, the names of the query parameters it sets. An empty frozenset means it
     stamps none of that kind. The client withholds them from any untrusted origin, a cross-origin redirect hop included
-    (see the module docstring). ``HttpOptions`` refuses a middleware that does not declare both.
+    (see the module docstring). ``Client()`` refuses a middleware that does not declare both, or is not async.
     """
 
     async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
@@ -76,21 +78,24 @@ class MiddlewareTransport(httpx2.AsyncBaseTransport):
         transport: httpx2.AsyncBaseTransport,
         middleware: tuple[Middleware, ...],
         guard: Callable[[httpx2.Request], Awaitable[None]],
-        signer: SigningAuth | None,
+        signer: tuple[SigningAuth, Clock] | None,
     ) -> None:
         """Chain *middleware* before *signer*, *guard* and *transport*, once, so each attempt only walks the chain.
 
-        *signer* is the client's auth when it is a ``SigningAuth``: only its marks are signed, since the guard withholds
-        only what the client's auth declares. *guard* is the client's credential guard, run on what the last middleware
-        passes on, once it is signed.
+        *signer* is the client's auth when it is a ``SigningAuth``, with the client's wall clock, which each signature
+        is made at: only its marks are signed, since the guard withholds only what the client's auth declares. *guard*
+        is the client's credential guard, run on what the last middleware passes on, once it is signed.
         """
         self._transport = transport
 
         async def guarded(request: httpx2.Request) -> httpx2.Response:
-            if signer is not None and request.extensions.get(SIGNER_EXT) is signer:
+            if signer is not None and request.extensions.get(SIGNER_EXT) is signer[0]:
+                auth, wall_clock = signer
                 # A hedge's copy and a redirect hop are new requests over the body the flow buffered: read it again.
                 await request.aread()
-                signer.sign(request)
+                before = stamped_names(request)
+                auth.sign(request, wall_clock())
+                refuse_undeclared(auth, "sign", request, before)
             await guard(request)
             return await transport.handle_async_request(request)
 

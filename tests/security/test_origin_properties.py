@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Final, override
+from typing import TYPE_CHECKING, Final, override
 
 import httpx2
 from hypothesis import given, settings
@@ -22,6 +22,7 @@ from hypothesis import strategies as st
 from headgate import (
     CachedTokenAuth,
     HttpOptions,
+    Minted,
     QueryParamAuth,
     SecurityOptions,
     StaticHeaderAuth,
@@ -31,6 +32,9 @@ from headgate._core import origin_of
 from tests.security._web import BASE, Web
 from tests.support.responses import RESPONSE
 from tests.support.tokens import premint
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 #: The origins a hop may be addressed to.
 _ORIGINS: Final = (
@@ -53,8 +57,9 @@ class _Bearer(CachedTokenAuth):
     """A bearer auth whose exchange never runs: it is seeded."""
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         raise NotImplementedError
+        yield  # unreachable: the yield makes this the async generator a mint is
 
 
 def _auth(kind: str) -> StaticHeaderAuth | QueryParamAuth | CachedTokenAuth:

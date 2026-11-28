@@ -15,10 +15,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, override
 
 import pytest
 
-from headgate import CachedTokenAuth, Client, HttpOptions, as_json
+from headgate import CachedTokenAuth, Client, HttpOptions, Minted, as_json
 from headgate.testing import FakeTransport, Respond
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
     import httpx2
 
 _TOKEN = {"access": "abc", "refresh": "r"}
@@ -27,8 +29,10 @@ _TOKEN = {"access": "abc", "refresh": "r"}
 def _define_struct_token() -> type:
     class StructToken(CachedTokenAuth[dict[str, str]]):
         @override
-        async def mint_token(self) -> tuple[dict[str, str], float]:
-            return _TOKEN, 3600.0
+        async def mint(
+            self, request: httpx2.Request
+        ) -> AsyncGenerator[httpx2.Request | Minted[dict[str, str]], httpx2.Response]:
+            yield Minted(_TOKEN, 3600.0)
 
     return StructToken
 
@@ -48,8 +52,8 @@ class _Mid[T](CachedTokenAuth[T]):
         self._token = token
 
     @override
-    async def mint_token(self) -> tuple[T, float]:
-        return self._token, 3600.0
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[T], httpx2.Response]:
+        yield Minted(self._token, 3600.0)
 
 
 class _Leaf(_Mid[dict[str, str]]):
@@ -70,11 +74,13 @@ async def test_a_generic_subclass_is_refused_at_the_first_attach() -> None:
 class _StructWithAttach(CachedTokenAuth[dict[str, str]]):
     """Mints a struct token and attaches its access half."""
 
-    token_headers: ClassVar = frozenset({"Authorization"})
+    credential_headers: ClassVar = frozenset({"Authorization"})
 
     @override
-    async def mint_token(self) -> tuple[dict[str, str], float]:
-        return _TOKEN, 3600.0
+    async def mint(
+        self, request: httpx2.Request
+    ) -> AsyncGenerator[httpx2.Request | Minted[dict[str, str]], httpx2.Response]:
+        yield Minted(_TOKEN, 3600.0)
 
     @override
     def attach(self, request: httpx2.Request, token: dict[str, str]) -> None:
@@ -94,16 +100,18 @@ class _AnyToken(CachedTokenAuth[Any]):
     """A token typed ``Any``, which says nothing about whether the default attach can send it."""
 
     @override
-    async def mint_token(self) -> tuple[Any, float]:
-        return "abc", 3600.0
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[Any], httpx2.Response]:
+        yield Minted("abc", 3600.0)
 
 
 class _MaybeToken(CachedTokenAuth[str | None]):
     """A token typed ``str | None``: a ``str`` when it is minted, so the default attach sends it."""
 
     @override
-    async def mint_token(self) -> tuple[str | None, float]:
-        return "abc", 3600.0
+    async def mint(
+        self, request: httpx2.Request
+    ) -> AsyncGenerator[httpx2.Request | Minted[str | None], httpx2.Response]:
+        yield Minted("abc", 3600.0)
 
 
 @pytest.mark.parametrize("auth", [_AnyToken(), _MaybeToken()], ids=["any", "optional-str"])
@@ -119,7 +127,7 @@ async def test_a_token_type_that_may_be_text_keeps_the_default_attach(auth: Cach
 async def test_a_seeded_token_that_is_not_text_is_refused_without_saying_minted() -> None:
     """Refuse a seeded token the default attach cannot send, in words that fit a token it did not mint."""
     auth = _Leaf(_TOKEN)
-    auth.seed(_TOKEN, 3600.0)
+    auth.seed(Minted(_TOKEN, 3600.0))
     fake = FakeTransport().reply("GET", "/x", Respond(json={}))
     async with Client(base_url="https://api.example", auth=auth, http=HttpOptions(transport=fake)) as client:
         with pytest.raises(TypeError, match=r"^_Leaf holds a dict token") as raised:

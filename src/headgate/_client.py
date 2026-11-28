@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Final, Literal, Self, Unpack, cast, final, ove
 
 import httpx2
 
-from headgate._auth import MINTING, Auth, failed_on_auth_hop, mint_hop_failure
+from headgate._auth import MINTING, Auth, check_timing, failed_on_auth_hop, hold_timing, mint_hop_failure, was_checked
 from headgate._body import read_capped, read_head
 from headgate._call_options import (
     BODY_HINTS,
@@ -92,6 +92,7 @@ from headgate._options import (
     check_deadline,
     check_hooks,
     check_middleware,
+    check_observers,
     check_timeout_fits,
     httpx_timeout,
     match_route,
@@ -336,8 +337,8 @@ class Client:
         :raises TypeError: for an argument of the wrong kind: an *auth* that is not a :class:`~headgate.Auth` (a plain
             ``httpx2.Auth`` declares nothing it stamps) or is an upstream ``httpx`` one, a *rate* that is neither
             a ``Rate``, a ``RateBudget`` nor ``None``, such as a bare number, *observers* or *middleware* that are not
-            a sequence, a middleware that does not declare its credentials, and a *base_url*, *policy* or *http* that
-            is not the kind it names.
+            a sequence, a middleware that does not declare its credentials or is not async, an observer whose
+            ``notify`` is, and a *base_url*, *policy* or *http* that is not the kind it names.
         """
         check_kind("base_url", base_url, str, "the API root, such as 'https://api.example.com/v1'")
         check_kind("policy", policy, TransportPolicy, "TransportPolicy(...)")
@@ -349,10 +350,12 @@ class Client:
         )
         observers, middleware = _stack_parts("observers", observers), _stack_parts("middleware", middleware)
         check_middleware(middleware)
+        check_observers(observers)
         self._policy_off = policy_is_disabled()
         self._policy = policy = _effective_policy(policy, off=self._policy_off)
         self._source = httpx2.URL(base_url).netloc.decode("ascii")  # host, and a port other than the default
         self._timing = current_timing()
+        check_timing(auth, self._timing)
         self._breakers = _registry_of(policy, self._timing)
         self._response_check = http.response_check
         self._max_response_bytes = http.max_response_bytes
@@ -371,6 +374,8 @@ class Client:
             base_url=base_url, credentials=credentials, http=http, timeout=policy.timeout, transport=stack
         )
         vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client, breakers=self._breakers)
+        # Last, so a client refused above leaves the auth's clock unfixed; check_timing refused a clash before.
+        hold_timing(auth, self._timing)
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse a subclass: an SDK holds a ``Client`` and calls it."""
@@ -1255,7 +1260,8 @@ def _check_url(url: object) -> None:
 def _check_auth(auth: object) -> None:
     """Refuse an *auth* that is not a :class:`~headgate.Auth`, whose credentials the guard could not know to withhold.
 
-    A subclass is required, not ``isinstance``: ``Auth.register`` makes a virtual subclass that declares nothing.
+    A subclass is required, not ``isinstance``: ``Auth.register`` makes a virtual subclass that declares nothing. So
+    is a class that went through ``Auth.__init_subclass__``, which a base that skips ``super()`` cuts off.
 
     :raises TypeError: naming its class and what to write instead.
     """
@@ -1264,6 +1270,14 @@ def _check_auth(auth: object) -> None:
             f"auth= takes a headgate.Auth, which declares what it stamps (got {type(auth).__qualname__}): subclass "
             "headgate.Auth, or use StaticHeaderAuth, and declare the headers and query parameters it sets in "
             "credential_headers and credential_params"
+        )
+        raise TypeError(msg)
+    if isinstance(auth, Auth) and not was_checked(auth):
+        msg = (
+            f"auth= takes a headgate.Auth whose class was checked when it was defined, and {type(auth).__qualname__} "
+            "was not checked when it was defined: a base class's __init_subclass__ skips super().__init_subclass__(), "
+            "so its subclasses escape the checks of what they stamp and how their hooks are written. Call "
+            "super().__init_subclass__(**kwargs) there"
         )
         raise TypeError(msg)
 
