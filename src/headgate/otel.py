@@ -124,14 +124,13 @@ def _request_attributes(info: CallInfo) -> tuple[str, _Attributes]:
     else:
         attributes[_METHOD] = "_OTHER"
         attributes[_METHOD_ORIGINAL] = info.method
-    if info.full_url is not None:
-        parts = urlsplit(info.full_url)
-        attributes[_URL_FULL] = info.full_url
-        if parts.hostname is not None:
-            attributes[_SERVER_ADDRESS] = parts.hostname
-        port = parts.port or _DEFAULT_PORTS.get(parts.scheme)
-        if port is not None:
-            attributes[_SERVER_PORT] = port
+    parts = urlsplit(info.full_url)
+    attributes[_URL_FULL] = info.full_url
+    if parts.hostname is not None:
+        attributes[_SERVER_ADDRESS] = parts.hostname
+    port = parts.port or _DEFAULT_PORTS.get(parts.scheme)
+    if port is not None:
+        attributes[_SERVER_PORT] = port
     name = "HTTP" if method not in _KNOWN_METHODS else method
     if info.template is not None:
         attributes[_URL_TEMPLATE] = info.template

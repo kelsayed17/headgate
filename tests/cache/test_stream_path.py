@@ -135,7 +135,7 @@ async def test_a_second_send_of_one_call_fetches_for_itself(storage: AsyncSqlite
     """Answer a hedge from its own send, though its call's first send of the same GET is still in flight."""
     network = _FirstHangs()
     transport = cache_transport(storage, network)
-    context = CallContext(CallInfo(method="GET", url=_URL))
+    context = CallContext(CallInfo(method="GET", url=_URL, full_url=_URL))
     first, hedge = httpx2.Request("GET", _URL), httpx2.Request("GET", _URL)
     context.attach(first)
     context.attach(hedge)

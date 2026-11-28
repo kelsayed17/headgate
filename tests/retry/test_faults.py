@@ -43,7 +43,7 @@ def _request(*, timeout: dict[str, float | None] | None = None) -> tuple[httpx2.
     """Build a POST with a ten-byte body and a fresh context whose first attempt has begun."""
     extensions = {} if timeout is None else {"timeout": timeout}
     request = httpx2.Request("POST", "https://api.test/orders", content=_BODY, extensions=extensions)
-    context = CallContext(CallInfo(method="POST", url="https://api.test/orders"))
+    context = CallContext(CallInfo(method="POST", url="https://api.test/orders", full_url="https://api.test/orders"))
     context.attach(request)
     context.begin_attempt()
     return request, context
@@ -187,7 +187,7 @@ async def test_progress_through_the_tracking_layer_is_what_httpx2_reports(
     no chunk after it.
     """
     request = _streamed()
-    context = CallContext(CallInfo(method="POST", url="https://api.test/orders"))
+    context = CallContext(CallInfo(method="POST", url="https://api.test/orders", full_url="https://api.test/orders"))
     context.attach(request)
     context.begin_attempt()
     network = FaultyTransport(schedule=[step])

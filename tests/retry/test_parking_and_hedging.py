@@ -63,7 +63,7 @@ _HEDGE_AFTER: Final = 0.5
 def _request(clock: TestClock, *, deadline: float | None = None) -> tuple[httpx2.Request, CallContext]:
     """Build a GET with a body and a header, and its context on *clock*."""
     request = httpx2.Request("GET", "https://api.test/orders", headers={"X-Trace": "t-1"}, content=b"query")
-    context = CallContext(CallInfo(method="GET", url="orders"), clock=clock, deadline_after=deadline)
+    context = CallContext(CallInfo(method="GET", url="orders", full_url="orders"), clock=clock, deadline_after=deadline)
     context.attach(request)
     return request, context
 
@@ -806,7 +806,9 @@ async def test_a_status_the_server_says_to_retry_keeps_its_retry_after_and_is_na
     )
     observer = _Events()
     request = httpx2.Request("GET", "https://api.test/orders")
-    context = CallContext(CallInfo(method="GET", url="orders"), clock=clock, emitter=Emitter((observer,)))
+    context = CallContext(
+        CallInfo(method="GET", url="orders", full_url="orders"), clock=clock, emitter=Emitter((observer,))
+    )
     context.attach(request)
 
     response = await retry.handle_async_request(request)
@@ -821,7 +823,9 @@ async def test_a_status_the_server_says_to_retry_keeps_its_retry_after_and_is_na
 def _observed(clock: TestClock, observer: _Events) -> httpx2.Request:
     """Build a GET on *clock* whose call delivers every event to *observer*."""
     request = httpx2.Request("GET", "https://api.test/orders")
-    CallContext(CallInfo(method="GET", url="orders"), clock=clock, emitter=Emitter((observer,))).attach(request)
+    CallContext(
+        CallInfo(method="GET", url="orders", full_url="orders"), clock=clock, emitter=Emitter((observer,))
+    ).attach(request)
     return request
 
 

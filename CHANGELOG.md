@@ -227,7 +227,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   re-mints only for a request that carried a declared name. Keep `authorization` in the declaration, or override
   `attach` to put the token where the declaration says.
 - `CallInfo.full_url` is filled for every call, so a middleware reads the absolute URL of a client with no observers
-  too, where it read `None`.
+  too, where it read `None`. It is a required `str`: a `CallInfo` built by hand, in a test of an observer, passes
+  `full_url=`, such as `CallInfo(method="GET", url="items/1", full_url="https://api.example/items/1")`, and an
+  observer drops its `if info.full_url is not None` check.
 - `typing.get_type_hints()` resolves on every exported class and function, and on the methods they define, after a
   bare `import headgate`, so `msgspec.convert({"read": 5.0}, Timeouts)`, pydantic and `inspect.signature(Client)` read
   headgate's options. They raised `NameError` for a name the annotation imported only for the type checker (`Mapping`,

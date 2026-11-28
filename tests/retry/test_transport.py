@@ -103,7 +103,10 @@ def _request(
     request = httpx2.Request(method, "https://api.test/orders", json={"qty": 1}, extensions={"timeout": _TIMEOUTS})
     emitter = Emitter((observer,)) if observer is not None else Emitter()
     context = CallContext(
-        CallInfo(method=method, url="https://api.test/orders"), clock=clock, deadline_after=deadline, emitter=emitter
+        CallInfo(method=method, url="https://api.test/orders", full_url="https://api.test/orders"),
+        clock=clock,
+        deadline_after=deadline,
+        emitter=emitter,
     )
     context.idempotency_key = key
     context.attach(request)

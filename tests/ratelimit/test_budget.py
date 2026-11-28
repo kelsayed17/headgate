@@ -58,7 +58,12 @@ _THREADS = 3
 def _context(clock: Clock, *, deadline: float | None = None, observer: Recorder | None = None) -> CallContext:
     """Return a call's context on *clock*, due *deadline* seconds from now, reporting to *observer*."""
     emitter = Emitter(() if observer is None else (observer,))
-    return CallContext(CallInfo(method="GET", url="https://x/"), clock=clock, deadline_after=deadline, emitter=emitter)
+    return CallContext(
+        CallInfo(method="GET", url="https://x/", full_url="https://x/"),
+        clock=clock,
+        deadline_after=deadline,
+        emitter=emitter,
+    )
 
 
 def _budget(clock: TestClock, rate: Rate = _RATE, **options: Adaptive | int | None) -> Pacer:
@@ -357,7 +362,7 @@ async def test_real_pacing_waits_on_the_system_clock() -> None:
     """Pace on the real clock and sleep by default: a second immediate request waits about one interval."""
     rate = Rate(requests=1, period=0.05)
     budget = Pacer(rate)
-    context = CallContext(CallInfo(method="GET", url="https://x/"))
+    context = CallContext(CallInfo(method="GET", url="https://x/", full_url="https://x/"))
     await budget.wait(context)
     start = time.monotonic()
     await budget.wait(context)
@@ -846,7 +851,7 @@ def test_one_budget_shared_by_clients_on_several_threads_books_every_turn_once()
     budget = Pacer(rate, timing=Timing(clock=lambda: 0.0, sleep=record))
 
     async def spend() -> None:
-        context = CallContext(CallInfo(method="GET", url="https://x/"), clock=lambda: 0.0)
+        context = CallContext(CallInfo(method="GET", url="https://x/", full_url="https://x/"), clock=lambda: 0.0)
         for _ in range(_PER_THREAD):
             await budget.wait(context)
 
