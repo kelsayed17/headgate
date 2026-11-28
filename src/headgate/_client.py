@@ -104,7 +104,7 @@ from headgate._options import (
 from headgate._redirects import redirect_method
 from headgate._request_body import Json, Lowered, WireValue, Writer, lowered, wire_value
 from headgate._responses import Expect, Reader, ResponseCheck, accepts, with_answers
-from headgate._stack import Credentials, build_http_client, build_transport_stack
+from headgate._stack import NETWORK_OVERRIDE, Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
 from headgate._view import KEEP, ROOT_DEFAULTS, VIEW_KEYS, ViewOptions
 from headgate.breaker import BreakerRegistry
@@ -366,6 +366,8 @@ class Client:
         vars(self)[_BUILT] = Built(cache=policy.cache, budgets=budgets, http=self._http_client, breakers=registry)
         # Last, so a client refused above leaves the auth's clock unfixed; check_timing refused a clash before.
         hold_timing(auth, self._timing)
+        if (network := NETWORK_OVERRIDE.get()) is not None:
+            network.clients.append(self)
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse a subclass: an SDK holds a ``Client`` and calls it."""

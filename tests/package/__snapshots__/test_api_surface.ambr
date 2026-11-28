@@ -363,7 +363,7 @@
 # name: test_the_public_surface_matches_the_snapshot[headgate.testing]
   '''
   module headgate.testing
-  __all__ = ['CassetteFilter', 'ConnectFail', 'DropMidBody', 'FakeTransport', 'FaultCall', 'FaultyTransport', 'PoolFull', 'RecordedRequest', 'RefusedStream', 'Reply', 'Respond', 'Slow', 'Step', 'TestClock', 'UnmatchedRequestError', 'breakers_of', 'budget_for', 'cache_of', 'check_codec', 'fake_network', 'instant_retries', 'policy_disabled']
+  __all__ = ['CassetteFilter', 'ConnectFail', 'DropMidBody', 'FakeNetwork', 'FakeTransport', 'FaultCall', 'FaultyTransport', 'PoolFull', 'RecordedRequest', 'RefusedStream', 'Reply', 'Respond', 'Slow', 'Step', 'TestClock', 'UnmatchedRequestError', 'breakers_of', 'budget_for', 'cache_of', 'check_codec', 'fake_network', 'instant_retries', 'policy_disabled']
   class CassetteFilter(object)(*, auths: 'Iterable[CredentialCarrier]' = (), headers: 'Collection[str]' = (), params: 'Collection[str]' = (), replaying: 'bool' = False) -> 'None'
       def __call__(self, request: 'httpx2.Request', call_next: 'Next') -> 'httpx2.Response'
       def before_record_request(self, request: 'R') -> 'R | None'
@@ -373,12 +373,16 @@
       field timeout: bool = False
   class DropMidBody(object)(after_bytes: 'int') -> 'None'
       field after_bytes: int
+  class FakeNetwork(Generic)(transport: 'T') -> 'None'
+      property clients
+      property transport
   class FakeTransport(AsyncBaseTransport)() -> 'None'
       def aclose(self) -> 'None'
       property calls
       def calls_to(self, method: 'str', path: 'str') -> 'tuple[httpx2.Request, ...]'
       def handle_async_request(self, request: 'httpx2.Request') -> 'httpx2.Response'
       def reply(self, method: 'str', path: 'str', *replies: 'Reply') -> 'Self'
+      def resolve(self, host: 'str', *addresses: 'str') -> 'Self'
   class FaultCall(object)(step: 'Step', method: 'str', url: 'str', headers: 'httpx2.Headers', connected: 'bool' = False, bytes_sent: 'int' = 0, response: 'httpx2.Response | None' = None, response_closed: 'bool | None' = None, error: 'Exception | None' = None) -> 'None'
       field step: Step
       field method: str
@@ -418,7 +422,7 @@
   def budget_for(client: 'Client', url: 'str | None' = None) -> 'RateBudget'
   def cache_of(client: 'Client') -> 'HttpCache | None'
   def check_codec(codec: 'Codec', *, record: 'TypeForm[object] | None' = None) -> 'None'
-  def fake_network(transport: 'T') -> 'Generator[T]'
+  def fake_network(transport: 'T') -> 'Generator[FakeNetwork[T]]'
   def instant_retries() -> 'Generator[None]'
   def policy_disabled() -> 'Generator[None]'
   '''
