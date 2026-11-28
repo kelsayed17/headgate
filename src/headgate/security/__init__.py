@@ -14,32 +14,27 @@ the guard keeps them on trusted origins and the cache partitions by them: a midd
 second when it has a credential identity of its own, and every :class:`~headgate.Auth` is a ``CredentialStamper`` by
 its shape.
 
-What else is public here plugs into the guard: a :data:`Resolver` (``SecurityOptions(resolver=...)``), and
-:class:`AddressGuard` and :class:`PinnedHTTPTransport`, so that a test can reach a loopback server through the real
-pinning transport (``AddressGuard(check=...)``). :func:`forbidden_reason` is the default :data:`AddressCheck`, and
-:func:`resolve_with_loop` the default resolver.
+What else is public here is what the guard is configured with, in ``SecurityOptions``: a :data:`Resolver`
+(``resolver=``) and an :data:`AddressCheck` (``check=``), of which :func:`forbidden_reason` is the default, so a check
+of your own can defer to it (a test reaching a loopback server admits that one address).
 
 Importing headgate also redacts the URL in httpx2's own ``HTTP Request:`` log line (:mod:`headgate.security._logging`).
 """
 
 from headgate._core import CredentialCarrier, CredentialStamper
 from headgate._core import rehome as _rehome
-from headgate.security._addresses import AddressCheck, AddressGuard, Resolver, forbidden_reason, resolve_with_loop
+from headgate.security._addresses import AddressCheck, Resolver, forbidden_reason
 from headgate.security._logging import redact_httpx2_log as _redact_httpx2_log
-from headgate.security._transport import PinnedHTTPTransport
 
 # httpx2 logs each request's URL as sent, credentials and all (see headgate.security._logging).
 _redact_httpx2_log()
 
 __all__ = [
     "AddressCheck",
-    "AddressGuard",
     "CredentialCarrier",
     "CredentialStamper",
-    "PinnedHTTPTransport",
     "Resolver",
     "forbidden_reason",
-    "resolve_with_loop",
 ]
 
 _rehome(__name__, globals())
