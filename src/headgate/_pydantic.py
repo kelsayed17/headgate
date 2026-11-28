@@ -5,7 +5,7 @@
 
 import functools
 import re
-from typing import Any, ClassVar, Final, cast, overload
+from typing import Any, ClassVar, Final, Literal, cast, get_origin, overload
 
 try:
     from pydantic import BaseModel, PydanticSchemaGenerationError, RootModel, TypeAdapter, ValidationError
@@ -80,8 +80,8 @@ def _cached_adapter(type_: TypeForm[object]) -> TypeAdapter[Any]:
     return adapter
 
 
-def _adapter[T](type_: TypeForm[T]) -> TypeAdapter[T]:
-    """Return the cached ``TypeAdapter`` for the type expression *type_*, typed by it.
+def _adapter[T](type_: TypeForm[T], verb: Literal["decode", "encode"]) -> TypeAdapter[T]:
+    """Return the cached ``TypeAdapter`` for the type expression *type_*, typed by it, to *verb* its values with.
 
     :raises TypeError: for a type that holds a class pydantic has no schema for (a plain class, a msgspec struct),
         naming the class, as the msgspec flavor refuses a class it does not know.
@@ -90,13 +90,25 @@ def _adapter[T](type_: TypeForm[T]) -> TypeAdapter[T]:
         # The cache key is the type expression itself, so the entry it returns was built from exactly ``TypeForm[T]``.
         return cast("TypeAdapter[T]", _cached_adapter(type_))
     except PydanticSchemaGenerationError as exc:
-        found = _SCHEMALESS.search(str(exc))
-        name = type_text(type_) if found is None else found[1].rpartition(".")[2]
+        builder = "reader" if verb == "decode" else "writer"
         msg = (
-            f"headgate.pydantic cannot decode {name}, a class pydantic has no schema for: declare it as a pydantic "
-            "model, a dataclass or a TypedDict, and read a msgspec.Struct with headgate.msgspec.reader"
+            f"headgate.pydantic cannot {verb} {_schemaless_name(type_, exc)}, a class pydantic has no schema for: "
+            f"declare it as a pydantic model, a dataclass or a TypedDict, and use headgate.msgspec.{builder} for a "
+            "msgspec.Struct"
         )
         raise TypeError(msg) from None
+
+
+def _schemaless_name(type_: object, error: Exception) -> str:
+    """Return the name of the class in *type_* pydantic has no schema for: *type_*'s own when it is that class.
+
+    For a class inside a type expression (``list[Plain]``), pydantic's message is read for it as a last resort, and
+    the expression is named as written when that fails.
+    """
+    if isinstance(type_, type) and get_origin(type_) is None:
+        return type_.__name__
+    found = _SCHEMALESS.search(str(error))
+    return type_text(type_) if found is None else str(found[1]).rpartition(".")[2]
 
 
 class PydanticCodec:
@@ -120,7 +132,7 @@ class PydanticCodec:
 
     def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
         """Return a function validating JSON against *type_*'s cached adapter."""
-        adapter = _adapter(type_)
+        adapter = _adapter(type_, "decode")
         strict = self._strict
 
         def decode(content: bytes) -> T:
@@ -134,7 +146,7 @@ class PydanticCodec:
         With *drop_none*, ``None`` goes from nested dicts too, as :func:`to_builtins` drops it (``exclude_none`` would
         keep a ``dict[str, int | None]``'s), so the bytes match the msgspec flavor's.
         """
-        adapter = _adapter(type_)
+        adapter = _adapter(type_, "encode")
         if not self._drop_none:
             return functools.partial(adapter.dump_json, by_alias=True)
 

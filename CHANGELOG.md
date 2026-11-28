@@ -328,9 +328,12 @@ change the public API; such changes are listed under **Changed** and **Removed**
   such a type fails where it is built. `headgate.msgspec.reader(Model)` of a pydantic model, or of a plain class
   anywhere in the type (`list[Plain]`, `dict[str, Plain] | None`), built, and every 200 then raised
   `ResponseParseError` as an unreadable body; it names the class, and a pydantic model's flavor:
-  write `headgate.pydantic.reader(Model)`. `headgate.pydantic` raises `TypeError` naming the class for one it has no
-  schema for, where it raised pydantic's `PydanticSchemaGenerationError`: catch `TypeError`. A codec of your own
-  whose `decoder()` builds for a plain class now fails `check_codec`: raise `TypeError` there.
+  write `headgate.pydantic.reader(Model)`. A writer is refused the same way, where it is built:
+  `headgate.msgspec.writer(Plain)` was accepted and failed at the first call, and now raises `TypeError` saying it
+  cannot encode the class, pointing a pydantic model to `headgate.pydantic.writer`. `headgate.pydantic` raises
+  `TypeError` naming the class for one it has no schema for, saying decode or encode for a reader or a writer, where it
+  raised pydantic's `PydanticSchemaGenerationError`: catch `TypeError`. A codec of your own whose `decoder()` builds
+  for a plain class now fails `check_codec`: raise `TypeError` there.
 - A reader's `refuse=` that returns anything but a `RefusedError` or `None` raises `TypeError` naming `refuse=`, where
   a call raised `ResponseParseError` ("unreadable 200 body") for the caller's own bug; a `response_check=` that does
   the same raises `TypeError` naming `response_check=`, where it raised an `AttributeError`. `RefusedError(kind=)`

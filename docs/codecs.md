@@ -28,8 +28,9 @@ path), and pydantic shows `[...]` in its place. The library's own error, which m
 the `DecodeError`, so a traceback or `logger.exception` cannot repeat it either. Each module's `CODEC` is the codec
 itself, for the functions below.
 
-Each also refuses, with `TypeError` where the reader is built, a type it cannot decode: `headgate.msgspec.reader` of a
-pydantic model points to `headgate.pydantic.reader`, and either flavor names a plain class it has no way to build.
+Each also refuses, with `TypeError` where the reader or writer is built, a type it cannot decode or encode:
+`headgate.msgspec.reader` of a pydantic model points to `headgate.pydantic.reader` (and a writer to its `writer`), and
+either flavor names a plain class it has no way to build.
 
 ## Any codec, the same way
 
