@@ -16,7 +16,7 @@ cannot see what a middleware adds or what a ``SigningAuth`` signs per attempt; :
 again below the last middleware and the signature, on every attempt of every hop.
 A middleware declares the headers and query parameters it stamps (``credential_headers`` and ``credential_params``, the
 shape every headgate auth has, empty when it stamps none), and has them removed from a hop addressed to any origin other
-than ``base_url``'s and ``SecurityOptions.trusted_origins``. ``HttpOptions`` refuses a middleware that declares neither.
+than ``base_url``'s and ``SecurityOptions.trusted_origins``. ``Client()`` refuses a middleware that declares neither.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ class Middleware(CredentialCarrier, Protocol):
     properties: ``credential_headers: frozenset[str]``, the names of the headers it sets (compared case-insensitively),
     and ``credential_params: frozenset[str]``, the names of the query parameters it sets. An empty frozenset means it
     stamps none of that kind. The client withholds them from any untrusted origin, a cross-origin redirect hop included
-    (see the module docstring). ``HttpOptions`` refuses a middleware that does not declare both.
+    (see the module docstring). ``Client()`` refuses a middleware that does not declare both, or is not async.
     """
 
     async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:

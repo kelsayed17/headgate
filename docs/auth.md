@@ -227,18 +227,19 @@ endpoint. The API host's breaker records nothing for it.
 
 ### Other credential shapes
 
-- `attach(request, token)` decides how a token is put on a request (`Authorization: Bearer` by default). A subclass
-  that overrides it declares the headers it sets in `credential_headers` and the query parameters in
-  `credential_params` (for a provider that takes `?access_token=`), not both empty, or the class definition fails: an
-  undeclared credential would follow a request anywhere. The default declares `frozenset({"authorization"})`, and a
-  class that keeps the default `attach` must keep `authorization` in its declaration, or the class definition fails:
-  a 401 re-mints only for a request that carried a declared name. The parameters are withheld from untrusted origins like the headers, a 401 to a request
-  carrying one re-mints, and error messages redact them.
+- `attach(request, token)` decides how a token is put on a request (`Authorization: Bearer` by default). A subclass that
+  overrides it declares the headers it sets in `credential_headers` and the query parameters in `credential_params` (for
+  a provider that takes `?access_token=`), not both empty, or the class definition fails: an undeclared credential would
+  follow a request anywhere. The default declares `frozenset({"authorization"})`, and a class that keeps the default
+  `attach` must keep `authorization` in its declaration, or the class definition fails: a 401 re-mints only for a
+  request that carried a declared name. The parameters are withheld from untrusted origins like the headers, a 401 to a
+  request carrying one re-mints, and error messages redact them.
 - `skips(request)` says a request needs no token (by default, one that already carries a token header or parameter).
 - `mint`, `attach` and `skips` are the hooks. The flow, `async_auth_flow`, and `reject_credential_rotation` are final:
   a subclass that overrides either fails when it is defined, and ty reports `override-of-final-method`. A header every
   request needs belongs in a [middleware](configuration.md#middleware).
-- `seed(Minted(token, lifetime))` caches a token obtained elsewhere, such as one restored from storage or a test's fixed bearer.
+- `seed(Minted(token, lifetime))` caches a token obtained elsewhere, such as one restored from storage or a test's fixed
+  bearer.
 - `CachedTokenAuth[TokenT]` is generic in the token's type, `str` by default. The default `attach` sends only a `str`,
   so a subclass whose token is another type (`CachedTokenAuth[dict[str, str]]`) overrides `attach`; one that does not
   fails when it is defined, or, when a generic subclass binds the type further down, at its first call.

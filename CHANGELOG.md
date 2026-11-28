@@ -92,8 +92,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   Their hooks are `sign` and `skips`, and `mint`, `attach` and `skips`; add a per-request header, such as a tenant id,
   in a middleware.
 - `SigningAuth.sign(request, now)` is handed the attempt's wall-clock time in Unix seconds, from the client's timing, so
-  a signer whose client is built under `TestClock.install()` runs on the test clock like the rest of the client. Write `def sign(self, request, now)` and sign with
-  `now` where you called `time.time()`.
+  a signer whose client is built under `TestClock.install()` runs on the test clock like the rest of the client. Write
+  `def sign(self, request, now)` and sign with `now` where you called `time.time()`.
 - A hook of the wrong color is refused where it is given, as ty already reported it: a `SigningAuth` whose `sign` is
   a coroutine function raises `TypeError` when the class is defined (its requests went out unsigned, with only a
   "never awaited" warning): write `def sign(self, request, now)`. `Client()` raises `TypeError` for an observer whose
@@ -144,7 +144,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   (`headers=["x"]`) is refused too, since no header or query credential is one character long. It is checked for a
   middleware when the client is built, for an `Auth` subclass's class attribute (`credential_headers` and
   `credential_params`, the one spelling `SigningAuth` and `CachedTokenAuth` declare with too) when the class is defined,
-  for a declaration through a property when the client is built, and for `CassetteFilter(headers=, params=)` and its auths' declarations when the filter is built.
+  for a plain `Auth`'s declaration through a property when the client is built (a property on a `SigningAuth` or
+  `CachedTokenAuth` is refused when the class is defined), and for `CassetteFilter(headers=, params=)` and its auths'
+  declarations when the filter is built.
 - The cache never looks up, stores or shares a call given a body, whatever its method and whatever `Content-Length` the
   caller wrote: a GET stream opened with `body=` was served the entry stored for its URL. No GET or HEAD takes a body
   now; this is the cache's own defense.
