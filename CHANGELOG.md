@@ -120,13 +120,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.
-
 - A walk's body is its `payload`, so "query" names only the QUERY verb and, in prose, the URL query:
   `paginate(payload=)`, `PageRequest.payload` and `PageRequest.with_payload()`. Write
   `paginate(url, payload=Query(...), ...)` for `paginate(url, query=Query(...), ...)`, and `request.payload` and
   `request.with_payload(...)` in a pager for `request.body` and `request.with_body(...)`. `paginate(query=)` raises
   `TypeError` naming `payload=`.
-
 - A pager carries its page reader, as its first argument, so a type checker knows the page type before it reads the
   lambdas after it: `Cursor(reader(Page), items=lambda p: p.items, next=lambda p: p.next, param="cursor")` is a
   `Cursor[Item, Page]`, and `lambda p: p.itemz` is a type error where it was an `Unknown` that reached every item.
@@ -143,7 +141,6 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `write: Writer[Query]` as fields, where a `write` property was required. Its methods stay abstract. `paginate()`
   raises `TypeError`, before the pager runs, for a pager whose `read` is missing or is not a `Reader` or an `Expect`,
   and for a writing pager with no `write`.
-
 - `Paginated` is the class of the walk `paginate()` returns, a final class rather than a protocol, so a mistake names
   it: `await client.paginate(...)` raises `TypeError: 'Paginated' object can't be awaited`, where it named a private
   `PageWalk`. Iterate with `async for`, or `await walk.collect()`. Annotations are unchanged: `Paginated[Issue]` and
@@ -151,7 +148,6 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `__aiter__`, `pages()` and `collect()`) no longer type-checks as one: build the real class from its pages, write
   `Paginated(pages, lambda page: page.items)`, where `pages` is a function of no arguments that starts the pages afresh
   (see the testing guide's "A fake walk").
-
 - Breakers take the shape a rate does: a policy's `breaker=` is a `BreakerPolicy`, from which the client builds
   breakers of its own, or a shared `BreakerRegistry`, built from one, whose breakers every client given it shares
   (`breaker: BreakerPolicy | BreakerRegistry | None`, as `rate: Rate | RateBudget | None`). The registry holds the
@@ -210,7 +206,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - The six top-level errors (`ClientError`, `TransportError`, `ClientTimeoutError`, `UpstreamStatusError`,
   `AuthError` and `RateLimitError`) have one home, `headgate`: `from headgate.errors import ClientError` raises
   `ImportError`, so write `from headgate import ClientError`. `headgate.errors` keeps every other error,
-  `ErrorDetails` and `Problem`.
+  `ErrorDetails` and `Problem`. A pickle of one of the six made before this release names it as
+  `headgate.errors.ClientError` (and so on), which no longer resolves, so it no longer loads: unpickling it raises
+  `AttributeError`. Re-create such pickles from the error, or load them with the earlier release.
 - A public module binds only what it exports and its public submodules, so no name has a second home:
   `headgate.health`, `headgate.msgspec`, `headgate.pydantic` and `headgate.otel` re-export what private modules
   define, as every other public module does, and the names they imported to do their work are gone from them. Import
@@ -236,7 +234,6 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `fake_network`, so a test sent its client secret to the real token host. Yield the exchange's request from `mint`
   instead (see the auth guide), or, for a mint that is not an HTTP request, yield only the `Minted`. The guide's recipe
   for it, and the testing guide's note that it does not reach the fake, are gone with it.
-
 - `BreakerPolicy.registry`, `BreakerRegistry.bind()` and the `ValueError` for a client whose thresholds differed from
   the ones a shared registry was bound to: a registry carries its own policy, so its clients cannot disagree. Give the
   registry the thresholds, and the clients the registry.
