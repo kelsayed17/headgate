@@ -33,8 +33,6 @@ import contextlib
 import copy
 import functools
 import math
-from collections.abc import Mapping
-from collections.abc import Set as AbstractSet
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
@@ -99,7 +97,7 @@ from headgate._options import (
     match_route,
     reject_upstream_httpx,
 )
-from headgate._request_body import Json, lowered
+from headgate._request_body import Json, WireValue, lowered, wire_value
 from headgate._responses import Expect, Reader, accepts, nothing
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
@@ -134,7 +132,7 @@ from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOM
 from headgate.streaming._stream import OpenStream
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Sequence
+    from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
     from types import TracebackType
 
     from headgate._core import Observer, Timing
@@ -154,9 +152,6 @@ __all__ = ["Built", "Client", "Method", "built_with"]
 
 type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "QUERY"]
 """The HTTP methods a client sends: one verb each, and :meth:`Client.stream`'s ``method``."""
-
-#: A query value httpx2 encodes itself.
-type _QueryValue = str | int | float | bool | None
 
 #: How much of a refused or failed streamed response is read, for the ``ClientError``'s body snippet.
 _STREAM_ERROR_HEAD_BYTES = 4096
@@ -1300,38 +1295,17 @@ def _registry_of(policy: TransportPolicy, timing: Timing) -> BreakerRegistry | N
     return registry
 
 
-def _query_pairs(params: Mapping[str, object]) -> list[tuple[str, _QueryValue]]:
-    """Flatten *params* into the ``(key, value)`` pairs httpx2 encodes, exactly as httpx2 flattens a mapping.
+def _query_pairs(params: Mapping[str, object]) -> list[tuple[str, WireValue]]:
+    """Flatten *params* into the ``(key, value)`` pairs httpx2 encodes: a list or tuple repeats its key.
 
-    :raises TypeError: for a value no query parameter can carry (see :data:`_NESTED`), before anything is sent.
+    :raises TypeError: for a value with no wire meaning (see :func:`~headgate._request_body.wire_value`), a list or
+        tuple inside another among them, before anything is sent.
     """
-    pairs: list[tuple[str, _QueryValue]] = []
+    pairs: list[tuple[str, WireValue]] = []
     for key, value in params.items():
         items = value if isinstance(value, list | tuple) else (value,)
-        pairs.extend((key, _query_value(key, item)) for item in items)
+        pairs.extend((key, wire_value("params=", key, item)) for item in items)
     return pairs
-
-
-#: The values a query parameter cannot carry: a container, whose ``str()`` is its Python ``repr``, and raw bytes. A
-#: list or tuple of scalars repeats its key; one inside another is refused.
-_NESTED: Final = (Mapping, AbstractSet, bytes, bytearray, memoryview, list, tuple)
-
-
-def _query_value(key: str, value: object) -> _QueryValue:
-    """Return *value* if httpx2 encodes it natively, else its ``str()``, which is what a ``UUID`` or an ``Enum`` means.
-
-    :raises TypeError: for a value in :data:`_NESTED`, naming *key* and the value's type.
-    """
-    if isinstance(value, str | int | float | bool | None):
-        return value
-    # Checked only past the common case, since an ABC's isinstance check costs more than the native ones.
-    if isinstance(value, _NESTED):
-        msg = (
-            "params= takes a str, int, float, bool or None for each value, or a list or tuple of them (got"
-            f" {type(value).__name__} under {key!r}): encode a nested value into text first, such as with json.dumps"
-        )
-        raise TypeError(msg)
-    return str(value)
 
 
 def _encoded_type(request: httpx2.Request, body: Lowered) -> str | None:

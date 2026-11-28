@@ -18,12 +18,16 @@ of its files is a file object that cannot be rewound, such as a pipe. :attr:`Raw
 
 from __future__ import annotations
 
+import enum
 import json
 import os
 import stat
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date, time
+from decimal import Decimal
 from typing import IO, Final, final, override
+from uuid import UUID
 
 import httpx2
 
@@ -40,10 +44,58 @@ __all__ = [
     "Raw",
     "RawContent",
     "UploadFiles",
+    "WireValue",
     "Writer",
     "files_replayable",
     "lowered",
+    "wire_fields",
+    "wire_value",
 ]
+
+type WireValue = str | int | float | bool | None
+"""A query or form value httpx2 encodes itself."""
+
+#: What a query or form value may be, for the refusal of one that is none of it.
+_WIRE_VALUES: Final = (
+    "a str, int, float, bool, None, an Enum of str or int, a UUID, Decimal, date, datetime or time for each value, or "
+    "a list or tuple of them"
+)
+
+
+def wire_value(option: str, key: str, value: object) -> WireValue:
+    """Return what *value*, under *key* in *option*, means on the wire: the one allowlist of query and form values.
+
+    A ``str``, number, ``bool`` or ``None`` is itself; an ``Enum`` its ``value``, which must be a ``str`` or an
+    ``int``; a ``UUID`` or ``Decimal`` its text; a ``date``, ``datetime`` or ``time`` its ISO 8601 form. An allowlist,
+    since any other value's ``str()`` is its Python ``repr``: a dataclass's ``Order(qty=1)``, a plain ``Enum``'s
+    ``Status.OPEN``.
+
+    :raises TypeError: for any other value, naming *option*, *key* and the value's type.
+    """
+    if isinstance(value, enum.Enum):
+        if isinstance(value.value, str | int):
+            return value.value
+    elif isinstance(value, str | int | float | bool | None):
+        return value
+    elif isinstance(value, UUID | Decimal):
+        return str(value)
+    elif isinstance(value, date | time):
+        return value.isoformat()
+    msg = (
+        f"{option} takes {_WIRE_VALUES} (got {type(value).__name__} under {key!r}): encode any other value into text "
+        "first, such as with json.dumps"
+    )
+    raise TypeError(msg)
+
+
+def wire_fields(option: str, fields: Mapping[str, object]) -> dict[str, object]:
+    """Return *fields* with each value through :func:`wire_value`, a list or tuple of them item by item."""
+    return {
+        key: [wire_value(option, key, item) for item in value]
+        if isinstance(value, list | tuple)
+        else wire_value(option, key, value)
+        for key, value in fields.items()
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,16 +173,21 @@ class Json:
 @final
 @dataclass(frozen=True, slots=True)
 class Form:
-    """A form body, sent as ``application/x-www-form-urlencoded``: each field's value as httpx2 encodes one.
+    """A form body, sent as ``application/x-www-form-urlencoded``: each field's value as a query value is sent.
 
-    :raises TypeError: for *fields* that are not a mapping.
+    A value is a ``str``, number, ``bool`` or ``None``, an ``Enum`` (sent as its value), a ``UUID`` or ``Decimal`` (its
+    text), a ``date``, ``datetime`` or ``time`` (ISO 8601), or a list or tuple of them, which repeats the field. The
+    fields are kept encoded.
+
+    :raises TypeError: for *fields* that are not a mapping, and for a value that is none of those.
     """
 
     fields: Mapping[str, object]
 
     def __post_init__(self) -> None:
-        """Refuse fields that are not a mapping, such as a list of pairs."""
+        """Refuse fields that are not a mapping, such as a list of pairs, or a value with no wire meaning."""
         check_kind("fields", self.fields, Mapping, "a mapping of field names to values")
+        object.__setattr__(self, "fields", wire_fields("Form(fields=)", self.fields))
 
 
 @final
@@ -139,9 +196,10 @@ class Multipart:
     """A ``multipart/form-data`` body: *files* as httpx2 takes them, and the form *fields* sent beside them.
 
     A file is ``{"name": file}``, or a ``(filename, file, content_type)`` tuple; ``file`` is bytes, text or a binary
-    file object. The body can be sent again (:attr:`replayable`) unless a file object cannot be rewound.
+    file object. The body can be sent again (:attr:`replayable`) unless a file object cannot be rewound. The *fields*
+    take the values a :class:`Form` does, and are kept encoded.
 
-    :raises TypeError: for *fields* that are not a mapping.
+    :raises TypeError: for *fields* that are not a mapping, and for a value with no wire meaning.
     :raises ValueError: for no files, which httpx2 would send as a form, not as ``multipart/form-data``: send fields
         alone as :class:`Form`.
     """
@@ -150,8 +208,9 @@ class Multipart:
     fields: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Refuse fields that are not a mapping, and a body with no files."""
+        """Refuse fields that are not a mapping or hold a value with no wire meaning, and a body with no files."""
         check_kind("fields", self.fields, Mapping, "a mapping of field names to values")
+        object.__setattr__(self, "fields", wire_fields("Multipart(fields=)", self.fields))
         if not self.files:
             msg = "Multipart needs at least one file; send form fields alone as Form(fields)"
             raise ValueError(msg)
