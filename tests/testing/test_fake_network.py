@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, cast, override
 
@@ -236,7 +237,8 @@ async def test_a_localhost_the_test_resolved_takes_its_answer() -> None:
 
 
 def test_a_fake_network_comes_only_from_fake_network() -> None:
-    """Refuse to build the handle directly: ``fake_network`` yields it."""
+    """Refuse to build the handle directly, whatever it is given, and show no parameters: ``fake_network`` yields it."""
+    assert inspect.signature(FakeNetwork) == inspect.Signature()
     with pytest.raises(TypeError, match=r"^FakeNetwork is yielded by fake_network\(transport\): write with "):
         FakeNetwork()
     with pytest.raises(TypeError, match=r"^FakeNetwork is yielded by fake_network\(transport\)"):
