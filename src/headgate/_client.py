@@ -103,6 +103,7 @@ from headgate._options import (
 )
 from headgate._redirects import redirect_method
 from headgate._request_body import (
+    Body,
     EncodedBody,
     Lowered,
     WireValue,
@@ -193,9 +194,21 @@ _NO_BODY_HINTS: Final = {
     for method in ("GET", "HEAD")
 }
 
+#: What a verb with a body says of a body keyword, and of ``cache_ttl=``, which only a read takes.
+_BODY_VERB_HINTS: Final = {
+    **BODY_HINTS,
+    "cache_ttl": "a cache stores only GETs and HEADs, so a verb with a body is never cached: leave cache_ttl= out",
+}
+
 #: What ``paginate`` says of a body keyword: a walk's body is the raw value its pager rewrites, ``payload=``.
 _WALK_BODY = "a walk's body is payload=, the value its pager rewrites for each page"
 _WALK_HINTS = dict.fromkeys(("body", "json", "data", "content", "files", "query"), _WALK_BODY)
+
+#: Why a walk's page with a body refuses ``cache_ttl=``.
+_UNCACHED_PAGE = (
+    "cache_ttl= sets a cached response's lifetime, but a page with a body is a POST, which no cache stores: leave "
+    "cache_ttl= out of a walk of POSTs"
+)
 
 #: Why a walk of POSTs refuses one fixed idempotency key.
 _ONE_KEY_FOR_EVERY_PAGE = "an idempotency key would be sent with every page's body; a walk of POSTs takes none"
@@ -697,8 +710,8 @@ class Client:
         fixed_key = self._one_key_for_every_page(call_options)
         if first.payload is not None and fixed_key:
             raise ValueError(_ONE_KEY_FOR_EVERY_PAGE)
-        if first.payload is not None and write is None:
-            _walk_json(first.payload)
+        if first.payload is not None:
+            _check_first_post(first.payload, call_options, writes=write is not None)
         answers = {status: _paired(read) for status, read in spec.answers.items()}
         paired = with_answers(Expect(_paired(spec.ok), headers=spec.headers, accept=spec.accept), answers)
 
@@ -723,7 +736,7 @@ class Client:
             if fixed_key:
                 raise ValueError(_ONE_KEY_FOR_EVERY_PAGE)
             body = _walk_json(request.payload) if write is None else write(request.payload)
-            return await self.post(request.url, expect=paired, body=body, **page_options)
+            return await self._request(_Call("POST", request.url, _posted(page_options, body)), paired)
 
         walk = PageWalk(fetch, pager, first, source=self._source, max_pages=max_pages, on_limit=on_limit)
         return Paginated(walk.pages, walk.items_of)
@@ -756,7 +769,7 @@ class Client:
         if call.method in _NO_BODY_HINTS:
             check_options(call.method.lower(), call.options, CALL_KEYS, _NO_BODY_HINTS[call.method])
         else:
-            check_options(call.method.lower(), call.options, REQUEST_KEYS, BODY_HINTS)
+            check_options(call.method.lower(), call.options, REQUEST_KEYS, _BODY_VERB_HINTS)
         check_overrides(call.options)
         spec: Expect[T] = _expectation(expect)
         prepared = self._prepare(call)
@@ -1548,6 +1561,31 @@ def _page_writer[I, P, B](pager: Pager[I, P, B]) -> Writer[B] | None:
         )
         raise TypeError(msg)
     return pager.write
+
+
+def _check_first_post(payload: object, options: CallOptions, *, writes: bool) -> None:
+    """Refuse, where a walk of POSTs is made, what its first page would raise.
+
+    That is a *payload* JSON cannot encode when the pager *writes* none, and a ``cache_ttl``.
+
+    :raises TypeError: for a payload that is not builtins (see :func:`_walk_json`).
+    :raises ValueError: for a ``cache_ttl``, since no cache stores a POST.
+    """
+    if not writes:
+        _walk_json(payload)
+    if "cache_ttl" in options:
+        raise ValueError(_UNCACHED_PAGE)
+
+
+def _posted(options: CallOptions, body: Body) -> RequestOptions:
+    """Return a walk's *options* for a page sent as a POST of *body*: a read's options, less ``cache_ttl``.
+
+    :raises ValueError: for a ``cache_ttl``, since no cache stores a POST.
+    """
+    if "cache_ttl" in options:
+        raise ValueError(_UNCACHED_PAGE)
+    posted: dict[str, object] = {**options, "body": body}
+    return cast("RequestOptions", posted)
 
 
 def _walk_json(payload: object) -> EncodedBody:

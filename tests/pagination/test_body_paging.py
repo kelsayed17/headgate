@@ -26,6 +26,7 @@ from headgate import (
     ClientError,
     EncodedBody,
     Expect,
+    HttpCache,
     HttpOptions,
     IdempotencyKeys,
     Rate,
@@ -42,6 +43,8 @@ from headgate.testing import FakeTransport
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+
+    from hishel import AsyncSqliteStorage
 
     from headgate.pagination import Pager
 
@@ -820,6 +823,21 @@ async def test_a_body_that_appears_mid_walk_is_held_to_the_same_rules(
     paginated = api.client().paginate("search", pager=cast("Any", pages), **options)
 
     with pytest.raises(ValueError, match=message):
+        _ = [item async for item in paginated]
+    assert [request.method for request in api.sent] == ["GET"]
+
+
+async def test_a_cache_lifetime_on_a_page_that_turns_into_a_post_is_refused(storage: AsyncSqliteStorage) -> None:
+    """Refuse ``cache_ttl=`` on a later page with a body, a POST no cache stores, before sending it."""
+    api = _Api(_by_param_cursor)
+    client = Client(
+        base_url=_BASE,
+        policy=CallPolicy(rate=_RATE, cache=HttpCache(storage=storage)),
+        http=HttpOptions(transport=httpx2.MockTransport(api.handle)),
+    )
+    paginated = client.paginate("search", pager=cast("Any", _WrittenPostsLater()), cache_ttl=60.0)
+
+    with pytest.raises(ValueError, match=r"^cache_ttl= sets a cached response's lifetime, but a page with a body"):
         _ = [item async for item in paginated]
     assert [request.method for request in api.sent] == ["GET"]
 

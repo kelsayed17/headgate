@@ -84,7 +84,8 @@ A walk of POSTs takes its body as `payload=` (see [Walks of POSTs](#walks-of-pos
 the value its pager rewrites, not one encoded body. Its `params=` are the first page's query parameters, and a pager's
 parameter is added to them. A pager's reader may be an `Expect`: a page can be a declared answer like any other. Every
 other option applies to each page as it does to one `get` (or one `post`, in a walk of POSTs): `follow_redirects=False`
-makes a page's redirect raise as its 3xx, and `cache_ttl=` is each page's cache lifetime.
+makes a page's redirect raise as its 3xx, and `cache_ttl=` is each page's cache lifetime, which a page with a body,
+a POST no cache stores, refuses with `ValueError`.
 
 ## Strategies
 

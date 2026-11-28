@@ -16,7 +16,8 @@ import httpx2
 import pytest
 
 from headgate import CallPolicy, Client, Expect, HttpCache, HttpOptions, Reader, Route, as_json, nothing
-from headgate.pagination import LinkHeader
+from headgate.msgspec import reader
+from headgate.pagination import BodyCursor, LinkHeader
 from headgate.testing import FakeTransport
 
 if TYPE_CHECKING:
@@ -83,25 +84,52 @@ async def test_a_cache_lifetime_on_a_client_without_a_cache_is_refused() -> None
 
 
 @pytest.mark.parametrize(
-    ("method", "path", "routes", "message"),
+    ("methods", "path", "routes", "message"),
     [
-        ("POST", "x", (), r"the client's cache stores no POST /x: its methods= and paths= leave it out"),
-        ("GET", "y", (), r"the client's cache stores no GET /y: its methods= and paths= leave it out"),
-        ("GET", "x", (Route("/x", cache=None),), r"its route \(/x\) keeps its paths out of the cache"),
+        (("HEAD",), "x", (), r"the client's cache stores no GET /x: its methods= and paths= leave it out"),
+        (("GET",), "y", (), r"the client's cache stores no GET /y: its methods= and paths= leave it out"),
+        (("GET",), "x", (Route("/x", cache=None),), r"its route \(/x\) keeps its paths out of the cache"),
     ],
     ids=["method", "path", "route"],
 )
 async def test_a_cache_lifetime_on_a_call_the_cache_does_not_store_is_refused(
-    storage: AsyncSqliteStorage, method: str, path: LiteralString, routes: tuple[Route, ...], message: str
+    storage: AsyncSqliteStorage,
+    methods: tuple[str, ...],
+    path: LiteralString,
+    routes: tuple[Route, ...],
+    message: str,
 ) -> None:
-    """Refuse ``cache_ttl=`` on a call the cache never stores: a method or path its rules leave out, or a route's."""
+    """Refuse ``cache_ttl=`` on a read the cache never stores: a method or path its rules leave out, or a route's."""
     fake = FakeTransport()
-    policy = CallPolicy(cache=HttpCache(storage=storage, paths=("/x",)), routes=routes)
+    policy = CallPolicy(cache=HttpCache(storage=storage, methods=methods, paths=("/x",)), routes=routes)
     async with Client(base_url=_BASE, policy=policy, http=HttpOptions(transport=fake)) as client:
-        send = client.post if method == "POST" else client.get
         with pytest.raises(ValueError, match=rf"^cache_ttl= sets a cached response's lifetime, but {message}"):
-            await send(path, expect=nothing, cache_ttl=60.0)
+            await client.get(path, expect=nothing, cache_ttl=60.0)
     assert not fake.calls
+
+
+#: A walk's body, typed as its pager's.
+_QUERY: Final[dict[str, object]] = {"q": 1}
+
+
+def _no_cursor(page: list[int]) -> str | None:
+    """Return no cursor: the walk ends at its first page."""
+    del page
+    return None
+
+
+def _at(body: dict[str, object], cursor: str) -> dict[str, object]:
+    """Return *body* at *cursor*."""
+    return {**body, "cursor": cursor}
+
+
+async def test_a_cache_lifetime_on_a_walk_of_posts_is_refused(storage: AsyncSqliteStorage) -> None:
+    """Refuse ``cache_ttl=`` on a walk whose pages are POSTs, which no cache stores, where the walk is made."""
+    pager = BodyCursor[int, list[int], dict[str, object]](reader(list[int]), items=list, next=_no_cursor, put=_at)
+    policy = CallPolicy(cache=HttpCache(storage=storage))
+    async with Client(base_url=_BASE, policy=policy, http=HttpOptions(transport=FakeTransport())) as client:
+        with pytest.raises(ValueError, match=r"^cache_ttl= sets a cached response's lifetime, but a page with a body"):
+            client.paginate("x", payload=_QUERY, pager=pager, cache_ttl=60.0)
 
 
 async def test_a_cache_lifetime_on_a_call_the_cache_stores_is_sent(storage: AsyncSqliteStorage) -> None:

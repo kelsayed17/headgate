@@ -265,8 +265,9 @@ await client.get(
 )
 ```
 
-plus `body=` for a body (a `Body`: what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`, see
-[request bodies](streaming.md#request-bodies)) and `idempotency_key=` for a write. `stream()` takes the same options
+plus, on a verb with a body, `body=` (a `Body`: what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`,
+see [request bodies](streaming.md#request-bodies)) and `idempotency_key=` for a write, but no `cache_ttl=`: a cache
+stores only GETs and HEADs, so the type checker refuses a lifetime on a POST, PUT, PATCH, DELETE or QUERY. `stream()` takes the same options
 without `expect=`, `cache_ttl=` and `max_response_bytes=`, and `paginate()` takes `pager=` (which reads its pages),
 `max_pages=`, `on_limit=` and the same options but the body, applied to each page; a walk of POSTs takes `payload=`
 ([Walks of POSTs](pagination.md#walks-of-posts)).
@@ -283,10 +284,10 @@ text first, with `json.dumps` or the API's own format.
 so an entry stored with `cache_ttl=None` is served until its storage evicts it, past any `Cache-Control: max-age` and
 even past `no-store`, as an entry of `HttpCache(ttl=None)` is.
 
-The options are typed, so a wrapper can forward them with every key checked. `CallOptions` is the TypedDict of every
-per-call option but the body, which every verb and `paginate()` take, and all that `get()` and `head()` take;
-`RequestOptions` is a body verb's (`CallOptions` plus the body); `headgate.streaming.StreamOptions` is `stream()`'s
-(`RequestOptions` less `cache_ttl` and `max_response_bytes`); and `ViewOptions` is what `with_options()` takes.
+The options are typed, so a wrapper can forward them with every key checked. `CallOptions` is the TypedDict of a
+read's options, all that `get()`, `head()` and `paginate()` take; `RequestOptions` is a body verb's (`CallOptions`
+less `cache_ttl`, plus the body); `headgate.streaming.StreamOptions` is `stream()`'s (`RequestOptions` less
+`max_response_bytes`); and `ViewOptions` is what `with_options()` takes.
 `CallUrl` is what a verb takes as its URL: a literal `str`, a t-string or an absolute `httpx2.URL`. A computed `str`
 is a type error, so a path built from values is a t-string, `t"items/{item_id}"`, each value escaped into its own
 segment; a pre-built fragment goes in as `{fragment:raw}`, and a nested t-string splices as structure
