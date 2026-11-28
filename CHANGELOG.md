@@ -63,7 +63,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   (`Authorization: Bearer {'access': ..., 'refresh': ...}`, the refresh token included). Its class must override
   `attach`: a subclass of `CachedTokenAuth[dict[str, str]]` that keeps the default raises `TypeError` when it is
   defined, and the default `attach` raises `TypeError` for a token that is not a `str`, before anything is sent, where
-  the type is bound further down. Override `attach` to put the token on the request.
+  the type is bound further down, or may be text (`CachedTokenAuth[Any]`, `CachedTokenAuth[str | None]`). Override
+  `attach` to put the token on the request.
 
 ### Security
 

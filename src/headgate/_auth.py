@@ -30,7 +30,8 @@ import math
 import secrets
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Final, get_args, get_origin, override
+from types import UnionType
+from typing import TYPE_CHECKING, Any, ClassVar, Final, get_args, get_origin, override
 
 import httpx2
 
@@ -497,17 +498,23 @@ class Minted[TokenT]:
     lifetime: float
 
 
+#: What a token type may be read as that does not say it is not text: ``Any``, and a union, which may hold ``str``.
+_MAYBE_TEXT: Final = (Any, UnionType)
+
+
 def _token_type(cls: type) -> object | None:
     """Return the token type *cls* binds in its own ``CachedTokenAuth[...]`` base, when it is a class other than text.
 
-    ``None`` when *cls* binds none there, binds ``str``, or binds what is no class here (a type variable a subclass
-    binds later, a ``Literal``): the default :meth:`~CachedTokenAuth.attach` checks the token itself then.
+    ``None`` when *cls* binds none there, binds ``str``, or binds what may be text or is no class here (``Any``, a
+    union such as ``str | None``, a type variable a subclass binds later, a ``Literal``): the default
+    :meth:`~CachedTokenAuth.attach` checks the token itself then. ``Any`` and a union are classes on 3.14, so they are
+    named here.
     """
     for base in cls.__dict__.get("__orig_bases__", ()):
         if get_origin(base) is CachedTokenAuth:
             (token_type,) = get_args(base)
             kind = get_origin(token_type) or token_type
-            if isinstance(kind, type) and not issubclass(kind, str):
+            if isinstance(kind, type) and kind not in _MAYBE_TEXT and not issubclass(kind, str):
                 return token_type
     return None
 

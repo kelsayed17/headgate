@@ -11,7 +11,7 @@ call, before anything is sent.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, override
+from typing import TYPE_CHECKING, Any, ClassVar, override
 
 import pytest
 
@@ -86,5 +86,31 @@ async def test_a_struct_token_with_attach_is_accepted() -> None:
     fake = FakeTransport().reply("GET", "/x", Respond(json={}))
     async with Client(base_url="https://api.example", auth=_StructWithAttach(), http=HttpOptions(transport=fake)) as c:
         await c.get("x", expect=as_json)
+
+    assert fake.calls[0].headers["Authorization"] == "Bearer abc"
+
+
+class _AnyToken(CachedTokenAuth[Any]):
+    """A token typed ``Any``, which says nothing about whether the default attach can send it."""
+
+    @override
+    async def mint_token(self) -> tuple[Any, float]:
+        return "abc", 3600.0
+
+
+class _MaybeToken(CachedTokenAuth[str | None]):
+    """A token typed ``str | None``: a ``str`` when it is minted, so the default attach sends it."""
+
+    @override
+    async def mint_token(self) -> tuple[str | None, float]:
+        return "abc", 3600.0
+
+
+@pytest.mark.parametrize("auth", [_AnyToken(), _MaybeToken()], ids=["any", "optional-str"])
+async def test_a_token_type_that_may_be_text_keeps_the_default_attach(auth: CachedTokenAuth[Any]) -> None:
+    """Accept ``Any`` and ``str | None`` when the class is defined, and send a ``str`` token they mint."""
+    fake = FakeTransport().reply("GET", "/x", Respond(json={}))
+    async with Client(base_url="https://api.example", auth=auth, http=HttpOptions(transport=fake)) as client:
+        await client.get("x", expect=as_json)
 
     assert fake.calls[0].headers["Authorization"] == "Bearer abc"
