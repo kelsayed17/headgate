@@ -5,6 +5,7 @@ should not be held whole: a large download, or a server-sent event stream that n
 
 ## Streams
 
+<!-- docs-test: check -->
 ```python
 async with client.stream("exports/2026.csv") as stream:
     async for chunk in stream.aiter_bytes():
@@ -46,6 +47,7 @@ and `aiter_events()`.
 
 ## Server-sent events
 
+<!-- docs-test: check -->
 ```python
 async with client.events("feed") as stream:
     async for event in stream.aiter_events():
@@ -85,12 +87,13 @@ the same way (see [responses](responses.md#readers)).
 A verb takes **`body=`**, a value a flavor's `writer` wrote: the mirror of `expect=`, built once at import, so
 a writer takes only its own type.
 
+<!-- docs-test: check -->
 ```python
 from headgate.msgspec import writer
 
 NEW_ORDER = writer(NewOrder)
-...
-await self.post("orders", body=NEW_ORDER(order), expect=ORDER)
+
+placed = await client.post("orders", body=NEW_ORDER(order), expect=ORDER)
 ```
 
 It is sent with the writer's `Content-Type` (`application/json` for these codecs) unless the call's `headers=`, or
@@ -118,7 +121,14 @@ A `Multipart`'s files are an `UploadFiles`, as httpx2 takes them: `{"name": file
 alone or in a `(filename, file, content_type)` tuple, where the file is bytes, text or a binary file object; a file object that is
 neither a regular file nor in memory, such as a pipe, cannot be rewound, so the call is sent once. `Raw(...).replayable` and `Multipart(...).replayable` say which a body is.
 
+<!-- docs-test: check -->
 ```python
+from collections.abc import AsyncIterator
+from pathlib import Path
+
+import anyio
+
+
 async def chunks(path: Path) -> AsyncIterator[bytes]:
     async with await anyio.open_file(path, "rb") as f:
         while chunk := await f.read(64 * 1024):

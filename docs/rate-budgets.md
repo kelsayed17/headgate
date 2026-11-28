@@ -5,6 +5,7 @@ budget caps them, then for its turn at the configured rate and for any pause the
 client side is cheaper than collecting 429s, and a budget that listens to the server stops a fleet of callers from
 hammering an API that has said "slow down".
 
+<!-- docs-test: run -->
 ```python
 from headgate import CallPolicy, Client, Rate, RateBudget, Route
 

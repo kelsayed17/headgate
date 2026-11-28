@@ -4,6 +4,7 @@ A client caches when its policy says so: `CallPolicy(cache=HttpCache(...))`. The
 [hishel](https://hishel.com)'s, made safe to share between credentials and to fail. It sits below the retry layer and
 above the rate budget, so a hit returns before any retry and spends no rate turn.
 
+<!-- docs-test: run -->
 ```python
 from hishel import AsyncSqliteStorage
 
@@ -152,12 +153,13 @@ The caller-driven alternative to a cache: keep the `Validator` (`ETag`, `Last-Mo
 back. The call sends `If-None-Match` / `If-Modified-Since` and returns `Fresh(value, validator)` for a new
 representation, or `NotModified(validator)` for a 304. headgate stores nothing; the representation is yours.
 
+<!-- docs-test: run -->
 ```python
 from headgate.cache import Fresh, NotModified, Validator, conditional
 from headgate.msgspec import reader
 
 
-async def refresh(client: CatalogClient, held: Series, validator: Validator | None) -> tuple[Series, Validator]:
+async def refresh(client: Client, held: Series, validator: Validator | None) -> tuple[Series, Validator]:
     result = await client.get("series/GDP", expect=conditional(reader(Series), validator=validator))
     match result:
         case Fresh(value=series, validator=new):

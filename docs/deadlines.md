@@ -14,12 +14,14 @@ each send's timeouts inside it.
 3. the first matching `Route(fragment, deadline=...)` in `CallPolicy(routes=...)`;
 4. the policy's `deadline`.
 
+<!-- docs-test: run -->
 ```python
 from headgate import Route, CallPolicy
 
 policy = CallPolicy(deadline=20.0, routes=(Route("/reports", deadline=300.0),))
 ```
 
+<!-- docs-test: check -->
 ```python
 report = await client.get(t"reports/{report_id}", expect=REPORT, deadline=600.0)
 ```
@@ -53,7 +55,10 @@ the per-read timeout bounds a stream**: each read waits at most `Timeouts.read`,
 past its deadline for as long as it does. So a stream's own `timeout=Timeouts(read=...)` may be longer than its
 deadline. To bound the whole stream, wrap the block in `asyncio.timeout`:
 
+<!-- docs-test: check -->
 ```python
+import asyncio
+
 async with asyncio.timeout(600), client.stream("export.csv") as stream:
     async for chunk in stream.aiter_bytes():
         sink.write(chunk)
@@ -71,6 +76,7 @@ The defaults are
 set. A client computing a deadline from its timeouts reads them there, such as one that leaves every attempt its
 whole connect and read timeout:
 
+<!-- docs-test: run -->
 ```python
 from headgate import RetryPolicy, Timeouts
 
@@ -78,6 +84,7 @@ SLOW_READ = Timeouts(read=120.0)
 RETRY = RetryPolicy()
 
 phases = SLOW_READ.over(Timeouts.DEFAULT)
+assert phases.connect is not None and phases.read is not None  # Timeouts.DEFAULT sets every phase
 SLOW_READ_DEADLINE = RETRY.attempts * (phases.connect + phases.read) + (RETRY.attempts - 1) * RETRY.backoff.max_wait
 ```
 
@@ -90,6 +97,7 @@ the policy's deadline), on a view, or on a call. Only the phases a `Timeouts` se
 instead is always allowed; cutting the timeouts is what a short deadline is for. To give a slow endpoint a long read
 timeout, raise the deadline with it:
 
+<!-- docs-test: run -->
 ```python
 reports = client.with_options(timeout=Timeouts(read=300.0), deadline=600.0)
 ```

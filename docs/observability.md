@@ -8,6 +8,7 @@ observers are readable on demand. What to record, where, and at what level is th
 
 An observer is any object with a `notify(event)` method, passed to the client as `observers=(...)`:
 
+<!-- docs-test: run -->
 ```python
 from headgate import Client
 from headgate.events import CallFinished, Event, RateLimited
@@ -57,6 +58,7 @@ observer raises never reaches the call: it is swallowed and counted per observer
 
 `pip install 'headgate[otel]'` (it needs only `opentelemetry-api`; bring your own SDK):
 
+<!-- docs-test: run -->
 ```python
 from headgate import Client
 from headgate.otel import OpenTelemetryObserver

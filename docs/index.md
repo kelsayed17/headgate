@@ -145,6 +145,7 @@ strings](https://peps.python.org/pep-0750/), so each value is escaped into its o
 A client for a few GitHub REST endpoints. The full version, with its tests, is
 [`examples/github_client.py`](https://github.com/kelsayed17/headgate/blob/main/examples/github_client.py).
 
+<!-- docs-test: run -->
 ```python
 from http import HTTPStatus
 from typing import Self
@@ -183,6 +184,9 @@ class GitHub:
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
         await self._http.aclose()
 
     async def repository(self, owner: str, name: str) -> Repository | None:
@@ -192,6 +196,7 @@ class GitHub:
         return self._http.paginate(t"repos/{owner}/{name}/issues", pager=ISSUE_PAGES)
 ```
 
+<!-- docs-test: check -->
 ```python
 async with GitHub(token) as github:
     repository = await github.repository("python", "cpython")

@@ -87,6 +87,7 @@ engine.
 
 ## Reading a failure
 
+<!-- docs-test: check -->
 ```python
 from headgate import ClientError, UpstreamStatusError
 

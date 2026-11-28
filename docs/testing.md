@@ -17,6 +17,7 @@ All three are read when a client is **constructed**, so build the SDK inside the
 already exists changes nothing, and the block need not stay open while the client is used. Breaker state needs no
 seam: each client keeps its own.
 
+<!-- docs-test: run -->
 ```python
 from collections.abc import Iterator
 
@@ -36,6 +37,7 @@ def catalog() -> Iterator[CatalogClient]:
 
 A route table of canned replies and a log of every request:
 
+<!-- docs-test: run -->
 ```python
 fake = (
     FakeTransport()
@@ -66,6 +68,7 @@ be tested too: a private address among them is refused with `ForbiddenDestinatio
 name that does not resolve, a `TransportError`. The guard's checks still run, so a private IP literal is refused
 without any lookup.
 
+<!-- docs-test: run -->
 ```python
 fake = FakeTransport().reply("GET", "/v1/ping", 200).resolve("internal.example.com", "10.0.0.7")
 ```
@@ -121,6 +124,7 @@ matches it, when that route sets `rate=`, or the default; without a `url`, the d
 `rate=`. Neither sends anything. Whether a response is served from the cache shows through the front door too: a
 second call that a fake network never sees.
 
+<!-- docs-test: run -->
 ```python
 from headgate.testing import FakeTransport, budget_for, cache_of, fake_network
 
@@ -157,6 +161,7 @@ own: `Paginated(pages, items_of)`, where `pages` is a function of no arguments t
 is called (an async generator function, say), and `items_of` returns the items on one page. It is the class
 `paginate()` returns, so the code under test iterates, collects and reads pages exactly as it does against the SDK:
 
+<!-- docs-test: run -->
 ```python
 from collections.abc import AsyncIterator
 
@@ -190,6 +195,7 @@ response, whether that response was closed, and the error raised.
 | `Slow(seconds, then=Respond())` | waits (honoring the read timeout), then takes `then` |
 | `RefusedStream()` | resets the HTTP/2 stream with `REFUSED_STREAM`, exactly as httpx2 raises it |
 
+<!-- docs-test: run -->
 ```python
 from headgate.testing import ConnectFail, DropMidBody, FaultyTransport, Respond
 
@@ -206,6 +212,7 @@ sent and what it got. A send past the end of the schedule raises `AssertionError
 vcrpy 8.3 and later record httpx2's own transports, so they see what headgate's default network transport sends, once
 per attempt, below the whole stack. `CassetteFilter` keeps credentials out of the cassette:
 
+<!-- docs-test: run -->
 ```python
 import pytest
 
@@ -240,6 +247,7 @@ A test that asserts on the first failure, as the fake network sends it, wants no
 route asks for), no breaker (the client never reads a registry, so it cannot be refused by one another client opened),
 and a budget that paces nothing, also for its routes' `rate=` and a shared `RateBudget` passed in.
 
+<!-- docs-test: run -->
 ```python
 from collections.abc import Iterator
 

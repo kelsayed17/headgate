@@ -68,6 +68,8 @@ dev = [
     "mutmut>=3.8",
     "vcrpy>=8.3",
     "typos>=1.51.1",
+    "cattrs>=25.1",
+    "orjson>=3.10",
 ]
 docs = ["zensical>=0.0.72"]
 
