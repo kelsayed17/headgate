@@ -26,6 +26,7 @@ import httpx2
 import pytest
 
 from headgate import (
+    Auth,
     BreakerPolicy,
     Client,
     ClientError,
@@ -324,8 +325,15 @@ async def test_a_retried_request_counts_one_failure(breaker: CircuitBreaker) -> 
     assert breaker.failure_count == 1, "but one failure against the host"
 
 
-class _RefusingAuth(httpx2.Auth):
+class _RefusingAuth(Auth):
     """An auth flow that fails to mint, for a configuration reason the host never saw."""
+
+    credential_headers: ClassVar = frozenset({"authorization"})
+    credential_params: ClassVar = frozenset[str]()
+
+    @override
+    def credential_identity(self) -> bytes:
+        return b"refusing"
 
     @override
     def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:

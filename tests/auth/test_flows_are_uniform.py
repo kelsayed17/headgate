@@ -11,7 +11,8 @@ Two rules:
   default flows, so on a class that overrides ``async_auth_flow`` they are inert. A flow that needs the body reads it
   itself (``await request.aread()``).
 
-The auth classes are found by walking ``httpx2.Auth``'s subclasses defined under ``headgate``.
+The auth classes are found by walking ``httpx2.Auth``'s subclasses defined under ``headgate``, but for
+:class:`~headgate.Auth`, the base that declares what an auth stamps and runs no flow of its own.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from __future__ import annotations
 import httpx2
 import pytest
 
-from headgate._auth import CachedTokenAuth, QueryParamAuth, StaticHeaderAuth
+from headgate._auth import Auth, CachedTokenAuth, QueryParamAuth, StaticHeaderAuth
 
 
 def _auths() -> list[type[httpx2.Auth]]:
@@ -28,7 +29,7 @@ def _auths() -> list[type[httpx2.Auth]]:
     while pending:
         cls = pending.pop()
         pending.extend(cls.__subclasses__())
-        if cls.__module__.startswith("headgate."):
+        if cls.__module__.startswith("headgate.") and cls is not Auth:
             found.add(cls)
     return sorted(found, key=lambda c: c.__qualname__)
 

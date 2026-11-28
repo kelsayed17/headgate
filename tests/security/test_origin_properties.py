@@ -93,7 +93,7 @@ def test_no_credential_reaches_an_untrusted_origin(kind: str, first: str, chain:
             # A drawn downgrade from https to http ends the chain as a raised 3xx; the hops before it still count.
             with contextlib.suppress(UpstreamStatusError):
                 await client.get(
-                    httpx2.URL(start if first else "h0"),
+                    httpx2.URL(start),
                     expect=RESPONSE,
                     headers={"Cookie": "c", "Proxy-Authorization": "p"},
                 )

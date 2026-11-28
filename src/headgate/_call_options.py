@@ -69,11 +69,13 @@ class _Bodies(TypedDict, total=False):
 class CallOptions(_Buffered, total=False, closed=True):
     """The per-call options of every verb and of :meth:`~headgate.Client.paginate`, beyond the body.
 
-    An option left out takes the view's, the route's or the policy's; ``None`` is off.
+    They are all ``get()`` and ``head()`` take, since a GET or HEAD has no body. An option left out takes the view's,
+    the route's or the policy's; ``None`` is off.
 
     * ``params``: the query, ``Mapping[str, object]`` so that a client can pass a TypedDict (a TypedDict is assignable
-      to no narrower mapping). Its values are encoded the way httpx2 encodes a mapping: a list or tuple repeats the key
-      once per item, and any value that is not a ``str``, number, bool or ``None`` is sent as its ``str()``.
+      to no narrower mapping). A value is a ``str``, number, bool or ``None``; an ``Enum``, sent as its value; a
+      ``UUID`` or ``Decimal``, sent as its text; a ``date``, ``datetime`` or ``time``, in ISO 8601; or a list or tuple
+      of them, which repeats the key once per item. Any other value raises ``TypeError`` before anything is sent.
     * ``headers``: added to the client's; a clash is won by the call.
     * ``timeout``: :class:`~headgate.Timeouts` whose set phases replace the view's or the client's.
     * ``deadline``: seconds this call may take in all, or ``None`` for no deadline.

@@ -36,7 +36,8 @@ policy = TransportPolicy(
 
 `retry=None` sends once, on the policy, a route, a view or a call: it is `RetryPolicy(attempts=1)`.
 `headgate.retry.RETRY_STATUSES` is the default `statuses`, to extend rather than restate:
-`RetryPolicy(statuses=RETRY_STATUSES | {520})`.
+`RetryPolicy(statuses=RETRY_STATUSES | {520})`. `methods` and `statuses` are frozensets: a bare `str`
+(`methods="GET"`, which would name the methods `G`, `E` and `T`) or a number raises `TypeError`.
 
 ## What is re-sent
 

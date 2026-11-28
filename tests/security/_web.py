@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate import Client, HttpOptions, Rate, TransportPolicy
+from headgate import Auth, Client, HttpOptions, Rate, TransportPolicy
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -40,7 +40,7 @@ class Web:
     def client(
         self,
         *,
-        auth: httpx2.Auth | None = None,
+        auth: Auth | None = None,
         http: HttpOptions | None = None,
         base_url: str = BASE,
         middleware: tuple[Middleware, ...] = (),

@@ -48,7 +48,7 @@ class _Stamper:
 
 def test_the_config_filters_the_credential_headers_and_what_auths_declare() -> None:
     """Filter the standard credential headers, the stamper's names, and the names given."""
-    config = CassetteFilter(auths=(_Stamper(), object()), headers=("X-Session",), params=("user_key",)).vcr_config()
+    config = CassetteFilter(auths=(_Stamper(),), headers=("X-Session",), params=("user_key",)).vcr_config()
 
     assert config["filter_headers"] == ["authorization", "cookie", "proxy-authorization", "x-api-key", "x-session"]
     assert config["filter_query_parameters"] == ["appid", "user_key"]

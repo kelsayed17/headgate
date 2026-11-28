@@ -21,6 +21,7 @@ import httpx2
 import pytest
 
 from headgate import (
+    Auth,
     AuthError,
     BreakerPolicy,
     CachedTokenAuth,
@@ -88,7 +89,7 @@ def _client(
     *responses: httpx2.Response | int,
     policy: TransportPolicy | None = None,
     http: HttpOptions | None = None,
-    auth: httpx2.Auth | None = None,
+    auth: Auth | None = None,
 ) -> Client:
     """Return a client over a script serving *responses*, sending each call once unless *policy* says otherwise."""
     transport = Script(*responses).transport()

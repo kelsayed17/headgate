@@ -20,6 +20,7 @@ import httpx2
 import pytest
 
 from headgate import (
+    Auth,
     BreakerPolicy,
     CachedTokenAuth,
     Client,
@@ -52,7 +53,7 @@ def _client(
     handler: Callable[[httpx2.Request], httpx2.Response],
     *,
     retry: RetryPolicy | None = None,
-    auth: httpx2.Auth | None = None,
+    auth: Auth | None = None,
     breaker: BreakerPolicy | None = None,
 ) -> Client:
     """Return a client over *handler* that sends each call once unless *retry* says otherwise."""

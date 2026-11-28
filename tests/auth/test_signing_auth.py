@@ -15,6 +15,7 @@ import httpx2
 import pytest
 
 from headgate import (
+    Auth,
     AuthError,
     Client,
     HttpCache,
@@ -79,9 +80,7 @@ class _QuerySigner(SigningAuth):
         request.url = request.url.copy_set_param("signature", "sig")
 
 
-def _client(
-    auth: httpx2.Auth, answer: Callable[[httpx2.Request], httpx2.Response]
-) -> tuple[Client, list[httpx2.Request]]:
+def _client(auth: Auth, answer: Callable[[httpx2.Request], httpx2.Response]) -> tuple[Client, list[httpx2.Request]]:
     """Return a client signing with *auth* over *answer*, and the list of the requests it sent, as sent."""
     sent: list[httpx2.Request] = []
 
@@ -250,12 +249,30 @@ async def test_each_attempt_is_signed_once_after_the_last_middleware() -> None:
     assert auth.signed == len(sent)
 
 
-class _Wrapping(httpx2.Auth):
-    """Runs a ``SigningAuth``'s flow inside its own, so the client's auth is not the signer."""
+class _Wrapper(Auth):
+    """An auth around a ``SigningAuth``, declaring what it declares, so the client's auth is not the signer."""
 
     def __init__(self, auth: SigningAuth) -> None:
         """Wrap *auth*."""
         self._auth = auth
+
+    @property
+    @override
+    def credential_headers(self) -> frozenset[str]:
+        return self._auth.credential_headers
+
+    @property
+    @override
+    def credential_params(self) -> frozenset[str]:
+        return self._auth.credential_params
+
+    @override
+    def credential_identity(self) -> bytes:
+        return self._auth.credential_identity()
+
+
+class _Wrapping(_Wrapper):
+    """Runs a ``SigningAuth``'s flow inside its own."""
 
     @override
     async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
@@ -281,12 +298,8 @@ async def test_a_signer_that_is_not_the_clients_auth_never_signs() -> None:
     assert auth.signed == 0
 
 
-class _Driving(httpx2.Auth):
+class _Driving(_Wrapper):
     """Drives a ``SigningAuth``'s flow to its end, forwarding each response back, inside its own flow."""
-
-    def __init__(self, auth: SigningAuth) -> None:
-        """Wrap *auth*."""
-        self._auth = auth
 
     @override
     async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:

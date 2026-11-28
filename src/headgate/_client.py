@@ -33,8 +33,6 @@ import contextlib
 import copy
 import functools
 import math
-from collections.abc import Mapping
-from collections.abc import Set as AbstractSet
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from string.templatelib import Template
@@ -42,7 +40,7 @@ from typing import TYPE_CHECKING, Final, Literal, Self, Unpack, cast, final, ove
 
 import httpx2
 
-from headgate._auth import MINTING, failed_on_auth_hop, mint_hop_failure
+from headgate._auth import MINTING, Auth, failed_on_auth_hop, mint_hop_failure
 from headgate._body import read_capped, read_head
 from headgate._call_options import (
     BODY_HINTS,
@@ -99,7 +97,7 @@ from headgate._options import (
     match_route,
     reject_upstream_httpx,
 )
-from headgate._request_body import Json, lowered
+from headgate._request_body import Json, WireValue, lowered, wire_value
 from headgate._responses import Expect, Reader, accepts, nothing
 from headgate._stack import Credentials, build_http_client, build_transport_stack
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
@@ -108,6 +106,7 @@ from headgate.breaker import BreakerRegistry, CircuitBreaker
 from headgate.breaker._breaker import BreakerOpenError
 from headgate.breaker._registry import NO_BREAKER
 from headgate.cache._transport import (
+    HAS_BODY,
     MAX_RESPONSE_BYTES,
     STREAMED,
     UNCACHED,
@@ -134,7 +133,7 @@ from headgate.retry._policy import NETWORK_ERRORS, REPLAYABLE_BODY, RETRY_OUTCOM
 from headgate.streaming._stream import OpenStream
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Sequence
+    from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
     from types import TracebackType
 
     from headgate._core import Observer, Timing
@@ -154,9 +153,6 @@ __all__ = ["Built", "Client", "Method", "built_with"]
 
 type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "QUERY"]
 """The HTTP methods a client sends: one verb each, and :meth:`Client.stream`'s ``method``."""
-
-#: A query value httpx2 encodes itself.
-type _QueryValue = str | int | float | bool | None
 
 #: How much of a refused or failed streamed response is read, for the ``ClientError``'s body snippet.
 _STREAM_ERROR_HEAD_BYTES = 4096
@@ -180,6 +176,15 @@ _REPORTED = "headgate.reported"
 #: the call's own ``headers=`` reach that origin and trusted ones only (see :class:`~headgate._core.ExplicitHeaders`).
 _WALK_ORIGIN = ContextVar[httpx2.Origin | None]("headgate_walk_origin", default=None)
 
+#: What ``get()`` and ``head()`` say of a body keyword: neither method takes one, and ``query()`` is the read that does.
+_NO_BODY_HINTS: Final = {
+    method: dict.fromkeys(
+        ("body", *BODY_HINTS),
+        f"a {method} has no body, and the cache does not key one: use query(), the safe read with a body",
+    )
+    for method in ("GET", "HEAD")
+}
+
 #: What ``paginate`` says of a body keyword: a walk's body is the raw value its pager rewrites, ``query=``.
 _WALK_BODY = "a walk's body is query=, the value its pager rewrites for each page"
 _WALK_HINTS = dict.fromkeys(("body", "json", "data", "content", "files"), _WALK_BODY)
@@ -198,7 +203,7 @@ class _Call:
 
     method: Method
     url: CallUrl
-    options: RequestOptions | StreamOptions
+    options: CallOptions | RequestOptions | StreamOptions
 
 
 class _BlockError(Exception):
@@ -292,11 +297,12 @@ class Client:
     **URLs.** A t-string URL (``t"series/{series_id}"``) is rendered by :func:`headgate._url.render_path`, which
     escapes every interpolation as one path segment and raises ``ValueError`` for a value no segment can hold (as
     :func:`~headgate._url.escape_segment` does): that is a programming error at the call site. Its template is the
-    call's route in events. An ``httpx2.URL`` is passed through verbatim, so a paginator can forward an absolute cursor
-    URL from a response body; a literal ``str`` is passed through the same way. A computed ``str``, such as an f-string,
-    does not type-check, because it skipped escaping. A URL httpx2 cannot parse raises the root ``ClientError``, since
-    such a URL often comes from the wire rather than the code; a redirect to one is the host's failure, a
-    ``TransportError``. Every message names a URL redacted and cut to a few hundred characters.
+    call's route in events. An absolute ``httpx2.URL`` is passed through verbatim, so a paginator can forward a cursor
+    URL from a response body; a literal ``str`` is passed through the same way. A relative ``httpx2.URL`` raises
+    ``TypeError``, since its only use would be to skip escaping, and so does a URL of any other kind. A computed
+    ``str``, such as an f-string, does not type-check, because it skipped escaping. A URL httpx2 cannot parse raises the
+    root ``ClientError``, since such a URL often comes from the wire rather than the code; a redirect to one is the
+    host's failure, a ``TransportError``. Every message names a URL redacted and cut to a few hundred characters.
 
     **Time.** The client takes its timing from :func:`headgate.timing.current_timing` when it is built.
     """
@@ -306,7 +312,7 @@ class Client:
         *,
         base_url: str,
         rate: Rate | RateBudget | None = None,
-        auth: httpx2.Auth | None = None,
+        auth: Auth | None = None,
         policy: TransportPolicy = _DEFAULT_POLICY,
         http: HttpOptions = _DEFAULT_HTTP,
         observers: Sequence[Observer] = (),
@@ -327,17 +333,17 @@ class Client:
         *observers* receive the client's events (see :mod:`headgate.events`), and *middleware* runs once per attempt,
         in order, inside the retry layer (see :class:`~headgate.Middleware`).
 
-        :raises TypeError: for an argument of the wrong kind: an upstream ``httpx`` *auth*, a *rate* that is neither
+        :raises TypeError: for an argument of the wrong kind: an *auth* that is not a :class:`~headgate.Auth` (a plain
+            ``httpx2.Auth`` declares nothing it stamps) or is an upstream ``httpx`` one, a *rate* that is neither
             a ``Rate``, a ``RateBudget`` nor ``None``, such as a bare number, *observers* or *middleware* that are not
             a sequence, a middleware that does not declare its credentials, and a *base_url*, *policy* or *http* that
             is not the kind it names.
-        :raises ClientConfigurationError: for a cache partitioned by credential with an *auth* that does not declare
-            its credentials (see :class:`~headgate.cache.Partition`).
         """
         check_kind("base_url", base_url, str, "the API root, such as 'https://api.example.com/v1'")
         check_kind("policy", policy, TransportPolicy, "TransportPolicy(...)")
         check_kind("http", http, HttpOptions, "HttpOptions(...)")
         reject_upstream_httpx(auth, what="auth")
+        _check_auth(auth)
         check_kind(
             "rate", rate, (Rate, RateBudget, type(None)), "a Rate, such as Rate.per_second(10), a RateBudget or None"
         )
@@ -436,9 +442,13 @@ class Client:
         url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
-        **options: Unpack[RequestOptions],
+        **options: Unpack[CallOptions],
     ) -> T:
-        """Send a GET and read the reply through *expect*. See :class:`Client`."""
+        """Send a GET and read the reply through *expect*. See :class:`Client`.
+
+        A GET takes no ``body=``: it has no meaning there, and the cache keys an entry by its URL alone. A read with a
+        body is :meth:`query`.
+        """
         call = _Call("GET", url, options)
         return await self._request(call, expect)
 
@@ -507,21 +517,22 @@ class Client:
         url: CallUrl,
         *,
         expect: Reader[T] | Expect[T],
-        **options: Unpack[RequestOptions],
+        **options: Unpack[CallOptions],
     ) -> T: ...
     @overload
-    async def head(self, url: CallUrl, **options: Unpack[RequestOptions]) -> None: ...
+    async def head(self, url: CallUrl, **options: Unpack[CallOptions]) -> None: ...
     async def head(
         self,
         url: CallUrl,
         *,
         expect: Reader[object] | Expect[object] = nothing,
-        **options: Unpack[RequestOptions],
+        **options: Unpack[CallOptions],
     ) -> object:
         """Send a HEAD and read the reply through *expect*: by default :data:`~headgate.nothing`, as a HEAD has no body.
 
         A reader still has the status line and headers, ``Content-Length`` and ``Content-Encoding`` included, so
-        ``expect=`` reads a header off a HEAD; the size cap is not applied to a body that does not exist.
+        ``expect=`` reads a header off a HEAD; the size cap is not applied to a body that does not exist. It takes no
+        ``body=``, as :meth:`get` takes none.
         """
         call = _Call("HEAD", url, options)
         return await self._request(call, expect)
@@ -557,6 +568,8 @@ class Client:
           httpx2 error: it propagates unchanged, the breaker is charged nothing for it, and ``CallFinished`` reports
           the status the stream opened with and no error.
 
+        A GET or HEAD stream takes no ``body=``, as :meth:`get` takes none: ``method="QUERY"`` is the read with a body.
+
         ``last_event_id=`` sends ``Last-Event-ID`` (when not empty, and in place of one in ``headers=``), to resume a
         server-sent event stream after the last event a previous :class:`~headgate.streaming.Stream` saw (its
         ``last_event_id``).
@@ -565,6 +578,12 @@ class Client:
         """
         check_options("stream", options, STREAM_KEYS, BODY_HINTS)
         check_overrides(options)
+        if method in _NO_BODY_HINTS and options.get("body") is not None:
+            msg = (
+                f"stream() takes no body= for a {method}: a {method} has no body, and the cache does not key one: use "
+                "method='QUERY', the safe read with a body"
+            )
+            raise TypeError(msg)
         if bool(last_event_id):
             # Merged case-insensitively, so it replaces a Last-Event-ID however headers= spelled it.
             headers = httpx2.Headers(options.get("headers"))
@@ -728,7 +747,10 @@ class Client:
 
         See :meth:`_dispatch` for how the last three read the body.
         """
-        check_options(call.method.lower(), call.options, REQUEST_KEYS, BODY_HINTS)
+        if call.method in _NO_BODY_HINTS:
+            check_options(call.method.lower(), call.options, CALL_KEYS, _NO_BODY_HINTS[call.method])
+        else:
+            check_options(call.method.lower(), call.options, REQUEST_KEYS, BODY_HINTS)
         check_overrides(call.options)
         spec: Expect[T] = _expectation(expect)
         prepared = self._prepare(call)
@@ -820,9 +842,10 @@ class Client:
 
         Raises ``ValueError`` for a t-string value no path segment can hold, for a call that would follow redirects
         on a client with a ``response_check``, for a ``deadline=`` that is not positive and finite and for a ``Json``
-        body JSON cannot carry; ``TypeError`` for a ``body=`` that is no ``Body``; and ``ClientError`` for a URL httpx2
-        cannot parse.
+        body JSON cannot carry; ``TypeError`` for a URL that is neither a ``str``, a t-string nor an absolute
+        ``httpx2.URL``, and for a ``body=`` that is no ``Body``; and ``ClientError`` for a URL httpx2 cannot parse.
         """
+        _check_url(call.url)
         if isinstance(call.url, Template):
             url, route = render_path(call.url), route_template(call.url)
         else:
@@ -875,8 +898,7 @@ class Client:
             context.put(STREAMED, value=True)
         context.follow_redirects = follow
         self._stamp_route(context, call, route_options, path)
-        if not body.replayable:
-            context.put(REPLAYABLE_BODY, value=False)
+        _mark_body(context, body, given=options.get("body") is not None)
         self._stamp_idempotency_key(request, context, options.get("idempotency_key"))
         # The cache transport only setdefaults the client's own TTL, so a per-call TTL stamped here wins.
         if "cache_ttl" in options:
@@ -923,7 +945,7 @@ class Client:
             return SEND_ONCE if retry is None else retry
         return None
 
-    def _follows(self, options: RequestOptions | StreamOptions) -> bool:
+    def _follows(self, options: CallOptions | RequestOptions | StreamOptions) -> bool:
         """Return whether a call with *options* follows redirects: its own choice, else the view's, the client's."""
         if "follow_redirects" in options:
             return options["follow_redirects"]
@@ -1205,6 +1227,47 @@ class Client:
         return replace(self._site(prepared), attempts=prepared.context.attempt - 1)
 
 
+def _mark_body(context: CallContext, body: Lowered, *, given: bool) -> None:
+    """Say on *context* what the layers below need of a call's *body*: that it was *given*, and if it is one-shot."""
+    if given:
+        context.put(HAS_BODY, value=True)
+    if not body.replayable:
+        context.put(REPLAYABLE_BODY, value=False)
+
+
+def _check_url(url: object) -> None:
+    """Refuse a call's *url* unless it is a ``str``, a t-string or an absolute ``httpx2.URL``.
+
+    A relative ``httpx2.URL`` is the one escape from escaping a t-string does not make greppable, and every URL a pager
+    forwards from the wire is absolute, so it has no other use.
+
+    :raises TypeError: naming what to write instead.
+    """
+    check_kind("url", url, (str, Template, httpx2.URL), "a literal str, a t-string or an absolute httpx2.URL")
+    if isinstance(url, httpx2.URL) and not url.is_absolute_url:
+        msg = (
+            "a relative httpx2.URL skips escaping: write a t-string, t'items/{uid}', or {fragment:raw} for a "
+            f"pre-built fragment (got {loggable_url(str(url))!r})"
+        )
+        raise TypeError(msg)
+
+
+def _check_auth(auth: object) -> None:
+    """Refuse an *auth* that is not a :class:`~headgate.Auth`, whose credentials the guard could not know to withhold.
+
+    A subclass is required, not ``isinstance``: ``Auth.register`` makes a virtual subclass that declares nothing.
+
+    :raises TypeError: naming its class and what to write instead.
+    """
+    if auth is not None and Auth not in type(auth).__mro__:
+        msg = (
+            f"auth= takes a headgate.Auth, which declares what it stamps (got {type(auth).__qualname__}): subclass "
+            "headgate.Auth, or use StaticHeaderAuth, and declare the headers and query parameters it sets in "
+            "credential_headers and credential_params"
+        )
+        raise TypeError(msg)
+
+
 def _route_rate(route: Route) -> tuple[Rate | RateBudget | None, bool]:
     """Return the rate *route* sets, and whether it sets one; ``None`` paces nothing of the route's own."""
     options = route.options
@@ -1250,38 +1313,17 @@ def _registry_of(policy: TransportPolicy, timing: Timing) -> BreakerRegistry | N
     return registry
 
 
-def _query_pairs(params: Mapping[str, object]) -> list[tuple[str, _QueryValue]]:
-    """Flatten *params* into the ``(key, value)`` pairs httpx2 encodes, exactly as httpx2 flattens a mapping.
+def _query_pairs(params: Mapping[str, object]) -> list[tuple[str, WireValue]]:
+    """Flatten *params* into the ``(key, value)`` pairs httpx2 encodes: a list or tuple repeats its key.
 
-    :raises TypeError: for a value no query parameter can carry (see :data:`_NESTED`), before anything is sent.
+    :raises TypeError: for a value with no wire meaning (see :func:`~headgate._request_body.wire_value`), a list or
+        tuple inside another among them, before anything is sent.
     """
-    pairs: list[tuple[str, _QueryValue]] = []
+    pairs: list[tuple[str, WireValue]] = []
     for key, value in params.items():
         items = value if isinstance(value, list | tuple) else (value,)
-        pairs.extend((key, _query_value(key, item)) for item in items)
+        pairs.extend((key, wire_value("params=", key, item)) for item in items)
     return pairs
-
-
-#: The values a query parameter cannot carry: a container, whose ``str()`` is its Python ``repr``, and raw bytes. A
-#: list or tuple of scalars repeats its key; one inside another is refused.
-_NESTED: Final = (Mapping, AbstractSet, bytes, bytearray, memoryview, list, tuple)
-
-
-def _query_value(key: str, value: object) -> _QueryValue:
-    """Return *value* if httpx2 encodes it natively, else its ``str()``, which is what a ``UUID`` or an ``Enum`` means.
-
-    :raises TypeError: for a value in :data:`_NESTED`, naming *key* and the value's type.
-    """
-    if isinstance(value, str | int | float | bool | None):
-        return value
-    # Checked only past the common case, since an ABC's isinstance check costs more than the native ones.
-    if isinstance(value, _NESTED):
-        msg = (
-            "params= takes a str, int, float, bool or None for each value, or a list or tuple of them (got"
-            f" {type(value).__name__} under {key!r}): encode a nested value into text first, such as with json.dumps"
-        )
-        raise TypeError(msg)
-    return str(value)
 
 
 def _encoded_type(request: httpx2.Request, body: Lowered) -> str | None:

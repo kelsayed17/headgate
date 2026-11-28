@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
-from headgate import Client, HttpOptions, RequestOptions, Timeouts, TransportPolicy, nothing
+from headgate import CallOptions, Client, HttpOptions, Timeouts, TransportPolicy, nothing
 from headgate._options import httpx_timeout
 from headgate.testing import FakeTransport
 
@@ -94,7 +94,7 @@ async def test_a_calls_timeout_longer_than_its_deadline_is_refused() -> None:
         pytest.param({"deadline": 1.0}, id="a-short-deadline-alone"),
     ],
 )
-async def test_a_calls_timeout_that_fits_is_sent(options: RequestOptions) -> None:
+async def test_a_calls_timeout_that_fits_is_sent(options: CallOptions) -> None:
     """Send a call whose timeout fits its own deadline, and one that only shortens the deadline."""
     client = _client()
     await client.get("x", expect=nothing, **options)

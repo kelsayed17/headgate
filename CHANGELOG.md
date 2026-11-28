@@ -6,6 +6,97 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ## [Unreleased]
 
+### Added
+
+- `headgate.Auth`, the one type `Client(auth=)` takes: an `httpx2.Auth` that declares the headers and query parameters
+  it stamps (`credential_headers`, `credential_params`, each a `frozenset` of names, as class attributes or
+  properties) and names its credential (`credential_identity()`). A subclass that leaves one out cannot be built.
+  `BearerAuth`, `StaticHeaderAuth`, `QueryParamAuth`, `SigningAuth` and `CachedTokenAuth` all derive from it. It is
+  `headgate.security.CredentialStamper` made a base class, and derives from it, so the contract is defined once; the
+  protocol remains for a middleware that has a credential identity of its own.
+
+### Changed
+
+- `Client(auth=)` takes a `headgate.Auth`. A plain `httpx2.Auth`, `httpx2.BasicAuth` and `httpx2.DigestAuth` included,
+  raises `TypeError` when the client is built, since it declares nothing the guard could withhold from another origin:
+  subclass `headgate.Auth` and declare what it stamps, or write `StaticHeaderAuth({"Authorization": ...})` for a fixed
+  header such as basic auth. Digest auth is `class Digest(Auth, httpx2.DigestAuth)` with the two declarations and a
+  `credential_identity()` (see the auth guide). A virtual subclass made with `Auth.register` is refused too, since
+  registering declares nothing.
+- `get()` and `head()` take no `body=` (their options are `CallOptions`): a GET's body has no meaning, and the cache
+  keyed the entry by its URL alone, so a second GET with another body was served the first one's answer. A body keyword
+  on either raises `TypeError` pointing to `query()`, the safe read with a body: write
+  `query(url, expect=..., body=Json(...))`. `delete()` keeps `body=`. A `stream()` with `method="GET"` or
+  `"HEAD"`, and `events()`, refuse `body=` the same way: write `stream(url, method="QUERY", body=...)`.
+- A call's `httpx2.URL` must be absolute. A relative one raises `TypeError`, since its only use was to skip escaping:
+  `httpx2.URL(f"items/{uid}")` type-checked and reached `/admin` for `uid = "../admin"`. Write a t-string,
+  `t"items/{uid}"`, or `{fragment:raw}` for a pre-built fragment. A URL of any other kind (`None`, `bytes`, a list, a
+  number) raises `TypeError` too, instead of being sent as its text with the client's credentials: pass a `str`, a
+  t-string or an absolute `httpx2.URL`.
+- `params=`, `Form` fields and `Multipart` fields share one allowlist of values with a wire meaning:
+  - a `str`, `int`, `float`, `bool` or `None` is sent as before;
+  - an `Enum` member is sent as its `.value`, which must be a `str` or an `int`: a plain `Enum` went out as
+    `Status.OPEN`, and now goes out as `open`;
+  - a `UUID` or a `Decimal` is sent as its text, as before;
+  - a `date`, `datetime` or `time` is sent in ISO 8601, `2026-01-02T03:04:00+00:00`, where `str(datetime)` put a
+    space in place of the `T`;
+  - every other value raises `TypeError` naming the key and its type, instead of being sent as its Python `repr`: a
+    dataclass, a msgspec `Struct`, a pydantic model, `object()`, a mapping, a set, `bytes` (but in a `Multipart`
+    field, which sends it as it is), an `Enum` whose value is neither a `str` nor an `int`, and a list or tuple inside
+    a list or tuple. `params=` refuses it at the call, and a
+    `Form` or `Multipart` when it is built (a nested `dict` in a `Form` was sent as its `repr`). Encode such a value
+    into text first, with `json.dumps` or the API's own format.
+- `Form.fields` and `Multipart.fields` hold the encoded values, a copy of the mapping given: `Form({"s": Status.OPEN})`
+  has `fields == {"s": "open"}`. Read the values you built the body from, not the body's.
+- Parameters that take names or codes take a collection of them: `CassetteFilter(headers=, params=)` and
+  `HttpCache(methods=, paths=, statuses=)` are typed `Collection[...]`, and `RetryPolicy(methods=, statuses=)` stays
+  typed `frozenset[...]`. A bare `str` (read one letter at a time), a number or a one-shot iterator (a generator, which
+  checking would empty) raises `TypeError` naming the option: write `methods=("GET",)` (`frozenset({"GET"})` for a
+  `RetryPolicy`) or `statuses=(503,)`, and turn a generator into a tuple. `RetryPolicy(methods="GET")` retried no GET,
+  and `HttpCache(methods="GET")` raised a `ValueError` that named the letters.
+- `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
+  `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
+  and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.
+
+### Removed
+
+- The cache's `ClientConfigurationError` for an auth that does not declare its credentials, which no auth can now
+  reach. `Partition.SHARED` remains the opt-in for public data.
+
+### Fixed
+
+- A `CachedTokenAuth` whose token type is not `str` no longer sends the token's `repr` as its bearer
+  (`Authorization: Bearer {'access': ..., 'refresh': ...}`, the refresh token included). Its class must override
+  `attach`: a subclass of `CachedTokenAuth[dict[str, str]]` that keeps the default raises `TypeError` when it is
+  defined, and the default `attach` raises `TypeError` for a token that is not a `str`, before anything is sent, where
+  the type is bound further down, or may be text (`CachedTokenAuth[Any]`, `CachedTokenAuth[str | None]`). Override
+  `attach` to put the token on the request.
+
+### Security
+
+- An auth's own header or query parameter no longer follows a request to another origin. A plain `httpx2.Auth` that set
+  `X-Api-Key` sent it on a cross-origin redirect and to an absolute URL on another host, since the guard withheld only
+  `Authorization`, `Proxy-Authorization` and `Cookie` for an auth that declared nothing; such an auth is now refused.
+- A credential declaration whose names are all one character long is refused with a `TypeError` that shows the spelling
+  to write: `frozenset("X-Api-Key")` is a `frozenset[str]` of eight letters, so it type-checked and withheld no real
+  header. Write `frozenset({"X-Api-Key"})` (`frozenset({"api_key"})` for a parameter). A lone one-character name
+  (`headers=["x"]`) is refused too, since no header or query credential is one character long. It is checked for a
+  middleware when the client is built, for an `Auth` subclass's class attribute (`credential_headers`, `signed_headers`,
+  `token_headers` and the `_params`) when the class is defined, for a declaration through a property when the client is
+  built, and for `CassetteFilter(headers=, params=)` and its auths' declarations when the filter is built.
+- The cache never looks up, stores or shares a call given a body, whatever its method and whatever `Content-Length` the
+  caller wrote: a GET stream opened with `body=` was served the entry stored for its URL. No GET or HEAD takes a body
+  now; this is the cache's own defense.
+- `CassetteFilter(headers="x-api-key")` no longer records the header it was asked to scrub: it filtered the letters
+  `x`, `-`, `a` and so on. A bare `str` is now refused.
+- Every pager's next-page `httpx2.URL` is resolved against the URL that answered the page, and a next page from
+  `https` to plain `http` is refused as `ForbiddenDestinationError` before it is sent, by the walk itself. Only the
+  built-in `LinkHeader` and `NextUrl` did this, so a custom pager could take a walk, its cursor and its request, to
+  cleartext, and its relative URL resolved against `base_url`. A pager returns the URL it read as
+  `PageRequest(httpx2.URL(target))`, as before, and need not resolve it. An absolute URL a pager forwards as a `str`
+  (read from a JSON body, say) is checked the same way; a relative `str` is still joined onto `base_url`, as a call's
+  own URL is.
+
 ## [0.12.1] - 2026-11-16
 
 The SSRF guard now pins the curl transport's connections to the addresses it vetted, as it already pinned the default
@@ -972,7 +1063,8 @@ configuration that could never work an error, so this is a minor release: see **
 
 ### Added
 
-- `headgate.ratelimit.BudgetBacklogError`, raised by `RateBudget.wait` when a call's paced turn comes after its deadline.
+- `headgate.ratelimit.BudgetBacklogError`, raised by `RateBudget.wait` when a call's paced turn comes after its
+  deadline.
 
 ### Changed
 

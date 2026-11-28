@@ -20,7 +20,7 @@ import httpx2
 import pytest
 import time_machine
 
-from headgate import HttpCache, Rate, RequestOptions
+from headgate import CallOptions, HttpCache, Rate, RequestOptions
 from headgate._client import Client
 from headgate.cache._transport import served_from_cache
 from tests.cache._helpers import CloseCountingStorage, series_rules, stamped_ttl, stub_client
@@ -28,8 +28,6 @@ from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
     from hishel import AsyncSqliteStorage
-
-    from headgate import CallOptions
 
 _CLIENT_TTL = 3600.0
 _CALL_TTL = 99.0
@@ -202,8 +200,9 @@ _VERBS = ("delete", "get", "head", "patch", "post", "put")
 @pytest.mark.parametrize("verb", _VERBS)
 def test_every_http_verb_takes_a_cache_ttl(verb: str) -> None:
     """Accept ``cache_ttl`` on every verb, through its options, so the forwarding test below covers them all."""
-    assert inspect.signature(getattr(Client, verb)).parameters["options"].annotation == ("Unpack[RequestOptions]")
-    assert "cache_ttl" in RequestOptions.__optional_keys__
+    options = {"get": CallOptions, "head": CallOptions}.get(verb, RequestOptions)
+    assert inspect.signature(getattr(Client, verb)).parameters["options"].annotation == f"Unpack[{options.__name__}]"
+    assert "cache_ttl" in options.__optional_keys__
 
 
 @pytest.mark.parametrize("verb", _VERBS)

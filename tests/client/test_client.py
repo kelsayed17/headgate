@@ -10,11 +10,9 @@ from __future__ import annotations
 
 import inspect
 import json
-import uuid
 from contextlib import AbstractAsyncContextManager
 from decimal import Decimal
-from enum import Enum
-from typing import TYPE_CHECKING, Any, TypedDict, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast, override
 
 import httpx2
 import msgspec
@@ -23,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 import headgate
 from headgate import (
+    Auth,
     AuthError,
     CachedTokenAuth,
     Client,
@@ -233,29 +232,6 @@ async def test_query_params_are_encoded_as_httpx2_encodes_a_mapping() -> None:
     assert seen == [b"a=1&a=2&b=&c=true&d=1.5&e=x", b"series_id=GDP&limit=3"]
 
 
-class _OrderState(Enum):
-    """A query value an ``Enum`` member stands for."""
-
-    OPEN = "open"
-
-
-async def test_a_scalar_httpx2_does_not_encode_is_sent_as_its_str() -> None:
-    """Send a ``UUID`` and an ``Enum`` member as their ``str()``, which is what they mean in a query."""
-    seen: list[str] = []
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        seen.append(request.url.query.decode())
-        return httpx2.Response(httpx2.codes.OK)
-
-    client = Client(
-        rate=_RATE, base_url="https://api.example", http=HttpOptions(transport=httpx2.MockTransport(handler))
-    )
-    order = uuid.UUID("12345678-1234-5678-1234-567812345678")
-    await client.get("x", expect=nothing, params={"order": order, "status": _OrderState.OPEN})
-
-    assert seen == [f"order={order}&status={_OrderState.OPEN}"]
-
-
 @pytest.mark.parametrize(
     ("value", "got"),
     [
@@ -294,8 +270,9 @@ async def test_a_nested_query_value_is_refused_before_anything_is_sent(value: ob
         await client.get("x", expect=nothing, params={"filter": value})
 
     assert str(raised.value) == (
-        f"params= takes a str, int, float, bool or None for each value, or a list or tuple of them (got {got} under"
-        " 'filter'): encode a nested value into text first, such as with json.dumps"
+        "params= takes a str, int, float, bool, None, an Enum of str or int, a UUID, Decimal, date, datetime or time"
+        f" for each value, or a list or tuple of them (got {got} under 'filter'): encode any other value into text"
+        " first, such as with json.dumps"
     )
     assert seen == []
 
@@ -613,8 +590,15 @@ async def test_explicit_headers_win_over_auth(httpx2_mock: HTTPXMock) -> None:
     assert req.headers.get("Authorization") == "X"
 
 
-class _StampAuth(httpx2.Auth):
-    """Stamp one header onto every request."""
+class _StampAuth(Auth):
+    """Stamp one header onto every request, and declare it."""
+
+    credential_headers: ClassVar = frozenset({"x-a"})
+    credential_params: ClassVar = frozenset[str]()
+
+    @override
+    def credential_identity(self) -> bytes:
+        return b"1"
 
     @override
     def auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response]:
@@ -623,7 +607,7 @@ class _StampAuth(httpx2.Auth):
 
 
 async def test_auth_param_threaded_to_async_client(httpx2_mock: HTTPXMock) -> None:
-    """Check that an ``httpx2.Auth`` passed as ``auth=`` runs at send time and stamps the request."""
+    """Check that an ``Auth`` passed as ``auth=`` runs at send time and stamps the request."""
     httpx2_mock.add_response(url="https://api.example/x", json={})
     client = Client(rate=_RATE, base_url="https://api.example", auth=_StampAuth())
     await client.get("x", expect=RESPONSE)

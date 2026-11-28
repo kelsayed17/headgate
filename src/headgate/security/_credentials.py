@@ -8,10 +8,10 @@ runs request hooks after the auth flow has stamped the request and before every 
 :class:`CredentialGuard` sees the first request (an absolute cursor URL included), every redirect hop and every hop an
 auth flow yields. On any of them addressed elsewhere it removes:
 
-* every header and query parameter the client's auth declares it stamps (a
-  :class:`~headgate.security.CredentialStamper`: every auth in headgate);
-* ``Authorization`` and ``Proxy-Authorization``, whatever the auth, so a third-party auth or a caller's own header does
-  not reach another origin either. httpx2 itself drops ``Authorization`` only on a cross-origin redirect, not on a
+* every header and query parameter the client's auth declares it stamps (every auth is a :class:`~headgate.Auth`,
+  which declares them);
+* ``Authorization`` and ``Proxy-Authorization``, whatever the auth, so a caller's own header does not reach another
+  origin either. httpx2 itself drops ``Authorization`` only on a cross-origin redirect, not on a
   first request to an absolute URL;
 * ``Cookie``. A client that keeps a cookie jar (``HttpOptions(cookies=True)``) then gets back what the jar holds for
   the hop's origin, since the jar scopes the cookies it stores to their domains; a ``Cookie`` header set explicitly
@@ -27,9 +27,7 @@ auth flow yields. On any of them addressed elsewhere it removes:
 
 The request is still sent, unsigned: a provider may hand out a signed download URL on another host. A header of one of
 those names that the call set itself is removed too, since nothing on the request tells the two apart; a credential
-meant for another origin needs that origin in ``trusted_origins``. A third-party auth that is not a
-``CredentialStamper`` and puts its credential in any other header or in the query is not covered: declare its names by
-implementing the protocol.
+meant for another origin needs that origin in ``trusted_origins``.
 
 **An auth flow's own hops** (requests a :class:`~headgate.CachedTokenAuth` mint yields, marked with
 :data:`CHAIN_ORIGIN`) carry the credentials the mint needs to the token endpoint the code addressed, so that origin is
@@ -54,17 +52,18 @@ from typing import TYPE_CHECKING, Final
 
 import httpx2
 
-from headgate._core import EXPLICIT_HEADERS, CredentialStamper, ExplicitHeaders, origin_text
+from headgate._core import EXPLICIT_HEADERS, ExplicitHeaders, check_not_letters, origin_text
 from headgate.errors import ForbiddenDestinationError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from http.cookiejar import CookieJar
 
+    from headgate._auth import Auth
     from headgate._middleware import Middleware
     from headgate._options import HttpOptions
 
-__all__ = ["CHAIN_ORIGIN", "CredentialGuard", "check_names"]
+__all__ = ["CHAIN_ORIGIN", "CredentialGuard", "check_declarations"]
 
 #: The request extension holding the origin (as :func:`~headgate._core.origin_text`) a hop chain may carry credentials
 #: to besides the trusted ones. An auth flow sets it on each request it yields; httpx2 hands a request's extensions to
@@ -79,15 +78,17 @@ _ALWAYS_WITHHELD: Final = frozenset({"authorization", "proxy-authorization", "co
 _NEVER_CREDENTIALS: Final = frozenset({"user-agent", "content-type", "accept", "accept-encoding", "accept-language"})
 
 
-def check_names(owner: str, **declared: object) -> None:
+def check_declarations(owner: str, **declared: object) -> None:
     """Raise ``TypeError`` unless every value in *declared* is a frozenset of names (``str``), naming *owner*.
 
-    A bare ``str`` iterates as its letters, so ``credential_headers = "x-api-key"`` would withhold no real header.
+    A bare ``str`` iterates as its letters, so ``credential_headers = "x-api-key"`` would withhold no real header, and
+    so would ``frozenset("x-api-key")``, a set of nothing but letters (:func:`~headgate._core.check_not_letters`).
     """
     for attribute, names in declared.items():
         if not (isinstance(names, frozenset) and all(isinstance(name, str) for name in names)):
             msg = f"{owner}.{attribute} must be a frozenset of names, not {type(names).__name__}"
             raise TypeError(msg)
+        check_not_letters(f"{owner}.{attribute}", names)
 
 
 class CredentialGuard:
@@ -103,7 +104,7 @@ class CredentialGuard:
     def __init__(
         self,
         *,
-        auth: httpx2.Auth | None,
+        auth: Auth | None,
         base_url: httpx2.URL,
         http: HttpOptions,
         middleware: Sequence[Middleware] = (),
@@ -120,8 +121,8 @@ class CredentialGuard:
         headers = set(_ALWAYS_WITHHELD)
         headers.update({name.lower() for name in http.headers} - _NEVER_CREDENTIALS)
         params = frozenset[str]()
-        if isinstance(auth, CredentialStamper):
-            check_names(
+        if auth is not None:
+            check_declarations(
                 type(auth).__name__,
                 credential_headers=auth.credential_headers,
                 credential_params=auth.credential_params,

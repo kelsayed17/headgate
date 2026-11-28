@@ -21,8 +21,8 @@ client is written with, and each name only here:
   writer and a decode on any codec;
 * request bodies: :data:`Body`, one of :class:`Json`, :class:`Form`, :class:`Multipart`, :class:`Raw` and a
   :data:`Writer`'s :class:`EncodedBody`;
-* auth: :class:`BearerAuth`, :class:`StaticHeaderAuth`, :class:`QueryParamAuth`, :class:`SigningAuth`,
-  :class:`CachedTokenAuth` and :class:`Minted`;
+* auth: :class:`Auth`, the one type ``auth=`` takes, and :class:`BearerAuth`, :class:`StaticHeaderAuth`,
+  :class:`QueryParamAuth`, :class:`SigningAuth`, :class:`CachedTokenAuth` and :class:`Minted`;
 * pages: :meth:`Client.paginate`'s :class:`Paginated`;
 * the errors a caller catches most: :class:`ClientError`, :class:`TransportError`, :class:`ClientTimeoutError`,
   :class:`UpstreamStatusError`, :class:`AuthError` and :class:`RateLimitError`.
@@ -36,6 +36,7 @@ testing kit (:mod:`headgate.testing`).
 """
 
 from headgate._auth import (
+    Auth,
     BearerAuth,
     CachedTokenAuth,
     Minted,
@@ -85,6 +86,7 @@ from headgate.ratelimit._rate import Rate
 from headgate.retry._policy import RetryPolicy
 
 __all__ = [
+    "Auth",
     "AuthError",
     "BearerAuth",
     "Body",

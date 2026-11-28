@@ -26,14 +26,17 @@ policy = TransportPolicy(cache=cache)
 
 - **What is stored**: a request whose method is in `methods` (`{"GET"}` by default) and whose path matches one of
   `paths` (every path by default), answered with a status in `statuses` (`{200}` by default). It is stored **even past a `no-store`**, which is the point for a provider that sends no cache
-  headers, or wrong ones. An empty collection matches nothing, so `methods=()` stores nothing.
+  headers, or wrong ones. An empty collection matches nothing, so `methods=()` stores nothing. Each is a collection:
+  a bare `str` (`methods="GET"`), a number or a one-shot iterator raises `TypeError`.
 - **`paths` takes whole segments or patterns.** A string is one or more whole path segments, matched as a `Route`
   matches, so `"series"` keeps `/v1/series/GDP` but not `/v1/timeseries`. A compiled pattern is searched for in the
   path, for what segments cannot say, such as a file name's prefix or extension:
   `paths=[re.compile(r"/fut_fin_txt_\d{4}\.zip$")]`. Neither looks at the query string. A fragment that names no
   segment, or a pattern that matches an empty path, would match every path, and raises `ValueError`.
 - **`methods` names `GET` and `HEAD` only.** An entry is keyed by its URL, so two POSTs with different bodies would
-  share one; any other method raises `ValueError`. A POST is never cached.
+  share one; any other method raises `ValueError`. A POST is never cached, and neither is any request with a body:
+  `get()`, `head()` and a GET or HEAD `stream()` take no `body=`, and a call given one goes straight to the network,
+  never looked up or stored.
 - **`statuses` names 2xx statuses other than 206 only.** hishel stores no other response, and a 206 holds part of a
   body; any other status raises `ValueError`, rather than being accepted and never stored.
 - **`caches_request(method, path)` and `stores_status(status)`** say what the three decide. A request they do not
@@ -82,11 +85,9 @@ A `CachedTokenAuth` partitions by the long-lived credential, not the short-lived
 By default each instance is its own identity; override `credential_identity()` to return the credential's secret
 material (it is hashed, never stored) so two instances holding it share entries. See [auth](auth.md#cachedtokenauth).
 
-An auth that does not declare its credentials (not a `CredentialStamper`) is refused when the client is built, as
-`ClientConfigurationError`, since nothing could keep its entries apart. `HttpCache(partition=Partition.SHARED)` is the
-opt-in for public data: every client on the storage sees every entry, whatever its credential. One thing still keeps
-entries apart there: a query parameter with a well-known secret name that the auth does not declare, by its value,
-since `/config?key=theme` and `?key=locale` are different resources.
+`HttpCache(partition=Partition.SHARED)` is the opt-in for public data: every client on the storage sees every entry,
+whatever its credential. One thing still keeps entries apart there: a query parameter with a well-known secret name that
+the auth does not declare, by its value, since `/config?key=theme` and `?key=locale` are different resources.
 
 Under either partition, a client that refuses private hosts (`SecurityOptions(block_private_hosts=True)`) has entries
 of its own, so it is never served what a client allowed private hosts fetched from an internal address on the same
@@ -97,7 +98,7 @@ storage.
 hishel persists the request with each entry, so it is handed a view of the request without `Authorization`,
 `Proxy-Authorization`, `Cookie`, every header and query parameter the auth or a middleware declares, every well-known
 secret query parameter, and the URL's userinfo. Every other header is stored as a keyed digest of its value, so a key
-in a header nothing declares (a client-wide one, a call's own, an undeclared auth's under `Partition.SHARED`) is not
+in a header nothing declares (a client-wide one, a call's own) is not
 stored either, while a response's `Vary` still matches only requests with the same values. The digest key is per
 process too, so an entry that varies on a request header is not found again after a restart. The real request goes to
 the network unchanged. A response's `Set-Cookie` is never stored either; the request that fetched it still receives

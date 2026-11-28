@@ -26,11 +26,11 @@ from urllib.parse import unquote
 
 import httpx2
 
-from headgate._core import check_fragment, path_has_fragment
+from headgate._core import check_collection, check_fragment, check_names, path_has_fragment
 
 if TYPE_CHECKING:
     import re
-    from collections.abc import Iterable
+    from collections.abc import Collection
 
     from hishel import AsyncBaseStorage
 
@@ -50,19 +50,17 @@ class Partition(enum.Enum):
     CREDENTIAL = "credential"
     """Only to requests made with the same credential: the default, and the only safe choice for private data.
 
-    The partition is a keyed hash of the auth's :meth:`~headgate.security.CredentialStamper.credential_identity` and of
-    any other credential the request carries, so two clients with different credentials never see each other's entries,
-    even on one storage. It requires an auth that declares its credentials (a
-    :class:`~headgate.security.CredentialStamper`), or no auth.
+    The partition is a keyed hash of the auth's :meth:`~headgate.Auth.credential_identity` and of any other credential
+    the request carries, so two clients with different credentials never see each other's entries, even on one storage.
     """
 
     SHARED = "shared"
     """To every client on the storage, whatever its credential: for public data only.
 
     Credentials are still never stored: what the auth and middleware declare is dropped, and every other request header
-    is stored as a keyed digest, so an undeclared auth's header is not stored either. A query parameter with a secret
+    is stored as a keyed digest, so a header nothing declares is not stored either. A query parameter with a secret
     name that the auth does not declare still keeps entries apart by its value, since it may be an ordinary parameter
-    (``?key=theme``). This is the explicit opt-in for an auth that does not declare its credentials.
+    (``?key=theme``).
     """
 
 
@@ -81,6 +79,8 @@ class HttpCache:
     such as a file name's prefix or extension. An empty collection matches nothing, so stores
     nothing. :meth:`caches_request` and :meth:`stores_status` say what the three decide.
 
+    :raises TypeError: for a ``methods``, ``paths`` or ``statuses`` that is not a collection: a bare ``str`` (read one
+        letter at a time), a number or a one-shot iterator.
     :raises ValueError: for a ``ttl`` that is not a positive finite number, a method in ``methods`` other than ``GET``
         and ``HEAD``, a status in ``statuses`` outside 2xx or a 206, or a fragment in ``paths`` that names no segment or
         a pattern that matches an empty path.
@@ -89,9 +89,9 @@ class HttpCache:
     storage: AsyncBaseStorage
     ttl: float | None = None
     partition: Partition = Partition.CREDENTIAL
-    methods: Iterable[str] | None = None
-    paths: Iterable[str | re.Pattern[str]] | None = None
-    statuses: Iterable[int] | None = None
+    methods: Collection[str] | None = None
+    paths: Collection[str | re.Pattern[str]] | None = None
+    statuses: Collection[int] | None = None
 
     def __post_init__(self) -> None:
         """Refuse a TTL no entry could live by, a method a URL cannot key, and a path rule that matches every path.
@@ -102,6 +102,7 @@ class HttpCache:
             msg = f"ttl must be a positive finite number of seconds, or None (got {self.ttl})"
             raise ValueError(msg)
         if self.methods is not None:
+            check_names("methods", self.methods, "a collection of methods, such as ('GET',)")
             methods = frozenset(method.upper() for method in self.methods)
             if bodied := sorted(methods - _URL_KEYED_METHODS):
                 msg = (
@@ -111,11 +112,13 @@ class HttpCache:
                 raise ValueError(msg)
             object.__setattr__(self, "methods", methods)
         if self.paths is not None:
+            check_collection("paths", self.paths, "a collection of path fragments or patterns, such as ('/items',)")
             paths = tuple(self.paths)
             for path in paths:
                 _check_path(path)
             object.__setattr__(self, "paths", paths)
         if self.statuses is not None:
+            check_collection("statuses", self.statuses, "a collection of statuses, such as (200,)")
             statuses = frozenset(self.statuses)
             if unstorable := sorted(status for status in statuses if not _storable(status)):
                 msg = (

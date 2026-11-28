@@ -75,6 +75,7 @@ if TYPE_CHECKING:
 __all__ = [
     "CACHE_DEGRADATIONS",
     "CACHE_DEGRADED_EXT",
+    "HAS_BODY",
     "HOST_UNTESTED",
     "MAX_RESPONSE_BYTES",
     "STREAMED",
@@ -364,6 +365,10 @@ STREAMED = Slot[bool]("streamed")
 
 #: A call's own ``max_response_bytes``, which this layer holds a body up to in place of the client's cap.
 MAX_RESPONSE_BYTES = Slot[int]("max_response_bytes")
+
+#: Marks a call given a body, which this layer sends past the cache: its key is the URL, which two bodies would share.
+#: The call says so, not the request's headers, which the caller may have written (a ``Content-Length: 0``).
+HAS_BODY = Slot[bool]("has_body")
 
 #: Marks a call whose route keeps it out of the cache (``Route(..., cache=None)``): neither looked up nor stored.
 UNCACHED = Slot[bool]("uncached")
@@ -696,6 +701,10 @@ class ResilientCacheTransport(AsyncCacheTransport):
     waiting request fetches for the rest. A body past the cap is not held, so each waiting request fetches its own.
     POSTs are never shared, since a POST's body is part of what it asks for, nor streams, nor a later send of the call
     fetching (a hedge), which would only wait on the send it is meant to overtake.
+
+    **A call given a body is never cached** (:data:`HAS_BODY`), whatever its method: it goes to the network as it
+    arrives, never looked up, stored or shared, since the key is its URL and two bodies would share one entry. No GET or
+    HEAD takes a body, a stream's included, so this is a defense.
     """
 
     def __init__(
@@ -727,7 +736,7 @@ class ResilientCacheTransport(AsyncCacheTransport):
         if self._ttl is not None:
             stamp_ttl(request, self._ttl, keep=True)
         context = CallContext.find(request)
-        uncached = context is not None and bool(context.get(UNCACHED))
+        uncached = context is not None and bool(context.get(UNCACHED) or context.get(HAS_BODY))
         # A Range asks for part of a body, which no stored whole one answers and whose 206 is never stored.
         if (
             uncached

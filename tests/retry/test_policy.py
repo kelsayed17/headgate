@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+import sys
 from typing import TYPE_CHECKING
 
 import pytest
@@ -17,6 +19,7 @@ from headgate.timing import Timing
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
 #: The default backoff's cap on any backoff wait.
 _MAX_WAIT = 5.0
@@ -144,3 +147,20 @@ _EXACT = Backoff(factor=1.0, max_wait=1000.0)
 def test_the_backoff_doubles_with_each_retry() -> None:
     """Wait ``factor · 2^n`` before retry *n*: 2, 4, 8, 16 seconds for a factor of 1."""
     assert [_EXACT.delay(retry, 1.0) for retry in range(1, 5)] == [2.0, 4.0, 8.0, 16.0]
+
+
+async def test_the_methods_and_statuses_read_as_frozensets(tmp_path: Path) -> None:
+    """Type a policy's ``methods`` and ``statuses`` as frozensets, so set algebra on them type-checks."""
+    module = tmp_path / "probe.py"
+    module.write_text(
+        "from headgate import RetryPolicy\n"
+        "policy = RetryPolicy()\n"
+        'methods: frozenset[str] = policy.methods | {"POST"}\n'
+        "statuses: frozenset[int] = policy.statuses - {503}\n"
+    )
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "ty", "check", str(module), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, _ = await process.communicate()
+
+    assert process.returncode == 0, stdout.decode()

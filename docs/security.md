@@ -30,14 +30,14 @@ auth flow sends.
 
 ## Credentials stay on your origin
 
-Every auth headgate ships declares the headers and query parameters it stamps (the `CredentialStamper` protocol:
-`credential_headers`, `credential_params`, `credential_identity()`). A request hook runs before **every hop**: the
+Every auth declares the headers and query parameters it stamps: `auth=` takes only a `headgate.Auth`, whose
+`credential_headers`, `credential_params` and `credential_identity()` say what it stamps and whose credential it is, so
+a plain `httpx2.Auth` is refused when the client is built. A request hook runs before **every hop**: the
 first request, each redirect, and each request an auth flow sends. On any hop addressed to an origin that is neither
 `base_url`'s nor in `HttpOptions(security=SecurityOptions(trusted_origins=...))`, it removes:
 
 - every header and query parameter the auth declares;
-- `Authorization` and `Proxy-Authorization`, whatever set them, so a third-party auth or a caller's own header does not
-  travel either;
+- `Authorization` and `Proxy-Authorization`, whatever set them, so a caller's own header does not travel either;
 - `Cookie`. A client that keeps a cookie jar (`cookies=True`) then sends the cookies its jar holds for that origin,
   since the jar scopes them to their domains; a `Cookie` header you set yourself, client-wide or on a call, is not the
   jar's and stays off;
@@ -76,10 +76,6 @@ from any hop not addressed to `base_url`'s origin or a trusted one. An auth flow
 middleware's credentials: the middleware did not choose it. A [`SigningAuth`](auth.md#signingauth) signs each attempt
 below the rate budget, and the guard runs once more after it, so its signature is withheld from an untrusted hop the
 same way.
-
-A third-party `httpx2.Auth` that is not a `CredentialStamper` and puts its credential in another header or in the query
-is not covered; declare the names to have them withheld. A cache refuses
-such an auth unless told the data is public (see [caching](caching.md#partitions)).
 
 ## Redirects
 
@@ -136,9 +132,11 @@ await client.delete(t"positions/{symbol}", expect=nothing)  # "BTC/USD" -> posit
 So a value cannot change the URL's structure: `/`, `?`, `#` and whitespace are percent-encoded, a value of `.` or `..`
 is sent as `%2E` or `%2E%2E` rather than resolved as a dot segment, and an empty value raises `ValueError` rather than
 addressing the collection. A nested t-string splices as structure (`t"{API_PREFIX}/accounts"`, its own values still
-escaped), and `{fragment:raw}` is the one explicit escape hatch for a pre-built fragment. A literal or an
+escaped), and `{fragment:raw}` is the one explicit escape hatch for a pre-built fragment. A literal or an absolute
 `httpx2.URL` is sent as it is, which is what lets a paginator follow an absolute URL from a response: it forwards that
-URL as an `httpx2.URL`.
+URL as an `httpx2.URL`. A relative `httpx2.URL` raises `TypeError`, since all it could do is skip the escaping
+(`httpx2.URL(f"items/{uid}")` with `uid = "../admin"` reaches `/admin`), and a URL of any other kind (`None`, `bytes`)
+raises `TypeError` rather than being sent as its text.
 
 ## Redaction
 

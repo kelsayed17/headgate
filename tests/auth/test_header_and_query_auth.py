@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Unpack
 
-from headgate import Client, Rate
+from headgate import Auth, Client, Rate
 from headgate._auth import QueryParamAuth, StaticHeaderAuth
 from headgate._url import is_secret_param
 from tests.support.responses import RESPONSE
@@ -21,10 +21,10 @@ if TYPE_CHECKING:
     import httpx2
     from pytest_httpx2 import HTTPXMock
 
-    from headgate._client import RequestOptions
+    from headgate import CallOptions
 
 
-async def _sent(httpx2_mock: HTTPXMock, auth: httpx2.Auth, **options: Unpack[RequestOptions]) -> httpx2.Request:
+async def _sent(httpx2_mock: HTTPXMock, auth: Auth, **options: Unpack[CallOptions]) -> httpx2.Request:
     """Send one GET through a client using *auth*, with the call *options*, and return the request that went out."""
     httpx2_mock.add_response(json={})
     client = Client(rate=Rate.per_second(100), base_url="https://api.example", auth=auth)

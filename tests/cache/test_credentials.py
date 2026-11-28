@@ -4,8 +4,8 @@
 """The cache keeps credentials out of storage, and each credential's entries to itself.
 
 Isolation is observed from the network leg (a hit never reaches it), and "nothing stored" by reading every byte of the
-real SQLite storage's rows. The auth here is a test-local :class:`~headgate._core.CredentialStamper`; the built-in
-auths implement the protocol themselves, and are exercised when they do.
+real SQLite storage's rows. The auth here is a test-local :class:`~headgate.Auth`; the built-in auths are exercised
+too.
 """
 
 from __future__ import annotations
@@ -24,12 +24,11 @@ from hishel import AsyncSqliteStorage
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from headgate import Client, HttpCache, HttpOptions, StaticHeaderAuth, TransportPolicy
+from headgate import Auth, Client, HttpCache, HttpOptions, StaticHeaderAuth, TransportPolicy
 from headgate._core import CredentialStamper
 from headgate.cache import Partition
 from headgate.cache._credentials import CredentialScope, credential_scope
 from headgate.cache._transport import served_from_cache
-from headgate.errors import ClientConfigurationError
 from tests.cache._helpers import accept, cache_transport, series_rules
 from tests.support.responses import RESPONSE
 
@@ -43,8 +42,8 @@ _HEADER = "X-Api-Key"
 _PARAM = "sig"
 
 
-class _KeyAuth(httpx2.Auth):
-    """Stamp a key header and a signature param, and declare both: a minimal :class:`CredentialStamper`."""
+class _KeyAuth(Auth):
+    """Stamp a key header and a signature param, and declare both: a minimal :class:`~headgate.Auth`."""
 
     def __init__(self, key: str, *, signature: str = "s") -> None:
         """Send *key* in :data:`_HEADER` and *signature* in :data:`_PARAM`; the identity is the key alone."""
@@ -52,15 +51,18 @@ class _KeyAuth(httpx2.Auth):
         self._signature = signature
 
     @property
+    @override
     def credential_headers(self) -> frozenset[str]:
         """Return the header this auth sets."""
         return frozenset({_HEADER})
 
     @property
+    @override
     def credential_params(self) -> frozenset[str]:
         """Return the param this auth sets."""
         return frozenset({_PARAM})
 
+    @override
     def credential_identity(self) -> bytes:
         """Return the key."""
         return self._key.encode()
@@ -70,16 +72,6 @@ class _KeyAuth(httpx2.Auth):
         """Stamp the header and the param."""
         request.headers.setdefault(_HEADER, self._key)
         request.url = request.url.copy_merge_params({_PARAM: self._signature})
-        yield request
-
-
-class _OpaqueAuth(httpx2.Auth):
-    """An auth that stamps a header but declares nothing about it."""
-
-    @override
-    def auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response]:
-        """Stamp a credential the cache cannot know about."""
-        request.headers["X-Opaque"] = "opaque-secret"
         yield request
 
 
@@ -115,7 +107,7 @@ class _Recorder(httpx2.AsyncBaseTransport):
 def _client(
     network: httpx2.AsyncBaseTransport,
     storage: AsyncSqliteStorage,
-    auth: httpx2.Auth | None,
+    auth: Auth | None,
     *,
     partition: Partition = Partition.CREDENTIAL,
     http: HttpOptions | None = None,
@@ -167,7 +159,6 @@ async def _stored_bytes(connection: anysqlite.Connection) -> bytes:
 def test_the_test_auth_is_a_credential_stamper() -> None:
     """Check that the test auth satisfies the protocol the cache reads, so the tests below mean what they say."""
     assert isinstance(_KeyAuth("k"), CredentialStamper)
-    assert not isinstance(_OpaqueAuth(), CredentialStamper)
 
 
 async def test_two_credentials_on_one_storage_never_see_each_others_entries(storage: AsyncSqliteStorage) -> None:
@@ -289,17 +280,17 @@ async def test_a_views_header_partitions_and_is_never_stored(
 async def test_a_shared_partition_stores_no_header_value_as_sent(
     inspected: AsyncSqliteStorage, connection: anysqlite.Connection
 ) -> None:
-    """Under ``Partition.SHARED`` an undeclared auth's header is not stored, nor a client-wide or per-call one."""
+    """Under ``Partition.SHARED`` a client-wide or per-call header is not stored as sent."""
     network = _Recorder()
     http = HttpOptions(headers={"X-Static": "static-1"})
-    client = _client(network, inspected, _OpaqueAuth(), partition=Partition.SHARED, http=http)
+    client = _client(network, inspected, None, partition=Partition.SHARED, http=http)
 
     await client.get(_URL, expect=RESPONSE, headers={"X-Call": "per-call-1"})
     hit = await client.get(_URL, expect=RESPONSE, headers={"X-Call": "per-call-1"})
 
     assert served_from_cache(hit)
     stored = await _stored_bytes(connection)
-    assert all(value not in stored for value in (b"opaque-secret", b"static-1", b"per-call-1"))
+    assert all(value not in stored for value in (b"static-1", b"per-call-1"))
 
 
 async def test_a_header_a_response_varies_on_still_tells_entries_apart(storage: AsyncSqliteStorage) -> None:
@@ -356,27 +347,7 @@ async def test_a_response_that_varies_on_everything_is_never_a_hit(storage: Asyn
     assert len(sent) == len(("first", "second"))
 
 
-# Refusing what cannot be partitioned.
-
-
-def test_an_auth_that_declares_nothing_is_refused_a_credential_partition(storage: AsyncSqliteStorage) -> None:
-    """A cache partitioned by credential cannot work with an auth that declares nothing, so the client is refused."""
-    with pytest.raises(
-        ClientConfigurationError, match=r"_OpaqueAuth does not declare its credentials.*SHARED"
-    ) as raised:
-        _client(_Recorder(), storage, _OpaqueAuth())
-    assert "headgate.security.CredentialStamper" in str(raised.value), "it names the public protocol, not a private one"
-
-
-async def test_an_auth_that_declares_nothing_may_share_explicitly(storage: AsyncSqliteStorage) -> None:
-    """``Partition.SHARED`` is the explicit opt-in for such an auth: the client builds and caches."""
-    network = _Recorder()
-    client = _client(network, storage, _OpaqueAuth(), partition=Partition.SHARED)
-
-    await client.get(_URL, expect=RESPONSE)
-    await client.get(_URL, expect=RESPONSE)
-
-    assert len(network.sent) == 1
+# The built-in auths.
 
 
 def test_a_built_in_auth_gets_a_credential_partition(storage: AsyncSqliteStorage) -> None:

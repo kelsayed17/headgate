@@ -5,7 +5,7 @@ Client(
     *,
     base_url: str,
     rate: Rate | RateBudget | None = None,
-    auth: httpx2.Auth | None = None,
+    auth: Auth | None = None,
     policy: TransportPolicy = TransportPolicy(),
     http: HttpOptions = HttpOptions(),
     observers: Sequence[Observer] = (),
@@ -41,8 +41,8 @@ is written, and freezes the collections it is given. Change one with `dataclasse
   its origin is the one credentials are sent to.
 - **`rate`**: a `Rate`, from which the client builds a budget of its own, or a `RateBudget` it shares with every client
   given the same instance. See [rate budgets](rate-budgets.md).
-- **`auth`**: an `httpx2.Auth`, usually one of headgate's. See [auth](auth.md). An upstream `httpx` object raises
-  `TypeError`.
+- **`auth`**: a `headgate.Auth`, usually one of headgate's. See [auth](auth.md). A plain `httpx2.Auth`, which declares
+  nothing it stamps, and an upstream `httpx` object raise `TypeError`.
 - **`observers`**: receive the client's [events](observability.md#events).
 - **`middleware`**: per-attempt hooks; see [middleware](#middleware). They are parts of the stack, not settings of how a
   request is sent, so they are the client's own rather than `HttpOptions` fields.
@@ -193,15 +193,16 @@ the client runs as a request hook, so the guard runs again below the last middle
 middleware declares in `credential_headers` and `credential_params` are removed there from any hop not addressed to
 `base_url`'s origin or a trusted one, a cross-origin redirect hop included. Both are required, each a `frozenset` of
 names, empty when the middleware stamps none, as a class attribute or a property; the client raises `TypeError` for a
-middleware that lacks either, and for a plain function. `request.content` is available for a
+middleware that lacks either, for one whose names are all one character long (`frozenset("X-Api-Key")` is eight
+letters: write `frozenset({"X-Api-Key"})`), and for a plain function. `request.content` is available for a
 buffered body; a streamed body is not readable there. A middleware that replaces the request
 (`call_next(httpx2.Request(...))`) keeps `request.extensions` on the new one, or a `SigningAuth` cannot sign that
 attempt. Even then the signature goes on the replacement, not on the request the client made, so a `SigningAuth`'s one
 re-send on a 401 is lost.
 
-The two declarations are the `headgate.security.CredentialCarrier` protocol, and an auth that also gives a
+The two declarations are the `headgate.security.CredentialCarrier` protocol, and one that also gives a
 `credential_identity()` (so a cache can partition by it) is a `headgate.security.CredentialStamper`; implement either
-from `headgate.security`, never from a private module.
+from `headgate.security`, never from a private module. An auth subclasses [`headgate.Auth`](auth.md#your-own-auth).
 
 A middleware reads its call through `headgate.call_info(request)`, a `headgate.events.CallView` taken when asked: the
 call's `CallInfo` (method, URL and route template, the same record events carry), its `attempt` (1 on the first send,
@@ -231,7 +232,7 @@ route's or the client's; `None` turns it off:
 
 ```python
 await client.get(
-    url,  # a literal, a t-string (escaped, and the call's route) or an httpx2.URL (sent as it is)
+    url,  # a literal, a t-string (escaped, and the call's route) or an absolute httpx2.URL (sent as it is)
     expect=reader_or_expect,
     retry=RetryPolicy(attempts=5),  # replaces the view's, the route's or the client's; None: send once
     follow_redirects=False,  # a 3xx raises as itself; True follows it
@@ -250,21 +251,23 @@ without `expect=`, `cache_ttl=` and `max_response_bytes=`, and `paginate()` take
 `on_limit=` and the same options but the body, applied to each page; a walk of POSTs takes `query=`
 ([Walks of POSTs](pagination.md#walks-of-posts)).
 
-A `params=` value is a `str`, `int`, `float`, `bool` or `None`, or a list or tuple of them, which repeats the key. Any
-other scalar (a `UUID`, a `Decimal`, an `Enum` member, a `date`) is sent as its `str()`. A value no query parameter can
-carry raises `TypeError` naming the parameter, before anything is sent: a mapping, a set, `bytes`, `bytearray` or
-`memoryview`, and a list or tuple inside a list or tuple. Encode such a value into text first, with `json.dumps` or the
-API's own format.
+A `params=` value is a `str`, `int`, `float`, `bool` or `None`; an `Enum` member, sent as its value (a `str` or an
+`int`); a `UUID` or a `Decimal`, sent as its text; a `date`, `datetime` or `time`, sent in ISO 8601
+(`2026-01-02T03:04:00+00:00`); or a list or tuple of them, which repeats the key. `Form` and `Multipart` fields take the
+same values, and a `Multipart` field takes `bytes` too, sent as they are. Any other value raises `TypeError` naming the
+parameter, before anything is sent (a `Form` or `Multipart` when it is built): a mapping, a set, `bytes`, a dataclass or
+a model, whose text would be its Python `repr`, and a list or tuple inside a list or tuple. Encode such a value into
+text first, with `json.dumps` or the API's own format.
 
 `cache_ttl=None` removes headgate's lifetime only: the cache is TTL-only and never reads a response's own cache headers,
 so an entry stored with `cache_ttl=None` is served until its storage evicts it, past any `Cache-Control: max-age` and
 even past `no-store`, as an entry of `HttpCache(ttl=None)` is.
 
 The options are typed, so a wrapper can forward them with every key checked. `CallOptions` is the TypedDict of every
-per-call option but the body, which every verb and `paginate()` take; `RequestOptions` is a verb's (`CallOptions` plus
-the body); `headgate.streaming.StreamOptions` is `stream()`'s (`RequestOptions` less `cache_ttl` and
-`max_response_bytes`); and `ViewOptions` is what `with_options()` takes. A wrapper typed on them forwards every option
-at once:
+per-call option but the body, which every verb and `paginate()` take, and all that `get()` and `head()` take;
+`RequestOptions` is a body verb's (`CallOptions` plus the body); `headgate.streaming.StreamOptions` is `stream()`'s
+(`RequestOptions` less `cache_ttl` and `max_response_bytes`); and `ViewOptions` is what `with_options()` takes. A
+wrapper typed on them forwards every option at once:
 
 ```python
 async def fetch(self, url: LiteralString, **options: Unpack[CallOptions]) -> Series:
@@ -273,7 +276,9 @@ async def fetch(self, url: LiteralString, **options: Unpack[CallOptions]) -> Ser
 
 Each is closed, so a misspelled keyword is a type error, and the client refuses one at runtime too, with a `TypeError`
 naming it, before anything is sent. `Method` is the literal type of the seven verbs, which `stream(method=...)` takes.
-`query()` sends the QUERY method: safe and idempotent like a GET, with a `body=` like a POST. It is retried and hedged
+`query()` sends the QUERY method: safe and idempotent like a GET, with a `body=` like a POST. A GET or HEAD takes no
+`body=`, which would have no meaning there and is not part of the cache's key: `get(url, body=...)` raises `TypeError`
+pointing to `query()`. It is retried and hedged
 as an idempotent request is, and never cached.
 
 ### Views

@@ -5,8 +5,8 @@
 
 :class:`CassetteFilter` builds a vcrpy configuration from what headgate already knows is secret: the credential
 headers, the query parameters :func:`headgate._url.is_secret_param` names (the well-known ones and every name a
-``QueryParamAuth`` registered), and what each auth declares through
-:class:`~headgate.security.CredentialStamper`. It is also a :class:`~headgate.Middleware` that marks the requests an
+``QueryParamAuth`` registered), and what each auth or middleware declares
+(a :class:`~headgate.security.CredentialCarrier`). It is also a :class:`~headgate.Middleware` that marks the requests an
 auth flow sends to mint a credential (:data:`headgate._auth.AUTH_HOP`), so the recorder skips them: a token response
 is a credential, and not the endpoint's answer.
 
@@ -38,11 +38,12 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from headgate._auth import AUTH_HOP
-from headgate._core import CredentialStamper
+from headgate._core import CredentialCarrier, check_kind, check_names, check_not_letters
 from headgate._url import sanitize_url
+from headgate.security._credentials import check_declarations
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, MutableMapping
+    from collections.abc import Collection, Iterable, MutableMapping
 
     import httpx2
 
@@ -75,26 +76,40 @@ class CassetteFilter:
     def __init__(
         self,
         *,
-        auths: Iterable[object] = (),
-        headers: Iterable[str] = (),
-        params: Iterable[str] = (),
+        auths: Iterable[CredentialCarrier] = (),
+        headers: Collection[str] = (),
+        params: Collection[str] = (),
         replaying: bool = False,
     ) -> None:
         """Filter the credentials *auths* declare, plus *headers* and query *params* named here.
 
-        An auth that is a :class:`~headgate.security.CredentialStamper` contributes the headers and parameters it
-        stamps; any other auth contributes nothing, so name its credentials in *headers* and *params*.
+        Each of *auths* is an auth or a middleware (a :class:`~headgate.security.CredentialCarrier`), which contributes
+        the headers and parameters it declares; name any other credential in *headers* and *params*.
 
         *replaying* (for ``record_mode="none"``) makes a mint fail the test with an ``AssertionError``: a mint is
         never recorded, so vcrpy would let it reach the network, with the auth's secret.
         """
         self._replaying = replaying
+        check_names("headers", headers, "a collection of header names, such as ('x-api-key',)")
+        check_names("params", params, "a collection of query parameter names, such as ('api_key',)")
+        check_not_letters("CassetteFilter(headers=)", headers)
+        check_not_letters("CassetteFilter(params=)", params)
         header_names = {name.lower() for name in (*_CREDENTIAL_HEADERS, *headers)}
         param_names = set(params)
         for auth in auths:
-            if isinstance(auth, CredentialStamper):
-                header_names.update(name.lower() for name in auth.credential_headers)
-                param_names.update(auth.credential_params)
+            check_kind(
+                "auths",
+                auth,
+                CredentialCarrier,
+                "auths or middleware that declare credential_headers and credential_params",
+            )
+            check_declarations(
+                type(auth).__qualname__,
+                credential_headers=auth.credential_headers,
+                credential_params=auth.credential_params,
+            )
+            header_names.update(name.lower() for name in auth.credential_headers)
+            param_names.update(auth.credential_params)
         self.filter_headers = tuple(sorted(header_names))
         self.filter_query_parameters = tuple(sorted(param_names))
 

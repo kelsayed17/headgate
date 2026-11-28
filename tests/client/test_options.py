@@ -111,7 +111,7 @@ _UpstreamHook.__module__ = "httpx._client"
         pytest.param(
             lambda: Client(base_url=_BASE, rate=_RATE, middleware=(_UpstreamHook(),)), "middleware", id="event-hook"
         ),
-        pytest.param(lambda: Client(base_url=_BASE, rate=_RATE, auth=_UpstreamAuth()), "auth", id="auth"),
+        pytest.param(lambda: Client(base_url=_BASE, rate=_RATE, auth=cast("Any", _UpstreamAuth())), "auth", id="auth"),
     ],
 )
 def test_an_upstream_httpx_object_is_refused_by_name(build: Callable[[], object], what: str) -> None:

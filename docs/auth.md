@@ -1,13 +1,67 @@
 # Auth
 
-A client's `auth=` is an `httpx2.Auth`. httpx2 runs its flow once per call, above the transport stack, so a retry
-re-sends the request already signed. headgate ships five (the three static ones below, `SigningAuth` and
-`CachedTokenAuth`), each a
-`CredentialStamper` that declares what it stamps, so the [credential guard](security.md#credentials-stay-on-your-origin)
-keeps it on your origin and the [cache](caching.md#partitions) keeps each credential's entries apart and the credential
-itself out of storage.
+A client's `auth=` is a `headgate.Auth`: an `httpx2.Auth` that declares what it stamps, so the
+[credential guard](security.md#credentials-stay-on-your-origin) keeps it on your origin and the
+[cache](caching.md#partitions) keeps each credential's entries apart and the credential itself out of storage. httpx2
+runs its flow once per call, above the transport stack, so a retry re-sends the request already signed. headgate ships
+five (the three static ones below, `SigningAuth` and `CachedTokenAuth`); a plain `httpx2.Auth`, `httpx2.BasicAuth` and
+`httpx2.DigestAuth` included, declares nothing, and `Client()` refuses it with a `TypeError`.
 
 Every one merges without overriding: a header or parameter the call sets itself wins.
+
+## Your own auth
+
+An auth of your own subclasses `headgate.Auth` and declares the headers and query parameters its flow sets, each a
+`frozenset` of names (empty when it sets none of that kind), and the credential they stand for:
+
+```python
+from typing import ClassVar
+
+import httpx2
+
+from headgate import Auth
+
+
+class KeyAuth(Auth):
+    credential_headers: ClassVar = frozenset({"x-api-key"})
+    credential_params: ClassVar = frozenset[str]()
+
+    def __init__(self, key: str) -> None:
+        self._key = key
+
+    def credential_identity(self) -> bytes:
+        return self._key.encode()
+
+    async def async_auth_flow(self, request):
+        request.headers.setdefault("x-api-key", self._key)
+        yield request
+```
+
+A subclass that leaves a member out cannot be built, and a declaration that is not a `frozenset` of names, or whose
+names are all one character long (`frozenset("x-api-key")` is a set of its letters, not one name), fails when the
+class is defined (or, for a property, when the client is built). A fixed header needs no class: `StaticHeaderAuth`.
+For basic auth, `StaticHeaderAuth({"Authorization": "Basic " + base64.b64encode(b"user:pass").decode()})`.
+
+Digest auth is httpx2's own flow with the declarations added, since `httpx2.DigestAuth` declares nothing:
+
+```python
+from typing import ClassVar
+
+import httpx2
+
+from headgate import Auth
+
+
+class Digest(Auth, httpx2.DigestAuth):
+    credential_headers: ClassVar = frozenset({"authorization"})
+    credential_params: ClassVar = frozenset[str]()
+
+    def credential_identity(self) -> bytes:
+        return b"user:pass"  # the credential's secret material, hashed for the cache, never stored
+
+
+auth = Digest("user", "pass")
+```
 
 ## Static credentials
 
@@ -168,7 +222,9 @@ endpoint. The API host's breaker records nothing for it.
   carrying one re-mints, and error messages redact them.
 - `skips(request)` says a request needs no token (by default, one that already carries a token header or parameter).
 - `seed(token, lifetime)` caches a token obtained elsewhere, such as one restored from storage or a test's fixed bearer.
-- `CachedTokenAuth[TokenT]` is generic in the token's type, `str` by default.
+- `CachedTokenAuth[TokenT]` is generic in the token's type, `str` by default. The default `attach` sends only a `str`,
+  so a subclass whose token is another type (`CachedTokenAuth[dict[str, str]]`) overrides `attach`; one that does not
+  fails when it is defined, or, when a generic subclass binds the type further down, at its first call.
 - `credential_identity()` names the long-lived credential for the cache partition. By default each instance is its own
   identity; return the client id and secret (hashed, never stored) to let instances holding the same credential share
   entries. Never return the short-lived token, which changes on every refresh.

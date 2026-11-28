@@ -12,11 +12,11 @@ request) belongs in that provider's client, as a :class:`SigningAuth` subclass.
 **An explicit ``headers=`` or ``params=`` from the caller wins a clash.** Every class here merges setdefault-style,
 because the flow runs at send time and a plain assignment would override the caller.
 
-Every class here is a :class:`~headgate.security.CredentialStamper`: it declares the headers and query parameters it
-stamps (``credential_headers``, ``credential_params``), so the client withholds them from any origin it does not trust
-(:mod:`headgate.security`), and it names the credential it carries (``credential_identity()``), so a cache can keep one
-credential's responses from another's. The identity is the secret material itself; it is hashed, never logged or
-stored.
+Every class here is an :class:`Auth`, the one type ``Client(auth=)`` takes: it declares the headers and query
+parameters it stamps (``credential_headers``, ``credential_params``), so the client withholds them from any origin it
+does not trust (:mod:`headgate.security`), and it names the credential it carries (``credential_identity()``), so a
+cache can keep one credential's responses from another's. The identity is the secret material itself; it is hashed,
+never logged or stored.
 
 Only the async flow is implemented; the clients are async-only.
 """
@@ -30,17 +30,18 @@ import math
 import secrets
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Final, override
+from types import UnionType
+from typing import TYPE_CHECKING, Any, ClassVar, Final, get_args, get_origin, override
 
 import httpx2
 
 from headgate._body import read_capped
-from headgate._core import CallContext, Slot, current_timing, origin_text
+from headgate._core import CallContext, CredentialStamper, Slot, current_timing, origin_text, type_text
 from headgate._failures import CallSite, loggable_url, mint_error, shorten, transport_error
 from headgate._url import redact_secrets, register_secret_params
 from headgate.errors import ClientConfigurationError, ClientError
 from headgate.retry._policy import REPLAYABLE_BODY
-from headgate.security._credentials import CHAIN_ORIGIN, check_names
+from headgate.security._credentials import CHAIN_ORIGIN, check_declarations
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable, Mapping
@@ -52,6 +53,7 @@ __all__ = [
     "FRESH_TOKEN_S",
     "MINTING",
     "SIGNER_EXT",
+    "Auth",
     "BearerAuth",
     "CachedTokenAuth",
     "Minted",
@@ -251,7 +253,56 @@ def _prepare_hop(hop: httpx2.Request, call: httpx2.Request, source: str) -> None
         context.fit_timeouts(hop)
 
 
-class StaticHeaderAuth(httpx2.Auth):
+class Auth(httpx2.Auth, CredentialStamper, ABC):
+    """An ``httpx2.Auth`` that declares what it stamps: the one type ``Client(auth=)`` takes.
+
+    It is the :class:`~headgate.security.CredentialStamper` contract made a base class, so its three members are
+    abstract here.
+
+    A subclass declares the headers and query parameters its flow sets, in :attr:`credential_headers` and
+    :attr:`credential_params` (a ``frozenset`` of names each, as class attributes or properties, empty when it stamps
+    none of that kind), and names the credential they stand for in :meth:`credential_identity`. The client withholds
+    exactly the declared names from any origin it does not trust, and the cache keeps them out of storage and keeps one
+    credential's entries from another's. A plain ``httpx2.Auth`` declares nothing, so ``Client()`` refuses it: a
+    third-party auth is wrapped in a subclass that declares its names, and a fixed header is a
+    :class:`StaticHeaderAuth`. A subclass that leaves a member out cannot be built, and one whose declaration is a
+    class attribute is checked when it is defined: each must be a ``frozenset`` of names, not all of them one character
+    long, as ``frozenset("X-Api-Key")`` is. A declaration through a property is checked when a client is built.
+    """
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Refuse a declaration given as a class attribute that is not a frozenset of names, or splits a name."""
+        super().__init_subclass__(**kwargs)
+        declared = {name: getattr(cls, name) for name in ("credential_headers", "credential_params")}
+        # A property (or other descriptor) reads per instance, so the client checks it when it is built.
+        check_declarations(
+            cls.__name__, **{name: value for name, value in declared.items() if not _is_descriptor(value)}
+        )
+
+    @property
+    @abstractmethod
+    @override
+    def credential_headers(self) -> frozenset[str]:
+        """The headers this auth sets (compared case-insensitively)."""
+
+    @property
+    @abstractmethod
+    @override
+    def credential_params(self) -> frozenset[str]:
+        """The query parameters this auth sets."""
+
+    @abstractmethod
+    @override
+    def credential_identity(self) -> bytes:
+        """Return stable bytes naming the credential (its secret material); never stored, only hashed."""
+
+
+def _is_descriptor(value: object) -> bool:
+    """Return whether *value*, read off a class, is a descriptor such as a property, not a declared value."""
+    return hasattr(type(value), "__get__")
+
+
+class StaticHeaderAuth(Auth):
     """Stamp a fixed set of headers onto every request, without overriding a header the caller set.
 
     Covers the static API key and static bearer cases (an ``Authorization: Bearer`` or ``x-api-key`` header). An empty
@@ -263,15 +314,18 @@ class StaticHeaderAuth(httpx2.Auth):
         self._headers = dict(headers)
 
     @property
+    @override
     def credential_headers(self) -> frozenset[str]:
         """The headers this auth stamps, lower-cased: withheld from any origin the client does not trust."""
         return frozenset(name.lower() for name in self._headers)
 
     @property
+    @override
     def credential_params(self) -> frozenset[str]:
         """No query parameters: this auth stamps headers only."""
         return frozenset[str]()
 
+    @override
     def credential_identity(self) -> bytes:
         """Return the headers and their values as bytes, names lower-cased: the same headers give the same bytes."""
         return _identity((name.lower(), value) for name, value in self._headers.items())
@@ -291,7 +345,7 @@ class BearerAuth(StaticHeaderAuth):
         super().__init__({"Authorization": f"Bearer {token}"})
 
 
-class QueryParamAuth(httpx2.Auth):
+class QueryParamAuth(Auth):
     """Merge a fixed set of query params into the request URL, without overriding a param the caller set.
 
     **The key rides the URL, and URLs are not secret to observability.** A tracing integration that records the full
@@ -307,15 +361,18 @@ class QueryParamAuth(httpx2.Auth):
         register_secret_params(self._params)
 
     @property
+    @override
     def credential_headers(self) -> frozenset[str]:
         """No headers: this auth stamps query parameters only."""
         return frozenset[str]()
 
     @property
+    @override
     def credential_params(self) -> frozenset[str]:
         """The query parameters this auth stamps: withheld from any origin the client does not trust."""
         return frozenset(self._params)
 
+    @override
     def credential_identity(self) -> bytes:
         """Return the parameters and their values as bytes: the same parameters give the same bytes."""
         return _identity(self._params.items())
@@ -329,7 +386,7 @@ class QueryParamAuth(httpx2.Auth):
         yield request
 
 
-class SigningAuth(httpx2.Auth, ABC):
+class SigningAuth(Auth):
     """Sign every attempt of a request with a provider's signer, and send it once more on a 401.
 
     For a credential that is a signature over the request itself, made fresh for every request: a JWT bound to the
@@ -378,7 +435,7 @@ class SigningAuth(httpx2.Auth, ABC):
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse a concrete subclass that declares nothing it signs with, and register its parameters as secret."""
         super().__init_subclass__(**kwargs)
-        check_names(cls.__name__, signed_headers=cls.signed_headers, signed_params=cls.signed_params)
+        check_declarations(cls.__name__, signed_headers=cls.signed_headers, signed_params=cls.signed_params)
         register_secret_params(cls.signed_params)
         if not inspect.isabstract(cls) and not (cls.signed_headers or cls.signed_params):
             msg = (
@@ -387,15 +444,18 @@ class SigningAuth(httpx2.Auth, ABC):
             raise TypeError(msg)
 
     @property
+    @override
     def credential_headers(self) -> frozenset[str]:
         """The headers :meth:`sign` sets (:attr:`signed_headers`), lower-cased."""
         return frozenset(name.lower() for name in self.signed_headers)
 
     @property
+    @override
     def credential_params(self) -> frozenset[str]:
         """The query parameters :meth:`sign` sets (:attr:`signed_params`)."""
         return self.signed_params
 
+    @override
     def credential_identity(self) -> bytes:
         """Return bytes naming the key this auth signs with: by default, this instance's own, drawn once."""
         if self._identity is None:
@@ -446,7 +506,28 @@ class Minted[TokenT]:
     lifetime: float
 
 
-class CachedTokenAuth[TokenT = str](httpx2.Auth):
+#: What a token type may be read as that does not say it is not text: ``Any``, and a union, which may hold ``str``.
+_MAYBE_TEXT: Final = (Any, UnionType)
+
+
+def _token_type(cls: type) -> object | None:
+    """Return the token type *cls* binds in its own ``CachedTokenAuth[...]`` base, when it is a class other than text.
+
+    ``None`` when *cls* binds none there, binds ``str``, or binds what may be text or is no class here (``Any``, a
+    union such as ``str | None``, a type variable a subclass binds later, a ``Literal``): the default
+    :meth:`~CachedTokenAuth.attach` checks the token itself then. ``Any`` and a union are classes on 3.14, so they are
+    named here.
+    """
+    for base in cls.__dict__.get("__orig_bases__", ()):
+        if get_origin(base) is CachedTokenAuth:
+            (token_type,) = get_args(base)
+            kind = get_origin(token_type) or token_type
+            if isinstance(kind, type) and kind not in _MAYBE_TEXT and not issubclass(kind, str):
+                return token_type
+    return None
+
+
+class CachedTokenAuth[TokenT = str](Auth):
     """Bearer auth for providers that mint a short-lived token over the network.
 
     The token comes from an endpoint, so it is cached, refreshed before it expires, and refreshed again if it is
@@ -478,7 +559,9 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     Supplying neither fails when the class is defined; with both, the flow runs :meth:`mint_flow`. Two more hooks let a
     credential that is not an ``Authorization`` bearer ride the same cache: :meth:`attach` (how a token is put on a
     request) and :meth:`skips` (a request that needs none). ``TokenT`` is the credential's type, ``str`` for every
-    bearer. :meth:`seed` caches a token obtained elsewhere.
+    bearer; a subclass whose token is of another type overrides :meth:`attach`, or its definition fails (or, when the
+    type is bound further down, as ``class Mid[T](CachedTokenAuth[T])``, its first call). :meth:`seed` caches a token
+    obtained elsewhere.
 
     **What it stamps is declared.** :attr:`token_headers` names the headers :meth:`attach` sets (``Authorization`` by
     default) and :attr:`token_params` the query parameters (none by default, ``access_token`` for a provider that takes
@@ -558,7 +641,7 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
         registered as secret.
         """
         super().__init_subclass__(**kwargs)
-        check_names(cls.__name__, token_headers=cls.token_headers, token_params=cls.token_params)
+        check_declarations(cls.__name__, token_headers=cls.token_headers, token_params=cls.token_params)
         register_secret_params(cls.token_params)
         # Not @abstractmethod: either of two methods satisfies the contract.
         supplied = any(getattr(cls, name) is not getattr(CachedTokenAuth, name) for name in ("mint_token", "mint_flow"))
@@ -576,19 +659,29 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
                 f"token_params (or override credential_headers)"
             )
             raise TypeError(msg)
+        token_type = _token_type(cls)
+        if token_type is not None and attaching is CachedTokenAuth:
+            msg = (
+                f"{cls.__name__} holds a {type_text(token_type)} token, so it must override attach: the default sends "
+                "a str as Authorization: Bearer"
+            )
+            raise TypeError(msg)
 
     # -- What it stamps (CredentialStamper) ----------------------------------
 
     @property
+    @override
     def credential_headers(self) -> frozenset[str]:
         """The headers :meth:`attach` sets (:attr:`token_headers`), lower-cased."""
         return frozenset(name.lower() for name in self.token_headers)
 
     @property
+    @override
     def credential_params(self) -> frozenset[str]:
         """The query parameters :meth:`attach` sets (:attr:`token_params`): none by default."""
         return self.token_params
 
+    @override
     def credential_identity(self) -> bytes:
         """Return bytes naming the long-lived credential this auth mints with: by default, this instance's own.
 
@@ -625,8 +718,16 @@ class CachedTokenAuth[TokenT = str](httpx2.Auth):
     def attach(self, request: httpx2.Request, token: TokenT) -> None:
         """Put *token* on *request*, replacing any earlier one: the re-send after a 401 calls this a second time.
 
-        An override declares the headers it sets in :attr:`token_headers`.
+        An override declares the headers it sets in :attr:`token_headers`. The default sends a ``str`` token as
+        ``Authorization: Bearer <token>``, and raises ``TypeError`` for any other, before setting anything: a token of
+        another type is attached by an override.
         """
+        if not isinstance(token, str):
+            msg = (
+                f"{type(self).__name__} holds a {type(token).__name__} token, which the default attach cannot send "
+                "as Authorization: Bearer: override attach to put it on the request"
+            )
+            raise TypeError(msg)
         request.headers["Authorization"] = f"Bearer {token}"
 
     def skips(self, request: httpx2.Request) -> bool:
