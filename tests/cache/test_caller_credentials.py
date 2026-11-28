@@ -70,7 +70,7 @@ def _client(echo: _Echo, storage: AsyncSqliteStorage, auth: Auth) -> Client:
     return Client(
         base_url="https://x",
         auth=auth,
-        policy=CallPolicy(cache=HttpCache(**series_rules(), storage=storage)),
+        policy=CallPolicy(cache=HttpCache(**series_rules(), storage=storage, ttl=None)),
         http=HttpOptions(transport=httpx2.MockTransport(echo)),
     )
 

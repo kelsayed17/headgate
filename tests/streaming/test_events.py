@@ -17,7 +17,7 @@ import pytest
 from headgate import CallPolicy, Client, HttpOptions, Timeouts
 
 if TYPE_CHECKING:
-    from headgate.streaming import StreamOptions
+    from headgate.streaming import EventOptions
 
 #: One event, as a server sends it.
 _EVENT = b"id: 7\nevent: tick\ndata: hi\n\n"
@@ -68,7 +68,7 @@ async def test_events_asks_for_an_event_stream_with_no_read_limit() -> None:
     ],
     ids=["own-accept", "own-read", "other-phase"],
 )
-async def test_the_callers_accept_and_read_timeout_win(options: StreamOptions, accept: str, read: float | None) -> None:
+async def test_the_callers_accept_and_read_timeout_win(options: EventOptions, accept: str, read: float | None) -> None:
     """Keep the caller's own ``Accept`` and read timeout over the defaults; a timeout without ``read`` sets none."""
     recording = _Recording()
     async with _client(recording).events("feed", **options):

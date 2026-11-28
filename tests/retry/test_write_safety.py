@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import io
 import os
-from typing import TYPE_CHECKING, BinaryIO, ClassVar, override
+from typing import TYPE_CHECKING, BinaryIO, ClassVar, cast, override
 
 import httpx2
 import pytest
@@ -258,6 +258,22 @@ async def test_an_empty_key_from_the_factory_is_refused() -> None:
     built = client(fake, policy=CallPolicy(idempotency=IdempotencyKeys(factory=lambda: "")))
 
     with pytest.raises(ValueError, match=r"^IdempotencyKeys\(factory=\.\.\.\) must return a key that is not empty"):
+        await built.post("x", body=Raw(_BODY), expect=nothing)
+
+    assert not fake.calls
+
+
+@pytest.mark.parametrize("key", [None, 42, b"k3y", object()], ids=["none", "int", "bytes", "object"])
+async def test_a_key_from_the_factory_that_is_no_text_is_refused(key: object) -> None:
+    """Refuse a key the policy's factory made that is not a ``str``, naming ``factory=``, before anything is sent.
+
+    It failed deep in the client with a bare ``AttributeError`` (``'object' object has no attribute 'strip'``).
+    """
+    fake = FakeTransport().reply("POST", "/v1/x", 201)
+    built = client(fake, policy=CallPolicy(idempotency=IdempotencyKeys(factory=cast("Callable[[], str]", lambda: key))))
+
+    message = rf"^IdempotencyKeys\(factory=\.\.\.\) must return a key, a str \(got {type(key).__name__}\)$"
+    with pytest.raises(TypeError, match=message):
         await built.post("x", body=Raw(_BODY), expect=nothing)
 
     assert not fake.calls

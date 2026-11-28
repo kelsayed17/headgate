@@ -123,7 +123,7 @@ async def test_a_precondition_the_call_sets_itself_wins() -> None:
 async def test_a_ttl_cache_answers_a_conditional_read_without_asking(storage: AsyncSqliteStorage) -> None:
     """A ``FilterPolicy`` cache never revalidates: a stored entry answers fresh and the origin is not asked again."""
     origin = _Origin()
-    client = _client(origin, HttpCache(**every_get_rules(), storage=storage))
+    client = _client(origin, HttpCache(**every_get_rules(), storage=storage, ttl=None))
     first = await client.get(_URL, expect=conditional(as_bytes))
     assert isinstance(first, Fresh)
 

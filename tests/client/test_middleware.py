@@ -15,6 +15,7 @@ import functools
 import hashlib
 import hmac
 import itertools
+import re
 from typing import TYPE_CHECKING, ClassVar, cast, override
 
 import httpx2
@@ -253,6 +254,7 @@ async def _bare_function(request: httpx2.Request, call_next: Next) -> httpx2.Res
         pytest.param(_HeadersAsStr(), "_HeadersAsStr", id="str"),
         pytest.param(_HeadersNotNames(), "_HeadersNotNames", id="not-names"),
         pytest.param(_bare_function, "_bare_function", id="function"),
+        pytest.param(functools.partial(_bare_function), "partial(_bare_function)", id="partial"),
     ],
 )
 def test_a_middleware_that_declares_nothing_is_refused(item: object, name: str) -> None:
@@ -391,11 +393,12 @@ def _declared[F](function: F) -> F:
     [
         pytest.param(_SyncCall(), "_SyncCall", id="sync-call"),
         pytest.param(_declared(_sync_function), "_sync_function", id="sync-function"),
+        pytest.param(_declared(functools.partial(_sync_function)), "partial(_sync_function)", id="sync-partial"),
     ],
 )
 def test_a_middleware_that_is_not_async_is_refused(item: object, name: str) -> None:
-    """Refuse at ``Client()`` a middleware whose call is not a coroutine function (T13), naming it."""
-    with pytest.raises(TypeError, match=rf"middleware {name} must be an async callable, async def __call__"):
+    """Refuse at ``Client()`` a middleware whose call is not a coroutine function (T13), naming it (a partial too)."""
+    with pytest.raises(TypeError, match=rf"middleware {re.escape(name)} must be an async callable, async def __call__"):
         Client(base_url="https://x", middleware=(cast("Middleware", item),))
 
 

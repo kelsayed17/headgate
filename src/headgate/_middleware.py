@@ -17,6 +17,12 @@ again below the last middleware and the signature, on every attempt of every hop
 A middleware declares the headers and query parameters it stamps (``credential_headers`` and ``credential_params``, the
 shape every headgate auth has, empty when it stamps none), and has them removed from a hop addressed to any origin other
 than ``base_url``'s and ``SecurityOptions.trusted_origins``. ``Client()`` refuses a middleware that declares neither.
+
+**A host a middleware sends to is vetted too.** Over a network transport that does not pin (a custom one, or a test's
+fake network), the SSRF guard's check is a request hook as well, which a middleware's change of host comes after, so it
+runs again below the last middleware, after the credential guard, on an attempt whose origin the guard has not admitted
+(one left where the hook vetted it is not looked up twice, and a retry or a hedge of a moved one is vetted where it
+goes); the default and curl transports vet the host they connect to themselves.
 """
 
 from collections.abc import Awaitable, Callable
@@ -24,8 +30,9 @@ from typing import TYPE_CHECKING, Protocol, override
 
 import httpx2
 
-from headgate._auth import SIGNER_EXT, SigningAuth, refuse_undeclared, stamped_names
+from headgate._auth import SIGNER_EXT, SigningAuth, refuse_moved, refuse_undeclared, stamped_names
 from headgate._core import CredentialCarrier
+from headgate.security._transport import VETTED_ORIGIN
 
 if TYPE_CHECKING:
     from headgate._core import Clock
@@ -61,7 +68,7 @@ def _link(middleware: Middleware, call_next: Next) -> Next:
 
 
 class MiddlewareTransport(httpx2.AsyncBaseTransport):
-    """Run a request through *middleware*, in order, then the signer and *guard*, then the transport below.
+    """Run a request through *middleware*, in order, then the signer and *guards*, then the transport below.
 
     The signer is the client's own :class:`~headgate.SigningAuth`, if it has one. It signs each attempt of a request
     its flow marked (:data:`~headgate._auth.SIGNER_EXT`) as the last middleware passes it on; the stack builds this
@@ -74,14 +81,18 @@ class MiddlewareTransport(httpx2.AsyncBaseTransport):
         *,
         transport: httpx2.AsyncBaseTransport,
         middleware: tuple[Middleware, ...],
-        guard: Callable[[httpx2.Request], Awaitable[None]],
+        guards: tuple[Callable[[httpx2.Request], Awaitable[None]], ...],
         signer: tuple[SigningAuth, Clock] | None,
+        vets: tuple[Callable[[httpx2.Request], Awaitable[None]], ...] = (),
     ) -> None:
-        """Chain *middleware* before *signer*, *guard* and *transport*, once, so each attempt only walks the chain.
+        """Chain *middleware* before *signer*, *guards* and *transport*, once, so each attempt only walks the chain.
 
         *signer* is the client's auth when it is a ``SigningAuth``, with the client's wall clock, which each signature
-        is made at: only its marks are signed, since the guard withholds only what the client's auth declares. *guard*
-        is the client's credential guard, run on what the last middleware passes on, once it is signed.
+        is made at: only its marks are signed, since the guard withholds only what the client's auth declares. *guards*
+        run in order on what the last middleware passes on, once it is signed: the client's credential guard. *vets*
+        run after them on a request whose origin the SSRF guard has not admitted (its mark,
+        :data:`~headgate.security._transport.VETTED_ORIGIN`, names another or none): the guard's vetting, when the
+        network transport does not pin.
         """
         self._transport = transport
 
@@ -90,10 +101,17 @@ class MiddlewareTransport(httpx2.AsyncBaseTransport):
                 auth, wall_clock = signer
                 # A hedge's copy and a redirect hop are new requests over the body the flow buffered: read it again.
                 await request.aread()
-                before = stamped_names(request)
+                before, origin = stamped_names(request), httpx2.Origin(request.url)
                 auth.sign(request, wall_clock())
                 refuse_undeclared(auth, "sign", request, before)
-            await guard(request)
+                refuse_moved(auth, "sign", request, origin)
+            for guard in guards:
+                await guard(request)
+            # Vetted again unless the guard admitted this very origin: a request a middleware moved, or built afresh
+            # (no mark), or a retry or a hedge of one it moved before the guard had admitted the move.
+            if vets and request.extensions.get(VETTED_ORIGIN) != httpx2.Origin(request.url):
+                for vet in vets:
+                    await vet(request)
             return await transport.handle_async_request(request)
 
         chain: Next = guarded

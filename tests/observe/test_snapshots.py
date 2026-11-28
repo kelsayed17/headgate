@@ -109,14 +109,14 @@ async def _hedged(observers: tuple[Observer, ...], _storage: AsyncSqliteStorage)
 async def _cache_hit(observers: tuple[Observer, ...], storage: AsyncSqliteStorage) -> None:
     """Make two calls for one cacheable resource, the second served from the cache."""
     fresh = httpx2.Response(200, content=b"cached", headers={"Cache-Control": "max-age=60"})
-    policy = CallPolicy(cache=HttpCache(**every_get_rules(), storage=storage))
+    policy = CallPolicy(cache=HttpCache(**every_get_rules(), storage=storage, ttl=None))
     await _call(client(FakeTransport().reply("GET", "/v1/x", fresh), *observers, policy=policy), times=2)
 
 
 async def _cache_degraded(observers: tuple[Observer, ...], storage: AsyncSqliteStorage) -> None:
     """Make one call whose cache storage fails, so it is handed to the network."""
     broken = FaultyStorage(storage, OSError("disk gone"), failing="get_entries")
-    policy = CallPolicy(cache=HttpCache(**every_get_rules(), storage=broken))
+    policy = CallPolicy(cache=HttpCache(**every_get_rules(), storage=broken, ttl=None))
     await _call(client(FakeTransport().reply("GET", "/v1/x"), *observers, policy=policy))
 
 

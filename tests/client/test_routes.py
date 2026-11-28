@@ -170,7 +170,7 @@ async def test_a_routes_cache_none_keeps_its_paths_out_of_the_cache(storage: Asy
     script = Script(httpx2.Response(200, content=b"body"))
     policy = CallPolicy(routes=(Route("/live", cache=None), Route("/stored")))
     client = stub_client(
-        transport=script.transport(), cache=HttpCache(**every_get_rules(), storage=storage), policy=policy
+        transport=script.transport(), cache=HttpCache(**every_get_rules(), storage=storage, ttl=None), policy=policy
     )
 
     for path in ("live", "live", "stored", "stored"):
@@ -219,7 +219,9 @@ def test_a_route_refuses_an_option_it_does_not_take(options: dict[str, Any], mes
 
 def test_a_policy_takes_only_routes() -> None:
     """Refuse a bare fragment, or a fragment string, where a route goes."""
-    message = r"^routes= takes a tuple of Route, such as \(Route\('/exports', deadline=300\.0\),\) \(got str\)$"
+    message = (
+        r"^routes= takes a sequence of Route, in order, such as \(Route\('/exports', deadline=300\.0\),\) \(got str\)$"
+    )
     with pytest.raises(TypeError, match=message):
         CallPolicy(routes=cast("Any", ("/x",)))
     with pytest.raises(TypeError, match=message):

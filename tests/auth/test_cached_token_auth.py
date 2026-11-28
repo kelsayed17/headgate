@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import math
+import pickle
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, cast, override
 
 import httpx2
@@ -21,7 +23,7 @@ import pytest
 from headgate import AuthError, Client, HttpOptions, TransportError, _auth
 from headgate._auth import AUTH_HOP, FRESH_TOKEN_S, CachedTokenAuth, Minted, failed_on_auth_hop
 from headgate.errors import ClientConfigurationError
-from headgate.testing import FakeTransport, Respond, TestClock, fake_network, instant_retries
+from headgate.testing import FakeTransport, Respond, TestClock, fake_network, instant_waits
 from tests.support.responses import RESPONSE
 from tests.support.tokens import TEST_BEARER, premint
 
@@ -477,6 +479,28 @@ class TestRotationRefusal:
         """Accept a missing, empty or echoed credential: only a different one means rotation."""
         _CountingAuth().reject_credential_rotation(returned, "same", setting="EXAMPLE_REFRESH_TOKEN")
 
+    @pytest.mark.parametrize(
+        ("returned", "configured", "kinds"),
+        [
+            (b"same", "same", "bytes against str"),
+            ("same", b"same", "str against bytes"),
+            (None, 7, "NoneType against int"),
+        ],
+        ids=["bytes-returned", "bytes-configured", "int-configured"],
+    )
+    def test_credentials_of_two_kinds_are_refused_naming_both(
+        self, returned: object, configured: object, kinds: str
+    ) -> None:
+        """Refuse a credential that is no ``str`` with a ``TypeError`` naming both, rather than read it as rotated.
+
+        ``b"same"`` never equals ``"same"``, so a token endpoint's bytes read as a new credential, the wrong refusal.
+        """
+        message = rf"^returned= and configured= take the two credentials as str, to compare them \(got {kinds}\)"
+        with pytest.raises(TypeError, match=message):
+            _CountingAuth().reject_credential_rotation(
+                cast("Any", returned), cast("Any", configured), setting="EXAMPLE_REFRESH_TOKEN"
+            )
+
 
 class _HoppingAuth(CachedTokenAuth[tuple[str, str]]):
     """Mint through requests the flow yields (a cookie-plus-crumb exchange) and ride as a header pair."""
@@ -720,7 +744,7 @@ class TestOneMint:
             .reply("POST", "/token", Respond(json={"access_token": "tok"}))
             .reply("GET", "/v2/me", Respond(json={"ok": True}))
         )
-        with fake_network(fake), instant_retries():
+        with fake_network(fake), instant_waits():
             client = Client(base_url="https://api.tasks.example/v2", auth=_Flow())
         async with client:
             await client.get("me", expect=RESPONSE)
@@ -771,10 +795,18 @@ class TestNoBaseConstructor:
         await client.get("/x")
         assert auth.mints == _MINT_AND_RE_MINT
 
-    @pytest.mark.parametrize("margin", [-1.0, True, math.nan, "5"], ids=repr)
-    def test_a_refresh_margin_that_is_not_seconds_is_refused(self, margin: object) -> None:
-        """Refuse, when the class is defined, a margin that is negative, NaN or not a number."""
-        with pytest.raises(TypeError, match=r"_Bad\.refresh_margin takes the seconds before expiry"):
+    @pytest.mark.parametrize(
+        ("margin", "error", "got"),
+        [(-1.0, ValueError, "-1.0"), (math.nan, ValueError, "nan"), (True, TypeError, "bool"), ("5", TypeError, "str")],
+        ids=["negative", "nan", "bool", "str"],
+    )
+    def test_a_refresh_margin_that_is_not_seconds_is_refused(
+        self, margin: object, error: type[Exception], got: str
+    ) -> None:
+        """Refuse, when the class is defined, a margin that is not a number (``TypeError``), or negative or NaN."""
+        wanted = "the seconds before expiry to refresh, a finite number of 0 or more"
+        message = rf"^_Bad\.refresh_margin takes {wanted} \(got {got}\)$"
+        with pytest.raises(error, match=message):
             type("_Bad", (_CountingAuth,), {"refresh_margin": margin})
 
     async def test_the_token_runs_on_the_timing_the_client_is_built_under(self) -> None:
@@ -830,10 +862,23 @@ def test_an_async_token_hook_is_refused_when_defined(hook: str) -> None:
         type("_Async", (_CountingAuth,), {hook: coroutine, "credential_headers": frozenset({"x-token"})})
 
 
-@pytest.mark.parametrize("lifetime", [0.0, -5.0, math.nan, True, "60"], ids=repr)
-def test_a_minted_lifetime_that_is_not_positive_seconds_is_refused(lifetime: object) -> None:
-    """Refuse, when it is built, a lifetime that is not a positive number of seconds (R9)."""
-    with pytest.raises(TypeError, match=r"Minted\(lifetime=\) takes the seconds the token lives, a number above 0"):
+@pytest.mark.parametrize(
+    ("lifetime", "error", "got"),
+    [
+        (0.0, ValueError, "0.0"),
+        (-5.0, ValueError, "-5.0"),
+        (math.nan, ValueError, "nan"),
+        (True, TypeError, "bool"),
+        ("60", TypeError, "str"),
+    ],
+    ids=["zero", "negative", "nan", "bool", "str"],
+)
+def test_a_minted_lifetime_that_is_not_positive_seconds_is_refused(
+    lifetime: object, error: type[Exception], got: str
+) -> None:
+    """Refuse, when it is built, a lifetime that is not a number (``TypeError``), or not above 0 (R9)."""
+    message = rf"^Minted\(lifetime=\) takes the seconds the token lives, a number above 0 \(got {got}\)$"
+    with pytest.raises(error, match=message):
         Minted("tok", cast("float", lifetime))
 
 
@@ -844,7 +889,7 @@ def test_a_minted_lifetime_may_be_infinite() -> None:
 
 def test_an_infinite_refresh_margin_is_refused() -> None:
     """Refuse ``math.inf``: a margin is a finite number of seconds (R9)."""
-    with pytest.raises(TypeError, match=r"_Bad\.refresh_margin takes the seconds before expiry"):
+    with pytest.raises(ValueError, match=r"_Bad\.refresh_margin takes the seconds before expiry .*\(got inf\)$"):
         type("_Bad", (_CountingAuth,), {"refresh_margin": math.inf})
 
 
@@ -924,6 +969,26 @@ async def test_a_copy_keeps_a_cache_of_its_own(client_factory: _Factory) -> None
     assert duplicate.credential_identity() != auth.credential_identity()
 
 
+@pytest.mark.parametrize("called", [False, True], ids=["before-a-call", "after-a-call"])
+async def test_an_auth_a_client_holds_copies_and_pickles_without_its_token(*, called: bool) -> None:
+    """Copy, deep-copy and pickle an auth a client holds, each copy with a cache of its own, the pickle with no token.
+
+    The token state holds each event loop's mints, which no copy shares and no pickle can hold. ``copy.deepcopy``
+    replays the reduce protocol as ``pickle.loads`` would.
+    """
+    auth = _CountingAuth()
+    async with _client_for(auth) as client:
+        if called:
+            await client.get("x", expect=RESPONSE)
+        pickled = pickle.dumps(auth)
+        copies = [copy.copy(auth), copy.deepcopy(auth)]
+
+    assert b"tok-1" not in pickled
+    for duplicate in copies:
+        assert duplicate.credential_identity() != auth.credential_identity()
+        assert duplicate.mints == auth.mints
+
+
 def test_a_client_refused_for_its_timing_builds_no_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
     """Refuse a client on a second timing before it builds an ``httpx2.AsyncClient``, and leave the auth's clock."""
     built: list[object] = []
@@ -944,3 +1009,35 @@ def test_a_client_refused_for_its_timing_builds_no_http_client(monkeypatch: pyte
     assert built == []
     with first_clock.install():
         _client_for(auth)  # still on the first client's timing
+
+
+#: A lifetime so short that every call finds the token due, so each mints, and concurrent calls wait on the lock.
+_ALWAYS_DUE_S = 1e-6
+
+
+async def _three_calls_at_once(auth: CachedTokenAuth) -> None:
+    """Make three concurrent calls with *auth* on a client of the running event loop, each minting in turn."""
+    async with _client_for(auth) as client:
+        await asyncio.gather(*(client.get("x", expect=RESPONSE) for _ in range(3)))
+
+
+class TestEventLoops:
+    """One auth serves clients on several event loops: its mint lock is the running loop's, not the first loop's."""
+
+    def test_clients_on_two_loops_in_turn_share_one_auth(self) -> None:
+        """Mint under a second loop's own lock, where one bound to the first loop raised ``RuntimeError``."""
+        auth = _CountingAuth(lifetime=_ALWAYS_DUE_S, delay=0.001)
+        asyncio.run(_three_calls_at_once(auth))
+        asyncio.run(_three_calls_at_once(auth))
+
+        assert auth.mints == 2 * 3
+
+    def test_clients_on_two_threads_share_one_auth(self) -> None:
+        """Mint on two threads' loops at once, each waiting on the lock of its own loop."""
+        auth = _CountingAuth(lifetime=_ALWAYS_DUE_S, delay=0.001)
+        with ThreadPoolExecutor(max_workers=2) as threads:
+            runs = [threads.submit(asyncio.run, _three_calls_at_once(auth)) for _ in range(2)]
+        for run in runs:
+            run.result()  # re-raises what the thread's loop raised
+
+        assert auth.mints == 2 * 3

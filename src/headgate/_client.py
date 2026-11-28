@@ -40,14 +40,25 @@ from typing import Final, Literal, Self, Unpack, cast, final, get_args, overload
 
 import httpx2
 
-from headgate._auth import MINTING, Auth, check_timing, failed_on_auth_hop, hold_timing, mint_hop_failure, was_checked
+from headgate._auth import (
+    MINTING,
+    Auth,
+    check_timing,
+    failed_on_auth_hop,
+    hold_timing,
+    mint_hop_failure,
+    refuse_auth_headers,
+    was_checked,
+)
 from headgate._body import read_capped, read_head
 from headgate._call_options import (
     BODY_HINTS,
     CALL_KEYS,
+    EVENT_KEYS,
     REQUEST_KEYS,
     STREAM_KEYS,
     CallOptions,
+    EventOptions,
     RequestOptions,
     StreamOptions,
     check_overrides,
@@ -63,6 +74,7 @@ from headgate._core import (
     Observer,
     Slot,
     Timing,
+    check_header_value,
     check_kind,
     check_options,
     named,
@@ -92,6 +104,7 @@ from headgate._options import (
     Route,
     RouteOptions,
     Timeouts,
+    check_base_url,
     check_deadline,
     check_hooks,
     check_middleware,
@@ -113,8 +126,15 @@ from headgate._request_body import (
     query_values,
     wire_value,
 )
-from headgate._responses import Expect, Reader, ResponseCheck, accepts, with_answers
-from headgate._stack import NETWORK_OVERRIDE, Credentials, build_http_client, build_transport_stack
+from headgate._responses import Expect, Reader, ResponseCheck, accepts, reader_hint, with_answers
+from headgate._stack import (
+    NETWORK_OVERRIDE,
+    OFFLINE_TRANSPORTS,
+    Credentials,
+    UnmatchedRequestError,
+    build_http_client,
+    build_transport_stack,
+)
 from headgate._url import CallUrl, render_path, route_template, sanitize_url
 from headgate._view import KEEP, ROOT_DEFAULTS, VIEW_KEYS, ViewOptions
 from headgate.breaker import BreakerRegistry
@@ -193,6 +213,13 @@ _NO_BODY_HINTS: Final = {
     )
     for method in ("GET", "HEAD")
 }
+
+#: What ``events()`` says of a body keyword: it opens a GET, and an event stream a POST opens is a ``stream()``.
+_EVENT_HINTS: Final = dict.fromkeys(
+    ("body", *BODY_HINTS),
+    "events() opens a GET, which has no body; for an event stream a POST opens, write stream(url, method='POST', "
+    "body=...) and read its aiter_events()",
+)
 
 #: What a verb with a body says of a body keyword, and of ``cache_ttl=``, which only a read takes.
 _BODY_VERB_HINTS: Final = {
@@ -303,25 +330,29 @@ class Client:
     * ``ResponseParseError``: a 2xx body the reader could not read;
     * ``ResponseTooLargeError``: a body past the call's ``max_response_bytes``, else ``HttpOptions.max_response_bytes``.
 
-    There is no ``None`` return except from a reader that returns it (:data:`~headgate._responses.nothing`): every
-    undeclared non-2xx raises, a 404 included. A non-2xx the provider documents as an answer is declared with
-    :meth:`Expect.on <headgate._responses.Expect.on>` and comes back as its own wire type.
+    There is no ``None`` return except from a reader that returns it (:data:`~headgate.nothing`): every undeclared
+    non-2xx raises, a 404 included. A non-2xx the provider documents as an answer is declared with
+    :meth:`Expect.on <headgate.Expect.on>` and comes back as its own wire type.
 
-    **Per-call options** are :class:`~headgate.RequestOptions`. An option left out takes the view's, the route's or the
-    client's, and ``None`` is off: ``retry=None`` sends once and never re-sends (a POST or PATCH is already re-sent only
-    when that is safe, see :class:`~headgate.RetryPolicy`), and ``retry=RetryPolicy(...)`` replaces the policy for the
-    call. ``follow_redirects=False`` makes a redirect raise as its 3xx. ``cache_ttl=`` sets this response's cache
-    lifetime, ``None`` for none. A keyword no option names raises ``TypeError`` before anything is sent.
+    **Per-call options** are :class:`~headgate.RequestOptions`, and for the reads :meth:`get` and :meth:`head`
+    :class:`~headgate.CallOptions`. An option left out takes the view's, the route's or the client's, and ``None`` is
+    off: ``retry=None`` sends once and never re-sends (a POST or PATCH is already re-sent only when that is safe, see
+    :class:`~headgate.RetryPolicy`), and ``retry=RetryPolicy(...)`` replaces the policy for the call.
+    ``follow_redirects=False`` makes a redirect raise as its 3xx. A read's ``cache_ttl=`` (a ``CallOptions`` key, which
+    no verb with a body takes) sets this response's cache lifetime, ``None`` for none. A keyword no option names raises
+    ``TypeError`` before anything is sent.
     :meth:`with_options` makes a view whose calls take other defaults for headers, timeouts, deadline, retry and
     redirects.
 
-    **URLs.** A t-string URL (``t"series/{series_id}"``) is rendered by :func:`headgate._url.render_path`, which escapes
-    every interpolation as one path segment and raises ``ValueError`` for a value no segment can hold (as
-    :func:`~headgate._url.escape_segment` does): that is a programming error at the call site. Its template is the
+    **URLs.** A t-string URL (``t"series/{series_id}"``) is rendered with every interpolation escaped as one path
+    segment (``/``, ``?``, ``#`` and whitespace percent-encoded, and a value of only dots too, which httpx2 would
+    resolve), and an empty value, which no segment can be, raises ``ValueError``: that is a programming error at the
+    call site. Its template is the
     call's ``CallInfo.template`` in events. An absolute ``httpx2.URL`` is passed through verbatim, so a paginator can
-    forward a cursor URL from a response body; a literal ``str`` is passed through the same way. A relative
-    ``httpx2.URL`` raises ``TypeError``, since its only use would be to skip escaping, and so does a URL of any other
-    kind. A computed ``str``, such as an f-string, does not type-check, because it skipped escaping. A URL httpx2 cannot
+    forward a cursor URL from a response body; a ``str`` is passed through the same way, since only a t-string is
+    escaped. A relative ``httpx2.URL`` raises ``TypeError``, since its only use would be to skip escaping, and so does
+    a URL of any other kind. A computed ``str``, such as an f-string, does not type-check under a checker that enforces
+    ``LiteralString`` (ty, pyright), because it skipped escaping; at runtime it is sent as written. A URL httpx2 cannot
     parse raises the root ``ClientError``, since such a URL often comes from the wire rather than the code; a redirect
     to one is the host's failure, a ``TransportError``. Every message names a URL redacted and cut to a few hundred
     characters.
@@ -352,8 +383,12 @@ class Client:
             ``httpx2.Auth`` declares nothing it stamps) or is an upstream ``httpx`` one, *observers* or *middleware*
             that are not a sequence, a middleware that does not declare its credentials or is not async, an observer
             whose ``notify`` is, and a *base_url*, *policy* or *http* that is not the kind it names.
+        :raises ValueError: for a *base_url* a call's path cannot be joined onto: one with no scheme or host
+            (``"api.example.com"``), a scheme other than http and https, a query or fragment, or a user or password;
+            and for an ``HttpOptions(headers=)`` header the *auth* sets itself, which would turn the auth off.
         """
         check_kind("base_url", base_url, str, "the API root, such as 'https://api.example.com/v1'")
+        check_base_url(base_url)
         check_kind("policy", policy, CallPolicy, "CallPolicy(...)")
         check_kind("http", http, HttpOptions, "HttpOptions(...)")
         reject_upstream_httpx(auth, what="auth")
@@ -376,7 +411,13 @@ class Client:
         self._emitter = Emitter(observers) if observers else SILENT
         self._view = ROOT_DEFAULTS
         self._owns_pool = True
+        self._auth = auth
+        # A client built outside every fake network sends on its own, so inside a block its calls refuse (_prepare).
+        self._outside_fake = NETWORK_OVERRIDE.get() is None
+        self._transport = http.transport
+        # Credentials.of checks the auth's declarations, which the refusal of a default header it sets reads.
         credentials = Credentials.of(base_url=base_url, auth=auth, http=http, middleware=middleware)
+        refuse_auth_headers(auth, http.headers, option="HttpOptions(headers=)")
         lanes = [Lane(route.fragment, *_route_rate(route)) for route in policy.routes]
         self._budgets = budgets = PathBudgets(
             default=policy.rate, lanes=lanes, timing=self._timing, origin=httpx2.URL(base_url).origin
@@ -434,12 +475,17 @@ class Client:
         :raises ValueError: for a deadline that is not positive and finite, and for a timeout longer than the deadline
             the view's calls run under, since it could never take effect. A deadline shorter than the timeouts is
             accepted: cutting each attempt's timeouts to the time left is what a short deadline is for. Also for
-            ``follow_redirects=True`` on a client with a ``response_check``, which no call may follow under.
+            ``follow_redirects=True`` on a client with a ``response_check``, which no call may follow under, and for
+            ``headers=`` that name a header more than once, in any case: a view's headers are merged by name; or one no
+            request can carry, a name that is not an HTTP token or a value holding CR, LF or NUL. And for
+            ``headers=`` that name a header the client's auth sets itself, which would turn the auth off for every
+            call of the view; a call's own ``headers=`` still sends one as the caller's credential.
         :raises TypeError: for a keyword :class:`~headgate.ViewOptions` does not name, and for a ``retry`` or
             ``follow_redirects`` of the wrong kind.
         """
         check_options("with_options", options, VIEW_KEYS)
         layered = self._view.layered(options)
+        refuse_auth_headers(self._auth, options.get("headers") or {}, option="with_options(headers=)")
         if self._response_check is not None and layered.follow_redirects is True:
             msg = f"the client of {self._source} has a response_check=, so no view may follow redirects"
             raise ValueError(msg)
@@ -585,9 +631,11 @@ class Client:
         """
         check_options("stream", options, STREAM_KEYS, BODY_HINTS)
         check_overrides(options)
+        methods = f"one of {', '.join(map(repr, _METHODS))}"
+        check_kind("method", method, str, methods)
         if method not in _METHODS:
-            msg = f"method= takes one of {', '.join(map(repr, _METHODS))} (got {method!r})"
-            raise TypeError(msg)
+            msg = f"method= takes {methods} (got {method!r})"
+            raise ValueError(msg)
         if method in _NO_BODY_HINTS and options.get("body") is not None:
             msg = (
                 f"stream() takes no body= for a {method}: a {method} has no body, and the cache does not key one: use "
@@ -597,7 +645,7 @@ class Client:
         return self._streamed(_Call(method, url, options))
 
     def events(
-        self, url: CallUrl, *, last_event_id: str | None = None, **options: Unpack[StreamOptions]
+        self, url: CallUrl, *, last_event_id: str | None = None, **options: Unpack[EventOptions]
     ) -> contextlib.AbstractAsyncContextManager[Stream]:
         """Open a server-sent event stream: a :meth:`stream` GET asking for ``text/event-stream``, with no read limit.
 
@@ -609,8 +657,14 @@ class Client:
         ``last_event_id=`` sends ``Last-Event-ID`` (when not empty, and in place of one in ``headers=``), to resume the
         stream after the last event a previous :class:`~headgate.streaming.Stream` saw (its ``last_event_id``); wait
         its ``reconnect_after`` first.
+
+        Its options are :class:`~headgate.streaming.EventOptions`: a stream's, less the body, since a GET has none. An
+        event stream a POST opens is a :meth:`stream` with ``method="POST"``, read with ``aiter_events()``.
         """
+        check_options("events", options, EVENT_KEYS, _EVENT_HINTS)
         check_kind("last_event_id", last_event_id, (str, type(None)), "the id of the last event seen, a str, or None")
+        if last_event_id is not None:
+            check_header_value("last_event_id", last_event_id, "Last-Event-ID")
         # Before the merge below, which would take a list of pairs as headers.
         check_overrides(options)
         # Merged case-insensitively, so Last-Event-ID replaces one however headers= spelled it.
@@ -682,8 +736,8 @@ class Client:
         :class:`~headgate.errors.PageLimitError`, since the result is incomplete, or with ``on_limit="stop"`` ends
         there. A walk that ends within the budget is unaffected. The walk is a ``Paginated[I, P]``: its items first.
 
-        :raises ValueError: for a ``max_pages`` below 1, an ``on_limit`` that is neither ``"raise"`` nor ``"stop"``,
-            ``on_limit="stop"`` without ``max_pages``, a walk its pager refuses
+        :raises ValueError: for a ``max_pages`` below 1, an ``on_limit`` ``str`` that is neither ``"raise"`` nor
+            ``"stop"``, ``on_limit="stop"`` without ``max_pages``, a walk its pager refuses
             (:meth:`~headgate.pagination.Pager.first` runs here, once),
             and for a first page with a body and an idempotency key (``idempotency_key=``, or the policy's header in
             ``headers=``, a view's or the client's), as one key on pages with different bodies would have the server
@@ -691,8 +745,9 @@ class Client:
             iteration. Also for a pager whose ``read`` declares a redirect (301, 302, 303, 307 or 308) on a walk that
             follows redirects, which would never see one.
         :raises TypeError: for a keyword no call option names, ``body=``, ``json=`` and ``limit=`` included (a walk's
-            body is ``payload=``, its page budget ``max_pages=``), for a ``max_pages`` that is not an ``int``, and for
-            a pager whose ``read`` is not a :class:`~headgate.Reader` or an ``Expect``, before the pager runs.
+            body is ``payload=``, its page budget ``max_pages=``), for a ``max_pages`` that is not an ``int``, an
+            ``on_limit`` that is not a ``str``, and for a pager whose ``read`` is not a :class:`~headgate.Reader` or an
+            ``Expect``, before the pager runs.
         """
         check_options("paginate", options, CALL_KEYS, _WALK_HINTS)
         check_overrides(options)
@@ -710,32 +765,34 @@ class Client:
         fixed_key = self._one_key_for_every_page(call_options)
         if first.payload is not None and fixed_key:
             raise ValueError(_ONE_KEY_FOR_EVERY_PAGE)
+        # A pager is a writing one by its class, so the write of a pager of the protocol's shape alone is not used.
+        unused = write is None and not isinstance(pager, WritingPager) and getattr(pager, "write", None) is not None
         if first.payload is not None:
-            _check_first_post(first.payload, call_options, writes=write is not None)
+            _check_first_post(first.payload, call_options, writes=write is not None, unused_write=unused)
         answers = {status: _paired(read) for status, read in spec.answers.items()}
         paired = with_answers(Expect(_paired(spec.ok), headers=spec.headers, accept=spec.accept), answers)
 
         # The origin the first page was sent to, once it was: a later page's call headers go there and nowhere else.
         addressed: list[httpx2.Origin] = []
 
-        async def fetch(request: PageRequest[B]) -> tuple[P, httpx2.Response]:
+        async def fetch(request: PageRequest[B], encoded: EncodedBody | None) -> tuple[P, httpx2.Response]:
             token = _WALK_ORIGIN.set(addressed[0] if addressed and request is not first else None)
             try:
-                page, response = await fetch_page(request)
+                page, response = await fetch_page(request, encoded)
             finally:
                 _WALK_ORIGIN.reset(token)
             if not addressed:
                 addressed.append((response.history[0] if response.history else response).request.url.origin)
             return page, response
 
-        async def fetch_page(request: PageRequest[B]) -> tuple[P, httpx2.Response]:
+        async def fetch_page(request: PageRequest[B], encoded: EncodedBody | None) -> tuple[P, httpx2.Response]:
             page_options = call_options.copy()
             page_options["params"] = request.params
             if request.payload is None:
                 return await self.get(request.url, expect=paired, **page_options)
             if fixed_key:
                 raise ValueError(_ONE_KEY_FOR_EVERY_PAGE)
-            body = _walk_json(request.payload) if write is None else write(request.payload)
+            body = _walk_json(request.payload, unused_write=unused) if encoded is None else encoded
             return await self._request(_Call("POST", request.url, _posted(page_options, body)), paired)
 
         walk = PageWalk(fetch, pager, first, source=self._source, max_pages=max_pages, on_limit=on_limit)
@@ -865,6 +922,9 @@ class Client:
         on a client with a ``response_check`` and for a ``deadline=`` that is not positive and finite; ``TypeError``
         for a URL that is neither a ``str``, a t-string nor an absolute
         ``httpx2.URL``, and for a ``body=`` that is no ``Body``; and ``ClientError`` for a URL httpx2 cannot parse.
+        Inside a test's ``fake_network`` block, a client built outside every block, on another network than the
+        block's, raises :class:`~headgate.testing.UnmatchedRequestError`, so a test's credentials cannot leave for the
+        real network; one on a fake of the testing kit's own reaches no network, and sends on it.
         """
         _check_url(call.url)
         if isinstance(call.url, Template):
@@ -872,6 +932,18 @@ class Client:
         else:
             url, route = str(call.url), None
         log_url = loggable_url(url)
+        if (
+            self._outside_fake
+            and (fake := NETWORK_OVERRIDE.get()) is not None
+            and fake.transport is not self._transport
+            and type(self._transport) not in OFFLINE_TRANSPORTS
+        ):
+            msg = (
+                f"{call.method} {log_url}: refused to send: this client was built before the fake_network block was "
+                f"entered, so it would send on its own network, not the block's {type(fake.transport).__name__}: "
+                "build the SDK inside the block"
+            )
+            raise UnmatchedRequestError(msg)
         options = call.options
         follow = self._follows(options)
         # The per-call half of the constructor's check: the client itself never follows with a response_check.
@@ -1009,7 +1081,8 @@ class Client:
         """Put the call's idempotency key on *request* once, before the retry layer, so every attempt carries it.
 
         The key is the call's ``idempotency_key=``, else a fresh one from the policy's ``IdempotencyKeys`` for a POST
-        or PATCH. A key the caller already set in ``headers=`` is kept. Raises ``ValueError`` for an empty or blank key.
+        or PATCH. A key the caller already set in ``headers=`` is kept. Raises ``ValueError`` for an empty or blank key,
+        and ``TypeError`` for a factory's key that is not a ``str``.
         """
         keys = self._policy.idempotency
         header = "Idempotency-Key" if keys is None else keys.header
@@ -1018,6 +1091,9 @@ class Client:
             raise ValueError(msg)
         if key is None and keys is not None and request.method in KEYED_METHODS:
             key = keys.factory()
+            if not isinstance(key, str):
+                msg = f"IdempotencyKeys(factory=...) must return a key, a str (got {named(key)})"
+                raise TypeError(msg)
             if not key.strip():
                 msg = f"IdempotencyKeys(factory=...) must return a key that is not empty or blank (got {key!r})"
                 raise ValueError(msg)
@@ -1151,17 +1227,19 @@ class Client:
         charged with:
 
         * **a failure**: a 5xx this request fetched, whether or not the retry policy re-sends it (a 501 is the origin
-          failing to serve the request as surely as a 503), and a network failure or timeout. The call's deadline
-          cutting off an attempt already handed to the network, before its head or mid-body, is such a timeout: the
-          deadline, not httpx2's own timeout, is what ends a call to an origin that hangs;
+          failing to serve the request as surely as a 503), and a network failure or timeout of an attempt handed to
+          the network transport. The call's deadline cutting off such an attempt, before its head or mid-body, is such a
+          timeout: the deadline, not httpx2's own timeout, is what ends a call to an origin that hangs;
         * **nothing**: a 429 (the origin is up and asked us to slow down, which the rate budget handles); a network
-          error of our own side's making, or a redirect loop (:data:`_LOCAL_FAILURES`, and an invalid URL); a failure
-          on a hop an auth flow made to mint a credential (that is the credential host's failure); and an outcome
-          another request's attempt produced (a cache hit, a stored 5xx served from the cache, or a download or failure
-          the cache shared from an identical GET, :data:`~headgate.cache._transport.HOST_UNTESTED`), since only the
-          request that fetched tested the origin. The caller's task being cancelled, and the deadline passing before
-          the attempt reached the network (in a rate-budget wait, a middleware, a token mint) or while the auth mints,
-          are nothing too, as is a response a middleware answered without sending the request.
+          error of our own side's making, or a redirect loop (:data:`_LOCAL_FAILURES`, and an invalid URL); a network
+          error raised before the attempt reached the network transport (a middleware's own ``ConnectError``, a
+          signer's ``OSError``, the SSRF guard's lookup of the call's own host in a request hook), which sent nothing;
+          a failure on a hop an auth flow made to mint a credential (that is the credential host's failure); and an
+          outcome another request's attempt produced (a cache hit, a stored 5xx served from the cache, or a download
+          or failure the cache shared from an identical GET, :data:`~headgate.cache._transport.HOST_UNTESTED`), since
+          only the request that fetched tested the origin. The caller's task being cancelled, and the deadline passing
+          before the attempt reached the network (in a rate-budget wait, a middleware, a token mint) or while the auth
+          mints, are nothing too, as is a response a middleware answered without sending the request.
         """
         request = prepared.request
         try:
@@ -1192,7 +1270,10 @@ class Client:
         """Charge the network failure *exc* to the origin on *verdict*, and return the ``ClientError`` it becomes."""
         if (mint_failure := mint_hop_failure(exc)) is not None:
             return mint_failure
-        if _network_failure_charges_origin(exc):
+        # The attempt that failed is the call's last: a failure raised before it reached the network tested no origin.
+        # shortcut: a request hook's failure on a later hop (the SSRF guard's lookup of a redirect target) reads the
+        # hop before's progress, so it is charged; mark each hop's progress in the hooks if that matters.
+        if prepared.context.progress.dispatched and _network_failure_charges_origin(exc):
             verdict.mark_failed()
         return transport_error(exc, self._site(prepared))
 
@@ -1462,7 +1543,8 @@ def _cut_off_on_the_wire(context: CallContext) -> bool:
     """Return whether the call's own deadline fired while its attempt was on the network (see ``_sent``).
 
     The deadline's timer says whether the cancellation is its own rather than the caller's; the attempt was on the
-    network once the rate budget handed it on, unless the auth flow was minting (that is the credential host's time).
+    network once it was handed to the network transport, unless the auth flow was minting (that is the credential
+    host's time).
     """
     timer = context.get(_DEADLINE_TIMER)
     return timer is not None and timer.expired() and context.progress.dispatched and context.get(MINTING) is not True
@@ -1516,9 +1598,13 @@ def _refuse_unseen_redirects[T](spec: Expect[T], method: str, *, replayable: boo
 def _expectation[T](expect: Reader[T] | Expect[T]) -> Expect[T]:
     """Return *expect* as an ``Expect``: itself, or one whose success reader it is.
 
-    :raises TypeError: for an *expect* that is neither, such as a model class or a bare function.
+    :raises TypeError: for an *expect* that is neither, such as a model class, saying to write its reader, or a bare
+        function.
     """
-    check_kind("expect", expect, (Reader, Expect), "a Reader or an Expect")
+    if not isinstance(expect, Reader | Expect):
+        hint = reader_hint(expect)
+        msg = f"expect= takes a Reader or an Expect (got {named(expect)})" + ("" if hint is None else f": {hint}")
+        raise TypeError(msg)
     return expect if isinstance(expect, Expect) else Expect(expect)
 
 
@@ -1563,7 +1649,7 @@ def _page_writer[I, P, B](pager: Pager[I, P, B]) -> Writer[B] | None:
     return pager.write
 
 
-def _check_first_post(payload: object, options: CallOptions, *, writes: bool) -> None:
+def _check_first_post(payload: object, options: CallOptions, *, writes: bool, unused_write: bool) -> None:
     """Refuse, where a walk of POSTs is made, what its first page would raise.
 
     That is a *payload* JSON cannot encode when the pager *writes* none, and a ``cache_ttl``.
@@ -1572,7 +1658,7 @@ def _check_first_post(payload: object, options: CallOptions, *, writes: bool) ->
     :raises ValueError: for a ``cache_ttl``, since no cache stores a POST.
     """
     if not writes:
-        _walk_json(payload)
+        _walk_json(payload, unused_write=unused_write)
     if "cache_ttl" in options:
         raise ValueError(_UNCACHED_PAGE)
 
@@ -1588,21 +1674,33 @@ def _posted(options: CallOptions, body: Body) -> RequestOptions:
     return cast("RequestOptions", posted)
 
 
-def _walk_json(payload: object) -> EncodedBody:
+#: What a walk's payload of builtins takes, and what to write instead of another, when its pager has no write.
+_NO_WRITE: Final = (
+    "paginate() sends payload= as JSON, since its pager has no write, so it takes builtins",
+    "write payload=to_builtins(value), or give the pager write=writer(Type)",
+)
+
+#: The same, when the pager has a write of its own that is not used, since it is not a WritingPager.
+_UNUSED_WRITE: Final = (
+    (
+        "paginate() sends payload= as JSON, which takes builtins, since its pager has a write but is not a "
+        "WritingPager, so the write is not used"
+    ),
+    "subclass headgate.pagination.WritingPager, whose write encodes each page's body",
+)
+
+
+def _walk_json(payload: object, *, unused_write: bool) -> EncodedBody:
     """Return a walk's *payload*, which its pager has no writer for, as JSON, refused in a walk's words.
+
+    *unused_write* says the pager has a ``write`` of its own, which is not used, since it is not a ``WritingPager``.
 
     :raises TypeError: for a payload that is not builtins: what a ``Json`` says to write names ``body=``, which a walk
         does not take.
     :raises ValueError: for one holding ``NaN`` or an infinity.
     """
-    return EncodedBody(
-        encoded_json(
-            payload,
-            subject="paginate()'s payload=",
-            takes="paginate() sends payload= as JSON, since its pager has no write, so it takes builtins",
-            instead="write payload=to_builtins(value), or give the pager write=writer(Type)",
-        )
-    )
+    takes, instead = _UNUSED_WRITE if unused_write else _NO_WRITE
+    return EncodedBody(encoded_json(payload, subject="paginate()'s payload=", takes=takes, instead=instead))
 
 
 def _paired[T](read: Reader[T]) -> Reader[tuple[T, httpx2.Response]]:

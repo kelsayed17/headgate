@@ -137,7 +137,7 @@ async def test_a_pause_past_the_deadline_is_not_mistaken_for_a_cache_fault(stora
     clock = TestClock()
     budget = _budget(clock)
     server = _Server()
-    cache = HttpCache(storage=storage)
+    cache = HttpCache(storage=storage, ttl=None)
     recorder = Recorder()
     client = _client(budget, server, cache=cache, recorder=recorder)
     with pytest.raises(RateLimitError):

@@ -10,6 +10,8 @@ budget is asked for shows whether two calls spent one budget or two.
 from __future__ import annotations
 
 import copy
+import pickle
+import threading
 from typing import TYPE_CHECKING, Any, Final, LiteralString, cast
 
 import pytest
@@ -114,6 +116,28 @@ def test_a_copy_of_a_shared_handle_is_the_handle(shared: Callable[[], object]) -
     assert copy.deepcopy(handle) is handle
 
 
+@pytest.mark.parametrize(
+    "shared",
+    [RetryBudget, BreakerRegistry, lambda: RateBudget(Rate.per_second(10))],
+    ids=["RetryBudget", "BreakerRegistry", "RateBudget"],
+)
+def test_a_shared_handle_cannot_be_pickled(shared: Callable[[], object]) -> None:
+    """Refuse to pickle a live handle, saying so, rather than fail on the lock inside it: it is one process's state.
+
+    Held by something pickled, it is refused the same way, under the notes ``pickle`` adds on where it was found.
+    """
+    handle = shared()
+    name = type(handle).__name__
+    message = (
+        rf"^a {name} is live state its clients share within one process, so it cannot be pickled: build one in each "
+        r"process that uses it"
+    )
+    with pytest.raises(TypeError, match=message):
+        pickle.dumps(handle)
+    with pytest.raises(TypeError, match=message):
+        pickle.dumps({"held": [handle]})
+
+
 def test_a_deep_copy_of_a_policy_keeps_its_shared_objects() -> None:
     """Keep the budgets and registry a policy shares when the policy is deep-copied, so its copy still shares them."""
     budget, registry, rate = RetryBudget(), BreakerRegistry(), RateBudget(Rate.per_second(10))
@@ -126,3 +150,29 @@ def test_a_deep_copy_of_a_policy_keeps_its_shared_objects() -> None:
     assert copied.retry is not None
     assert copied.retry.budget is budget
     Client(base_url="https://api.example", policy=copied)
+
+
+def test_one_retry_budget_spent_from_several_threads_admits_exactly_its_allowance() -> None:
+    """Admit exactly the window's allowance of retries when threads spend one budget at once, as on free threading."""
+    share = RetryShare(ratio=0.0, min_per_second=10.0, window=10.0)
+    allowance = int(share.min_per_second * share.window)
+    budget = RetryBudget(share)
+    ledger = ledger_of(budget)
+    start = threading.Barrier(8)
+    admitted: list[bool] = []
+    lock = threading.Lock()
+
+    def spend() -> None:
+        start.wait()
+        spent = [ledger.try_spend() for _ in range(50)]
+        with lock:
+            admitted.extend(spent)
+
+    threads = [threading.Thread(target=spend) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert admitted.count(True) == allowance, "ten a second over ten seconds, however the threads interleave"
+    assert ledger.counts() == (allowance, 0)

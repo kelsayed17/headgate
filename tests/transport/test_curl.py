@@ -188,6 +188,104 @@ def test_curl_following_redirects_itself_is_refused(sessions: list[_Session], va
     assert sessions == []
 
 
+@pytest.mark.parametrize("option", [CurlOpt.URL, CurlOpt.CURLU], ids=["URL", "CURLU"])
+def test_curl_sending_every_request_to_one_url_is_refused(sessions: list[_Session], option: CurlOpt) -> None:
+    """Refuse ``CurlOpt.URL`` and ``CURLU``: curl would send every request there, past every hook and the guard."""
+    with pytest.raises(ValueError, match=r"must not set CurlOpt\.URL or CurlOpt\.CURLU"):
+        _transport(sessions, curl_options={option: "http://127.0.0.1:6379/"})
+    assert sessions == []
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        (CurlOpt.HTTPHEADER, [b"Authorization: Bearer s3cret"]),
+        (CurlOpt.HTTP3_HTTPHEADER, [b"Authorization: Bearer s3cret"]),
+        (CurlOpt.COOKIE, "session=s3cret"),
+        (CurlOpt.USERPWD, "user:s3cret"),
+        (CurlOpt.USERNAME, "user"),
+        (CurlOpt.PASSWORD, "s3cret"),
+        (CurlOpt.XOAUTH2_BEARER, "s3cret"),
+    ],
+    ids=lambda case: case.name if isinstance(case, CurlOpt) else "",
+)
+def test_curl_sending_a_header_or_credential_with_every_request_is_refused(
+    sessions: list[_Session], option: CurlOpt, value: object
+) -> None:
+    """Refuse a header list or a credential in ``curl_options``: curl adds it to every request below every hook.
+
+    It reached every origin a redirect led to, past the credential guard that drops a credential there, and the
+    redaction of secrets; a header list also added its lines to each request's own, a second ``Authorization`` beside
+    the auth's.
+    """
+    with pytest.raises(
+        ValueError, match=rf"must not set CurlOpt\.{option.name}: .* HttpOptions\(headers=\.\.\.\)"
+    ) as caught:
+        _transport(sessions, curl_options={option: value})
+    assert "s3cret" not in str(caught.value)
+    assert sessions == []
+
+
+@pytest.mark.parametrize("value", [1, 2, True], ids=["optional", "required", "true"])
+def test_curl_reading_a_netrc_is_refused(sessions: list[_Session], value: object) -> None:
+    """Refuse ``CurlOpt.NETRC``: curl adds a ``.netrc`` password below every hook, a ``default`` entry's anywhere."""
+    with pytest.raises(ValueError, match=r"must not set CurlOpt\.NETRC: .* HttpOptions\(headers=\.\.\.\)"):
+        _transport(sessions, curl_options={CurlOpt.NETRC: value, CurlOpt.NETRC_FILE: "/dev/null"})
+    assert sessions == []
+
+
+def test_curl_ignoring_a_netrc_is_taken(sessions: list[_Session]) -> None:
+    """Take ``CurlOpt.NETRC`` set to 0, ``CURL_NETRC_IGNORED``, which reads no ``.netrc``: curl's own default."""
+    _, session = _transport(sessions, curl_options={CurlOpt.NETRC: 0})
+    assert session.init["curl_options"][CurlOpt.NETRC] == 0
+
+
+@pytest.mark.parametrize("value", [0, False], ids=["unified", "false"])
+def test_curl_sending_a_requests_headers_to_its_proxy_is_refused(sessions: list[_Session], value: object) -> None:
+    """Refuse ``CurlOpt.HEADEROPT`` set to ``CURLHEADER_UNIFIED``: curl sends each request's headers to the proxy too.
+
+    Its credentials, an auth's ``Authorization`` among them, then went in the ``CONNECT`` that opens the tunnel, which
+    the proxy, and anyone between, reads.
+    """
+    with pytest.raises(ValueError, match=r"must not set CurlOpt\.HEADEROPT to CURLHEADER_UNIFIED \(0\): .* proxy"):
+        _transport(sessions, curl_options={CurlOpt.PROXY: _PROXY, CurlOpt.HEADEROPT: value})
+    assert sessions == []
+
+
+def test_curl_keeping_a_requests_headers_from_its_proxy_is_taken(sessions: list[_Session]) -> None:
+    """Take ``CurlOpt.HEADEROPT`` set to 1, ``CURLHEADER_SEPARATE``, which keeps them from the proxy: curl's default."""
+    _, session = _transport(sessions, curl_options={CurlOpt.PROXY: _PROXY, CurlOpt.HEADEROPT: 1})
+    assert session.init["curl_options"][CurlOpt.HEADEROPT] == 1
+
+
+def test_a_proxy_credential_is_taken(sessions: list[_Session]) -> None:
+    """Take a proxy's user and password in ``curl_options``: they go to the one proxy, never to an origin."""
+    _, session = _transport(sessions, curl_options={CurlOpt.PROXY: _PROXY, CurlOpt.PROXYUSERPWD: "user:pass"})
+    assert session.init["curl_options"][CurlOpt.PROXYUSERPWD] == "user:pass"
+
+
+@pytest.mark.parametrize("count", [0, -1])
+def test_fewer_than_one_connection_is_refused(sessions: list[_Session], count: int) -> None:
+    """Refuse a connection count below 1, on which curl_cffi never finishes building its session, before building it."""
+    with pytest.raises(ValueError, match=rf"^max_connections= takes a number of curl handles, .* \(got {count}\)$"):
+        AsyncCurlTransport(impersonate="chrome", max_connections=count)
+    assert sessions == []
+
+
+@pytest.mark.parametrize(
+    ("key", "got"),
+    [("FRESH_CONNECT", "'FRESH_CONNECT', of type str"), (int(CurlOpt.FRESH_CONNECT), "74, of type int")],
+    ids=["name", "number"],
+)
+def test_a_curl_option_that_is_not_a_curl_opt_is_refused(sessions: list[_Session], key: object, got: str) -> None:
+    """Refuse a key that is not a ``CurlOpt``, before building the session: a name failed at the first request."""
+    with pytest.raises(
+        TypeError, match=rf"^curl_options= takes a mapping of CurlOpt to values, or None \(got the key {got}\)$"
+    ):
+        AsyncCurlTransport(impersonate="chrome", curl_options=cast("Any", {key: True}))
+    assert sessions == []
+
+
 def test_curl_told_not_to_follow_redirects_is_accepted(sessions: list[_Session]) -> None:
     """Accept a ``CurlOpt.FOLLOWLOCATION`` that says what the transport does anyway: follow nothing."""
     _, session = _transport(sessions, curl_options={CurlOpt.FOLLOWLOCATION: False})
@@ -528,6 +626,46 @@ async def test_closing_the_transport_twice_closes_curl_once() -> None:
     await transport.aclose()
 
 
+async def test_clients_sharing_a_curl_transport_close_its_session_with_the_last(sessions: list[_Session]) -> None:
+    """Keep the session open while a client built on the transport is open, and close it with the last of them."""
+    transport, session = _transport(sessions)
+    first, second = (Client(base_url="https://api.example", http=HttpOptions(transport=transport)) for _ in range(2))
+
+    await first.aclose()
+    await first.aclose()  # a client closed twice lets go once
+    await first.with_options(deadline=5.0).aclose()  # a view closes nothing
+    assert not session.closed
+    await second.aclose()
+    assert session.closed
+
+
+async def test_closing_a_shared_curl_transport_itself_closes_its_session(sessions: list[_Session]) -> None:
+    """Close the session at the transport's own ``aclose``, though a client built on it is still open."""
+    transport, session = _transport(sessions)
+    client = Client(base_url="https://api.example", http=HttpOptions(transport=transport))
+
+    await transport.aclose()
+    assert session.closed
+    await client.aclose()
+
+
+@pytest.mark.parametrize("closed_by", ["its-last-client", "its-aclose"])
+async def test_a_client_cannot_be_built_on_a_closed_curl_transport(sessions: list[_Session], closed_by: str) -> None:
+    """Refuse a client on a curl transport that is closed, where it is built: each of its sends would fail.
+
+    They failed with ``Session is closed``, a network failure, retried and charged to the origin's breaker.
+    """
+    transport, session = _transport(sessions)
+    if closed_by == "its-last-client":
+        await Client(base_url="https://api.example", http=HttpOptions(transport=transport)).aclose()
+    else:
+        await transport.aclose()
+
+    with pytest.raises(ValueError, match=r"^this AsyncCurlTransport is closed .*: build a new one for this client$"):
+        Client(base_url="https://api.example", http=HttpOptions(transport=transport))
+    assert (session.closed, session.calls) == (True, [])
+
+
 class _Server(ThreadingHTTPServer):
     """A loopback server whose handlers can wait on :attr:`release` and count the POSTs that reached it."""
 
@@ -715,3 +853,22 @@ class TestRealCurl:
         async with httpx2.AsyncClient(transport=transport) as client:
             response = await client.get(f"{server}/redirect")
         assert (response.status_code, response.headers["location"]) == (httpx2.codes.FOUND, "/ok")
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{"X-Stamp": "a\r\nX-Injected: yes"}, {"X-Stamp": "a\x00b"}],
+    ids=["line-break", "nul"],
+)
+async def test_a_header_no_request_can_send_is_refused_before_curl_sees_it(headers: dict[str, str]) -> None:
+    """Refuse a header whose value a hook set with a line break or a NUL, which curl would write as given.
+
+    The options refuse one where it is given; a value set on the way (a minted token, a middleware's stamp) is refused
+    here, as httpx2's own transport refuses it, naming the header but not the value.
+    """
+    transport = AsyncCurlTransport(impersonate="chrome")
+    try:
+        with pytest.raises(httpx2.LocalProtocolError, match=r"^the header 'X-Stamp' holds a line break or a NUL"):
+            await transport.handle_async_request(httpx2.Request("GET", "https://api.example.test/", headers=headers))
+    finally:
+        await transport.aclose()

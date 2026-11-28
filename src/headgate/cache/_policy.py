@@ -28,8 +28,8 @@ import httpx2
 from hishel import AsyncBaseStorage
 
 from headgate._core import (
-    check_collection,
     check_fragment,
+    check_kind,
     check_names,
     check_number,
     check_statuses,
@@ -73,8 +73,9 @@ class HttpCache:
     """A client's opt-in HTTP response cache: what to keep, where, for how long, and whose it is.
 
     ``storage`` is the hishel store, which many clients may share and whoever created it closes. ``ttl`` is the
-    client's default lifetime in seconds, which a per-call ``cache_ttl=`` overrides. ``partition`` decides who sees an
-    entry (:class:`Partition`); entries are per credential unless it says otherwise.
+    client's default lifetime in seconds, which a per-call ``cache_ttl=`` overrides. It is required, since the cache
+    stores past ``no-store`` and never revalidates: ``ttl=None``, written out, keeps entries with no expiry.
+    ``partition`` decides who sees an entry (:class:`Partition`); entries are per credential unless it says otherwise.
 
     What is stored: a request whose method is in ``methods`` (``GET`` by default; ``GET`` and ``HEAD`` only, since the
     URL is the key) and whose path matches one of ``paths`` (any path by default), answered with a status in
@@ -83,15 +84,17 @@ class HttpCache:
     such as a file name's prefix or extension. An empty collection, which would store nothing, is refused:
     ``cache=None`` is a client without a cache.
 
-    :raises TypeError: for a ``methods``, ``paths`` or ``statuses`` that is not a collection: a bare ``str`` (read one
-        letter at a time), a number or a one-shot iterator.
+    :raises TypeError: for a ``storage`` that is not a hishel ``AsyncBaseStorage``, a ``partition`` that is not a
+        :class:`Partition`, and a ``methods``, ``paths`` or ``statuses`` that is not a collection: a bare ``str``
+        (read one letter at a time), a number or a one-shot iterator; and for an entry of the wrong kind in one, a
+        path that is neither a ``str`` nor a pattern compiled from one included, naming it.
     :raises ValueError: for a ``ttl`` that is not a positive finite number, a method in ``methods`` other than ``GET``
         and ``HEAD``, a status in ``statuses`` outside 2xx or a 206, a fragment in ``paths`` that names no segment or
         a pattern that matches an empty path, and an empty ``methods``, ``paths`` or ``statuses``.
     """
 
     storage: AsyncBaseStorage
-    ttl: float | None = None
+    ttl: float | None
     partition: Partition = Partition.CREDENTIAL
     methods: Collection[str] = _DEFAULT_METHODS
     paths: Collection[str | re.Pattern[str]] | None = None
@@ -102,6 +105,8 @@ class HttpCache:
 
         The collections are frozen.
         """
+        check_kind("storage", self.storage, AsyncBaseStorage, "a hishel async storage, such as AsyncSqliteStorage()")
+        check_kind("partition", self.partition, Partition, "a Partition, such as Partition.SHARED")
         if self.ttl is not None:
             check_number("ttl", self.ttl, "seconds, a positive finite number, or None for no lifetime limit")
         if self.ttl is not None and not (self.ttl > 0 and math.isfinite(self.ttl)):
@@ -119,7 +124,12 @@ class HttpCache:
             raise ValueError(msg)
         object.__setattr__(self, "methods", methods)
         if self.paths is not None:
-            check_collection("paths", self.paths, "a collection of path fragments or patterns, such as ('/items',)")
+            check_names(
+                "paths",
+                self.paths,
+                "a collection of path fragments or patterns, such as ('/items',)",
+                kind=(str, re.Pattern),
+            )
             paths = tuple(self.paths)
             _refuse_empty("paths", paths)
             for path in paths:
@@ -190,9 +200,15 @@ def _storable(status: int) -> bool:
 
 
 def _check_path(path: str | re.Pattern[str]) -> None:
-    """Refuse a fragment naming no segment, and a pattern matching an empty path: each would match every path."""
+    """Refuse a fragment naming no segment, and a pattern matching an empty path: each would match every path.
+
+    A pattern compiled from bytes, which no path is, is refused too.
+    """
     if isinstance(path, str):
         check_fragment(path)
+    elif isinstance(path.pattern, bytes):
+        msg = f"paths= takes patterns of str, as a path is (got the bytes pattern {path.pattern!r})"
+        raise TypeError(msg)
     elif path.search("") is not None:
         msg = f"a path pattern must not match an empty path, or it matches every path (got {path.pattern!r})"
         raise ValueError(msg)

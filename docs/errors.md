@@ -21,7 +21,9 @@ Every error class has one module to import it from:
 | `UnmatchedRequestError` | `headgate.testing` |
 
 The six a caller catches most are at the top level, the test kit's own is in `headgate.testing`, and the rest live in
-`headgate.errors`. That is each one's only import: `from headgate.errors import ClientError` raises `ImportError`.
+`headgate.errors`. That is each one's only import: `from headgate.errors import ClientError` raises `ImportError`,
+naming its home (`ClientError lives in headgate: from headgate import ClientError`), as importing any public name from
+the wrong public module does.
 Each class reports the same home in tracebacks and `repr`, `headgate.UpstreamStatusError` or
 `headgate.errors.CircuitOpenError`, so the name a traceback prints is the one to import, as it is for every class and
 function headgate exports.
@@ -45,7 +47,10 @@ ClientError                      also: an unparsable URL, a pagination loop
 ```
 
 A natural mapping for a service calling upstreams: `ClientTimeoutError` to 504, `ClientConfigurationError` to 503, and
-every other `ClientError` to 502. `DecodeError` is not a `ClientError`: a codec raises it, and the client turns it
+every other `ClientError` to 502. A `ClientError` may be subclassed to name a failure of your own, at the place in the
+tree it belongs: a subclass keeps its base's constructor and attributes, pickles as its base does, and a boundary maps
+it as it maps its base. A reader raises a refusal as one with `RefusedError(kind=)`, which takes any subclass of
+`UpstreamStatusError`. `DecodeError` is not a `ClientError`: a codec raises it, and the client turns it
 into `ResponseParseError` before a caller sees it. Neither is `headgate.errors.RefusedError`, which a reader (or an
 `HttpOptions(response_check=)`) produces for a refusal: the client converts it into the `ClientError` its `kind`
 names.

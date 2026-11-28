@@ -4,7 +4,7 @@
 """The implementation of :mod:`headgate.otel`, which exports it and documents it."""
 
 from dataclasses import dataclass
-from typing import ClassVar, Final
+from typing import ClassVar, Final, final
 from urllib.parse import urlsplit
 
 try:
@@ -22,7 +22,7 @@ from opentelemetry.propagators.textmap import TextMapPropagator
 from opentelemetry.trace import Span, TracerProvider
 from opentelemetry.util.types import AttributeValue
 
-from headgate._core import CallContext, CallFinished, CallInfo, CallStarted, Event
+from headgate._core import CallContext, CallFinished, CallInfo, CallStarted, Event, check_kind, sealed
 from headgate._middleware import Next
 from headgate._user_agent import headgate_version
 from headgate.cache._transport import TRACE_HEADERS
@@ -104,6 +104,8 @@ def _error_type(status: int | None, error: str | None) -> str | None:
     return error
 
 
+@final
+@sealed("configure it with tracer_provider=, meter_provider= and propagator=, or wrap it in an observer of your own")
 class OpenTelemetryObserver:
     """Report each call as an OpenTelemetry CLIENT span and duration, and propagate its trace context. See the module.
 
@@ -125,7 +127,12 @@ class OpenTelemetryObserver:
 
         *propagator* writes the trace context onto each attempt; W3C Trace Context by default rather than the global
         propagator, which also sends Baggage, an application's own key-value data, to every server called.
+
+        :raises TypeError: for a provider or a propagator of the wrong kind.
         """
+        check_kind("tracer_provider", tracer_provider, (TracerProvider, type(None)), "a TracerProvider, or None")
+        check_kind("meter_provider", meter_provider, (MeterProvider, type(None)), "a MeterProvider, or None")
+        check_kind("propagator", propagator, (TextMapPropagator, type(None)), "a TextMapPropagator, or None")
         version = headgate_version()
         self._tracer = trace.get_tracer(_SCOPE, version, tracer_provider)
         meter = metrics.get_meter(_SCOPE, version, meter_provider)

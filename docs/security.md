@@ -78,6 +78,13 @@ middleware's credentials: the middleware did not choose it. A [`SigningAuth`](au
 below the rate budget, and the guard runs once more after it, so its signature is withheld from an untrusted hop the
 same way.
 
+A credential set below every hop's guard would go wherever a hop goes, so the curl transport refuses one where it is
+built: a `CurlOpt.HTTPHEADER`, `HTTP3_HTTPHEADER`, `COOKIE`, `USERPWD`, `USERNAME`, `PASSWORD`, `XOAUTH2_BEARER` or a
+truthy `NETRC` in `AsyncCurlTransport(curl_options=...)` raises `ValueError`, since curl would add it to requests
+whatever their origin, and so does a `HEADEROPT` of `CURLHEADER_UNIFIED` (0), with which curl sends each request's
+headers to the proxy too. Set a header with `HttpOptions(headers=...)` and a credential with an auth. A proxy's own
+credential (`CurlOpt.PROXYUSERPWD`) goes to the one proxy, and is taken.
+
 ## Redirects
 
 - **No downgrade.** A redirect from `https` to `http` is never followed: the 3xx becomes the call's final response and
@@ -110,10 +117,17 @@ name, so TLS still sends it as SNI and verifies the certificate against it, and 
   and curl is handed the vetted addresses, so it never looks the name up itself. curl keeps one DNS cache and one
   connection pool for all its requests, so a curl transport serves one guard: building a second client on the same
   transport instance with a different `SecurityOptions` guard, or without the guard, raises `ValueError`. Clients with
-  the same guard may share it. A `CurlOpt.PROXY`, `PRE_PROXY`, `RESOLVE` or `CONNECT_TO` in its `curl_options` chooses
-  the address itself, so the guard refuses them.
+  the same guard may share it: closing one leaves it open for the others, and its curl session closes with the last
+  client built on it, or when `transport.aclose()` is called; a client built on it after that raises `ValueError`,
+  since it could send nothing, so build a new transport for it. A `CurlOpt.PROXY`, `PRE_PROXY`, `RESOLVE`,
+  `CONNECT_TO`, `UNIX_SOCKET_PATH` or `ABSTRACT_UNIX_SOCKET` in its `curl_options` chooses the address itself, and a
+  `PORT` there one curl looks up for itself, so the guard refuses them.
 - Any other custom transport (`HttpOptions(transport=...)`) resolves names itself: every hop is still vetted before
-  it is sent, but the transport's own lookup is not pinned.
+  it is sent, but the transport's own lookup is not pinned. An attempt a [middleware](configuration.md#middleware)
+  sends to an origin the guard has not admitted is vetted again below the last middleware, a retry or a hedge of it
+  included, so a host a middleware sends to (a failover replica, say) is refused as the hop's own would be; so it is
+  inside a test's `fake_network`, through the fake network's names. One left where the guard vetted it is not looked
+  up a second time.
 - The guard cannot be combined with `proxy=`, since a proxy resolves the target itself.
 - `HttpOptions(security=SecurityOptions(resolver=...))` replaces the event loop's `getaddrinfo` (an async function of
   host and port returning addresses as text), and is accepted only with the guard on. Inside a test's
@@ -123,21 +137,23 @@ name, so TLS still sends it as SNI and verifies the certificate against it, and 
   it is refused, or `None` to admit it; one of your own is accepted only with the guard on. Every hop, over every
   transport, is judged by it. The default is `headgate.security.forbidden_reason` itself, which says why an address is
   refused (`"loopback"`, `"site-local"`, ...), so a check can decide a few addresses and defer to it for the rest, such
-  as a test that reaches a loopback server:
+  as a test that reaches a loopback server (below).
 
-  ```python
-  from headgate import HttpOptions, SecurityOptions
-  from headgate.security import forbidden_reason
+`Resolver` and `AddressCheck`, in `headgate.security`, are the types of the two functions. A check that admits the one
+loopback address a test server listens on, and defers to the default for every other:
+
+<!-- docs-test: run -->
+```python
+from headgate import HttpOptions, SecurityOptions
+from headgate.security import forbidden_reason
 
 
-  def loopback_too(address: str) -> str | None:
-      return None if address == "127.0.0.1" else forbidden_reason(address)
+def loopback_too(address: str) -> str | None:
+    return None if address == "127.0.0.1" else forbidden_reason(address)
 
 
-  http = HttpOptions(security=SecurityOptions(block_private_hosts=True, check=loopback_too))
-  ```
-
-  `Resolver` and `AddressCheck`, in `headgate.security`, are the types of the two functions.
+http = HttpOptions(security=SecurityOptions(block_private_hosts=True, check=loopback_too))
+```
 
 ## Paths built from values
 
@@ -153,11 +169,16 @@ await client.delete(t"positions/{symbol}", expect=nothing)  # "BTC/USD" -> posit
 So a value cannot change the URL's structure: `/`, `?`, `#` and whitespace are percent-encoded, a value of `.` or `..`
 is sent as `%2E` or `%2E%2E` rather than resolved as a dot segment, and an empty value raises `ValueError` rather than
 addressing the collection. A nested t-string splices as structure (`t"{API_PREFIX}/accounts"`, its own values still
-escaped), and `{fragment:raw}` is the one explicit escape hatch for a pre-built fragment. A literal or an absolute
-`httpx2.URL` is sent as it is, which is what lets a paginator follow an absolute URL from a response: it forwards that
-URL as an `httpx2.URL`. A relative `httpx2.URL` raises `TypeError`, since all it could do is skip the escaping
-(`httpx2.URL(f"items/{uid}")` with `uid = "../admin"` reaches `/admin`), and a URL of any other kind (`None`, `bytes`)
-raises `TypeError` rather than being sent as its text.
+escaped), and `{fragment:raw}` is the one explicit escape hatch for a pre-built fragment.
+
+Only a t-string is escaped. A `str` and an absolute `httpx2.URL` are sent as they are, which is what lets a paginator
+follow an absolute URL from a response: it forwards that URL as an `httpx2.URL`. A call's URL is typed
+`LiteralString | Template | httpx2.URL`, so a type checker that enforces `LiteralString`, as ty and pyright do, refuses
+an f-string or any other computed `str`; mypy reads `LiteralString` as `str` and lets one through. At runtime a `str` is
+a `str`: a computed one is sent as written, `../admin` and all, so build a path from values as a t-string. A relative
+`httpx2.URL` raises `TypeError`, since all it could do is skip the escaping (`httpx2.URL(f"items/{uid}")` with
+`uid = "../admin"` reaches `/admin`), and a URL of any other kind (`None`, `bytes`) raises `TypeError` rather than being
+sent as its text.
 
 ## Redaction
 
@@ -165,7 +186,8 @@ Nothing headgate raises or reports carries a credential in clear:
 
 - every URL in an error message or event has its userinfo and secret query values replaced with `***`. Secret names
   are the well-known ones (`api_key`, `token`, `access_token`, `signature`, `X-Amz-Signature`, `session`, and more,
-  compared ignoring case, `_` and `-`) plus every name a `QueryParamAuth` was given;
+  compared ignoring case, `_` and `-`) plus every query parameter a client's auth or middleware declares in
+  `credential_params` (a `QueryParamAuth`'s names among them), registered when the client is built;
 - a header value the HTTP library refuses to encode is reported by the header's name, never its value;
 - events carry no headers and no bodies; error messages carry a bounded snippet of an error response's body, which is
   the upstream's own text.

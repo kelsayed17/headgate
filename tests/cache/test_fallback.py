@@ -272,7 +272,7 @@ async def test_a_bug_in_a_cache_rule_propagates_rather_than_degrading(
     network = Network()
     request = httpx2.Request("GET", _URL)
     recorder = observed(request)
-    transport = ResilientCacheTransport(network, HttpCache(storage=storage), max_body_bytes=GENEROUS_CAP)
+    transport = ResilientCacheTransport(network, HttpCache(storage=storage, ttl=None), max_body_bytes=GENEROUS_CAP)
 
     with pytest.raises(RuntimeError, match="a bug in a cache rule"):
         await transport.handle_async_request(request)
@@ -287,7 +287,7 @@ async def test_a_bug_inside_hishel_after_the_send_closes_the_network_response(
     """A bug while hishel stores surfaces as itself, and the network response hishel abandoned with it is closed."""
     monkeypatch.setattr(_transport, "stores_status", _buggy_rule)
     network = TrackingNetwork()
-    transport = ResilientCacheTransport(network, HttpCache(storage=storage), max_body_bytes=GENEROUS_CAP)
+    transport = ResilientCacheTransport(network, HttpCache(storage=storage, ttl=None), max_body_bytes=GENEROUS_CAP)
 
     with pytest.raises(RuntimeError, match="a bug in a cache rule"):
         await transport.handle_async_request(httpx2.Request("GET", _URL))
@@ -570,12 +570,12 @@ async def test_a_storage_fault_while_an_unheld_body_streams_is_a_value_free_tran
     with a larger cap sharing the storage.
     """
     network = TrackingNetwork((b"x" * 10,) * 10)
-    storer = stub_client(transport=network, cache=HttpCache(**every_get_rules(), storage=storage))
+    storer = stub_client(transport=network, cache=HttpCache(**every_get_rules(), storage=storage, ttl=None))
     await storer.get("big", expect=as_bytes)
     await storer.aclose()
     client = stub_client(
         transport=network,
-        cache=HttpCache(**every_get_rules(), storage=_fails_while_serving(storage)),
+        cache=HttpCache(**every_get_rules(), storage=_fails_while_serving(storage), ttl=None),
         http=HttpOptions(max_response_bytes=15),
     )
     received = _Received()

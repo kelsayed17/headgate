@@ -19,6 +19,7 @@ from typing_extensions import TypeForm
 
 from headgate._codec import decode_with, reader_for, writer_for
 from headgate._codec import drop_none as _drop_none
+from headgate._core import check_kind
 from headgate._request_body import Writer
 from headgate._responses import Reader
 from headgate.errors import RefusedError
@@ -51,7 +52,12 @@ class MsgspecCodec:
     errors: ClassVar[tuple[type[Exception], ...]] = (msgspec.DecodeError,)
 
     def __init__(self, *, strict: bool = True, drop_none: bool = False) -> None:
-        """Decode strictly unless *strict* is false; encode without ``None`` fields when *drop_none* is true."""
+        """Decode strictly unless *strict* is false; encode without ``None`` fields when *drop_none* is true.
+
+        :raises TypeError: for a *strict* or *drop_none* that is not a ``bool``.
+        """
+        check_kind("strict", strict, bool, "a bool")
+        check_kind("drop_none", drop_none, bool, "a bool")
         self._strict = strict
         self._drop_none = drop_none
 
@@ -134,15 +140,17 @@ _LAX: Final = MsgspecCodec(strict=False)
 _DROPPING_NONE: Final = MsgspecCodec(drop_none=True)
 
 
-def decode[T](content: bytes, type_: TypeForm[T], *, strict: bool = True) -> T:
+def decode[T](content: bytes | str, type_: TypeForm[T], *, strict: bool = True) -> T:
     """Decode *content* as strict JSON into the type expression *type_*.
 
-    The primitive every JSON reader shares, and the one to call for bytes that are not a whole response: a document
-    nested inside another, or a fixture read from disk. ``strict=True`` rejects msgspec's built-in coercions, so a JSON
-    string where an ``int`` is declared is wire drift.
+    The primitive every JSON reader shares, and the one to call for content that is not a whole response: a document
+    nested inside another, a fixture read from disk, or a server-sent event's data, a ``str`` read as its UTF-8 bytes.
+    ``strict=True`` rejects msgspec's built-in coercions, so a JSON string where an ``int`` is declared is wire drift.
 
+    :raises TypeError: for *content* that is neither ``bytes`` nor a ``str``, and a *strict* that is not a ``bool``.
     :raises DecodeError: if *content* is not JSON or does not match *type_*.
     """
+    check_kind("strict", strict, bool, "a bool")
     return decode_with(CODEC if strict else _LAX, content, type_)
 
 
@@ -163,6 +171,7 @@ def reader[T](
     :class:`~headgate.errors.DecodeError`. ``strict=False`` is the deliberate opt-out for a wire that needs lax
     coercion. ``allow_empty_body`` and ``refuse`` are documented on :func:`~headgate.reader_for`.
     """
+    check_kind("strict", strict, bool, "a bool")
     codec = CODEC if strict else _LAX
     return reader_for(codec, type_, allow_empty_body=allow_empty_body, refuse=refuse)
 
@@ -175,6 +184,7 @@ def writer[T](type_: TypeForm[T], *, drop_none: bool = False) -> Writer[T]:
     ``omit_defaults`` as :func:`to_builtins`; *type_* types the writer, so it takes only that type. ``drop_none=True``
     removes ``None``-valued fields recursively, as :func:`to_builtins` does.
     """
+    check_kind("drop_none", drop_none, bool, "a bool")
     return writer_for(_DROPPING_NONE if drop_none else CODEC, type_)
 
 
@@ -194,5 +204,6 @@ def to_builtins(value: object, *, drop_none: bool = False) -> object:
     ``drop_none=True`` also removes ``None``-valued fields recursively, for a body whose unset optionals must be
     omitted rather than sent as ``null``. It keeps ``False`` and ``0``, unlike ``omit_defaults``.
     """
+    check_kind("drop_none", drop_none, bool, "a bool")
     out = msgspec.to_builtins(value)
     return _drop_none(out) if drop_none else out

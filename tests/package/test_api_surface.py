@@ -17,7 +17,8 @@ import importlib
 import inspect
 import pkgutil
 import re
-from typing import TYPE_CHECKING, TypeAliasType, get_overloads
+import types
+from typing import TYPE_CHECKING, ClassVar, Protocol, TypeAliasType, get_overloads
 
 import pytest
 
@@ -91,15 +92,33 @@ def _field_default(field: dataclasses.Field[object]) -> str:
     return ""
 
 
+#: What a class's namespace holds that is no attribute of its own to render: a slot's descriptor, read as the field or
+#: instance attribute it stores.
+_DESCRIPTORS = (types.MemberDescriptorType, types.GetSetDescriptorType)
+
+
 def _members(cls: type) -> list[str]:
-    """Render the public methods (an overloaded one as its overloads), properties and enum members *cls* defines."""
+    """Render the public members *cls* defines, by name, besides its fields or keys; or an enum's members.
+
+    A member is a method (an overloaded one as its overloads), a property, or an attribute, apart from a dataclass's
+    fields and a ``TypedDict``'s keys, which :func:`_render_class` renders.
+
+    An attribute is a class attribute that is not a function, with its annotation and value (a class's constant, a
+    codec's media type, a declaration's names), or a name the class declares by its annotation alone: a protocol's
+    data member, or an instance attribute declared on the class.
+    """
     lines: list[str] = []
     if issubclass(cls, enum.Enum):
         lines.extend(f"    {member.name} = {member.value!r}" for member in cls)
         return lines
-    for name, member in sorted(vars(cls).items()):
+    keyed = is_typeddict(cls)
+    annotations = {} if keyed else annotationlib.get_annotations(cls, format=annotationlib.Format.STRING)
+    fields = {field.name for field in dataclasses.fields(cls)} if dataclasses.is_dataclass(cls) else set[str]()
+    namespace = vars(cls)
+    for name in sorted({*namespace, *annotations} - fields):
         if name.startswith("_") and name != "__call__":
             continue
+        member = namespace.get(name, dataclasses.MISSING)
         if isinstance(member, property):
             lines.append(f"    property {name}")
         elif isinstance(member, classmethod | staticmethod):
@@ -107,6 +126,10 @@ def _members(cls: type) -> list[str]:
             lines.extend(f"    {kind} {name}{_signature(form)}" for form in _forms(member.__func__))
         elif callable(member):
             lines.extend(f"    def {name}{_signature(form)}" for form in _forms(member))
+        elif not isinstance(member, _DESCRIPTORS):
+            annotation = f": {annotations[name]}" if name in annotations else ""
+            value = "" if member is dataclasses.MISSING else f" = {_masked(repr(member))}"
+            lines.append(f"    attribute {name}{annotation}{value}")
     return lines
 
 
@@ -182,6 +205,29 @@ def _render(module_name: str) -> str:
 def test_the_public_surface_matches_the_snapshot(module_name: str, snapshot: SnapshotAssertion) -> None:
     """Check that the module's public names, signatures, fields and defaults are exactly the reviewed ones."""
     assert _render(module_name) == snapshot
+
+
+def test_a_class_renders_its_attributes() -> None:
+    """Render a class attribute with its annotation and value, and a data member declared by its annotation alone."""
+
+    class Shape(Protocol):
+        uri: str
+
+    class Held:
+        LIMIT: ClassVar[int] = 3
+        DEFAULT = "x"
+        name: str
+
+        def go(self) -> None:
+            """Go."""
+
+    assert _members(Shape) == ["    attribute uri: str"]
+    assert _members(Held) == [
+        "    attribute DEFAULT = 'x'",
+        "    attribute LIMIT: ClassVar[int] = 3",
+        "    def go(self) -> 'None'",
+        "    attribute name: str",
+    ]
 
 
 def test_every_public_module_is_snapshotted() -> None:

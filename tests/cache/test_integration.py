@@ -76,7 +76,7 @@ async def test_cache_hit_second_call_no_network(storage: AsyncSqliteStorage) -> 
     base = _CountingTransport()
     client = stub_client(
         transport=base,
-        cache=HttpCache(**series_rules(), storage=storage),
+        cache=HttpCache(**series_rules(), storage=storage, ttl=None),
     )
 
     r1 = await client.get("/series?id=A", expect=RESPONSE)
@@ -93,7 +93,7 @@ async def test_cache_miss_distinct_url_refetches(storage: AsyncSqliteStorage) ->
     base = _CountingTransport()
     client = stub_client(
         transport=base,
-        cache=HttpCache(**series_rules(), storage=storage),
+        cache=HttpCache(**series_rules(), storage=storage, ttl=None),
     )
 
     urls = ("/series?id=A", "/series?id=B")
@@ -210,7 +210,9 @@ def test_only_a_read_takes_a_cache_ttl(verb: str) -> None:
 async def test_every_cached_verb_forwards_a_per_call_cache_ttl(verb: str, storage: AsyncSqliteStorage) -> None:
     """``cache_ttl=`` reaches the request the network sees (in hishel's ``caching`` extension) from a GET or HEAD."""
     base = _CountingTransport()
-    client = stub_client(transport=base, cache=HttpCache(storage=storage, methods=("GET", "HEAD"), statuses=(201,)))
+    client = stub_client(
+        transport=base, cache=HttpCache(storage=storage, ttl=None, methods=("GET", "HEAD"), statuses=(201,))
+    )
 
     await getattr(client, verb)("/thing", expect=RESPONSE, cache_ttl=_CALL_TTL)
 
@@ -221,7 +223,7 @@ async def test_every_cached_verb_forwards_a_per_call_cache_ttl(verb: str, storag
 async def test_a_verb_the_cache_never_stores_refuses_a_cache_ttl(verb: str, storage: AsyncSqliteStorage) -> None:
     """Refuse ``cache_ttl=`` on a verb no cache stores, which would set the lifetime of nothing, sending nothing."""
     base = _CountingTransport()
-    client = stub_client(transport=base, cache=HttpCache(storage=storage))
+    client = stub_client(transport=base, cache=HttpCache(storage=storage, ttl=None))
 
     message = rf"^{verb}\(\) got an unexpected keyword argument 'cache_ttl': a cache stores only GETs and HEADs"
     with pytest.raises(TypeError, match=message):
@@ -245,7 +247,7 @@ async def test_clients_share_one_storage_and_closing_them_never_closes_it() -> N
             stub_client(
                 rate=Rate.per_second(2),
                 transport=network,
-                cache=HttpCache(**series_rules(), storage=shared),
+                cache=HttpCache(**series_rules(), storage=shared, ttl=None),
             )
             for _ in range(_SHARING_CLIENTS)
         ]

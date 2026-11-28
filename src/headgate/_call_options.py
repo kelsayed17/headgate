@@ -1,7 +1,9 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""The per-call option bags: :class:`CallOptions`, :class:`RequestOptions` and :class:`StreamOptions`.
+"""The per-call option bags: :class:`CallOptions`, :class:`RequestOptions`, and the streams' two.
+
+A stream takes :class:`StreamOptions`, and an event stream :class:`EventOptions`.
 
 Each is a closed ``TypedDict``, so a type checker refuses a keyword it does not name, and an option left out is truly
 absent: it inherits the view's, the route's or the policy's, while ``None`` turns it off. A bag is built on a private
@@ -14,12 +16,12 @@ At runtime ``**options`` would swallow any keyword, so every entry point checks 
 
 import math
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, cast
 
 # A closed TypedDict (PEP 728) refuses a keyword it does not name, so a stray or misspelled option is a type error.
 from typing_extensions import TypedDict
 
-from headgate._core import check_headers, check_kind, check_str_mapping
+from headgate._core import check_header_value, check_headers, check_kind, check_str_mapping
 from headgate._options import Timeouts
 from headgate._request_body import Body
 from headgate.retry._policy import RetryPolicy
@@ -27,9 +29,11 @@ from headgate.retry._policy import RetryPolicy
 __all__ = [
     "BODY_HINTS",
     "CALL_KEYS",
+    "EVENT_KEYS",
     "REQUEST_KEYS",
     "STREAM_KEYS",
     "CallOptions",
+    "EventOptions",
     "RequestOptions",
     "StreamOptions",
     "check_overrides",
@@ -116,6 +120,14 @@ class StreamOptions(_EveryCall, _Bodies, total=False, closed=True):
     """
 
 
+class EventOptions(_EveryCall, total=False, closed=True):
+    """The per-call options of :meth:`~headgate.Client.events`: :class:`StreamOptions` less the ``body``.
+
+    An event stream is opened with a GET, which has no body; one that a POST opens is a :meth:`~headgate.Client.stream`
+    with ``method="POST"``, read with ``aiter_events()``.
+    """
+
+
 #: What to write for each body keyword a verb or ``stream()`` took before ``body=`` said what a body is.
 BODY_HINTS: Final = {
     "json": "write body=Json(value)",
@@ -128,6 +140,7 @@ BODY_HINTS: Final = {
 CALL_KEYS: Final = frozenset(CallOptions.__optional_keys__)
 REQUEST_KEYS: Final = frozenset(RequestOptions.__optional_keys__)
 STREAM_KEYS: Final = frozenset(StreamOptions.__optional_keys__)
+EVENT_KEYS: Final = frozenset(EventOptions.__optional_keys__)
 
 
 def check_overrides(options: Mapping[str, object]) -> None:
@@ -139,8 +152,8 @@ def check_overrides(options: Mapping[str, object]) -> None:
         ``None`` (``True`` and ``False`` included, with what to write instead), a ``follow_redirects`` that is not a
         ``bool`` and a ``cache_ttl`` that is neither a number nor ``None``, and a ``max_response_bytes`` that is not an
         ``int`` (a ``bool`` included).
-    :raises ValueError: for a ``cache_ttl`` that is not positive and finite, and a ``max_response_bytes`` that is not
-        positive.
+    :raises ValueError: for a ``cache_ttl`` that is not positive and finite, a ``max_response_bytes`` that is not
+        positive, and ``headers`` no request can carry: a name that is not an HTTP token, a value holding CR, LF or NUL.
     """
     _check_request_kinds(options)
     if "retry" in options:
@@ -179,4 +192,6 @@ def _check_request_kinds(options: Mapping[str, object]) -> None:
     if "headers" in options:
         check_headers("headers", options["headers"])
     if "idempotency_key" in options:
-        check_kind("idempotency_key", options["idempotency_key"], str, "a key, a str; leave it out for none")
+        key = options["idempotency_key"]
+        check_kind("idempotency_key", key, str, "a key, a str; leave it out for none")
+        check_header_value("idempotency_key", cast("str", key), "the idempotency key")

@@ -37,13 +37,16 @@ except that:
 - the client's `response_check` runs on the response head, before the block is entered.
 
 A `Stream` has `status_code`, `headers` and `request_id`, and three ways to read the body, one per stream:
-`aiter_bytes(*, chunk_size=None)` (decoded bytes as they arrive), `aiter_lines(*, max_line_size=1 MiB)` (decoded text lines)
-and `aiter_events()`.
+`aiter_bytes(*, chunk_size=None)` (decoded bytes as they arrive), `aiter_lines(*, max_line_size=1_048_576)` (decoded
+text lines) and `aiter_events()`. Each size is an `int` of at least 1, or `None` where it may be: one below 1 raises
+`ValueError` where the iterator is asked for.
 
 `aiter_lines` splits where `str.splitlines` does, as httpx2's does, and raises `ResponseTooLargeError` for a line past
-`max_line_size` characters (`None` for no limit), before it ends if it never does. It decodes by the response's
-`charset`: one that is no text encoding (`base64`, `rot13`) is read as UTF-8, as no `charset` is, and a body the
-`charset` cannot decode raises `ResponseParseError`.
+`max_line_size` characters (`None` for no limit), before it ends if it never does. It counts characters of the decoded
+text, where `aiter_events` counts an event's `max_event_size` in bytes as they arrived, so the one default bounds the
+two differently: a line of 600,000 `é` is 600,000 characters, within the limit, and as an event's data 1.2 MB, past it.
+It decodes by the response's `charset`: one that is no text encoding (`base64`, `rot13`) is read as UTF-8, as no
+`charset` is, and a body the `charset` cannot decode raises `ResponseParseError`.
 
 ## Server-sent events
 
@@ -61,16 +64,19 @@ async with client.events("feed", last_event_id=resume_from) as stream:
 `client.events(url, ...)` is `stream()` of a GET with two defaults: it sends `Accept: text/event-stream` unless your
 `headers=` name an `Accept`, and each read has no time limit (`math.inf`) unless your `timeout=` sets `read`, since an
 event stream may be quiet for minutes. The deadline bounds opening it, as for any stream, and `asyncio.timeout` around
-the block bounds the whole of it. It takes every option `stream()` does, and `last_event_id=`, which `stream()` does
-not: a raw stream that needs the header sends it in `headers=`.
+the block bounds the whole of it. It takes every option `stream()` does but the body (its options are
+`headgate.streaming.EventOptions`), and `last_event_id=`, which `stream()` does not: a raw stream that needs the header
+sends it in `headers=`. A body keyword raises `TypeError`, since a GET has none: an event stream a POST opens is
+`stream(url, method="POST", body=..., headers={"Accept": "text/event-stream"})`, read with `aiter_events()`.
 
-`aiter_events(max_event_size=1 MiB)` parses each event as soon as its blank line arrives, by the WHATWG grammar, into
-an `httpx2.ServerSentEvent`: `event`, `data` (multi-line joined), `id` and the `retry` its block named. The body is
+`aiter_events(max_event_size=1_048_576)` parses each event as soon as its blank line arrives, by the WHATWG grammar,
+into an `httpx2.ServerSentEvent`: `event`, `data` (multi-line joined), `id` and the `retry` its block named. The body is
 UTF-8 whatever its `charset` says, a leading byte order mark is skipped, and a block without data (an `event: ping`
-heartbeat, a `retry:` or `id:` alone) is not an event, so `event.data` is always what a `data:` field sent. A response
+heartbeat, a `retry:` or `id:` alone) is not an event, so `event.data` is always what a `data:` field sent, as text:
+a flavor's `decode(event.data, Quote)` reads it into a type. A response
 that does not declare `text/event-stream` raises `ResponseParseError` at once; an event larger than `max_event_size`
-(`None` for no limit) raises `ResponseTooLargeError`, however the body is cut into chunks. A comment is never part of an
-event, and is dropped as it arrives. The 1 MiB default is `headgate.streaming.DEFAULT_MAX_EVENT_SIZE`.
+bytes (`None` for no limit) raises `ResponseTooLargeError`, however the body is cut into chunks. A comment is never part
+of an event, and is dropped as it arrives. The 1 MiB default is `headgate.streaming.DEFAULT_MAX_EVENT_SIZE`.
 
 `stream.last_event_id` is the id the server last set, `None` until it sets one and `""` once it resets it with an
 empty `id`. Pass it as `events(last_event_id=)` when re-opening, and the request carries `Last-Event-ID` (none when it
@@ -122,8 +128,11 @@ from, and a change to that value afterwards is not sent; `copy.replace(body, val
   redirects are followed. Prefer this for a file.
 
 A `Multipart`'s files are an `UploadFiles`, as httpx2 takes them: `{"name": file}`, each an `UploadFile`, the file
-alone or in a `(filename, file, content_type)` tuple, where the file is bytes, text or a binary file object; a file object that is
-neither a regular file nor in memory, such as a pipe, cannot be rewound, so the call is sent once. `Raw(...).replayable` and `Multipart(...).replayable` say which a body is.
+alone or in a `(filename, file)`, `(filename, file, content_type)` or `(filename, file, content_type, headers)` tuple,
+where the file is bytes, text or a binary file object. Anything else raises `TypeError` naming its field, where the
+`Multipart` is built. A file object is anything with a `read`, as httpx2 reads one. One that is neither a regular file
+nor in memory, such as a pipe, or one with only its `read`, cannot be rewound, so the call is sent once.
+`Raw(...).replayable` and `Multipart(...).replayable` say which a body is.
 
 <!-- docs-test: check -->
 ```python
@@ -149,4 +158,7 @@ await client.post(
 
 A call has one body, so no two can conflict. `Raw` content that is none of the three (a `str`, which you encode first, a
 `bytearray`, a list) raises `TypeError` naming it, and so does a `body=` that is no `Body` (bare `bytes` or a `dict`).
-A `CachedTokenAuth` buffers a streamed body before the first send, because a 401 makes it send the request again.
+A `SigningAuth` reads a streamed body before the first send, so its signature can cover it and a 401 can send it
+again. A `CachedTokenAuth` does not: after a 401 that re-mints, it sends again a body that can be sent twice (bytes, or
+a function that starts the stream afresh, `Raw(lambda: chunks(path))`), but not a one-shot stream (`Raw(chunks(path))`),
+whose 401 reaches the caller as `AuthError`; the rejected token is dropped, so the next call mints.

@@ -15,7 +15,7 @@ from headgate import BreakerPolicy, CallPolicy, Client, HttpOptions, Rate, RateB
 from headgate.breaker import BreakerRegistry, BreakerState
 from headgate.breaker._registry import table_of
 from headgate.errors import CircuitOpenError
-from headgate.health import BreakerSnapshot, breaker_states
+from headgate.health import BreakerSnapshot, breaker_snapshots
 from headgate.retry import RetryBudget, RetryShare
 from headgate.testing import FakeTransport, TestClock, breakers_of
 from tests.support.breakers import registry_of
@@ -53,7 +53,7 @@ async def test_two_clients_given_no_registry_keep_a_breaker_each() -> None:
     await second.get("x", expect=nothing)
 
     assert registry_of(first) is not registry_of(second)
-    assert breaker_states(registry_of(first)) == {
+    assert breaker_snapshots(registry_of(first)) == {
         _ORIGIN: BreakerSnapshot(state=BreakerState.OPEN, refusing=True, failures=1)
     }
 
@@ -70,7 +70,7 @@ async def test_two_clients_given_one_registry_share_its_breakers() -> None:
 
     assert breakers_of(first) is breakers_of(second) is shared
     assert not second_fake.calls
-    assert breaker_states(shared)[_ORIGIN].state is BreakerState.OPEN
+    assert breaker_snapshots(shared)[_ORIGIN].state is BreakerState.OPEN
 
 
 async def test_a_shared_registry_is_read_through_its_snapshot_and_cleared_whole() -> None:
@@ -80,17 +80,22 @@ async def test_a_shared_registry_is_read_through_its_snapshot_and_cleared_whole(
     first, second = _client(fake, shared), _client(fake, shared)
     await _fail(first)
 
-    assert breaker_states(shared) == {_ORIGIN: BreakerSnapshot(state=BreakerState.CLOSED, refusing=False, failures=1)}
-    assert "https://never.test" not in breaker_states(shared)
-    assert (len(shared), repr(shared)) == (1, f"BreakerRegistry({{'{_ORIGIN}': 'closed'}})")
+    assert breaker_snapshots(shared) == {
+        _ORIGIN: BreakerSnapshot(state=BreakerState.CLOSED, refusing=False, failures=1)
+    }
+    assert "https://never.test" not in breaker_snapshots(shared)
+    assert (len(shared), repr(shared)) == (
+        1,
+        f"BreakerRegistry({shared.policy!r}, max_hosts=1024, breakers={{'{_ORIGIN}': 'closed'}})",
+    )
 
     await _fail(second)
-    assert breaker_states(shared)[_ORIGIN].state is BreakerState.OPEN, "the two clients' failures counted together"
+    assert breaker_snapshots(shared)[_ORIGIN].state is BreakerState.OPEN, "the two clients' failures counted together"
 
     shared.clear()
-    assert (len(shared), breaker_states(shared)) == (0, {})
+    assert (len(shared), breaker_snapshots(shared)) == (0, {})
     await second.get("x", expect=nothing)
-    assert breaker_states(shared)[_ORIGIN] == BreakerSnapshot(state=BreakerState.CLOSED, refusing=False, failures=0)
+    assert breaker_snapshots(shared)[_ORIGIN] == BreakerSnapshot(state=BreakerState.CLOSED, refusing=False, failures=0)
 
 
 def test_a_registry_carries_its_thresholds() -> None:

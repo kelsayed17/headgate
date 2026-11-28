@@ -4,14 +4,17 @@
 """The implementation of :mod:`headgate.health`, which exports it and documents it."""
 
 from dataclasses import dataclass
+from typing import final
 
-from headgate._core import OBSERVER_FAILURES, BreakerState
+from headgate._core import OBSERVER_FAILURES, BreakerState, check_kind, sealed
 from headgate.breaker import BreakerRegistry
 from headgate.breaker._registry import table_of
 
-__all__ = ["BreakerSnapshot", "breaker_states", "observer_failures"]
+__all__ = ["BreakerSnapshot", "breaker_snapshots", "observer_failures"]
 
 
+@final
+@sealed("read the snapshots headgate.health returns")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BreakerSnapshot:
     """One origin's breaker at one instant.
@@ -28,7 +31,7 @@ class BreakerSnapshot:
     failures: int
 
 
-def breaker_states(registry: BreakerRegistry) -> dict[str, BreakerSnapshot]:
+def breaker_snapshots(registry: BreakerRegistry) -> dict[str, BreakerSnapshot]:
     """Return a snapshot per origin *registry* holds a breaker for, each read at one instant.
 
     Each key is the origin in its canonical form, ``scheme://host[:port]``: the host lower-cased, an IPv6 host in
@@ -38,7 +41,10 @@ def breaker_states(registry: BreakerRegistry) -> dict[str, BreakerSnapshot]:
 
     Pass the registry the clients to report on share (their ``breaker=BreakerRegistry(...)``); a client given a
     ``BreakerPolicy`` keeps its breakers to itself.
+
+    :raises TypeError: for a *registry* that is not a :class:`~headgate.breaker.BreakerRegistry`.
     """
+    check_kind("registry", registry, BreakerRegistry, "the BreakerRegistry the clients share")
     snapshots: dict[str, BreakerSnapshot] = {}
     for breaker in table_of(registry).breakers():
         state, refusing, failures = breaker.reading()

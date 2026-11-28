@@ -37,8 +37,8 @@ def policy_disabled() -> Generator[None]:
     since its stack is fixed. Safe to nest. What "off" means:
 
     * no request is retried, whatever the policy, a route, a view or a call asks for. Stronger than
-      :func:`~headgate.testing.instant_retries`, which keeps the retries and makes them instant, for a test of retry
-      behavior;
+      :func:`~headgate.testing.instant_waits`, which keeps the retries and makes every wait instant, for a test of
+      retry behavior;
     * no breaker (``CallPolicy(breaker=None)``): the client never reads a registry, so a breaker another client opened
       on the same host cannot refuse it;
     * a budget that paces nothing, enforced where a budget is built, so it covers the budgets a client's routes build

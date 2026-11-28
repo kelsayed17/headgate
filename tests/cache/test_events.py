@@ -61,7 +61,7 @@ def _client(network: httpx2.AsyncBaseTransport, storage: AsyncBaseStorage, recor
     """Build a client caching every GET into *storage*, reporting to *recorder*, retrying nothing."""
     return Client(
         base_url="https://x",
-        policy=CallPolicy(retry=None, cache=HttpCache(**every_get_rules(), storage=storage)),
+        policy=CallPolicy(retry=None, cache=HttpCache(**every_get_rules(), storage=storage, ttl=None)),
         http=HttpOptions(transport=network),
         observers=(recorder,),
     )
@@ -126,7 +126,9 @@ async def test_a_coalesced_call_that_accepts_a_failed_store_reports_it(storage: 
 async def test_a_failed_store_with_no_call_to_report_on_raises_nothing(storage: AsyncSqliteStorage) -> None:
     """Drop a failed write of a response no client call accepted, as quietly as one no observer hears."""
     faulty = FaultyStorage(storage, RuntimeError("down"), failing="create_entry")
-    transport = ResilientCacheTransport(Network(), HttpCache(**every_get_rules(), storage=faulty), max_body_bytes=1024)
+    transport = ResilientCacheTransport(
+        Network(), HttpCache(**every_get_rules(), storage=faulty, ttl=None), max_body_bytes=1024
+    )
     response = await transport.handle_async_request(httpx2.Request("GET", _URL))
     await response.aread()
 
@@ -169,7 +171,7 @@ async def test_a_client_without_observers_emits_nothing(storage: AsyncSqliteStor
     network = Network()
     client = Client(
         base_url="https://x",
-        policy=CallPolicy(cache=HttpCache(**every_get_rules(), storage=storage)),
+        policy=CallPolicy(cache=HttpCache(**every_get_rules(), storage=storage, ttl=None)),
         http=HttpOptions(transport=network),
     )
 
@@ -183,7 +185,7 @@ async def test_a_client_without_observers_emits_nothing(storage: AsyncSqliteStor
 async def test_a_request_no_call_sent_reports_nothing_and_is_stamped_with_nothing(storage: AsyncSqliteStorage) -> None:
     """Serve a request handed straight to the cache, which has no call to report on, without inventing one for it."""
     transport = ResilientCacheTransport(
-        Network(), HttpCache(storage=storage, methods=("GET", "HEAD")), max_body_bytes=1024
+        Network(), HttpCache(storage=storage, ttl=None, methods=("GET", "HEAD")), max_body_bytes=1024
     )
     request = httpx2.Request("HEAD", _URL)
 

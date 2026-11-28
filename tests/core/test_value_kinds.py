@@ -10,9 +10,11 @@ takes and what it got, rather than a comparison error from inside the constructo
 
 from __future__ import annotations
 
+import functools
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 import pytest
+from hishel import AsyncSqliteStorage
 
 from headgate import (
     BreakerPolicy,
@@ -38,6 +40,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 _PAGE: Final = reader(list[int])
+
+#: A storage for a cache that is only built: it never connects.
+_STORAGE: Final = AsyncSqliteStorage(database_path=":memory:")
 
 #: ``True``, typed as anything, for a field that takes no ``bool``.
 _TRUE: Final[Any] = True
@@ -75,7 +80,7 @@ _FIELDS: Final[list[tuple[str, Callable[[Any], object], bool]]] = [
     ("failure_threshold", lambda v: BreakerPolicy(failure_threshold=v), True),
     ("recovery_timeout", lambda v: BreakerPolicy(recovery_timeout=v), False),
     ("max_hosts", lambda v: BreakerRegistry(max_hosts=v), True),
-    ("ttl", lambda v: HttpCache(storage=cast("Any", object()), ttl=v), False),
+    ("ttl", lambda v: HttpCache(storage=_STORAGE, ttl=v), False),
     ("page_size", lambda v: Offset(_PAGE, items=_items, page_size=v), True),
     ("start", lambda v: Offset(_PAGE, items=_items, page_size=10, start=v), True),
     ("start", lambda v: PageNumber(_PAGE, items=_items, more=bool, start=v), True),
@@ -139,7 +144,7 @@ def test_a_retry_policy_may_retry_a_202() -> None:
 def test_cache_statuses_are_ints() -> None:
     """Refuse a numeric string among the cache's statuses, before its 2xx rule compares it."""
     with pytest.raises(TypeError, match=r"^statuses= .*\(got str '200' among them\)"):
-        HttpCache(storage=cast("Any", object()), statuses=cast("Any", ("200",)))
+        HttpCache(storage=_STORAGE, ttl=None, statuses=cast("Any", ("200",)))
 
 
 @pytest.mark.parametrize("status", ["404", True], ids=["text", "bool"])
@@ -162,6 +167,12 @@ def test_an_observer_has_a_notify_method(observer: object) -> None:
     """Refuse an observer with no callable ``notify``, whose every event would fail into ``observer_failures()``."""
     with pytest.raises(TypeError, match=r"^observers= takes Observers, each with a notify\(event\) method"):
         Client(base_url="https://api.example.test/", observers=cast("Any", [observer]))
+
+
+def test_an_observer_given_as_a_partial_is_named_by_its_function() -> None:
+    """Name a refused ``functools.partial`` by the function it wraps, as a refused middleware is named."""
+    with pytest.raises(TypeError, match=r"\(got partial\(print\), which has none\)$"):
+        Client(base_url="https://api.example.test/", observers=cast("Any", [functools.partial(print, "event:")]))
 
 
 _PAGERS: Final[list[tuple[str, Callable[[], object], str]]] = [

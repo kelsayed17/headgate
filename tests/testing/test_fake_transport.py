@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import dataclasses
 import gzip
-from typing import TYPE_CHECKING
+import re
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx2
 import pytest
@@ -18,6 +19,7 @@ from headgate import (
     Form,
     HttpOptions,
     Rate,
+    Reader,
     TransportError,
     UpstreamStatusError,
     as_bytes,
@@ -134,6 +136,15 @@ async def test_a_status_reply_reaches_the_status_ladder() -> None:
     assert caught.value.status_code == httpx2.codes.NOT_FOUND
 
 
+@pytest.mark.parametrize("status", [99, 600])
+def test_a_status_no_response_has_is_refused_where_it_is_written(status: int) -> None:
+    """Refuse a bare status, and a ``Respond``'s, outside 100-599, which the fakes answered with as if it were one."""
+    with pytest.raises(ValueError, match=rf"^reply\(\*replies\) takes an HTTP status, 100 to 599 \(got {status}\)$"):
+        FakeTransport().reply("GET", "/v1/x", status)
+    with pytest.raises(ValueError, match=rf"^status_code= takes an HTTP status, 100 to 599 \(got {status}\)$"):
+        Respond(status)
+
+
 async def test_closing_the_client_closes_the_transport() -> None:
     """Record that the client closed it."""
     fake = FakeTransport()
@@ -181,3 +192,75 @@ async def test_the_log_keeps_the_headers_as_sent_for_a_streamed_body() -> None:
 
     (call,) = fake.calls
     assert (call.headers.get("transfer-encoding"), call.headers.get("content-length")) == ("chunked", None)
+
+
+#: Reads the status a call was answered with.
+_STATUS: Final = Reader(lambda response: response.status_code)
+
+
+async def test_a_route_written_as_an_absolute_url_matches_its_origin_too() -> None:
+    """Match a route given as an absolute URL on its origin and path, so a request to another host matches nothing.
+
+    A path-only route still matches any host, and an absolute URL is matched before it: a token host and the API host
+    each answer their own.
+    """
+    fake = (
+        FakeTransport()
+        .reply("POST", "https://AUTH.example.test:443/oauth/token", 201)
+        .reply("POST", "/oauth/token", 202)
+    )
+    client = _client(fake)
+
+    token = await client.post(httpx2.URL("https://auth.example.test/oauth/token"), expect=_STATUS)
+    api = await client.post(httpx2.URL("https://api.example.test/oauth/token"), expect=_STATUS)
+    pinned = FakeTransport().reply("POST", "https://auth.example.test/oauth/token")
+    with pytest.raises(UnmatchedRequestError, match=r"\(routes: POST https://auth\.example\.test/oauth/token\)$"):
+        await _client(pinned).post(httpx2.URL("https://evil.example.test/oauth/token"), expect=nothing)
+
+    assert (token, api) == (201, 202)
+    assert len(fake.calls_to("POST", "https://auth.example.test/oauth/token")) == 1
+    assert len(fake.calls_to("POST", "/oauth/token")) == len(("auth", "api"))
+
+
+@pytest.mark.parametrize(
+    ("path", "fix"),
+    [
+        ("/v2/tasks?page=2", "write '/v2/tasks'"),
+        ("/v2/tasks#top", "write '/v2/tasks'"),
+        ("https://auth.example.test/token?grant=x", "write 'https://auth.example.test/token'"),
+        ("v2/tasks", "start a path with '/', the client's base path included, or give an absolute URL its scheme"),
+        ("auth.example.test/token", "start a path with '/'"),
+        ("http://[::1", "it is not a URL httpx2 can read (Invalid port: ':1')"),
+        ("ftp://files.example.test/x", "a client sends only http and https URLs"),
+    ],
+    ids=["query", "fragment", "url-query", "relative", "no-scheme", "malformed", "scheme"],
+)
+def test_a_route_that_could_never_match_is_refused_where_it_is_written(path: str, fix: str) -> None:
+    """Refuse a route or a ``calls_to`` with a query, a fragment or a relative path, saying how to write it."""
+    message = (
+        rf"^path= takes a path as sent, such as '/v1/items', or an absolute URL, .* \(got {re.escape(repr(path))}\)"
+    )
+    with pytest.raises(ValueError, match=rf"{message}: .*{re.escape(fix)}"):
+        FakeTransport().reply("GET", path, 200)
+    with pytest.raises(ValueError, match=rf"{message}: .*{re.escape(fix)}"):
+        FakeTransport().calls_to("GET", path)
+
+
+@pytest.mark.parametrize(
+    "route", ["/v1/a b/na\u00efve", "https://api.example.test/v1/a b/na\u00efve"], ids=["path", "url"]
+)
+async def test_a_route_is_escaped_as_a_url_is(route: str) -> None:
+    """Escape a space and a non-ASCII character in a route as a URL's path is, so either form matches what is sent."""
+    fake = FakeTransport().reply("GET", route, 204)
+
+    await _client(fake).get(t"{'a b'}/{'na\u00efve'}", expect=nothing)
+
+    assert len(fake.calls_to("GET", route)) == 1
+
+
+@pytest.mark.parametrize("reply", [Respond, httpx2.Response], ids=["respond", "response"])
+def test_a_class_given_as_a_reply_is_refused_where_it_is_written(reply: type) -> None:
+    """Refuse a class as a reply, which the route would call with the request and get no response from."""
+    message = rf"^reply\(\*replies\) takes a Respond, .* \(got the class {reply.__name__}\)$"
+    with pytest.raises(TypeError, match=message):
+        FakeTransport().reply("GET", "/x", cast("Any", reply))

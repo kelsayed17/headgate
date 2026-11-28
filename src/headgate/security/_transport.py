@@ -21,14 +21,16 @@ to when the client is built (``headgate._curl.guard_binding``), and resolves, ve
 
 **Any other custom transport** (``HttpOptions(transport=...)``) resolves names itself, so the guard cannot choose its
 address: :func:`address_hook` vets every hop as a request hook, which refuses a forbidden host before anything is
-sent, but the transport's own lookup could still be answered differently a moment later.
+sent, but the transport's own lookup could still be answered differently a moment later. The stack runs the same hook
+again below the client's last middleware, on an attempt the middleware moved to another origin (see
+:mod:`headgate._stack`).
 """
 
 import asyncio
 import contextlib
 import ssl
 from collections.abc import Awaitable, Callable, Iterable
-from typing import override
+from typing import Final, override
 
 import httpcore2
 import httpx2
@@ -37,7 +39,11 @@ from httpcore2._backends.base import SOCKET_OPTION
 
 from headgate.security._addresses import AddressGuard
 
-__all__ = ["PinnedHTTPTransport", "address_hook", "vet_request"]
+__all__ = ["VETTED_ORIGIN", "PinnedHTTPTransport", "address_hook", "vet_request"]
+
+#: The request extension holding the origin the SSRF guard last vetted the request for, set only once it was admitted:
+#: a layer that must vet a request someone may have moved compares the request's origin with it.
+VETTED_ORIGIN: Final = "headgate.vetted_origin"
 
 
 class _VettingBackend(httpcore2.AsyncNetworkBackend):
@@ -111,7 +117,12 @@ def address_hook(guard: AddressGuard) -> Callable[[httpx2.Request], Awaitable[No
     """
 
     async def vet(request: httpx2.Request) -> None:
+        # The origin vet_request checks, read before its lookup awaits, so a move meanwhile is never marked as vetted.
+        origin = httpx2.Origin(request.url)
         await vet_request(guard, request)
+        # Marked once admitted, never before: a retry or a hedge of a request moved since carries the mark of where it
+        # was, and is vetted again where it is now.
+        request.extensions[VETTED_ORIGIN] = origin
 
     return vet
 

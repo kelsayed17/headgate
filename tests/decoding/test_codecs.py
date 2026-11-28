@@ -15,7 +15,7 @@ import json
 import re
 import sys
 import traceback
-from typing import TYPE_CHECKING, ClassVar, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, override
 
 import httpx2
 import msgspec
@@ -124,10 +124,84 @@ def test_an_empty_body_reads_as_the_codecs_empty_array() -> None:
     assert reader_for(_TAGGED, list[_Row], allow_empty_body=True)(response(b"")) == []
 
 
-def test_an_empty_body_is_refused_unless_the_reader_allows_it() -> None:
-    """Refuse an empty body by default: an empty 200 is corruption for every provider but a list-shaped one."""
-    with pytest.raises(DecodeError):
-        reader_for(_TAGGED, list[_Row])(response(b""))
+@pytest.mark.parametrize(
+    "codec", [_TAGGED, msgspec_flavor.CODEC, pydantic_flavor.CODEC], ids=["own", "msgspec", "pydantic"]
+)
+@pytest.mark.parametrize("body", [b"", b" \r\n"], ids=["empty", "blank"])
+def test_an_empty_body_is_refused_unless_the_reader_allows_it(codec: Codec, body: bytes) -> None:
+    """Refuse an empty body by default, saying it is empty and which option reads one, not the parser's words.
+
+    An empty 200 is corruption for every provider but a list-shaped one.
+    """
+    with pytest.raises(DecodeError, match=r"^the body is empty: allow_empty_body=True reads one as an empty list$"):
+        reader_for(codec, list[int])(response(body))
+
+
+def _decode_with_msgspec[T](content: bytes | str, type_: type[T]) -> T:
+    """Decode *content* with ``decode_with`` on the msgspec codec."""
+    return decode_with(msgspec_flavor.CODEC, content, type_)
+
+
+#: Each decode of content that is not a whole response: both flavors' ``decode``, and ``decode_with``.
+_DECODES: Final = [msgspec_flavor.decode, pydantic_flavor.decode, _decode_with_msgspec]
+
+
+@pytest.mark.parametrize("decode", _DECODES, ids=["msgspec", "pydantic", "decode-with"])
+def test_a_decode_reads_text_as_its_utf8_bytes(decode: Callable[[bytes | str, type[object]], object]) -> None:
+    """Read a ``str``, such as a server-sent event's data, as the bytes it is in UTF-8, as it reads those bytes."""
+    assert decode('{"name": "na\u00efve"}', dict[str, str]) == {"name": "naïve"}
+    assert decode('{"name": "naïve"}', dict[str, str]) == decode('{"name": "naïve"}'.encode(), dict[str, str])
+
+
+@pytest.mark.parametrize("decode", _DECODES, ids=["msgspec", "pydantic", "decode-with"])
+@pytest.mark.parametrize(
+    ("content", "got"), [(bytearray(b"{}"), "bytearray"), (memoryview(b"{}"), "memoryview"), (None, "NoneType")]
+)
+def test_a_decode_refuses_content_that_is_neither_bytes_nor_text(
+    decode: Callable[[object, type[object]], object], content: object, got: str
+) -> None:
+    """Refuse anything but ``bytes`` and a ``str``, naming both, rather than read a buffer as a library would."""
+    message = rf"^content= takes bytes or a str, such as a response's content or an event's data \(got {got}\)$"
+    with pytest.raises(TypeError, match=message):
+        decode(content, dict[str, int])
+
+
+@pytest.mark.parametrize("decode", _DECODES, ids=["msgspec", "pydantic", "decode-with"])
+def test_a_decode_refuses_text_no_utf8_can_carry(decode: Callable[[str, type[object]], object]) -> None:
+    """Refuse a ``str`` holding a lone surrogate, which no UTF-8 holds, as content that is not JSON, keeping it out."""
+    with pytest.raises(DecodeError, match=r"^not UTF-8 text: it holds a lone surrogate$"):
+        decode('"\ud800"', str)
+
+
+@pytest.mark.parametrize("decode", _DECODES, ids=["msgspec", "pydantic", "decode-with"])
+def test_a_decode_refuses_bytes_that_are_not_utf8(decode: Callable[[bytes, type[object]], object]) -> None:
+    """Refuse a JSON string whose bytes are not UTF-8 with a ``DecodeError`` in every flavor, not a bare error.
+
+    msgspec counts the bad byte within the string, not the body, so its refusal names no byte.
+    """
+    message = r"^not UTF-8 text: a JSON string holds bytes that are not UTF-8$|Invalid JSON: invalid unicode code point"
+    with pytest.raises(DecodeError, match=message):
+        decode(b'"\xff"', str)
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda codec: decode_with(codec, b"1", int),
+        lambda codec: reader_for(codec, int),
+        lambda codec: writer_for(codec, int),
+        check_codec,
+    ],
+    ids=["decode-with", "reader-for", "writer-for", "check-codec"],
+)
+def test_a_codecs_class_is_refused_where_a_codec_goes(build: Callable[[Any], object]) -> None:
+    """Refuse a codec's class, which has a codec's members as functions, saying to pass an instance."""
+    message = (
+        r"^codec= takes a Codec, such as headgate\.msgspec\.CODEC \(got the class MsgspecCodec\): pass an instance, "
+        r"such as MsgspecCodec\(\)$"
+    )
+    with pytest.raises(TypeError, match=message):
+        build(MsgspecCodec)
 
 
 @pytest.mark.filterwarnings("error")
@@ -323,6 +397,27 @@ class _ReadsRecordsAsDicts(MsgspecCodec):
         return cast("Callable[[bytes], T]", super().decoder(dict[str, object] if type_ is _Row else type_))
 
 
+class _BuildsRecordsUnchecked(MsgspecCodec):
+    """Strict for the built-in containers, but builds a record by calling it, checking no field: ``"1"`` stays text."""
+
+    @override
+    def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
+        if type_ is not _Row:
+            return super().decoder(type_)
+        return lambda content: cast("T", _Row(value=msgspec.json.decode(content).get("value")))
+
+
+class _ReadsRecordsAsObjects(MsgspecCodec):
+    """Checks a record's fields, but takes its body for an object: an array raises ``AttributeError``."""
+
+    @override
+    def decoder[T](self, type_: TypeForm[T], /) -> Callable[[bytes], T]:
+        decode = super().decoder(type_)
+        if type_ is not _Row:
+            return decode
+        return lambda content: decode(msgspec.json.encode(dict(msgspec.json.decode(content).items())))
+
+
 @pytest.mark.parametrize(
     ("codec", "message"),
     [
@@ -345,6 +440,14 @@ class _ReadsRecordsAsDicts(MsgspecCodec):
         (_RejectsUnknownFields(), r"^_RejectsUnknownFields refused a body with a field .* does not declare"),
         (_MisreadsRecords(), r"^_MisreadsRecords read _Row\(value=2\) from a body with a field"),
         (_ReadsRecordsAsDicts(), r"^_ReadsRecordsAsDicts read \{'value': 1, .*\} from a body with a field"),
+        (
+            _BuildsRecordsUnchecked(),
+            r"^_BuildsRecordsUnchecked accepted a record whose int field holds a numeric string as _Row\(value='1'\)",
+        ),
+        (
+            _ReadsRecordsAsObjects(),
+            r"^_ReadsRecordsAsObjects raised AttributeError for an array where a record is declared, which is not one",
+        ),
     ],
     ids=[
         "media-type",
@@ -360,6 +463,8 @@ class _ReadsRecordsAsDicts(MsgspecCodec):
         "unknown-field",
         "record",
         "record-shape",
+        "record-field",
+        "record-array",
     ],
 )
 def test_the_conformance_check_names_the_promise_a_codec_breaks(codec: Codec, message: str) -> None:

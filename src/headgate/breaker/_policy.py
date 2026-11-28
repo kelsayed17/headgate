@@ -5,12 +5,15 @@
 
 import math
 from dataclasses import dataclass
+from typing import final
 
-from headgate._core import check_int, check_number
+from headgate._core import check_int, check_number, sealed
 
 __all__ = ["BreakerPolicy"]
 
 
+@final
+@sealed("set failure_threshold and recovery_timeout, which are all the breaker reads")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BreakerPolicy:
     """When an origin's breaker trips and when it tests the origin again.

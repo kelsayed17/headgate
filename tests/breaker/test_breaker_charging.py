@@ -14,25 +14,33 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, ClassVar, override
 
 import httpx2
 import pytest
 
 from headgate import (
+    Auth,
     BreakerPolicy,
     CallPolicy,
     Client,
     ClientError,
     HttpOptions,
+    Middleware,
+    Next,
     Rate,
     RateLimitError,
+    RetryPolicy,
+    SigningAuth,
+    TransportError,
     UpstreamStatusError,
 )
 from headgate._core import BREAKER_GATE, BreakerChanged, BreakerState, CallContext
 from headgate.breaker import BreakerRegistry
 from headgate.breaker._registry import table_of
-from headgate.testing import TestClock
+from headgate.errors import CircuitOpenError
+from headgate.retry import Backoff
+from headgate.testing import FakeTransport, TestClock, fake_network
 from headgate.timing import Timing
 from tests.support.breakers import failures
 from tests.support.events import Recorder
@@ -118,6 +126,85 @@ async def test_a_network_failure_is_a_host_failure(exc: type[httpx2.TransportErr
     with pytest.raises(ClientError):
         await client.get("x", expect=RESPONSE)
     assert failures(client, _HOST) == 1
+
+
+@pytest.mark.call_policy
+@pytest.mark.parametrize(
+    "handler",
+    [_raising(httpx2.ConnectError), lambda _request: httpx2.Response(503)],
+    ids=["network-failure", "5xx"],
+)
+async def test_a_failure_is_charged_though_the_rate_budget_withdrew_the_retry(
+    handler: Callable[[httpx2.Request], httpx2.Response],
+) -> None:
+    """Charge the attempt that reached the network when the retry after it never went out.
+
+    The retry's turn on the rate budget comes after the call's deadline, so the budget withdraws it, unsent, and the
+    call ends with the first attempt's failure: that attempt is the one the breaker is charged for. The budget sees
+    the turn is too late at once, on the real clock, without waiting for it.
+    """
+    fake = FakeTransport().reply("GET", "/x", handler)
+    with fake_network(fake):
+        client = Client(
+            base_url=_ORIGIN,
+            policy=CallPolicy(
+                rate=Rate.per_second(1), retry=RetryPolicy(attempts=2, backoff=Backoff(factor=0.01, max_wait=0.01))
+            ),
+        )
+    with pytest.raises(ClientError) as raised:
+        await client.get("x", expect=RESPONSE, deadline=0.5)
+
+    assert raised.value.__notes__[-1] == "deadline exhausted"
+    assert len(fake.calls) == 1
+    assert failures(client, _HOST) == 1
+
+
+class _Offline:
+    """A middleware that fails each attempt itself, as an offline mode does, so no attempt reaches the network."""
+
+    credential_headers = frozenset[str]()
+    credential_params = frozenset[str]()
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        """Raise the failure a network transport would, without sending."""
+        del call_next
+        msg = "offline mode"
+        raise httpx2.ConnectError(msg, request=request)
+
+
+class _KeylessSigner(SigningAuth):
+    """A signer whose key file is missing, so each attempt fails before it is sent."""
+
+    credential_headers: ClassVar = frozenset({"X-Signature"})
+
+    @override
+    def sign(self, request: httpx2.Request, now: float) -> None:
+        missing = "signing.pem"
+        raise FileNotFoundError(missing)
+
+
+@pytest.mark.parametrize(
+    ("auth", "middleware"), [(None, (_Offline(),)), (_KeylessSigner(), ())], ids=["middleware", "signer"]
+)
+async def test_a_failure_before_the_network_is_not_a_host_failure(
+    auth: Auth | None, middleware: tuple[Middleware, ...]
+) -> None:
+    """Charge nothing for a network failure a middleware or a signer raised: no attempt reached the network."""
+    sent: list[httpx2.Request] = []
+    client = Client(
+        base_url=_ORIGIN,
+        auth=auth,
+        policy=CallPolicy(rate=_RATE, retry=RetryPolicy(attempts=2), breaker=BreakerPolicy(failure_threshold=1)),
+        http=HttpOptions(transport=httpx2.MockTransport(lambda request: sent.append(request) or httpx2.Response(200))),
+        middleware=middleware,
+    )
+    for _ in range(2):
+        with pytest.raises(TransportError) as caught:
+            await client.get("x", expect=RESPONSE)
+        assert not isinstance(caught.value, CircuitOpenError), "the breaker opened on a failure that sent nothing"
+
+    assert sent == []
+    assert failures(client, _HOST) == 0
 
 
 # --- Transitions as events ---

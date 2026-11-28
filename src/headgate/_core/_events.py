@@ -22,7 +22,9 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, final
+
+from headgate._core._kinds import sealed
 
 __all__ = [
     "OBSERVER_FAILURES",
@@ -48,6 +50,8 @@ __all__ = [
 _CALL_IDS = itertools.count(1)
 
 
+@final
+@sealed("read the CallInfo an event carries")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CallInfo:
     """What identifies one logical call in every event about it.
@@ -102,11 +106,15 @@ class CallEvent:
     call: CallInfo
 
 
+@final
+@sealed("headgate sends its events, and an observer reads them by their fields")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CallStarted(CallEvent):
     """A call's request was built and is about to be sent."""
 
 
+@final
+@sealed("headgate sends its events, and an observer reads them by their fields")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AttemptFinished(CallEvent):
     """One send of the call finished: a response head arrived (``status_code``) or it raised (``error``, a type name).
@@ -121,6 +129,8 @@ class AttemptFinished(CallEvent):
     elapsed: float
 
 
+@final
+@sealed("headgate sends its events, and an observer reads them by their fields")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RetryScheduled(CallEvent):
     """The retry layer will send the call again after ``delay`` seconds, because of ``reason``."""
@@ -130,6 +140,8 @@ class RetryScheduled(CallEvent):
     reason: str
 
 
+@final
+@sealed("headgate sends its events, and an observer reads them by their fields")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RateLimited(CallEvent):
     """The call's rate budget held it back, or its response paused the budget, for ``delay`` seconds.
@@ -143,6 +155,8 @@ class RateLimited(CallEvent):
     reason: str
 
 
+@final
+@sealed("headgate sends its events, and an observer reads them by their fields")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CacheChecked(CallEvent):
     """The HTTP cache checked the call, or could not store its answer: ``outcome`` says which, and what it did."""
@@ -150,6 +164,8 @@ class CacheChecked(CallEvent):
     outcome: CacheOutcome
 
 
+@final
+@sealed("headgate sends its events, and an observer reads them by their fields")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DeprecationNoticed(CallEvent):
     """The call's response announced that its endpoint is deprecated (RFC 9745) or will be sunset (RFC 8594).
@@ -169,6 +185,8 @@ class DeprecationNoticed(CallEvent):
     sunset_link: str | None = None
 
 
+@final
+@sealed("headgate sends its events, and an observer reads them by their fields")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CallFinished(CallEvent):
     """A call ended: with the final ``status_code``, or raising ``error`` (the ``ClientError`` type name).
@@ -182,6 +200,8 @@ class CallFinished(CallEvent):
     elapsed: float
 
 
+@final
+@sealed("headgate sends its events, and an observer reads them by their fields")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BreakerChanged:
     """An origin's circuit breaker moved from ``previous`` to ``state``; ``call`` is the call that moved it, if any."""

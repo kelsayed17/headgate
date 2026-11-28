@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, override
 
 import httpx2
 
-from headgate._core import CallContext, RateLimited, progress_of
+from headgate._core import CallContext, RateLimited
 from headgate.ratelimit._budget import PUSHBACK, pacer_of
 
 if TYPE_CHECKING:
@@ -78,8 +78,6 @@ class RateLimitTransport(httpx2.AsyncBaseTransport):
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         budget = pacer_of(self._budgets.for_request(request))
         context = CallContext.of(request)
-        # This send's own attempt, not the call's latest: a hedge may have begun while it waited, above or here.
-        progress = progress_of(context)
         # The slot first, then the turn: calls that slots freed together still go out at the rate, and a pause set while
         # a call waited for its slot still holds it.
         release = await budget.occupy()
@@ -87,7 +85,6 @@ class RateLimitTransport(httpx2.AsyncBaseTransport):
             await budget.wait(context)
             # The waits took some of the call's time: the send that follows gets only what is left.
             context.fit_timeouts(request)
-            progress.mark_dispatched()
             sent_at = budget.now()
             response = await self._transport.handle_async_request(request)
         except BaseException:

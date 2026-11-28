@@ -43,7 +43,11 @@ nor is an entry whose response varies on a request header (``Vary``); they expir
 
 import hashlib
 import hmac
+import itertools
 import secrets
+import threading
+import types
+import weakref
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, override
 
@@ -140,6 +144,7 @@ class CredentialScope:
     """One client's rule for what the cache may store of a request and whose entry it is. See the module docstring."""
 
     __slots__ = (
+        "__weakref__",
         "_client_headers",
         "_dropped_headers",
         "_dropped_params",
@@ -157,7 +162,7 @@ class CredentialScope:
         partition: Partition = Partition.CREDENTIAL,
         carriers: Iterable[CredentialCarrier] = (),
         client_headers: Iterable[str] = (),
-        guarded: bool = False,
+        guard: Guard | None = None,
     ) -> None:
         """Strip what *stamper* and *carriers* declare, and partition by their credentials under the default partition.
 
@@ -166,8 +171,9 @@ class CredentialScope:
         :class:`~headgate.security.CredentialStamper` and by the values otherwise. *client_headers* names the headers
         the client sets on every request, which label the partition by their values. The names are read once, here.
 
-        A *guarded* client (one that refuses private hosts) gets entries of its own under either partition, so it is
-        never served a body an unguarded client on the same storage fetched from a host it would refuse.
+        A client with a *guard* (it refuses private hosts) gets entries of its own under either partition, labeled by
+        the guard's check and resolver, so it is never served a body that an unguarded client, or one whose guard
+        admits more, fetched from a host it would refuse: a cache hit is not vetted.
         """
         sources = list(carriers)
         if stamper is not None:
@@ -192,8 +198,7 @@ class CredentialScope:
         self._represented_params = frozenset(represented_params)
         self._client_headers = frozenset(name.lower() for name in client_headers) - self._dropped_headers
         self._partitioned = partition is Partition.CREDENTIAL
-        # One label for every guarded client, since they all vet addresses alike; a configurable check needs its own.
-        self._guarded = (b"guarded",) if guarded else ()
+        self._guarded = () if guard is None else (b"guarded", _lease_guard_label(self, guard))
 
     def view(self, request: httpx2.Request) -> tuple[httpx2.URL, httpx2.Headers]:
         """Return the URL and headers hishel gets for *request*: no credential, and its partition label if any."""
@@ -255,12 +260,77 @@ def credential_scope(
     *,
     middleware: Iterable[CredentialCarrier] = (),
     headers: Iterable[str] = (),
-    guarded: bool = False,
+    guard: Guard | None = None,
 ) -> CredentialScope:
     """Return the :class:`CredentialScope` for a client with *cache*, *auth*, *middleware* and client-wide *headers*.
 
-    A *guarded* client, one that refuses private hosts, gets entries of its own.
+    A client with a *guard*, one that refuses private hosts, gets entries of its own, apart from every other guard's.
     """
-    return CredentialScope(
-        auth, partition=cache.partition, carriers=middleware, client_headers=headers, guarded=guarded
-    )
+    return CredentialScope(auth, partition=cache.partition, carriers=middleware, client_headers=headers, guard=guard)
+
+
+#: What decides which hosts a guarded client reaches: its SSRF guard's address check and its resolver.
+type Guard = tuple[object, object]
+
+#: A guard's key: for its check and for its resolver, the identities of the objects that decide it.
+type _GuardKey = tuple[tuple[int, ...], ...]
+
+
+@dataclass(slots=True)
+class _GuardEntry:
+    """A guard in use: its label, the objects that decide it, and how many credential scopes use it."""
+
+    #: The label its entries carry, drawn once from the serial.
+    label: bytes
+    #: The objects whose identities key it, held so that no other object can take one while the entry lives.
+    deciders: tuple[object, ...]
+    #: The credential scopes using it: the entry goes with the last of them.
+    scopes: int = 0
+
+
+#: Each guard in use, by its key: an entry goes when the last credential scope using it is collected.
+_GUARD_LABELS: Final[dict[_GuardKey, _GuardEntry]] = {}
+#: Reentrant: a collection run while the table is locked may finalize a scope, whose release then takes the lock.
+_GUARD_LABELS_LOCK: Final = threading.RLock()
+#: Where the next label is drawn from: a count, so a label is never handed out twice, even after its entry went.
+_GUARD_SERIAL: Final = itertools.count()
+
+
+def _deciders(part: object) -> tuple[object, ...]:
+    """Return what decides *part*, a check or a resolver: a bound method's object and function, else *part* itself.
+
+    Each read of ``tenant.resolve`` builds a new method, equal to the last: its object and its function are what stay.
+    """
+    if isinstance(part, types.MethodType):
+        return (part.__self__, part.__func__)
+    return (part,)
+
+
+def _lease_guard_label(scope: object, guard: Guard) -> bytes:
+    """Return the label of *guard*'s entries, held for *scope* until it is collected: one per check and resolver.
+
+    Labels are per process, as the partition key is. A guard is told by the identities of the objects that decide it,
+    not by equality: a check or a resolver need not be hashable, and two that compare equal may still decide
+    differently. A bound method counts as its object and its function, so ``tenant.resolve`` read for each client is
+    one resolver; separate objects, however equal, are separate guards. The entry holds those objects while a scope
+    uses it, so no other object takes one of their identities, and with it the label; it goes with its last scope,
+    and a guard built later draws a new label.
+    """
+    deciders = [_deciders(part) for part in guard]
+    key = tuple(tuple(map(id, objects)) for objects in deciders)
+    with _GUARD_LABELS_LOCK:
+        entry = _GUARD_LABELS.get(key)
+        if entry is None:
+            held = tuple(itertools.chain.from_iterable(deciders))
+            entry = _GUARD_LABELS[key] = _GuardEntry(str(next(_GUARD_SERIAL)).encode(), held)
+        entry.scopes += 1
+    weakref.finalize(scope, _release_guard, key, entry)
+    return entry.label
+
+
+def _release_guard(key: _GuardKey, entry: _GuardEntry) -> None:
+    """Let a collected scope go of *entry*, which leaves the table with its last scope, and never takes a newer one."""
+    with _GUARD_LABELS_LOCK:
+        entry.scopes -= 1
+        if not entry.scopes and _GUARD_LABELS.get(key) is entry:
+            del _GUARD_LABELS[key]

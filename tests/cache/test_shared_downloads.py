@@ -483,7 +483,9 @@ def _sharing_client(network: _GatedNetwork, storage: AsyncSqliteStorage) -> Clie
     """Build a client over *network* that caches every GET and sends each request once."""
     return Client(
         base_url="https://example.test",
-        policy=CallPolicy(retry=RetryPolicy(attempts=1), cache=HttpCache(**every_get_rules(), storage=storage)),
+        policy=CallPolicy(
+            retry=RetryPolicy(attempts=1), cache=HttpCache(**every_get_rules(), storage=storage, ttl=None)
+        ),
         http=HttpOptions(transport=network),
     )
 
@@ -525,7 +527,9 @@ async def test_gets_whose_timeouts_the_deadline_cut_still_share(storage: AsyncSq
     client = Client(
         base_url="https://example.test",
         policy=CallPolicy(
-            deadline=20.0, retry=RetryPolicy(attempts=1), cache=HttpCache(**every_get_rules(), storage=storage)
+            deadline=20.0,
+            retry=RetryPolicy(attempts=1),
+            cache=HttpCache(**every_get_rules(), storage=storage, ttl=None),
         ),
         http=HttpOptions(transport=network),
     )
@@ -655,7 +659,7 @@ async def test_middleware_timeout_overrides_define_sharing(storage: AsyncSqliteS
         policy=CallPolicy(
             retry=None,
             deadline=60.0,
-            cache=HttpCache(**_store_nothing(), storage=storage),
+            cache=HttpCache(**_store_nothing(), storage=storage, ttl=None),
             timeout=Timeouts(connect=30.0, read=30.0, write=30.0, pool=30.0),
         ),
         http=HttpOptions(transport=network),
@@ -695,7 +699,7 @@ async def test_middleware_can_change_the_timeout_on_a_later_retry(storage: Async
         policy=CallPolicy(
             retry=RetryPolicy(attempts=2),
             deadline=60.0,
-            cache=HttpCache(**_store_nothing(), storage=storage),
+            cache=HttpCache(**_store_nothing(), storage=storage, ttl=None),
             timeout=Timeouts(connect=30.0, read=30.0, write=30.0, pool=30.0),
         ),
         http=HttpOptions(transport=network),

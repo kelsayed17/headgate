@@ -33,7 +33,7 @@ _LARGE: Final = 4 * _KIB
 
 def _client(network: TrackingNetwork, *, cap: int, storage: AsyncSqliteStorage | None) -> Client:
     """Return a client capped at *cap* over *network*, caching every GET into *storage* when given."""
-    cache = None if storage is None else HttpCache(**every_get_rules(), storage=storage)
+    cache = None if storage is None else HttpCache(**every_get_rules(), storage=storage, ttl=None)
     return stub_client(transport=network, cache=cache, http=HttpOptions(max_response_bytes=cap))
 
 

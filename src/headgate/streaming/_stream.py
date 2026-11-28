@@ -15,6 +15,7 @@ from typing import Final, Protocol, final
 
 import httpx2
 
+from headgate._core import check_int
 from headgate._errors import ClientError
 from headgate._failures import CallSite, parse_error
 from headgate._sse import EventParser, EventTooLargeError, text_decoder
@@ -36,13 +37,27 @@ _LINE_ENDS: Final = "\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
 _EVENT_STREAM: Final = "text/event-stream"
 
 
+def _check_size(option: str, size: int | None, wanted: str) -> None:
+    """Refuse a *size* for *option* that is neither ``None`` nor an ``int`` of at least 1, as *wanted* says.
+
+    :raises TypeError: for a size that is not an ``int``, a ``bool`` included.
+    :raises ValueError: for one below 1: no chunk is that small, and no line or event fits under that limit.
+    """
+    if size is not None:
+        check_int(option, size, wanted)
+        if size < 1:
+            msg = f"{option}= takes {wanted} (got {size})"
+            raise ValueError(msg)
+
+
 class Stream(Protocol):
     """A response whose head has arrived and whose body is read as it arrives, inside ``client.stream(...)``.
 
     The status is a 2xx (anything else raised before the block was entered) and the client's ``response_check`` has
     passed. Read the body once, with one of :meth:`aiter_bytes`, :meth:`aiter_lines` or :meth:`aiter_events`; the
     response is closed when the block exits, whether or not it was read to the end. A network failure or timeout while
-    reading raises ``TransportError`` / ``ClientTimeoutError`` from the iteration.
+    reading raises ``TransportError`` / ``ClientTimeoutError`` from the iteration. A size an iterator takes is an
+    ``int`` of at least 1 (``None`` where it may be): one below 1 raises ``ValueError`` where the iterator is asked for.
     """
 
     @property
@@ -88,11 +103,12 @@ class Stream(Protocol):
     def aiter_lines(self, *, max_line_size: int | None = DEFAULT_MAX_EVENT_SIZE) -> AsyncIterator[str]:
         """Iterate the body as decoded text lines, without their line endings, split as ``str.splitlines`` splits.
 
-        A line past *max_line_size* characters (1 MiB by default, as an event; ``None`` for no limit) raises
-        ``ResponseTooLargeError``, before it ends if it never does. The body is decoded by its ``charset``; one that is
-        no text encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is. Bytes the ``charset`` decodes
-        badly become replacement characters, and a body it cannot decode at all (UTF-16 without a byte order mark)
-        raises ``ResponseParseError``.
+        A line past *max_line_size* characters of decoded text (``None`` for no limit) raises
+        ``ResponseTooLargeError``, before it ends if it never does. The default is the number an event's limit counts
+        in bytes, 1,048,576, so a line of characters that take several bytes each holds more bytes than an event may.
+        The body is decoded by its ``charset``; one that is no text encoding (``base64``, ``rot13``) is read as UTF-8,
+        as no ``charset`` is. Bytes the ``charset`` decodes badly become replacement characters, and a body it cannot
+        decode at all (UTF-16 without a byte order mark) raises ``ResponseParseError``.
         """
         ...
 
@@ -164,17 +180,24 @@ class OpenStream:
 
     def aiter_bytes(self, *, chunk_size: int | None = None) -> AsyncIterator[bytes]:
         """Iterate the body as bytes, in chunks as they arrive or of *chunk_size* bytes."""
+        _check_size(
+            "chunk_size", chunk_size, "a number of bytes, an int of at least 1, or None for chunks as they arrive"
+        )
         return _Guarded(self._response.aiter_bytes(chunk_size), self._fail)
 
     def aiter_lines(self, *, max_line_size: int | None = DEFAULT_MAX_EVENT_SIZE) -> AsyncIterator[str]:
         """Iterate the body as decoded text lines, without their line endings, split as ``str.splitlines`` splits.
 
-        A line past *max_line_size* characters (1 MiB by default, as an event; ``None`` for no limit) raises
-        ``ResponseTooLargeError``, before it ends if it never does. The body is decoded by its ``charset``; one that is
-        no text encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is. Bytes the ``charset`` decodes
-        badly become replacement characters, and a body it cannot decode at all (UTF-16 without a byte order mark)
-        raises ``ResponseParseError``.
+        A line past *max_line_size* characters of decoded text (``None`` for no limit) raises
+        ``ResponseTooLargeError``, before it ends if it never does. The default is the number an event's limit counts
+        in bytes, 1,048,576, so a line of characters that take several bytes each holds more bytes than an event may.
+        The body is decoded by its ``charset``; one that is no text encoding (``base64``, ``rot13``) is read as UTF-8,
+        as no ``charset`` is. Bytes the ``charset`` decodes badly become replacement characters, and a body it cannot
+        decode at all (UTF-16 without a byte order mark) raises ``ResponseParseError``.
         """
+        _check_size(
+            "max_line_size", max_line_size, "a number of characters, an int of at least 1, or None for no limit"
+        )
         decoder = text_decoder(self._response.encoding)
         chunks = _Guarded(self._response.aiter_bytes(), self._fail)
         unreadable = functools.partial(parse_error, resp=self._response, site=self._site)
@@ -193,6 +216,7 @@ class OpenStream:
 
         :raises ResponseParseError: at once, for a response that does not declare ``text/event-stream``.
         """
+        _check_size("max_event_size", max_event_size, "a number of bytes, an int of at least 1, or None for no limit")
         media_type = self._response.headers.get("content-type", "").partition(";")[0].strip().lower()
         if media_type != _EVENT_STREAM:
             error = ValueError(f"expected an event stream, got content type {media_type or 'none'!r}")

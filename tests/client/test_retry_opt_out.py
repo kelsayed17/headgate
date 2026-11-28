@@ -87,7 +87,7 @@ async def test_retry_none_and_a_cache_ttl_are_both_stamped(httpx2_mock: HTTPXMoc
     ttl = 5.0
     cached = Client(
         base_url="https://example.invalid",
-        policy=CallPolicy(rate=Rate.per_second(2), cache=HttpCache(storage=storage)),
+        policy=CallPolicy(rate=Rate.per_second(2), cache=HttpCache(storage=storage, ttl=None)),
     )
 
     async with cached as client:

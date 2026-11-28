@@ -16,7 +16,7 @@ each send's timeouts inside it.
 
 <!-- docs-test: run -->
 ```python
-from headgate import Route, CallPolicy
+from headgate import CallPolicy, Route
 
 policy = CallPolicy(deadline=20.0, routes=(Route("/reports", deadline=300.0),))
 ```
@@ -99,6 +99,8 @@ timeout, raise the deadline with it:
 
 <!-- docs-test: run -->
 ```python
+from headgate import Timeouts
+
 reports = client.with_options(timeout=Timeouts(read=300.0), deadline=600.0)
 ```
 

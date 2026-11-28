@@ -16,8 +16,11 @@ describe what each piece does; this describes how they fit together.
    and cookies all default to the safe behavior; loosening each is a named option.
 5. **No logging, no environment reads.** Observability is typed events delivered to observers the caller installs.
    Nothing reads `os.environ`; the HTTP client and the default transport are built with `trust_env=False`.
-6. **Injectable time and randomness.** Every clock, sleep and random source is a parameter with a production default.
-   `headgate.testing` supplies fakes; no test patches a private global.
+6. **Injectable time and randomness.** Time has one seam, not a parameter on each constructor: whatever measures or
+   waits (a `Client`, a shared `RateBudget`, `RetryBudget` or `BreakerRegistry`, a `FaultyTransport`) takes its clock,
+   sleep, wall clock and random draw from `headgate.timing.current_timing()` when it is built, the system's by default.
+   A test builds under `TestClock.install()`, or `timing_override()` with a `Timing` of its own, from
+   `headgate.testing` and `headgate.timing`; no test patches a private global.
 
 ## Packages and the import boundary
 

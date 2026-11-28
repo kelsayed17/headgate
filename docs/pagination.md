@@ -9,12 +9,15 @@ endpoint that takes its search as a request body is walked with POSTs instead, g
 [Walks of POSTs](#walks-of-posts).
 
 A pager's first argument is the reader of its pages, a `Reader` or an `Expect`, so the type checker knows the page type
-before it reads the functions after it: a lambda is checked against `Page`, and the walk's item type is inferred.
+before it reads the functions after it: a lambda's use of the page is checked against `Page` (`page.dta` is an error),
+and the walk's item type is inferred from what it returns. What a lambda returns is not checked against what the pager
+needs, though: `items=lambda page: page`, a page where a sequence of items goes, type-checks, and only the walk finds
+it out. A function with annotations, `def items_of(page: Page) -> list[Item]`, is checked whole.
 
 <!-- docs-test: check -->
 ```python
-from headgate.pagination import Cursor
 from headgate.msgspec import reader
+from headgate.pagination import Cursor
 
 ITEM_PAGES = Cursor(reader(Page), items=lambda page: page.data, next=lambda page: page.next_cursor, param="after")
 
@@ -103,6 +106,15 @@ A page with no items ends a `Cursor`, `PageNumber`, `LinkHeader` or `NextUrl` wa
 advances while returning nothing makes no progress, and following it spends the rate budget for nothing. For an
 endpoint that sends empty pages mid-walk, pass `stop_on_empty=False`.
 
+Each hook is checked twice: that it can be called, when the pager is built (a class as `write=` is refused there too,
+as `Reader` refuses one), and what it returns, where the walk takes it. An `items` that returns no sequence (a
+generator included: the strategy counts the items and tests for none; a set or a dict's view is taken), or returns
+text or a mapping, whose characters or keys the walk would yield as items, a pager's own `page_items` that returns no
+iterable, a `total` that returns neither an `int` nor `None`, a `next` that returns neither a `str` (or, for
+`NextUrl`, an `httpx2.URL`) nor `None`, an `offset` that returns no `int`, and a `write` that returns no
+`EncodedBody` raise `TypeError` naming the hook, as a reader's `refuse=` does, rather than fail inside the walk or
+send what the hook returned.
+
 With `size_param=`, `Offset` sends the page size too, under whatever name the endpoint uses (`limit`, `per_page`,
 SODA's `$limit`): your own size there, an int of at least 1 or a string of digits, when your `params=` give one, and
 `page_size` otherwise. A page shorter than that size is the last. Without `size_param=`, the page size is yours to
@@ -161,8 +173,8 @@ pager, so it is built once beside them.
 ```python
 import msgspec
 
-from headgate.pagination import BodyCursor, BodyOffset
 from headgate.msgspec import reader, writer
+from headgate.pagination import BodyCursor, BodyOffset
 
 QUERY = writer(Query)
 
@@ -230,7 +242,9 @@ would carry it, and a server that honors it would answer each page with the firs
 A scheme the strategies do not cover implements the `Pager[I, P]` protocol (`Pager[I, P, B]` for a walk of POSTs whose
 bodies are of type `B`), items first as in `Paginated[I, P]`, with a `read` that reads its pages. One that encodes its
 walk's bodies subclasses `WritingPager[I, P, B]` and gives it a `write` too:
-a pager writes bodies because it says so, not because it has an attribute of that name.
+a pager writes bodies because it says so, not because it has an attribute of that name. A scheme one of the strategies
+nearly covers subclasses that strategy instead and overrides the hook that differs (`first`, `page_items` or
+`next_page`): a walk calls a pager's hooks and nothing else, so the override is what runs.
 
 <!-- docs-test: run -->
 ```python

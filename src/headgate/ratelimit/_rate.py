@@ -5,12 +5,15 @@
 
 import math
 from dataclasses import dataclass
+from typing import final
 
-from headgate._core import check_number
+from headgate._core import check_number, sealed
 
 __all__ = ["UNPACED", "Adaptive", "Rate"]
 
 
+@final
+@sealed("build one of requests and period, such as Rate.per_second(10)")
 @dataclass(frozen=True, slots=True)
 class Rate:
     """``requests`` per ``period`` seconds, with its unit in the call that builds it.
@@ -71,6 +74,8 @@ class Rate:
 UNPACED = Rate.per_second(1_000_000)
 
 
+@final
+@sealed("set decrease, increase and min_rate, which are all the budget reads")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Adaptive:
     """Adaptive throttling (AIMD): slow down when the server pushes back, recover while it does not.

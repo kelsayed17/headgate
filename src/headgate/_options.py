@@ -9,17 +9,18 @@
   headers, redirects, the body cap, cookies).
 * :class:`Timeouts`, :class:`IdempotencyKeys` and :class:`Route`, the values those hold.
 
-Every one is frozen, slotted and keyword-only, validates on construction so a bad configuration fails where it is
-written, and freezes the collections it is given.
+Every one is frozen and slotted, takes its options as keywords (a :class:`Route` takes its fragment first, by position),
+validates on construction so a bad configuration fails where it is written, and freezes the collections it is given.
 """
 
 import functools
 import inspect
 import math
+import re
 import ssl
 import uuid
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field, replace
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, fields, replace
 from types import MappingProxyType
 from typing import ClassVar, Final, Unpack, final, override
 
@@ -32,8 +33,9 @@ from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
 from headgate._core import (
     check_callable,
     check_collection,
+    check_default_headers,
     check_fragment,
-    check_headers,
+    check_header_name,
     check_int,
     check_kind,
     check_names,
@@ -43,9 +45,11 @@ from headgate._core import (
     origin_of,
     origin_text,
     path_has_fragment,
+    sealed,
 )
-from headgate._failures import DEFAULT_REQUEST_ID_HEADERS
+from headgate._failures import DEFAULT_REQUEST_ID_HEADERS, shorten
 from headgate._responses import ResponseCheck
+from headgate._url import hide_userinfo
 from headgate.breaker._policy import BreakerPolicy
 from headgate.breaker._registry import BreakerRegistry
 from headgate.cache._policy import HttpCache
@@ -64,6 +68,7 @@ __all__ = [
     "RouteOptions",
     "SecurityOptions",
     "Timeouts",
+    "check_base_url",
     "check_deadline",
     "check_hooks",
     "check_middleware",
@@ -128,6 +133,8 @@ def check_deadline(deadline: float | None) -> None:
 _PHASES: Final = ("connect", "read", "write", "pool")
 
 
+@final
+@sealed("set connect, read, write and pool, which are all the client reads")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Timeouts:
     """Per-phase timeouts in seconds: obtaining a connection from the pool, connecting, writing, reading.
@@ -156,7 +163,8 @@ class Timeouts:
             _check_positive(name, value)
 
     def over(self, base: Timeouts) -> Timeouts:
-        """Return *base* with the phases this sets in place of its own."""
+        """Return *base* with the phases this sets in place of its own; ``TypeError`` for a *base* not a Timeouts."""
+        check_kind("base", base, Timeouts, _TIMEOUTS_WANTED)
         return replace(base, **dict(_set_phases(self)))
 
 
@@ -237,6 +245,8 @@ def _uuid4_text() -> str:
     return str(uuid.uuid4())
 
 
+@final
+@sealed("set header and factory, which are all the client reads")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class IdempotencyKeys:
     """Stamp a fresh idempotency key on every POST and PATCH a client sends, once per call, under ``header``.
@@ -250,12 +260,10 @@ class IdempotencyKeys:
     factory: Callable[[], str] = field(default=_uuid4_text)
 
     def __post_init__(self) -> None:
-        """Refuse a header that is not a name, and a factory that cannot be called."""
+        """Refuse a header that is not a name (an HTTP token), and a factory that cannot be called."""
         check_kind("header", self.header, str, "a header name")
         check_callable("factory", self.factory, "a function returning a fresh key")
-        if not self.header:
-            msg = "header must name a header"
-            raise ValueError(msg)
+        check_header_name("header", self.header)
 
 
 #: The methods :class:`IdempotencyKeys` stamps: the ones RFC 9110 does not define as idempotent.
@@ -288,6 +296,7 @@ _ROUTE_KEYS: Final = frozenset(RouteOptions.__optional_keys__)
 
 
 @final
+@sealed("build a Route of the fragment and the options its paths take")
 class Route:
     """The one per-path rule: what the calls whose URL path holds ``fragment``'s segments do differently.
 
@@ -311,7 +320,7 @@ class Route:
 
     def __init__(self, fragment: str, /, **options: Unpack[RouteOptions]) -> None:
         """Hold *fragment* and the *options* its paths take."""
-        check_kind("fragment", fragment, str, "path segments, such as '/exports'")
+        check_kind("Route(fragment)", fragment, str, "path segments, such as '/exports'")
         check_fragment(fragment)
         check_options("Route", options, _ROUTE_KEYS)
         if "retry" in options:
@@ -355,11 +364,13 @@ class Route:
         return f"Route({self._fragment!r}{options})"
 
 
-def match_route(routes: tuple[Route, ...], path: str) -> Route | None:
+def match_route(routes: Sequence[Route], path: str) -> Route | None:
     """Return the first of *routes* whose fragment *path* holds, or ``None``."""
     return next((route for route in routes if path_has_fragment(path, route.fragment)), None)
 
 
+@final
+@sealed("set its fields, which are all the client reads")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CallPolicy:
     """What the stack does with every call: the pair of :class:`~headgate.CallOptions`, which override it per call.
@@ -380,8 +391,8 @@ class CallPolicy:
       ``None`` for none.
     * ``cache``: an opt-in :class:`~headgate.HttpCache`.
     * ``idempotency``: stamp idempotency keys on POST and PATCH (:class:`IdempotencyKeys`), or ``None``.
-    * ``routes``: the per-path rules (:class:`Route`): a call's first matching route sets its retry, timeout,
-      deadline, rate and cache, and what it leaves out comes from here.
+    * ``routes``: the per-path rules (:class:`Route`), in order, held as a ``tuple``: a call's first matching route
+      sets its retry, timeout, deadline, rate and cache, and what it leaves out comes from here.
     """
 
     rate: Rate | RateBudget | None = None
@@ -391,7 +402,7 @@ class CallPolicy:
     breaker: BreakerPolicy | BreakerRegistry | None = field(default_factory=BreakerPolicy)
     cache: HttpCache | None = None
     idempotency: IdempotencyKeys | None = None
-    routes: tuple[Route, ...] = ()
+    routes: Sequence[Route] = ()
 
     def __post_init__(self) -> None:
         """Refuse an option of the wrong kind, a bad deadline, and a timeout longer than its deadline; freeze the rules.
@@ -421,7 +432,7 @@ class CallPolicy:
         check_kind("idempotency", self.idempotency, (IdempotencyKeys, type(None)), "IdempotencyKeys(), or None")
         check_deadline(self.deadline)
         check_timeout_fits(self.timeout, self.deadline)
-        wanted = "a tuple of Route, such as (Route('/exports', deadline=300.0),)"
+        wanted = "a sequence of Route, in order, such as (Route('/exports', deadline=300.0),)"
         if isinstance(self.routes, Route):
             check_kind("routes", self.routes, (), wanted)
         check_collection("routes", self.routes, wanted)
@@ -444,6 +455,52 @@ def _is_bare_origin(url: httpx2.URL) -> bool:
     )
 
 
+#: The API root ``Client(base_url=)``'s refusals show as an example.
+_BASE_URL_EXAMPLE: Final = "'https://api.example.com/v1'"
+
+#: What follows a URL's first ``?`` or ``#``: a query or fragment, any of whose names and values may be a secret.
+_AFTER_QUERY: Final = re.compile(r"(?<=[?#]).+", re.DOTALL)
+
+
+def check_base_url(base_url: str) -> None:
+    """Refuse a *base_url* a call's path cannot be joined onto: an http(s) URL with a host, and nothing after its path.
+
+    httpx2 appends a call's path to whatever *base_url* ends with, a query or a fragment included, and sends a userinfo
+    as an ``Authorization`` header, which no auth declares. Each refusal shows the URL redacted, and cut after its first
+    ``?`` or ``#``.
+
+    :raises ValueError: naming ``base_url=`` and what to write instead.
+    """
+    # Redacted as text, which keeps an empty "?" or "#" that splitting the URL would drop, and a "#" in a userinfo,
+    # then cut: a secret may sit under any query name, not only those redaction knows.
+    shown = repr(shorten(_AFTER_QUERY.sub("…", hide_userinfo(base_url), count=1)))
+    absolute = f"base_url= takes an absolute http(s) URL, such as {_BASE_URL_EXAMPLE} (got {shown})"
+    try:
+        url = httpx2.URL(base_url)
+    except httpx2.InvalidURL:
+        # httpx2's reason quotes the part it could not read, which may be a password: say only that it is no URL.
+        msg = f"{absolute}: it is not a URL httpx2 can read"
+        raise ValueError(msg) from None
+    if not (url.scheme and url.host):
+        msg = f"{absolute}: start it with https:// and the host"
+    elif url.scheme not in _ORIGIN_SCHEMES:
+        msg = f"base_url= takes an http or https URL, such as {_BASE_URL_EXAMPLE} (got {shown}): headgate speaks HTTP"
+    # The text, not the parsed parts: the path is appended after an empty "?" or "#" too.
+    elif "?" in base_url or "#" in base_url:
+        msg = (
+            f"base_url= takes a URL with no query or fragment (got {shown}): every call's path would be appended to "
+            "it, a key there included; send a key with QueryParamAuth, other parameters with params="
+        )
+    elif url.userinfo:
+        msg = (
+            f"base_url= takes a URL with no user or password (got {shown}): httpx2 would send them as an "
+            "Authorization header no auth declares; use an Auth, such as StaticHeaderAuth({'Authorization': ...})"
+        )
+    else:
+        return
+    raise ValueError(msg)
+
+
 def _normalized_origin(text: str) -> str:
     """Return *text*, an ``http(s)://host[:port]`` origin, normalized; ``ValueError`` for anything else."""
     try:
@@ -451,23 +508,31 @@ def _normalized_origin(text: str) -> str:
     except httpx2.InvalidURL:
         url = None
     if url is None or not _is_bare_origin(url):
-        msg = f"trusted origin must be an http(s) origin such as 'https://host[:port]' (got {text!r})"
+        shown = repr(shorten(_AFTER_QUERY.sub("…", hide_userinfo(text), count=1)))
+        msg = f"trusted origin must be an http(s) origin such as 'https://host[:port]' (got {shown})"
         raise ValueError(msg)
     return origin_text(origin_of(url))
 
 
-#: What a proxy URL's error calls a URL httpx2 cannot parse, or one with no scheme.
+#: What a proxy URL's error calls a URL httpx2 cannot parse, or one with no scheme, or a scheme without its ``//``.
 _MALFORMED = "malformed"
 
 
 def _check_proxy(proxy: str) -> None:
-    """Raise ``ValueError`` for a proxy URL httpx2 cannot use."""
+    """Raise ``ValueError`` for a proxy URL httpx2 cannot use: another scheme, or no host to connect to."""
     try:
-        scheme = httpx2.URL(proxy).scheme or _MALFORMED
+        url = httpx2.URL(proxy)
     except httpx2.InvalidURL:
-        scheme = _MALFORMED
+        url = None
+    scheme = _MALFORMED
+    # A scheme counts with its "//": in "token:x@host" httpx2 reads the user, a secret, as one, which no message shows.
+    if url is not None and url.scheme and proxy[len(url.scheme) :].startswith("://"):
+        scheme = url.scheme
     if scheme not in _PROXY_SCHEMES:
         msg = f"proxy must be an http, https or socks5 URL (got a {scheme} URL)"
+        raise ValueError(msg)
+    if url is not None and not url.host:
+        msg = "proxy must name the host to connect to, such as 'http://proxy.example:3128' (got a URL with no host)"
         raise ValueError(msg)
 
 
@@ -487,6 +552,14 @@ def _refuse_class(option: str, item: object, wanted: str) -> None:
         raise TypeError(msg)
 
 
+def _hook_name(item: object) -> str:
+    """Return what a refusal calls *item*: its qualified name, its class's, or a partial's ``partial(<function>)``."""
+    if isinstance(item, functools.partial):
+        return f"partial({_hook_name(item.func)})"
+    name: object = getattr(item, "__qualname__", type(item).__qualname__)
+    return str(name)
+
+
 def check_middleware(middleware: Iterable[object]) -> None:
     """Refuse a middleware that does not declare the credentials it stamps as two frozensets, or splits a name.
 
@@ -495,7 +568,7 @@ def check_middleware(middleware: Iterable[object]) -> None:
     """
     for item in middleware:
         _refuse_class("middleware", item, "middleware instances")
-        name = getattr(item, "__qualname__", type(item).__qualname__)
+        name = _hook_name(item)
         for attribute in ("credential_headers", "credential_params"):
             names = getattr(item, attribute, None)
             if not (isinstance(names, frozenset) and all(isinstance(n, str) for n in names)):
@@ -523,7 +596,7 @@ def check_observers(observers: Iterable[object]) -> None:
     for item in observers:
         _refuse_class("observers", item, "Observer instances")
         if not callable(getattr(item, "notify", None)):
-            name = getattr(item, "__qualname__", type(item).__qualname__)
+            name = _hook_name(item)
             msg = f"observers= takes Observers, each with a notify(event) method (got {name}, which has none)"
             raise TypeError(msg)
         if inspect.iscoroutinefunction(getattr(item, "notify", None)):
@@ -534,12 +607,14 @@ def check_observers(observers: Iterable[object]) -> None:
             raise TypeError(msg)
 
 
+@final
+@sealed("set its fields, which are all the client reads")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SecurityOptions:
     """Where a client's requests and credentials may go, passed as ``HttpOptions(security=...)``.
 
-    * ``trusted_origins``: origins besides ``base_url``'s that credentials may be sent to (``"https://host[:port]"``);
-      every other origin gets the request without them (see :mod:`headgate.security`).
+    * ``trusted_origins``: origins besides ``base_url``'s that credentials may be sent to (``"https://host[:port]"``),
+      held as a ``frozenset``; every other origin gets the request without them (see :mod:`headgate.security`).
     * ``block_private_hosts``: ``True`` turns on the SSRF guard: a request to a host that is, or resolves to, an
       address that is not globally routable raises :class:`~headgate.errors.ForbiddenDestinationError`, on every hop,
       and the default transport and ``headgate.curl.AsyncCurlTransport`` connect only to the addresses they checked. It
@@ -552,16 +627,18 @@ class SecurityOptions:
       defer to for every address it does not decide itself. A check of your own only with ``block_private_hosts=True``.
     """
 
-    trusted_origins: frozenset[str] = frozenset()
+    trusted_origins: Collection[str] = frozenset()
     block_private_hosts: bool = False
     resolver: Resolver | None = None
     check: AddressCheck = forbidden_reason
 
     def __post_init__(self) -> None:
         """Refuse a value of the wrong kind, and a resolver or check without the SSRF guard; normalize the origins."""
-        # Each origin may be text or an httpx2.URL; _normalized_origin refuses anything else.
-        check_collection(
-            "trusted_origins", self.trusted_origins, "a frozenset of origins, such as {'https://cdn.example'}"
+        check_names(
+            "trusted_origins",
+            self.trusted_origins,
+            "a collection of origins, such as ('https://cdn.example',)",
+            kind=(str, httpx2.URL),
         )
         check_kind("block_private_hosts", self.block_private_hosts, bool, "a bool")
         if self.resolver is not None:
@@ -578,15 +655,21 @@ class SecurityOptions:
         object.__setattr__(self, "trusted_origins", frozenset(map(_normalized_origin, self.trusted_origins)))
 
 
+@final
+@sealed("set its fields, which are all the client reads")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class HttpOptions:
     """How a request is sent and its response read.
 
     * ``transport``: a custom network transport (``headgate.curl.AsyncCurlTransport``, a test double), which then owns
       its own TLS, pool and proxy: ``ssl_context``, ``limits`` and ``proxy`` configure only the default transport, an
-      HTTP/2 ``httpx2.AsyncHTTPTransport``.
+      HTTP/2 ``httpx2.AsyncHTTPTransport``. The client closes the transport when it closes; a curl transport that
+      several clients share is closed with the last of them, and ``Client()`` raises ``ValueError`` on a closed one.
     * ``headers``: sent on every request to ``base_url``'s origin and the ``trusted_origins``; any other origin gets
-      only ``User-Agent`` and the ``Accept`` headers among them. A call's ``headers=`` wins a clash.
+      only ``User-Agent`` and the ``Accept`` headers among them. A call's ``headers=`` wins a clash. They are merged
+      by name, so each is named once: one named twice, in any case, raises ``ValueError``, as does a name that is not
+      an HTTP token and a value holding CR, LF or NUL, which no request can carry. ``Client()`` raises ``ValueError``
+      for one its auth sets itself, since the auth would take it as the caller's credential.
     * ``follow_redirects`` and ``max_redirects``: the client's default, which a call can override, and the hop limit.
       httpx2 counts an auth flow's hops in the same history as redirects, so each request a
       :class:`~headgate.CachedTokenAuth` mint sends, and a 401 it re-mints after, uses one of ``max_redirects`` too.
@@ -597,9 +680,11 @@ class HttpOptions:
     * ``security``: where requests and credentials may go (:class:`SecurityOptions`): trusted origins and the SSRF
       guard.
     * ``user_agent``: a product token sent before headgate's own (``"<user_agent> headgate/<v> httpx2/<v>
-      python/<v>"``); without one, headgate's alone.
+      python/<v>"``); without one, headgate's alone. A ``User-Agent`` in ``headers`` replaces the whole header, so the
+      two together raise ``ValueError``.
     * ``cookies``: ``True`` keeps httpx2's cookie jar; by default no cookie a response sets is stored or sent back.
-    * ``request_id_headers``: the response headers a ``ClientError``'s ``request_id`` is read from, first match wins.
+    * ``request_id_headers``: the response headers a ``ClientError``'s ``request_id`` is read from, in order, first
+      match wins; held as a ``tuple``, lower-cased.
 
     The timeouts are the policy's (``CallPolicy(timeout=)``), and the observers and middleware the client's own
     (``Client(observers=, middleware=)``): parts of the stack, not settings of how a request is sent.
@@ -619,7 +704,7 @@ class HttpOptions:
     proxy: str | None = None
     user_agent: str | None = None
     cookies: bool = False
-    request_id_headers: tuple[str, ...] = DEFAULT_REQUEST_ID_HEADERS
+    request_id_headers: Sequence[str] = DEFAULT_REQUEST_ID_HEADERS
 
     def __post_init__(self) -> None:
         """Validate every option, and freeze and normalize the collections."""
@@ -636,6 +721,12 @@ class HttpOptions:
         if self.user_agent is not None and (not self.user_agent or not self.user_agent.isprintable()):
             msg = "user_agent must be a non-empty, printable product token"
             raise ValueError(msg)
+        if self.user_agent is not None and "user-agent" in {name.lower() for name in self.headers}:
+            msg = (
+                "user_agent= and headers= both set User-Agent: give user_agent= for a product token sent before "
+                "headgate's own, or the header for the whole of it, not both"
+            )
+            raise ValueError(msg)
         names = tuple(name.lower() for name in self.request_id_headers)
         if not all(names):
             msg = "request_id_headers must name headers"
@@ -643,12 +734,20 @@ class HttpOptions:
         object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
         object.__setattr__(self, "request_id_headers", names)
 
+    @override
+    def __repr__(self) -> str:
+        """Return the options as a dataclass shows them, but each header's value as ``'***'``: it may be a key."""
+        shown = {item.name: getattr(self, item.name) for item in fields(self)}
+        shown["headers"] = dict.fromkeys(self.headers, "***")
+        shown["proxy"] = None if self.proxy is None else hide_userinfo(self.proxy)
+        return f"HttpOptions({', '.join(f'{name}={value!r}' for name, value in shown.items())})"
+
     def _check_kinds(self) -> None:
         """Refuse a value of the wrong kind where it is written, rather than at the first request."""
         if self.transport is not None and not isinstance(self.transport, httpx2.AsyncBaseTransport):
             reject_upstream_httpx(self.transport, what="transport")
             check_kind("transport", self.transport, (), "an httpx2.AsyncBaseTransport, or None")
-        check_headers("headers", self.headers)
+        check_default_headers("headers", self.headers)
         check_kind("follow_redirects", self.follow_redirects, bool, "a bool")
         check_int("max_redirects", self.max_redirects, "a number of hops, an int")
         check_int("max_response_bytes", self.max_response_bytes, "a number of bytes, an int")
@@ -660,7 +759,11 @@ class HttpOptions:
         check_kind("proxy", self.proxy, (str, type(None)), "a proxy URL, or None")
         check_kind("user_agent", self.user_agent, (str, type(None)), "a product token, or None")
         check_kind("cookies", self.cookies, bool, "a bool")
-        check_names("request_id_headers", self.request_id_headers, "a tuple of header names, such as ('x-trace-id',)")
+        check_names(
+            "request_id_headers",
+            self.request_id_headers,
+            "a sequence of header names, in order, such as ('x-trace-id',)",
+        )
 
     def _check_guard(self) -> None:
         """Refuse the SSRF guard with a proxy, which would resolve the target past it."""

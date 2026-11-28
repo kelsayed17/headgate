@@ -17,8 +17,9 @@ escaping up would corrupt the value for display, comparison and the response mod
 t-string path and escapes every interpolation with :func:`escape_segment`. Query parameters need none of this: httpx2
 encodes ``params=`` itself.
 
-**Redaction.** :data:`SECRET_QUERY_PARAMS` names the query parameters that carry a credential, and a ``QueryParamAuth``
-adds the names it injects with :func:`register_secret_params`. :func:`sanitize_url` redacts every URL a ``ClientError``
+**Redaction.** :data:`SECRET_QUERY_PARAMS` names the query parameters that carry a credential, and every client adds
+the names its auth and middleware declare (``credential_params``) with :func:`register_secret_params`, as a
+``QueryParamAuth`` adds the names it injects. :func:`sanitize_url` redacts every URL a ``ClientError``
 message names, :func:`redact_secrets` redacts ``name=value`` pairs and URL userinfo in free text such as an httpx2
 exception message, and the HTTP cache strips the same parameters before it stores a request. A URL's whole userinfo is a
 credential, a bare ``user@`` included: a token sent as the username (``https://ghp_…@host``) is how several hosts
@@ -39,6 +40,7 @@ __all__ = [
     "SECRET_QUERY_PARAMS",
     "CallUrl",
     "escape_segment",
+    "hide_userinfo",
     "is_secret_param",
     "redact_secrets",
     "register_secret_params",
@@ -136,6 +138,22 @@ def redact_secrets(text: str) -> str:
     """
     text = _USERINFO.sub(f"//{_REDACTED}@", text)
     return _PAIR.sub(lambda m: f"{m[1]}{m[2]}={_REDACTED}" if is_secret_param(m[2]) else m[0], text)
+
+
+#: Everything up to a URL's last ``@``, after its scheme and slashes when it has both (group 1, kept): the userinfo of a
+#: URL nothing parsed, a password with a ``/``, a quote or a space in it included, and one written with no ``//`` or no
+#: scheme, whose user name looks like a scheme (``user:pw@host``, ``token:x@host``) and goes with the password.
+_ANY_USERINFO: Final = re.compile(r"^((?:[A-Za-z][A-Za-z0-9+.-]*:)?/+)?.*@", re.DOTALL)
+
+
+def hide_userinfo(url: str) -> str:
+    """Return the configured *url* with every secret hidden, its userinfo whatever it holds, for a message or a repr.
+
+    :func:`redact_secrets` finds a userinfo in free text, so it stops at a character a URL in a sentence ends with; a
+    URL given as a setting is the whole string, so everything up to its last ``@`` is hidden, a ``@`` in its path
+    included, which a message can spare.
+    """
+    return redact_secrets(_ANY_USERINFO.sub(rf"\g<1>{_REDACTED}@", url, count=1))
 
 
 def escape_segment(value: object) -> str:

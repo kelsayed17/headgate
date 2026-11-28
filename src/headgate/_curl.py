@@ -71,20 +71,27 @@ guard, and curl is handed every vetted address as a ``CURLOPT_RESOLVE`` entry, s
 the name up itself; the URL keeps its name, so TLS still sends it as SNI and verifies the certificate against it.
 libcurl keeps a resolve entry in the session's DNS cache after the transfer, and its connection pool is shared by every
 request, so one transport serves one guard: a client built on it with another guard, or none, is refused. A
-``CurlOpt.PROXY``, ``PRE_PROXY``, ``RESOLVE`` or ``CONNECT_TO`` in ``curl_options`` would choose the address itself, so
-the guard refuses those too.
+``CurlOpt.PROXY``, ``PRE_PROXY``, ``RESOLVE``, ``CONNECT_TO``, ``UNIX_SOCKET_PATH`` or ``ABSTRACT_UNIX_SOCKET`` in
+``curl_options`` would choose the address itself, and a ``PORT`` there one curl looks up for itself, so the guard
+refuses those too.
+
+**Clients that share a transport share its session**, so a client's close does not close it while another client
+built on it is open: each sends through a hold on the transport, and the last hold let go closes it. The transport's
+own ``aclose`` closes the session at once. A client built on a closed transport is refused where it is built, since
+each of its sends would fail.
 """
 
 import asyncio
 import functools
+import re
 import threading
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, cast, get_args, override
+from typing import Any, Final, cast, final, get_args, override
 
 import httpx2
 
-from headgate._core import CallContext
+from headgate._core import CallContext, check_int, check_kind, sealed
 from headgate._user_agent import DEFAULT_USER_AGENT
 from headgate.retry._policy import IDEMPOTENT_METHODS, RETRY_POLICY, is_keyed
 from headgate.security._addresses import AddressGuard
@@ -149,9 +156,36 @@ _WIRE_ENCODING_HEADERS = ("content-encoding", "content-length")
 
 _METHODS: dict[str, HttpMethod] = {method: method for method in get_args(HttpMethod)}
 
+#: What ``curl_options=`` takes, for the refusal of anything else.
+_CURL_OPTIONS_WANTED = "a mapping of CurlOpt to values, or None"
+
 #: The curl options that choose the address a connection reaches, which the SSRF guard must choose instead: a proxy
-#: resolves the target itself, and a resolve or connect-to entry of the caller's would replace the vetted one.
-_ADDRESS_OPTIONS = (CurlOpt.PROXY, CurlOpt.PRE_PROXY, CurlOpt.RESOLVE, CurlOpt.CONNECT_TO)
+#: resolves the target itself, a resolve or connect-to entry of the caller's would replace the vetted one, and a Unix
+#: socket replaces the host's address altogether.
+_ADDRESS_OPTIONS = (
+    CurlOpt.PROXY,
+    CurlOpt.PRE_PROXY,
+    CurlOpt.RESOLVE,
+    CurlOpt.CONNECT_TO,
+    CurlOpt.UNIX_SOCKET_PATH,
+    CurlOpt.ABSTRACT_UNIX_SOCKET,
+    # The pin covers a host on the URL's port: another port is one curl resolves for itself.
+    CurlOpt.PORT,
+)
+
+#: The curl options that put a header or a credential on requests below every hook, where it would reach the other
+#: origins a redirect leads to, past the credential guard and the redaction of secrets; a header list adds its lines to
+#: each request's own (a second ``Authorization``, say). A truthy ``CurlOpt.NETRC`` is refused with them, since curl
+#: then adds a ``.netrc`` password, a ``default`` entry's to any host. A proxy's credential goes to the one proxy.
+_HEADER_OPTIONS = (
+    CurlOpt.HTTPHEADER,
+    CurlOpt.HTTP3_HTTPHEADER,
+    CurlOpt.COOKIE,
+    CurlOpt.USERPWD,
+    CurlOpt.USERNAME,
+    CurlOpt.PASSWORD,
+    CurlOpt.XOAUTH2_BEARER,
+)
 
 
 @dataclass
@@ -223,25 +257,60 @@ class GuardBinding:
     session, and so its binding. *address_options* names the transport's ``curl_options`` that choose the address curl
     connects to, which the guard must choose instead. Clients on several threads may be built on one transport, so
     :meth:`bind` checks and sets under a lock.
+
+    The clients sharing the transport share its session too, so each client built on it sends through a hold on it
+    (:meth:`hold`), and the session is closed when the last of them closes, not the first. :attr:`closed` says it is,
+    for every copy of the transport, which shares the session.
     """
 
-    __slots__ = ("_address_options", "_bound", "_lock", "guard")
+    __slots__ = ("_address_options", "_bound", "_holds", "_lock", "closed", "guard")
 
     def __init__(self, address_options: Sequence[str] = ()) -> None:
-        """Start unbound, with the names of the transport's own *address_options*, if it has any."""
+        """Start unbound and open, with the names of the transport's own *address_options*, if it has any."""
         self._address_options = tuple(address_options)
         self._bound = False
+        self._holds = 0
         self._lock = threading.Lock()
         self.guard: AddressGuard | None = None
+        self.closed = False
+
+    def hold(self, transport: httpx2.AsyncBaseTransport) -> httpx2.AsyncBaseTransport:
+        """Return a client's hold on *transport*: it sends on the transport, and closing it lets go of it.
+
+        The hold let go last closes *transport*, and so its curl session; the transport's own ``aclose`` still closes
+        it at once.
+        """
+        with self._lock:
+            self._holds += 1
+        return _Hold(transport, self)
+
+    def release(self) -> bool:
+        """Let go of one hold; return whether it was the last, so the transport is to be closed."""
+        with self._lock:
+            self._holds -= 1
+            return self._holds == 0
+
+    def close(self) -> bool:
+        """Mark the transport closed; return whether it was open, so that two closes at once close it once."""
+        with self._lock:
+            was_open = not self.closed
+            self.closed = True
+            return was_open
 
     def bind(self, guard: AddressGuard | None) -> None:
         """Serve only requests the SSRF *guard* vets (``None``: an unguarded client), pinning each to its addresses.
 
-        :raises ValueError: when the transport already serves another guard (or none, or one where *guard* is none),
-            or when *guard* is given and ``curl_options`` choose the connection's address (a proxy, a resolve or a
-            connect-to entry).
+        :raises ValueError: when the transport is closed, so a client built on it could send nothing; when it already
+            serves another guard (or none, or one where *guard* is none); or when *guard* is given and
+            ``curl_options`` choose the connection's address (a proxy, a resolve or a connect-to entry, a Unix socket).
         """
         with self._lock:
+            if self.closed:
+                msg = (
+                    "this AsyncCurlTransport is closed (by the last client built on it, or by its aclose()), so every "
+                    "request sent on it would fail: build a new one for this client"
+                )
+                raise ValueError(msg)
             if self._bound and guard != self.guard:
                 msg = (
                     "this AsyncCurlTransport already serves a client with a different SSRF guard "
@@ -260,6 +329,43 @@ class GuardBinding:
             self.guard = guard
 
 
+class _Hold(httpx2.AsyncBaseTransport):
+    """One client's hold on a curl transport other clients may share (see :meth:`GuardBinding.hold`)."""
+
+    def __init__(self, transport: httpx2.AsyncBaseTransport, binding: GuardBinding) -> None:
+        """Send on *transport*, letting go of *binding*'s hold on close."""
+        self._transport = transport
+        self._binding = binding
+
+    @override
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        return await self._transport.handle_async_request(request)
+
+    @override
+    async def aclose(self) -> None:
+        """Let go of the hold, and close the transport when it was the last."""
+        if self._binding.release():
+            await self._transport.aclose()
+
+
+#: A byte no header line may hold: curl writes a value as it is given, so a line break in one starts another header.
+_UNSENDABLE: Final = re.compile(rb"[\r\n\0]")
+
+
+def _refuse_unsendable_headers(request: httpx2.Request) -> None:
+    """Refuse *request* when a header's name or value holds a line break or a NUL, as httpx2's own transport does.
+
+    The options that set a header refuse one where it is given; a value set on the way (a minted token, a middleware's
+    or a signer's stamp, an idempotency key) reaches here. The value is not quoted, since it may be a credential.
+
+    :raises httpx2.LocalProtocolError: naming the header, before anything is sent.
+    """
+    for name, value in request.headers.raw:
+        if _UNSENDABLE.search(name) or _UNSENDABLE.search(value):
+            msg = f"the header {name.decode('latin-1')!r} holds a line break or a NUL, which no request can send"
+            raise httpx2.LocalProtocolError(msg, request=request)
+
+
 def guard_binding(transport: httpx2.AsyncBaseTransport) -> GuardBinding | None:
     """Return the guard binding *transport* holds as its own, or ``None`` for a transport that resolves names itself.
 
@@ -273,6 +379,11 @@ def guard_binding(transport: httpx2.AsyncBaseTransport) -> GuardBinding | None:
     return found if isinstance(found, GuardBinding) else None
 
 
+@final
+@sealed(
+    "change each request in a middleware (Client(middleware=...)), which runs on every attempt; a transport of your "
+    "own that sends through it is not pinned by the SSRF guard, which only vets each hop before it is sent"
+)
 class AsyncCurlTransport(httpx2.AsyncBaseTransport):
     """Send each request through ``curl_cffi`` with a browser's TLS handshake, as an ``httpx2`` async transport.
 
@@ -281,9 +392,17 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
     :param default_headers: let the profile supply the browser's headers (and drop httpx2's) instead of sending none.
     :param curl_options: extra libcurl options, e.g. ``{CurlOpt.FRESH_CONNECT: True}`` to open a new connection per
         request for hosts that fingerprint a reused one. Values are whatever libcurl takes for the option (``curl_cffi``
-        annotates them as ``str``, which is narrower than what it accepts). ``CurlOpt.FOLLOWLOCATION`` is refused with a
-        ``ValueError``: curl would follow a redirect below every hook, so headgate follows them itself.
+        annotates them as ``str``, which is narrower than what it accepts). ``CurlOpt.FOLLOWLOCATION``, ``URL`` and
+        ``CURLU`` are refused, since curl would follow a redirect or send every request to one URL below every hook,
+        and so are a header list and a credential (``HTTPHEADER``, ``HTTP3_HTTPHEADER``, ``COOKIE``, ``USERPWD``,
+        ``USERNAME``, ``PASSWORD``, ``XOAUTH2_BEARER``, a truthy ``NETRC``), which curl would add to requests whatever
+        their origin, and a ``HEADEROPT`` of ``CURLHEADER_UNIFIED``, which would send each request's headers to the
+        proxy too: headgate follows redirects itself, and sets each request's URL and headers.
     :param max_connections: concurrent curl handles; a request beyond them waits for one, with no pool timeout.
+    :raises TypeError: for an option of the wrong kind: an *impersonate* that is not a ``str``, a *default_headers*
+        that is not a ``bool``, *curl_options* that are not a mapping or have a key that is not a ``CurlOpt`` (its name
+        or its number included), and a *max_connections* that is not an ``int``.
+    :raises ValueError: for a *max_connections* below 1, and for the *curl_options* refused above.
     """
 
     def __init__(
@@ -294,6 +413,18 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
         curl_options: Mapping[CurlOpt, Any] | None = None,
         max_connections: int = 10,
     ) -> None:
+        check_kind("impersonate", impersonate, str, "a curl_cffi browser profile, such as 'chrome'")
+        check_kind("default_headers", default_headers, bool, "a bool")
+        check_kind("curl_options", curl_options, (Mapping, type(None)), _CURL_OPTIONS_WANTED)
+        for option in curl_options or {}:
+            if not isinstance(option, CurlOpt):
+                got = f"the key {option!r}, of type {type(option).__name__}"
+                msg = f"curl_options= takes {_CURL_OPTIONS_WANTED} (got {got})"
+                raise TypeError(msg)
+        check_int("max_connections", max_connections, "a number of curl handles, an int of at least 1")
+        if max_connections < 1:
+            msg = f"max_connections= takes a number of curl handles, an int of at least 1 (got {max_connections})"
+            raise ValueError(msg)
         # curl reads the environment's proxy settings on its own, and an httpx2 transport ignores them
         # (https://github.com/lexiforest/curl_cffi/issues/345).
         # `""` overrides a `NO_PROXY` the environment sets, as `"*"` overrides its `HTTP_PROXY`.
@@ -305,6 +436,30 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
                 "the credential guard included; headgate follows redirects itself (HttpOptions(follow_redirects=...))"
             )
             raise ValueError(msg)
+        if CurlOpt.URL in given or CurlOpt.CURLU in given:
+            msg = (
+                "curl_options must not set CurlOpt.URL or CurlOpt.CURLU: curl would send every request to that URL, "
+                "past every hook and the SSRF guard; headgate sets each request's URL"
+            )
+            raise ValueError(msg)
+        refused = [f"CurlOpt.{option.name}" for option in _HEADER_OPTIONS if option in given]
+        if given.get(CurlOpt.NETRC):
+            refused.append("CurlOpt.NETRC")
+        if refused:
+            msg = (
+                f"curl_options must not set {', '.join(refused)}: curl would add the header or the credential below "
+                "every hook, past the credential guard and the redaction of secrets, so it would reach the other "
+                "origins a redirect leads to; set a header with HttpOptions(headers=...) and a credential with an "
+                "auth, such as BearerAuth"
+            )
+            raise ValueError(msg)
+        if given.get(CurlOpt.HEADEROPT) == 0:
+            msg = (
+                "curl_options must not set CurlOpt.HEADEROPT to CURLHEADER_UNIFIED (0): curl would send each "
+                "request's headers, its credentials among them, to the proxy too, in the CONNECT that opens the "
+                "tunnel; leave it out, and curl keeps them apart"
+            )
+            raise ValueError(msg)
         options: dict[CurlOpt, Any] = {
             CurlOpt.NOPROXY: "" if CurlOpt.PROXY in given else "*",
             CurlOpt.CAINFO: certifi.where(),
@@ -313,7 +468,6 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
         }
         self._default_headers = default_headers
         self._guard = GuardBinding([option.name for option in _ADDRESS_OPTIONS if option in given])
-        self._closed = False
         self._session = _Session(
             max_clients=max_connections,
             impersonate=impersonate,
@@ -330,6 +484,7 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
         if method is None:
             msg = f"curl cannot send an HTTP {request.method} request"
             raise httpx2.UnsupportedProtocol(msg, request=request)
+        _refuse_unsendable_headers(request)
         # Vetted before the body is read, so a lookup that fails leaves a one-shot body unread, and the call retryable.
         guard = self._guard.guard
         resolve = None if guard is None else _resolve_entry(request, await vet_request(guard, request))
@@ -366,11 +521,10 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
 
     @override
     async def aclose(self) -> None:
-        # Clients sharing the transport each close it; `curl_cffi` 0.16 crashes closing a closed session.
-        if self._closed:
-            return
-        self._closed = True
-        await self._session.close()
+        """Close the curl session at once, though clients built on the transport may still hold it."""
+        # The last client's hold closes it again later; `curl_cffi` 0.16 crashes closing a closed session.
+        if self._guard.close():
+            await self._session.close()
 
 
 def _httpx_response(request: httpx2.Request, response: _Response) -> httpx2.Response:

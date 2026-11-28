@@ -25,15 +25,16 @@ as a redirect would be. Both are the walk's, so they hold for every pager.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, replace
+from string.templatelib import Template
 from types import MappingProxyType
-from typing import ClassVar, Final, Protocol, override
+from typing import ClassVar, Final, Protocol, cast, final, override
 
 import httpx2
 
-from headgate._core import check_callable, check_int, check_kind
-from headgate._request_body import Writer, query_values
+from headgate._core import check_callable, check_int, check_kind, named, sealed
+from headgate._request_body import EncodedBody, Writer, query_values
 from headgate._responses import Expect, Reader
 from headgate._url import CallUrl
 from headgate.pagination._link import next_link
@@ -52,6 +53,8 @@ __all__ = [
 ]
 
 
+@final
+@sealed("change one with with_param() or with_payload()")
 @dataclass(frozen=True, slots=True)
 class PageRequest[B = None]:
     """The request for one page, as a :class:`Pager` reads and returns it: its URL (as a verb takes it), its params.
@@ -61,6 +64,9 @@ class PageRequest[B = None]:
     A request with no ``payload`` is a GET, and one with a ``payload`` a POST. The payload stays the caller's own
     value, of type ``B``, so that a pager can rewrite it for the next page; how it is sent as the request body is the
     walk's, not the request's (see :class:`WritingPager`).
+
+    :raises TypeError: for a *url* that is not a ``str``, a t-string or an ``httpx2.URL``, and *params* that are not a
+        mapping.
     """
 
     url: CallUrl
@@ -68,12 +74,15 @@ class PageRequest[B = None]:
     payload: B | None = None
 
     def __post_init__(self) -> None:
-        """Freeze the params."""
+        """Refuse a URL or params of the wrong kind, and freeze the params."""
+        check_kind("url", self.url, (str, Template, httpx2.URL), "a str, a t-string or an httpx2.URL")
         if self.params is not None:
+            check_kind("params", self.params, Mapping, "a mapping of names to values, such as {'q': 'gdp'}")
             object.__setattr__(self, "params", MappingProxyType(dict(query_values(self.params))))
 
     def with_param(self, name: str, value: object) -> PageRequest[B]:
-        """Return this request with the query parameter *name* set to *value*."""
+        """Return this request with the query parameter *name* set to *value*; ``TypeError`` for a *name* not a str."""
+        check_kind("name", name, str, "a query parameter's name, a str")
         return replace(self, params={**(self.params or {}), name: value})
 
     def with_payload(self, payload: B) -> PageRequest[B]:
@@ -127,8 +136,8 @@ class WritingPager[I, P, B](ABC):
     would take as its field's default.
 
     The body is the caller's own value, which ``write`` encodes; with ``write`` ``None``, the value is builtins, sent as
-    JSON. :class:`Cursor`, :class:`Offset`,
-    :class:`BodyCursor` and :class:`BodyOffset` are writing pagers; a pager of GETs is not one.
+    JSON. :class:`Cursor`, :class:`Offset`, :class:`PageNumber`, :class:`BodyCursor` and :class:`BodyOffset` are writing
+    pagers; a pager of GETs is not one.
 
     A pager is one by subclassing this class, not by its shape: an attribute that only shares the name ``write`` is
     never taken for a writer. Its methods are abstract, so a subclass that leaves one out cannot be built. ``read``
@@ -179,17 +188,79 @@ def _check_pager(pager: object) -> None:
     """Refuse a built-in *pager* whose reader, hooks, numbers or names are of the wrong kind, naming the field.
 
     A pager is a value built at import, so a page reader passed in the wrong place, or a hook that is not a function,
-    fails there rather than at the first page of the first walk.
+    fails there rather than at the first page of the first walk. A class as ``write`` is refused too, as ``Reader``
+    refuses one: calling it builds an instance of it, never the ``EncodedBody`` a writer returns.
     """
     read: object = getattr(pager, "read", None)
     check_kind("read", read, (Reader, Expect), "the page reader, a Reader or an Expect, such as reader(Page)")
     for name, wanted in _HOOKS.items():
         if (hook := getattr(pager, name, None)) is not None:
             check_callable(name, hook, wanted)
+    if isinstance(write := getattr(pager, "write", None), type):
+        msg = (
+            f"write= takes {_HOOKS['write']} (got the class {write.__name__}): write writer({write.__name__}) with a "
+            "flavor's writer, or leave write= out to send builtins as JSON"
+        )
+        raise TypeError(msg)
     for name in ("page_size", "start"):
         if hasattr(pager, name):
             check_int(name, getattr(pager, name), "a number of items or pages, an int")
     check_kind("stop_on_empty", getattr(pager, "stop_on_empty", True), bool, "a bool")
+
+
+#: What each hook returns, for the refusal of anything else, as ``refuse=`` names what a reader's returns.
+_CURSOR: Final = "the next page's cursor, a str, or None"
+_NEXT_URL: Final = "the next page's URL, a str or an httpx2.URL, or None"
+_TOTAL: Final = "the collection's exact size, an int, or None"
+ITEMS: Final = "the items on a page, an iterable"
+_SEQUENCE: Final = "the items on a page, a sequence, such as a list"
+_OFFSET: Final = "a body's offset, an int"
+
+
+def returned(hook: str, value: object, kind: type | tuple[type, ...], wanted: str, *, optional: bool = True) -> None:
+    """Refuse *value*, what *hook* returned, unless it is a *kind*, or ``None`` when *optional*; a ``bool`` is no int.
+
+    A hook is the caller's code, so what it returns is checked where the walk takes it, rather than failing in the walk,
+    or reaching the wire, as something it is not.
+
+    :raises TypeError: naming *hook*, what it returns (*wanted*) and what it returned.
+    """
+    if (optional and value is None) or (isinstance(value, kind) and not isinstance(value, bool)):
+        return
+    msg = f"{hook} returns {wanted} (got {named(value)})"
+    raise TypeError(msg)
+
+
+def _items_of[I, P](items: Callable[[P], Sequence[I]], page: P) -> Sequence[I]:
+    """Return the items a built-in strategy's *items* reads from *page*, refusing what it cannot count them in.
+
+    Its type is a sequence; any collection is taken, as before, a set or a dict's view included. A generator or an
+    iterator has no length; a ``str`` or ``bytes`` is a collection of characters, and a mapping of keys, not of items.
+
+    :raises TypeError: naming ``items=``, for anything that is not a collection of items.
+    """
+    found = items(page)
+    if isinstance(found, str | bytes):
+        msg = f"items= returns {_SEQUENCE}, not text, whose characters would be walked as items (got {named(found)})"
+        raise TypeError(msg)
+    if isinstance(found, Mapping):
+        msg = (
+            f"items= returns {_SEQUENCE}, not a mapping, whose keys would be walked as items (got {named(found)}): "
+            "return the list inside it, or its .values()"
+        )
+        raise TypeError(msg)
+    returned("items=", found, Collection, _SEQUENCE, optional=False)
+    return cast("Sequence[I]", found)
+
+
+def written[B](write: Writer[B], payload: B) -> EncodedBody:
+    """Return *payload* as *write* encodes it, refusing what is not an ``EncodedBody``: a page's body, as it is sent.
+
+    :raises TypeError: naming ``write=``, for anything else it returns.
+    """
+    body = write(payload)
+    returned("write=", body, EncodedBody, "an EncodedBody, as a flavor's writer(Type) builds one", optional=False)
+    return body
 
 
 def _check_param(param: str) -> None:
@@ -207,6 +278,7 @@ def _last[P](page: P, count: int, page_size: int, total: Callable[[P], int | Non
     server that caps its pages below *page_size* is walked to the end; without one, a short page is the last.
     """
     known = None if total is None else total(page)
+    returned("total=", known, int, _TOTAL)
     if known is None:
         return count < page_size
     return count == 0 or walked >= known
@@ -281,12 +353,12 @@ class Cursor[I, P, B = None](WritingPager[I, P, B]):
     @override
     def page_items(self, page: P) -> Sequence[I]:
         """Return the items on *page*."""
-        return self.items(page)
+        return _items_of(self.items, page)
 
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* carrying *page*'s cursor, or ``None`` when it has none or (by default) no items."""
-        return self._next_after(page, self.items(page), request, response)
+        return self._next_after(page, _items_of(self.items, page), request, response)
 
     def _next_after(
         self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
@@ -296,6 +368,7 @@ class Cursor[I, P, B = None](WritingPager[I, P, B]):
         if self.stop_on_empty and not items:
             return None
         cursor = self.next(page)
+        returned("next=", cursor, str, _CURSOR)
         return request.with_param(self.param, cursor) if bool(cursor) else None
 
 
@@ -345,6 +418,7 @@ class Offset[I, P, B = None](WritingPager[I, P, B]):
             raise ValueError(msg)
         _check_param(self.param)
         if self.size_param is not None:
+            check_kind("size_param", self.size_param, str, "the name of a query parameter, a str, or None")
             if not self.size_param:
                 msg = "size_param must name a query parameter"
                 raise ValueError(msg)
@@ -363,12 +437,12 @@ class Offset[I, P, B = None](WritingPager[I, P, B]):
     @override
     def page_items(self, page: P) -> Sequence[I]:
         """Return the items on *page*."""
-        return self.items(page)
+        return _items_of(self.items, page)
 
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* at the offset after *page*'s items, or ``None`` after the last page (see the class)."""
-        return self._next_after(page, self.items(page), request, response)
+        return self._next_after(page, _items_of(self.items, page), request, response)
 
     def _next_after(
         self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
@@ -428,12 +502,12 @@ class PageNumber[I, P, B = None](WritingPager[I, P, B]):
     @override
     def page_items(self, page: P) -> Sequence[I]:
         """Return the items on *page*."""
-        return self.items(page)
+        return _items_of(self.items, page)
 
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* at the next page number, or ``None`` when ``more`` says none or *page* is empty."""
-        return self._next_after(page, self.items(page), request, response)
+        return self._next_after(page, _items_of(self.items, page), request, response)
 
     def _next_after(
         self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
@@ -471,11 +545,11 @@ class LinkHeader[I, P]:
 
     def page_items(self, page: P) -> Sequence[I]:
         """Return the items on *page*."""
-        return self.items(page)
+        return _items_of(self.items, page)
 
     def next_page(self, page: P, request: PageRequest, response: httpx2.Response) -> PageRequest | None:
         """Return the request for *response*'s ``rel="next"`` link, or ``None`` when it has none or *page* is empty."""
-        return self._next_after(page, self.items(page), request, response)
+        return self._next_after(page, _items_of(self.items, page), request, response)
 
     def _next_after(
         self, page: P, items: Sequence[I], request: PageRequest, response: httpx2.Response
@@ -513,11 +587,11 @@ class NextUrl[I, P]:
 
     def page_items(self, page: P) -> Sequence[I]:
         """Return the items on *page*."""
-        return self.items(page)
+        return _items_of(self.items, page)
 
     def next_page(self, page: P, request: PageRequest, response: httpx2.Response) -> PageRequest | None:
         """Return the request for *page*'s next URL, or ``None`` when it names none or (by default) has no items."""
-        return self._next_after(page, self.items(page), request, response)
+        return self._next_after(page, _items_of(self.items, page), request, response)
 
     def _next_after(
         self, page: P, items: Sequence[I], request: PageRequest, response: httpx2.Response
@@ -527,6 +601,7 @@ class NextUrl[I, P]:
         if self.stop_on_empty and not items:
             return None
         target = self.next(page)
+        returned("next=", target, (str, httpx2.URL), _NEXT_URL)
         return _wire_url(target) if bool(target) else None
 
 
@@ -563,12 +638,12 @@ class BodyCursor[I, P, B](WritingPager[I, P, B]):
     @override
     def page_items(self, page: P) -> Sequence[I]:
         """Return the items on *page*."""
-        return self.items(page)
+        return _items_of(self.items, page)
 
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request* with *page*'s cursor in its body, or ``None`` when it has none or (by default) no items."""
-        return self._next_after(page, self.items(page), request, response)
+        return self._next_after(page, _items_of(self.items, page), request, response)
 
     def _next_after(
         self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
@@ -578,6 +653,7 @@ class BodyCursor[I, P, B](WritingPager[I, P, B]):
         if self.stop_on_empty and not items:
             return None
         cursor = self.next(page)
+        returned("next=", cursor, str, _CURSOR)
         if cursor is None or not cursor:
             return None
         return request.with_payload(self.put(_posted(request, "BodyCursor"), cursor))
@@ -616,7 +692,7 @@ class BodyOffset[I, P, B](WritingPager[I, P, B]):
     @override
     def first(self, request: PageRequest[B]) -> PageRequest[B]:
         """Return *request* unchanged, refusing one with no body or a negative offset."""
-        start = self.offset(_posted(request, "BodyOffset"))
+        start = self._offset_of(_posted(request, "BodyOffset"))
         if start < 0:
             msg = f"the first request body's offset must be >= 0 (got {start})"
             raise ValueError(msg)
@@ -625,12 +701,12 @@ class BodyOffset[I, P, B](WritingPager[I, P, B]):
     @override
     def page_items(self, page: P) -> Sequence[I]:
         """Return the items on *page*."""
-        return self.items(page)
+        return _items_of(self.items, page)
 
     @override
     def next_page(self, page: P, request: PageRequest[B], response: httpx2.Response) -> PageRequest[B] | None:
         """Return *request*'s body at the offset past *page*'s items, or ``None`` after a short page or at ``total``."""
-        return self._next_after(page, self.items(page), request, response)
+        return self._next_after(page, _items_of(self.items, page), request, response)
 
     def _next_after(
         self, page: P, items: Sequence[I], request: PageRequest[B], response: httpx2.Response
@@ -639,7 +715,34 @@ class BodyOffset[I, P, B](WritingPager[I, P, B]):
         del response
         count = len(items)
         body = _posted(request, "BodyOffset")
-        following = self.offset(body) + count
+        following = self._offset_of(body) + count
         if _last(page, count, self.page_size, self.total, following):
             return None
         return request.with_payload(self.put(body, following))
+
+    def _offset_of(self, body: B) -> int:
+        """Return the offset ``offset`` reads from *body*, refusing what is not an ``int``, naming ``offset=``."""
+        found = self.offset(body)
+        returned("offset=", found, int, _OFFSET, optional=False)
+        return found
+
+
+#: The built-in strategies, whose next request the walk can compute from the items it already read from a page.
+_STRATEGIES: Final = frozenset({Cursor, Offset, PageNumber, LinkHeader, NextUrl, BodyCursor, BodyOffset})
+
+
+def items_hook(pager: object) -> Callable[..., object] | None:
+    """Return the hook through which the walk hands *pager* the items it read from a page, or ``None`` for none.
+
+    A pager whose class takes both ``next_page`` and ``page_items`` from a built-in strategy, a subclass that only adds
+    to it included, is given the items, so its ``items=`` runs once per page. One that overrides either is walked by its
+    own ``next_page``, as any other pager is: an override of ``page_items`` (a filter, say) must not change what the
+    strategy counts, and an override of ``next_page`` is the subclass's to keep.
+    """
+    cls = type(pager)
+    strategy = next((base for base in cls.__mro__ if base in _STRATEGIES), None)
+    if strategy is None:
+        return None
+    if any(getattr(cls, name) is not getattr(strategy, name) for name in ("next_page", "page_items")):
+        return None
+    return getattr(pager, "_next_after", None)

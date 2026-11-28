@@ -32,7 +32,17 @@ from typing import Final, NoReturn, cast, final, override
 
 import httpx2
 
-from headgate._core import check_headers, check_int, check_kind, named
+from headgate._core import (
+    check_callable,
+    check_default_headers,
+    check_kind,
+    check_status,
+    is_model_class,
+    is_type,
+    named,
+    sealed,
+    type_text,
+)
 from headgate._failures import reader_misuse
 from headgate._sse import EventParser, text_decoder
 from headgate.errors import DecodeError, RefusedError
@@ -48,11 +58,13 @@ __all__ = [
     "as_text",
     "body_reader",
     "nothing",
+    "reader_hint",
     "with_answers",
 ]
 
 
 @final
+@sealed("wrap a function of the response, Reader(lambda response: ...)")
 class Reader[T]:
     """Turns a response into a value: ``Reader(fn)`` around a function of the response, or ``@Reader`` over a ``def``.
 
@@ -77,7 +89,7 @@ class Reader[T]:
         """Wrap *read*, the function that turns a response into a value, under *name* or *read*'s own.
 
         :raises TypeError: for a *read* that cannot be called, and for a class, here rather than at the first
-            response: ``Reader(str)`` would return the response's ``repr``.
+            response: ``Reader(str)`` would return the response's ``repr``; and for a *name* that is not a ``str``.
         """
         if isinstance(read, type):
             fallback = f"for a class built from a response, write Reader(lambda r: {read.__name__}(r))"
@@ -87,6 +99,7 @@ class Reader[T]:
             # Anything not callable is an instance, so its type's name is what _kinds would print.
             msg = f"Reader takes a function of the response (got {type(read).__name__})"
             raise TypeError(msg)
+        check_kind("name", name, (str, type(None)), "the name its repr shows, a str, or None for the function's")
         # Private, so the type parameter stays covariant: a Reader[Order] is a Reader[Order | None].
         self._read = read
         self._name = _name_of(read) if name is None else name
@@ -110,6 +123,44 @@ _READERS_FOR: Final[Mapping[type, str]] = {
 }
 
 
+def reader_hint(value: object) -> str | None:
+    """Return what to write for *value* given where a reader goes, when it is a class or a type: its reader; else None.
+
+    A model class where its reader goes is the commonest mistake there: the reader of it is a flavor's ``reader``.
+    """
+    if not is_type(value):
+        return None
+    if isinstance(value, type) and value in _READERS_FOR:
+        return _READERS_FOR[value]
+    return f"write reader({type_text(value)}) with a flavor's reader, from headgate.msgspec or headgate.pydantic"
+
+
+#: The builtins whose own constructor misreads a body's bytes: ``str`` returns their ``repr``, ``bool`` reads any body
+#: but an empty one as ``True``, and the containers hold the byte values, which ``dict`` cannot take.
+_MISREADING: Final = (str, bool, list, tuple, set, frozenset, dict)
+
+
+def _misreading_hint(decode: object) -> str | None:
+    """Return what to write for *decode*, given as a function of a body's bytes, when it would misread every body.
+
+    A type expression (``list[Row]``) and a model class (which takes its fields, not bytes) take a flavor's reader,
+    and so do ``bool``, ``tuple``, ``set`` and ``frozenset``; ``str``, ``bytes``, ``dict`` and ``list`` have readers of
+    their own. A class of one's own that keeps a misreading builtin's constructor (``class Symbol(str)``) is built
+    from the text or the JSON the bytes hold. Any other class (``io.BytesIO``, ``int``, an enum of bytes, a ``str``
+    whose ``__new__`` decodes them) is built from the bytes as it is written to: ``None``.
+    """
+    hint = reader_hint(decode)
+    if hint is None or not isinstance(decode, type) or is_model_class(decode) or decode is bytes:
+        return hint
+    for base in _MISREADING:
+        if issubclass(decode, base) and decode.__new__ is base.__new__ and decode.__init__ is base.__init__:
+            if decode is base:
+                return hint
+            built_from = "content.decode()" if base is str else "json.loads(content)"
+            return f"write body_reader(lambda content: {decode.__name__}({built_from}))"
+    return None
+
+
 def _name_of(read: object) -> str:
     """Return what a reader over *read* is named: its ``__name__``, a partial's function's, or its type's name."""
     target = read.func if isinstance(read, functools.partial) else read
@@ -123,19 +174,9 @@ _COULD_NOT_ASK: Final = frozenset(
     {httpx2.codes.UNAUTHORIZED, httpx2.codes.PROXY_AUTHENTICATION_REQUIRED, httpx2.codes.TOO_MANY_REQUESTS}
 )
 
-#: The status range RFC 9110 defines.
-_MIN_STATUS, _MAX_STATUS = 100, 599
-
 
 def _refuse_unclaimable(status: int) -> None:
-    """Raise ``ValueError`` for a status no call may declare as an answer.
-
-    Both ways of declaring an answer run this one check (the :class:`Expect` constructor over every key of
-    ``answers``, and :meth:`Expect.on`), so they refuse the same statuses with the same message.
-    """
-    if not _MIN_STATUS <= status <= _MAX_STATUS:
-        msg = f"{status} is not an HTTP status"
-        raise ValueError(msg)
+    """Raise ``ValueError`` for an HTTP status no call may declare as an answer: one that means we could not ask."""
     if status in _COULD_NOT_ASK or status >= httpx2.codes.INTERNAL_SERVER_ERROR:
         msg = f"{status} means we could not ask; it is never a documented answer"
         raise ValueError(msg)
@@ -159,6 +200,7 @@ _REPLACEABLE: Final = frozenset({"ok", "headers", "accept"})
 
 
 @final
+@sealed("declare each answer with .on(status, reader)")
 class Expect[T]:
     """One endpoint's documented responses: a success reader for any 2xx, plus exact-status answers.
 
@@ -180,7 +222,9 @@ class Expect[T]:
     :func:`headgate.cache.conditional`); a header the call sets itself wins.
     ``accept`` names the media types the endpoint answers with (``"application/json"``, or a comma-separated list).
     The client sends it as the request's ``Accept`` header, unless the call sets one in ``headers=``, and checks every
-    non-empty response it hands a reader against it before the reader runs (see :func:`accepts`). A body of another
+    non-empty response it hands a reader against it before the reader runs. Media types compare case-insensitively
+    with their parameters ignored, ``*/*`` and ``type/*`` match as in ``Accept``, and a structured-syntax suffix matches
+    its base type (``application/problem+json`` is an ``application/json``). A body of another
     type raises ``ResponseParseError`` naming the status and the ``Content-Type`` on a 2xx; on a declared non-2xx it
     falls through to the status ladder, as an unreadable body does.
     """
@@ -190,13 +234,22 @@ class Expect[T]:
     def __init__(self, ok: Reader[T], *, headers: Mapping[str, str] = _NO_HEADERS, accept: str | None = None) -> None:
         """Read a 2xx with *ok*, sending *headers*, and accept *accept*'s media types; refuse a non-reader *ok*.
 
-        :raises TypeError: for an *ok* that is not a :class:`Reader`.
-        :raises ValueError: for a malformed *accept*.
+        :raises TypeError: for an *ok* that is not a :class:`Reader`, and an *accept* that is not a ``str``.
+        :raises ValueError: for a malformed *accept*, *headers* that name a header more than once, in any case, or one
+            no request can carry (a name that is not an HTTP token, a value holding CR, LF or NUL), and an *accept*
+            beside an ``Accept`` in *headers*, two spellings of one header.
         """
         check_kind("ok", ok, Reader, "a Reader")
-        check_headers("headers", headers)
+        check_default_headers("headers", headers)
         if accept is not None:
+            check_kind("accept", accept, str, "media types, such as 'application/json', or None")
             _media_ranges(accept)
+            if "accept" in {name.lower() for name in headers}:
+                msg = (
+                    "accept= and headers= both set Accept: give accept=, which each response is checked against too, "
+                    "or the header alone, not both"
+                )
+                raise ValueError(msg)
         self._ok = ok
         self._answers: Mapping[int, Reader[T]] = MappingProxyType({})
         self._headers: Mapping[str, str] = MappingProxyType(dict(headers))
@@ -234,7 +287,7 @@ class Expect[T]:
             (the credentials are ours, and the transport owns 429 and 5xx through retry and the breaker); or for a
             status already declared. It is raised where the ``Expect`` is built, usually at import.
         """
-        check_int("status", status, "an HTTP status, an int such as HTTPStatus.NOT_FOUND")
+        check_status("status", status, "an HTTP status, an int such as HTTPStatus.NOT_FOUND")
         check_kind("read", read, Reader, "a Reader")
         _refuse_unclaimable(status)
         if status in self._answers:
@@ -269,10 +322,12 @@ class Expect[T]:
 
     @override
     def __repr__(self) -> str:
-        return (
-            f"Expect({self._ok!r}, answers={dict(self._answers)!r}, headers={dict(self._headers)!r}, "
-            f"accept={self._accept!r})"
-        )
+        """Return the ``Expect`` as it is built: its constructor, then an ``.on()`` per answer, by status.
+
+        Each header's value shows as ``'***'``, since it may be a credential.
+        """
+        built = f"Expect({self._ok!r}, headers={dict.fromkeys(self._headers, '***')!r}, accept={self._accept!r})"
+        return built + "".join(f".on({status}, {read!r})" for status, read in sorted(self._answers.items()))
 
     def _key(self) -> tuple[object, ...]:
         """Return what two equal ``Expect`` objects share: their readers, answers, headers and accept."""
@@ -367,6 +422,13 @@ def body_reader[T](
     ``Protocol`` naming only the envelope fields it reads. Have it refuse only codes every consumer of the endpoint
     would read as failure (auth, quota, rate limit, server, a malformed request, any undocumented code) and leave a
     code about the subject (an unknown instrument, a rejected order) in the value for the caller.
+
+    :raises TypeError: for a *decode* or a ``refuse`` that cannot be called, an ``empty`` that is not ``bytes``, and a
+        *decode* that is a class or a type that would misread every body, saying which reader to write:
+        ``body_reader(str)`` would return the body's ``repr``, a model class would hold the bytes, and ``bool``,
+        ``tuple``, ``set`` and ``frozenset``, and a class of your own that keeps a builtin's constructor
+        (``class Symbol(str)``), would read the bytes as those builtins do. A class built from the bytes, such as
+        ``io.BytesIO``, ``int`` or an enum of bytes, is taken.
     """
     return _body_reader(decode, empty=empty, refuse=refuse, name=_name_of(decode))
 
@@ -379,7 +441,22 @@ def _body_reader[T](
     refuse: Callable[[T], RefusedError | None] | None,
     name: str,
 ) -> Reader[T]:
-    """Build the reader :func:`body_reader` documents, named *name*: for a builder that names its reader itself."""
+    """Build the reader :func:`body_reader` documents, named *name*: for a builder that names its reader itself.
+
+    :raises TypeError: as :func:`body_reader` documents.
+    """
+    check_callable("body_reader(decode)", decode, "a function of the body's bytes")
+    if (hint := _misreading_hint(decode)) is not None:
+        if decode is bytes and refuse is not None:
+            # as_bytes takes no refuse=, so the bytes are read with a function that hands them on as they are.
+            hint = "write body_reader(lambda content: content, refuse=...) to check the body's bytes"
+        msg = f"body_reader(decode) takes a function of the body's bytes (got {named(decode)}): {hint}"
+        raise TypeError(msg)
+    check_kind("empty", empty, (bytes, type(None)), "the bytes an empty body is read as, or None")
+    if refuse is not None:
+        check_callable(
+            "refuse", refuse, "a function of the decoded value, returning a RefusedError or None to accept it"
+        )
 
     def _read(resp: httpx2.Response, /) -> T:
         content = resp.content

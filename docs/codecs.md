@@ -38,8 +38,8 @@ Three functions work on any codec, the two above included:
 
 - `reader_for(codec, Type, *, allow_empty_body=False, refuse=None)` builds a reader for `expect=`;
 - `writer_for(codec, Type)` builds a writer for `body=`, sent under the codec's media type;
-- `decode_with(codec, content, Type)` decodes bytes that are not a whole response, such as a document nested in
-  another.
+- `decode_with(codec, content, Type)` decodes content that is not a whole response, such as a document nested in
+  another, or a server-sent event's data: `bytes`, or a `str`, read as its UTF-8 bytes.
 
 A body the codec cannot read raises `DecodeError`, which a call raises as `ResponseParseError` with the codec's
 description of what was wrong. A body nested too deeply for the library's parser is refused the same way, and
@@ -57,9 +57,16 @@ A codec is any object with five members, the `Codec` protocol:
 | `encoder(Type)` | a function writing a value of `Type` as bytes, built once per type |
 | `describe(error)` | a message for one of `errors` that never quotes the input, which may hold a credential |
 
+The protocol is runtime-checkable: `isinstance(value, Codec)` asks whether a value has the five members, and
+`reader_for`, `writer_for`, `decode_with` and `check_codec` raise `TypeError` naming `codec=` for one that lacks any.
+
 A codec handles the built-in containers too, `dict`, `list` and the scalars inside them, besides its own record
 types: `reader_for(..., allow_empty_body=True)` encodes an empty `list[object]` when it builds the reader, and
 `check_codec` writes and reads `dict[str, int]` and `dict[str, str]`.
+
+A codec that differs from a flavor's in one member, a media type of its own or an error type, may subclass the
+flavor's codec, `MsgspecCodec` or `PydanticCodec`, and override that member: a reader and a writer call a codec through
+its five members, so the override is what runs.
 
 cattrs over orjson, for example. cattrs builds a scalar by calling its type, so `int("1")` would read a numeric string
 as a number: the codec registers hooks that take a scalar only as itself, which is the strictness headgate's codecs
@@ -187,7 +194,8 @@ It raises `AssertionError` naming the first promise broken:
 - a body cut short at its middle is refused, so a codec whose bodies end in a newline passes;
 - each refusal raises one of `errors`, and neither its description nor its traceback (chained errors included)
   repeats the input, whether a value or a key;
-- a field the record does not declare is ignored, since providers add fields without notice (checked only when
-  `record=` is given).
+- with `record=`: a field the record does not declare is ignored, since providers add fields without notice, while a
+  record whose `value` is a numeric string, `{"value": "1"}`, and an array where the record is declared are refused
+  with one of `errors`, so a codec strict for the built-in containers cannot build its records unchecked.
 
 Every body it reads is one the codec wrote itself, so the check works for any format.

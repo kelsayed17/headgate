@@ -118,7 +118,7 @@ retried, a retry spends its own rate turn, and one deadline bounds the lot.
   <li><strong>Your reader</strong><span>a typed result, or a typed error</span></li>
 </ol>
 
-[:lucide-arrow-right: How headgate compares with 20+ libraries](comparison.md){ .md-button }
+[:lucide-arrow-right: How headgate compares with about 30 libraries](comparison.md){ .md-button }
 [:lucide-arrow-right: The standards it follows](standards.md){ .md-button }
 
 ## Install
@@ -136,9 +136,9 @@ retried, a retry spends its own rate turn, and one deadline bounds the lot.
     ```
 
 The `msgspec` extra brings the codec the examples use; `headgate[pydantic]` brings pydantic's, and any other library
-plugs in as a [codec](codecs.md) of its own. headgate needs **Python 3.14** or newer: endpoint paths are [template
-strings](https://peps.python.org/pep-0750/), so each value is escaped into its own path segment by default. It runs on
-**httpx2**, pydantic's fork of httpx; see [why httpx2](comparison.md#why-httpx2).
+plugs in as a [codec](codecs.md) of its own. headgate needs **Python 3.14** or newer, free-threaded builds included:
+endpoint paths are [template strings](https://peps.python.org/pep-0750/), so each value is escaped into its own path
+segment by default. It runs on **httpx2**, pydantic's fork of httpx; see [why httpx2](comparison.md#why-httpx2).
 
 ## A real client
 
@@ -214,3 +214,4 @@ the token on `api.github.com` all come from the `Client` it holds.
 - [Configuration](configuration.md): every option, and where it lives.
 - [Declared responses](responses.md) and [errors](errors.md): what an endpoint answers, and what it raises.
 - [Testing a client](testing.md): fake networks, instant retries and failure schedules, with nothing private patched.
+- [Imports](imports.md): every public name, and the module to import it from.

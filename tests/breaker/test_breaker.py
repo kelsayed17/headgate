@@ -400,7 +400,10 @@ def test_a_registry_keys_a_breaker_by_origin() -> None:
     assert table_of(registry).breakers("https://a.example") == (first,)
     assert table_of(registry).breakers() == (first, other)
     assert len(registry) == len((first, other))
-    assert repr(registry) == "BreakerRegistry({'https://a.example': 'open', 'https://b.example': 'closed'})"
+    assert repr(registry) == (
+        f"BreakerRegistry(BreakerPolicy(failure_threshold=1, recovery_timeout={_LONG_COOLDOWN!r}), max_hosts=1024, "
+        "breakers={'https://a.example': 'open', 'https://b.example': 'closed'})"
+    )
 
     registry.clear()
     assert len(registry) == 0

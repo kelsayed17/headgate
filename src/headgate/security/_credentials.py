@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Final
 import httpx2
 
 from headgate._core import EXPLICIT_HEADERS, ExplicitHeaders, check_not_letters, origin_text
+from headgate._url import register_secret_params
 from headgate.errors import ForbiddenDestinationError
 
 if TYPE_CHECKING:
@@ -112,7 +113,8 @@ class CredentialGuard:
 
         *http*'s are each header in its ``headers`` but ``User-Agent``, ``Content-Type`` and the content negotiation
         headers, and *middleware*'s what each declares. *cookie_jar* is the jar the client keeps, if any, whose
-        cookies for the hop's origin replace a withheld ``Cookie``.
+        cookies for the hop's origin replace a withheld ``Cookie``. The query parameters *auth* and *middleware*
+        declare are registered as secret, so every URL headgate shows, httpx2's own log line included, redacts them.
 
         :raises TypeError: for an *auth* whose declarations are not frozensets of names.
         """
@@ -132,6 +134,7 @@ class CredentialGuard:
         self._cookie_jar = cookie_jar
         self._middleware_headers = frozenset(name.lower() for item in middleware for name in item.credential_headers)
         self._middleware_params = frozenset(name for item in middleware for name in item.credential_params)
+        register_secret_params(params | self._middleware_params)
         trusted = (httpx2.Origin(origin) for origin in http.security.trusted_origins)
         self._trusted = frozenset({base_url.origin, *trusted})
 

@@ -26,10 +26,10 @@ from headgate import (
     ClientError,
     Expect,
     HttpOptions,
+    Next,
     RateLimitError,
     Reader,
     RetryPolicy,
-    StaticHeaderAuth,
     TransportError,
     UpstreamStatusError,
 )
@@ -94,15 +94,25 @@ async def local_server() -> AsyncIterator[str]:
         await server.wait_closed()
 
 
+class _NewlineToken:
+    """A middleware that stamps a bearer with a trailing newline: headers given as options are refused for one."""
+
+    credential_headers = frozenset({"authorization"})
+    credential_params = frozenset[str]()
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        """Stamp the bearer, then send."""
+        request.headers["Authorization"] = f"Bearer {_CANARY}\n"
+        return await call_next(request)
+
+
 async def test_a_header_value_the_http_library_refuses_is_never_quoted(local_server: str) -> None:
     """A token with a trailing newline makes h11 refuse the header, quoting the whole value; the error names the header.
 
     The message is fixed and value-free, and nothing is chained, since the cause carries the same text.
     """
     client = Client(
-        base_url=local_server,
-        policy=CallPolicy(retry=RetryPolicy(attempts=1)),
-        auth=StaticHeaderAuth({"Authorization": f"Bearer {_CANARY}\n"}),
+        base_url=local_server, policy=CallPolicy(retry=RetryPolicy(attempts=1)), middleware=(_NewlineToken(),)
     )
     try:
         with pytest.raises(TransportError) as raised:

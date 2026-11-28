@@ -54,7 +54,7 @@ async def test_the_timeout_survives_the_cache_layer(storage: AsyncSqliteStorage)
         transport=base,
         http=HttpOptions(),
         policy=CallPolicy(timeout=Timeouts(read=_CLIENT_TIMEOUT)),
-        cache=HttpCache(**series_rules(), storage=storage),
+        cache=HttpCache(**series_rules(), storage=storage, ttl=None),
     )
 
     await client.get("/series?id=A", expect=RESPONSE)
@@ -72,7 +72,7 @@ async def test_a_per_call_timeout_still_wins_through_the_cache(storage: AsyncSql
         transport=base,
         http=HttpOptions(),
         policy=CallPolicy(timeout=Timeouts(read=_CLIENT_TIMEOUT)),
-        cache=HttpCache(**series_rules(), storage=storage),
+        cache=HttpCache(**series_rules(), storage=storage, ttl=None),
     )
 
     every = dict.fromkeys(("connect", "read", "write", "pool"), _CALL_TIMEOUT)
@@ -102,7 +102,7 @@ async def test_a_black_holing_host_times_out_through_the_cache(storage: AsyncSql
         base_url=f"http://127.0.0.1:{port}",
         policy=CallPolicy(
             retry=RetryPolicy(attempts=1),
-            cache=HttpCache(**series_rules(), storage=storage),
+            cache=HttpCache(**series_rules(), storage=storage, ttl=None),
             timeout=Timeouts(read=_SHORT_TIMEOUT),
         ),
         http=HttpOptions(),

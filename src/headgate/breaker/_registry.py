@@ -29,7 +29,7 @@ import weakref
 from collections import OrderedDict
 from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager
-from typing import Final, Protocol, Self, override
+from typing import Final, NoReturn, Protocol, Self, final, override
 
 import httpx2
 
@@ -42,6 +42,8 @@ from headgate._core import (
     current_timing,
     origin_of,
     origin_text,
+    refuse_pickle,
+    sealed,
     timing_override,
 )
 from headgate.breaker._breaker import CircuitBreaker, TransitionListener, Verdict
@@ -166,11 +168,13 @@ class BreakerTable:
             self._breakers.clear()
 
 
+@final
+@sealed("share one registry between the clients whose breakers it pools")
 class BreakerRegistry:
     """The breakers of every origin its clients have called, built on first use with its *policy*. See the module.
 
     Every client given the same registry as its ``breaker=`` shares its breakers; read their states with
-    :func:`headgate.health.breaker_states`, which builds none. *max_hosts* bounds how many it holds; every breaker it
+    :func:`headgate.health.breaker_snapshots`, which builds none. *max_hosts* bounds how many it holds; every breaker it
     builds runs on the timing current when the registry is built (:func:`headgate.timing.current_timing`), whenever it
     builds it.
     """
@@ -224,9 +228,15 @@ class BreakerRegistry:
         return self
 
     @override
+    def __reduce__(self) -> NoReturn:
+        """Refuse to be pickled: a live registry is state its clients share in one process, raising ``TypeError``."""
+        refuse_pickle(self)
+
+    @override
     def __repr__(self) -> str:
+        """Return the registry's policy, its bound and each origin's breaker state."""
         states = {breaker.name: str(breaker.state) for breaker in self._table.breakers()}
-        return f"BreakerRegistry({states!r})"
+        return f"BreakerRegistry({self.policy!r}, max_hosts={self.max_hosts}, breakers={states!r})"
 
 
 #: Each live registry's table. Weak, so a registry nobody holds any more goes with its breakers.

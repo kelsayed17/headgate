@@ -108,7 +108,7 @@ def test_the_old_builders_are_gone() -> None:
         for name in ("decoder", "encoder"):
             assert not hasattr(flavor, name), (flavor.__name__, name)
     for name in ("RefusalCheck", "RefusedError"):
-        assert not hasattr(headgate, name), name
+        assert name not in vars(headgate), name
     assert hasattr(headgate, "ResponseCheck")
     assert headgate.errors.RefusedError.__module__ == "headgate.errors"
 
@@ -170,15 +170,39 @@ _CALLS: dict[str, Callable[[Client, Any], Awaitable[object]]] = {
 }
 
 
-@_NOT_READERS
+#: What a reader goes, for each value that is not one, and what ``expect=`` says of it: a class or a type is the
+#: model where its reader goes, so the refusal names the reader of it.
+_NOT_EXPECTATIONS = pytest.mark.parametrize(
+    ("value", "refusal"),
+    [
+        (str, "the class str): for the body as text, use as_text"),
+        (
+            Order,
+            "the class Order): write reader(Order) with a flavor's reader, from headgate.msgspec or headgate.pydantic",
+        ),
+        (
+            list[Order],
+            (
+                "the type list[Order]): write reader(list[Order]) with a flavor's reader, from headgate.msgspec or "
+                "headgate.pydantic"
+            ),
+        ),
+        (_plain, "function)"),
+        (lambda resp: resp, "function)"),
+    ],
+    ids=["str", "class", "type", "function", "lambda"],
+)
+
+
+@_NOT_EXPECTATIONS
 @pytest.mark.parametrize("verb", list(_CALLS))
-async def test_every_call_refuses_a_non_reader_expect(verb: str, value: object, named: str) -> None:
-    """Refuse a non-reader ``expect=`` where the call is made, before anything is sent."""
+async def test_every_call_refuses_a_non_reader_expect(verb: str, value: object, refusal: str) -> None:
+    """Refuse a non-reader ``expect=`` where the call is made, before anything is sent, saying what to write."""
     fake = FakeTransport()
     async with Client(base_url="https://api.test", http=HttpOptions(transport=fake)) as client:
         with pytest.raises(TypeError) as caught:
             await _CALLS[verb](client, cast("Any", value))
-    assert str(caught.value) == f"expect= takes a Reader or an Expect (got {named})"
+    assert str(caught.value) == f"expect= takes a Reader or an Expect (got {refusal}"
     assert not fake.calls
 
 

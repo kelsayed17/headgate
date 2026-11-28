@@ -14,8 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import gc
 import math
-from typing import TYPE_CHECKING, Final, override
+import weakref
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Final, cast, override
 
 import httpx2
 import pytest
@@ -23,8 +26,10 @@ import pytest
 from headgate import CallPolicy, Client, HttpCache, HttpOptions, Method, SecurityOptions, as_bytes
 from headgate._core import CallContext, CallInfo
 from headgate.cache import Partition
+from headgate.cache._credentials import _GUARD_LABELS
 from headgate.errors import ForbiddenDestinationError
 from headgate.events import CacheOutcome
+from headgate.security import forbidden_reason
 from tests.cache._helpers import (
     NETWORK_BODY,
     FaultyStorage,
@@ -90,7 +95,7 @@ async def test_streams_open_before_their_bodies_end_each_on_its_own_download(
     """
     network = _Events()
     faulty = FaultyStorage(storage, ValueError("corrupt"), failing=failing)
-    client = stub_client(transport=network, cache=HttpCache(storage=faulty))
+    client = stub_client(transport=network, cache=HttpCache(storage=faulty, ttl=None))
     async with (
         client,
         asyncio.timeout(5),
@@ -176,7 +181,9 @@ class _HungWrites(FaultyStorage):
 async def test_a_hung_write_ends_with_the_deadline_and_is_reported_unstored(storage: AsyncSqliteStorage) -> None:
     """Return a verb's answer by its deadline though the write of its miss hangs, and report the answer unstored."""
     recorder = Recorder()
-    client = stub_client(transport=Network(), cache=HttpCache(storage=_HungWrites(storage)), observers=(recorder,))
+    client = stub_client(
+        transport=Network(), cache=HttpCache(storage=_HungWrites(storage), ttl=None), observers=(recorder,)
+    )
     async with client, asyncio.timeout(5):
         body = await client.get("series", expect=as_bytes, deadline=0.2)
 
@@ -209,7 +216,9 @@ async def test_a_write_cut_off_mid_body_is_never_served(storage: AsyncSqliteStor
     """Fetch again after a write the deadline cut off partway, rather than serve the half that was written."""
     network = Network()
     recorder = Recorder()
-    client = stub_client(transport=network, cache=HttpCache(storage=_StallsMidBody(storage)), observers=(recorder,))
+    client = stub_client(
+        transport=network, cache=HttpCache(storage=_StallsMidBody(storage), ttl=None), observers=(recorder,)
+    )
     async with client, asyncio.timeout(5):
         first = await client.get("series", expect=as_bytes, deadline=0.2)
         second = await client.get("series", expect=as_bytes)
@@ -236,7 +245,7 @@ class _Report(httpx2.AsyncBaseTransport):
 @pytest.mark.parametrize("cached", [False, True], ids=["uncached", "cached"])
 async def test_a_raw_utf8_header_value_is_handed_up_as_sent(storage: AsyncSqliteStorage, *, cached: bool) -> None:
     """Read a response whose ``Content-Disposition`` holds raw UTF-8, keeping the value's bytes."""
-    client = stub_client(transport=_Report(), cache=HttpCache(storage=storage) if cached else None)
+    client = stub_client(transport=_Report(), cache=HttpCache(storage=storage, ttl=None) if cached else None)
     async with client:
         response = await client.get("series", expect=RESPONSE)
 
@@ -269,7 +278,7 @@ async def test_traced_identical_gets_share_one_download(storage: AsyncSqliteStor
     telemetry = Telemetry()
     client = Client(
         base_url="https://x",
-        policy=CallPolicy(cache=HttpCache(storage=storage)),
+        policy=CallPolicy(cache=HttpCache(storage=storage, ttl=None)),
         http=HttpOptions(transport=network),
         observers=(telemetry.observer,),
         middleware=(telemetry.observer,),
@@ -304,7 +313,7 @@ async def test_a_guarded_client_is_never_served_an_unguarded_clients_entry(
     partition: Partition, storage: AsyncSqliteStorage
 ) -> None:
     """Refuse an internal host on a guarded client, though an unguarded one on its storage stored that host's body."""
-    cache = HttpCache(storage=storage, partition=partition)
+    cache = HttpCache(storage=storage, ttl=None, partition=partition)
     unguarded = stub_client(transport=Network(), cache=cache)
     guarded = Client(
         base_url="https://x",
@@ -315,6 +324,183 @@ async def test_a_guarded_client_is_never_served_an_unguarded_clients_entry(
         assert await unguarded.get("series", expect=as_bytes) == NETWORK_BODY
         with pytest.raises(ForbiddenDestinationError):
             await guarded.get("series", expect=as_bytes)
+
+
+def _admit_everything(address: object) -> str | None:
+    """Refuse no address: a check laxer than the default one."""
+    del address
+    return None
+
+
+@pytest.mark.parametrize("partition", list(Partition))
+async def test_a_guarded_client_is_never_served_an_entry_a_laxer_guard_fetched(
+    partition: Partition, storage: AsyncSqliteStorage
+) -> None:
+    """Refuse an internal host on a strict client, though a client whose check admits it stored that host's body.
+
+    A cache hit is not vetted, so each guard keeps entries of its own: two guards with different checks never share.
+    """
+    cache = HttpCache(storage=storage, ttl=None, partition=partition)
+    names = _Names(x="10.0.0.5")
+    lax = stub_client(
+        transport=Network(),
+        cache=cache,
+        http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=names, check=_admit_everything)),
+    )
+    strict = Client(
+        base_url="https://x",
+        policy=CallPolicy(cache=cache),
+        http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=names)),
+    )
+    async with lax, strict:
+        assert await lax.get("series", expect=as_bytes) == NETWORK_BODY
+        with pytest.raises(ForbiddenDestinationError):
+            await strict.get("series", expect=as_bytes)
+
+
+async def test_clients_with_one_guard_share_their_cache_entries(storage: AsyncSqliteStorage) -> None:
+    """Serve a client the entry another client with the very same check and resolver fetched: one guard, one label."""
+    cache = HttpCache(storage=storage, ttl=None)
+    names = _Names(x="8.8.8.8")
+    network = Network()
+    security = SecurityOptions(block_private_hosts=True, resolver=names, check=_admit_everything)
+    first, second = (stub_client(transport=network, cache=cache, http=HttpOptions(security=security)) for _ in "ab")
+    async with first, second:
+        assert await first.get("series", expect=as_bytes) == NETWORK_BODY
+        assert await second.get("series", expect=as_bytes) == NETWORK_BODY
+
+    assert network.calls == 1, "the second client was served the first one's entry"
+
+
+class _Tenant:
+    """A tenant whose resolver is a bound method: the guard's label must not keep the tenant alive."""
+
+    async def resolve(self, host: str, port: int) -> Sequence[str]:
+        """Answer every name with a public address."""
+        del host, port
+        return ("8.8.8.8",)
+
+
+async def test_a_guards_cache_label_keeps_its_resolver_no_longer_than_its_clients(storage: AsyncSqliteStorage) -> None:
+    """Free a guard's resolver and what it holds once its clients are gone, though the cache labeled their entries."""
+    tenant = _Tenant()
+    alive = weakref.ref(tenant)
+    labels = len(_GUARD_LABELS)
+    client = stub_client(
+        transport=Network(),
+        cache=HttpCache(storage=storage, ttl=None),
+        http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=tenant.resolve)),
+    )
+    async with client:
+        assert await client.get("series", expect=as_bytes) == NETWORK_BODY
+    assert len(_GUARD_LABELS) == labels + 1
+    del client, tenant
+    gc.collect()
+
+    assert alive() is None
+    assert len(_GUARD_LABELS) == labels, "the guard's label went with its last client"
+
+
+async def test_clients_given_one_objects_method_share_their_cache_entries(storage: AsyncSqliteStorage) -> None:
+    """Serve a client the entry another fetched when each was given ``tenant.resolve``: one object, one function.
+
+    Each read of the method builds a new one, so a guard told by its resolver's identity alone gave each client a
+    label of its own, and the second client fetched again what the first had stored.
+    """
+    cache = HttpCache(storage=storage, ttl=None)
+    tenant = _Tenant()
+    network = Network()
+    first, second = (
+        stub_client(
+            transport=network,
+            cache=cache,
+            http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=tenant.resolve)),
+        )
+        for _ in "ab"
+    )
+    async with first, second:
+        assert await first.get("series", expect=as_bytes) == NETWORK_BODY
+        assert await second.get("series", expect=as_bytes) == NETWORK_BODY
+
+    assert network.calls == 1, "the second client was served the first one's entry"
+
+
+@dataclass(frozen=True, slots=True)
+class _SlottedNames:
+    """A resolver that takes no weak reference, as a slotted dataclass does: every name has a public address."""
+
+    address: str = "8.8.8.8"
+
+    async def __call__(self, host: str, port: int) -> Sequence[str]:
+        """Answer every name with the public address."""
+        del host, port
+        return (self.address,)
+
+
+async def test_a_guards_label_goes_with_its_last_client_though_its_resolver_takes_no_weak_reference(
+    storage: AsyncSqliteStorage,
+) -> None:
+    """Drop the label of a guard whose resolver takes no weak reference once its last client is gone.
+
+    The entry held such a resolver for the whole process beside the default check, which is never collected, so the
+    table grew by a resolver, and all it held, with every client built and closed.
+    """
+    labels = len(_GUARD_LABELS)
+    for _ in range(3):
+        client = stub_client(
+            transport=Network(),
+            cache=HttpCache(storage=storage, ttl=None),
+            http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=_SlottedNames())),
+        )
+        async with client:
+            assert await client.get("series", expect=as_bytes) == NETWORK_BODY
+        del client
+        gc.collect()
+
+    assert len(_GUARD_LABELS) == labels
+
+
+@dataclass(frozen=True, slots=True)
+class _Check:
+    """An address check that takes no weak reference, as a slotted dataclass does: lax, or as strict as the default."""
+
+    lax: bool
+
+    def __call__(self, address: object) -> str | None:
+        """Admit every address when lax, else judge it as the default check does."""
+        return None if self.lax else forbidden_reason(cast("Any", address))
+
+
+async def test_a_check_that_takes_no_weak_reference_never_lends_its_label(storage: AsyncSqliteStorage) -> None:
+    """Refuse every strict client, though each lax client before it, now gone, fetched the body on the same storage.
+
+    A check that takes no weak reference is held by its label's entry, so a later check never takes its identity, and
+    with it the label: one that did was served what the lax one fetched from a host it refuses.
+    """
+    cache = HttpCache(storage=storage, ttl=None)
+    names = _Names(x="10.0.0.5")
+    for _ in range(40):
+        lax = stub_client(
+            transport=Network(),
+            cache=cache,
+            http=HttpOptions(
+                security=SecurityOptions(block_private_hosts=True, resolver=names, check=_Check(lax=True))
+            ),
+        )
+        async with lax:
+            assert await lax.get("series", expect=as_bytes) == NETWORK_BODY
+        del lax
+        gc.collect()
+        strict = Client(
+            base_url="https://x",
+            policy=CallPolicy(cache=cache),
+            http=HttpOptions(
+                security=SecurityOptions(block_private_hosts=True, resolver=names, check=_Check(lax=False))
+            ),
+        )
+        async with strict:
+            with pytest.raises(ForbiddenDestinationError):
+                await strict.get("series", expect=as_bytes)
 
 
 # L31: a per-call cache_ttl is checked before anything is sent.
@@ -329,7 +515,7 @@ async def test_a_per_call_cache_ttl_no_entry_could_live_by_is_refused(
 ) -> None:
     """Refuse a ``cache_ttl`` that is not a positive finite number of seconds, before sending."""
     network = Network()
-    client = stub_client(transport=network, cache=HttpCache(storage=storage))
+    client = stub_client(transport=network, cache=HttpCache(storage=storage, ttl=None))
     async with client:
         with pytest.raises(error, match="cache_ttl"):
             await client.get("series", expect=as_bytes, cache_ttl=ttl)

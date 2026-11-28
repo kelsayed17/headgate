@@ -1,11 +1,12 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""``TestClock`` and ``instant_retries``: time a test drives, through the timing clients are built with."""
+"""``TestClock`` and ``instant_waits``: time a test drives, through the timing clients are built with."""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import email.utils
 import math
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING, Any, cast
 import httpx2
 import pytest
 
+import headgate.testing
 import headgate.timing
 from headgate import (
     BreakerPolicy,
@@ -33,25 +35,30 @@ from headgate._core import current_timing
 from headgate.breaker import BreakerRegistry
 from headgate.breaker._breaker import CircuitBreaker
 from headgate.breaker._registry import table_of
+from headgate.events import RateLimited
 from headgate.retry import Backoff, RetryBudget, RetryShare
 from headgate.retry._policy import ledger_of
 from headgate.testing import (
     FakeTransport,
     FaultyTransport,
+    Respond,
     Slow,
     TestClock,
     budget_for,
-    instant_retries,
+    instant_waits,
     policy_disabled,
 )
 from headgate.testing._time import _SETTLE_TURNS
 from headgate.timing import Timing
+from tests.support.events import Recorder
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 _START = 100.0
 _STEP = 2.5
+#: What a clock's step takes, as its refusal says.
+_STEP_WANTED = "a finite number of seconds, 0 or more: a clock only moves forward"
 #: A backoff whose waits are exactly ``factor * 2**retry`` under a clock whose jitter always draws 1.
 _EXACT_BACKOFF = Backoff(factor=1.0, max_wait=60.0)
 
@@ -66,9 +73,30 @@ def test_the_clock_reads_what_it_was_moved_to() -> None:
 
 @pytest.mark.parametrize("step", [-1.0, math.nan, math.inf])
 def test_the_clock_refuses_a_step_no_clock_takes(step: float) -> None:
-    """Refuse a backwards, NaN or infinite step."""
-    with pytest.raises(ValueError, match="only moves forward"):
+    """Refuse a backwards, NaN or infinite step, naming the option."""
+    with pytest.raises(ValueError, match=rf"^seconds= takes {_STEP_WANTED} \(got {step}\)$"):
         TestClock().advance(step)
+
+
+async def test_the_clock_moves_only_as_told_and_hands_out_a_copy_of_its_sleeps() -> None:
+    """Read ``now`` and ``epoch``, which nothing but ``advance`` and ``sleep`` move, and a fresh list of the sleeps.
+
+    An assignment would move the clock backwards, or to no number, past the checks ``advance`` makes.
+    """
+    clock = TestClock(_START, epoch=1_000.0)
+    await clock.sleep(_STEP)
+    clock.sleeps.append(99.0)
+
+    assert (clock.now, clock.epoch, clock.wall_clock(), clock.sleeps) == (
+        _START + _STEP,
+        1_000.0,
+        1_000.0 + _START + _STEP,
+        [_STEP],
+    )
+    assert clock.sleeps is not clock.sleeps
+    for name in ("now", "epoch", "sleeps"):
+        with pytest.raises(AttributeError):
+            setattr(clock, name, 0.0)
 
 
 async def test_a_sleep_advances_the_clock_and_is_recorded() -> None:
@@ -165,9 +193,15 @@ async def test_a_cancelled_sleep_due_with_another_is_left_asleep() -> None:
 
 @pytest.mark.parametrize("step", [-1.0, math.nan, math.inf])
 async def test_a_sleep_refuses_a_step_no_clock_takes(step: float) -> None:
-    """Refuse a backwards, NaN or infinite sleep, as :meth:`TestClock.advance` refuses the step."""
-    with pytest.raises(ValueError, match="only moves forward"):
+    """Refuse a backwards, NaN or infinite sleep, as :meth:`TestClock.advance` refuses the step, as its call reads."""
+    with pytest.raises(ValueError, match=rf"^sleep\(seconds\) takes {_STEP_WANTED} \(got {step}\)$"):
         await TestClock().sleep(step)
+
+
+async def test_a_sleep_refuses_a_step_that_is_no_number_as_its_call_reads() -> None:
+    """Name the positional-only ``seconds`` as ``sleep(seconds)``, which a caller writes, not ``seconds=``."""
+    with pytest.raises(TypeError, match=r"^sleep\(seconds\) takes seconds, a number \(got str\)$"):
+        await TestClock().sleep(cast("Any", "1"))
 
 
 async def test_concurrent_calls_back_off_together() -> None:
@@ -206,25 +240,66 @@ async def test_a_client_built_under_install_waits_on_the_test_clock() -> None:
     assert clock() == sum(clock.sleeps)
 
 
-async def test_instant_retries_replaces_only_the_sleep() -> None:
+async def test_instant_waits_replaces_only_the_sleep() -> None:
     """Keep the clock in force, and replace the sleep with one that returns at once."""
     clock = TestClock()
-    with clock.install(), instant_retries():
+    with clock.install(), instant_waits():
         timing = current_timing()
         assert timing.clock is clock
         await timing.sleep(_STEP)
     assert clock.sleeps == []
 
 
-async def test_instant_retries_retries_without_waiting() -> None:
+async def test_instant_waits_retries_without_waiting() -> None:
     """Retry a mocked failure as production does, sending every attempt."""
     fake = FakeTransport().reply("GET", "/x", httpx2.codes.SERVICE_UNAVAILABLE, httpx2.codes.OK)
-    with instant_retries():
+    with instant_waits():
         client = Client(
             base_url="https://h.test", policy=CallPolicy(rate=Rate.per_second(1000)), http=HttpOptions(transport=fake)
         )
     await client.get("x", expect=nothing)
     assert len(fake.calls) == len(("503", "200"))
+
+
+@pytest.mark.call_policy
+async def test_instant_waits_makes_the_pacing_instant_too() -> None:
+    """Make every wait return at once, a rate budget's pacing included, not only a retry's backoff."""
+    clock = TestClock()
+    fake = FakeTransport().reply("GET", "/x")
+    with clock.install(), instant_waits():
+        client = Client(
+            base_url="https://h.test", policy=CallPolicy(rate=Rate.per_second(1)), http=HttpOptions(transport=fake)
+        )
+    for _ in range(3):
+        await client.get("x", expect=nothing)
+
+    assert (len(fake.calls), clock(), clock.sleeps) == (3, 0.0, [])
+
+
+@pytest.mark.call_policy
+@pytest.mark.parametrize("on_test_clock", [False, True], ids=["real-clock", "test-clock"])
+async def test_instant_waits_sleeps_through_a_servers_pause_once(*, on_test_clock: bool) -> None:
+    """Wait out a 429's pause in one instant sleep and send, on the real clock or a test clock nothing moves.
+
+    The wait re-read a clock the sleep had not moved: it spun until the real clock passed the pause, and on a test
+    clock it never ended.
+    """
+    fake = FakeTransport().reply("GET", "/x", Respond(429, retry_after=20.0), 200)
+    recorder = Recorder()
+    with TestClock().install() if on_test_clock else contextlib.nullcontext(), instant_waits():
+        client = Client(base_url="https://h.test", http=HttpOptions(transport=fake), observers=[recorder])
+
+    async with asyncio.timeout(5.0):
+        await client.get("x", expect=nothing)
+
+    assert [event.reason for event in recorder.of(RateLimited)] == ["pushback", "paused"]
+    assert len(fake.calls) == len(("429", "200"))
+
+
+def test_the_switch_is_named_for_every_wait() -> None:
+    """Name it ``instant_waits``, since it makes pacing instant too: ``instant_retries`` is gone, with no alias."""
+    assert "instant_retries" not in vars(headgate.testing)
+    assert "instant_waits" in headgate.testing.__all__
 
 
 @pytest.mark.call_policy
