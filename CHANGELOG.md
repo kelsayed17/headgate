@@ -78,9 +78,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `auth.seed(token, lifetime)`.
 - `CachedTokenAuth` has no constructor: its cache and lock are made on first use, so a subclass whose `__init__`
   forgets `super().__init__()` works, where it failed at its first call with an `AttributeError` naming private state.
-  `super().__init__()` may stay, and does nothing. `refresh_margin` is a class attribute, a number of seconds of 0 or
-  more checked when the class is defined: write `refresh_margin = 30.0` in the class body for
-  `super().__init__(refresh_margin=30.0)`. `CachedTokenAuth(timing=)` is removed: a token's lifetime runs on the timing
+  `super().__init__()` may stay, and does nothing. `refresh_margin` is a class attribute, a finite number of seconds of
+  0 or more checked when the class is defined, and the class's value is the one read, not an instance's: write
+  `refresh_margin = 30.0` in the class body for `super().__init__(refresh_margin=30.0)`. `CachedTokenAuth(timing=)` is
+  removed: a token's lifetime runs on the timing
   of the first client built with the auth, so build it, or the client, inside `timing_override()` or
   `TestClock.install()`.
 - `async_auth_flow` is `@final` on `SigningAuth` and `CachedTokenAuth`, and so is `reject_credential_rotation`: a
@@ -99,6 +100,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   coroutine-function `skips`, on either auth base, and `attach` on a `CachedTokenAuth`, are refused when the class is
   defined too: an `async def skips` returned a coroutine, which is truthy, so every request went out unsigned or
   without its token. Write `def skips(self, request)` and `def attach(self, request, token)`.
+- `Minted(token, lifetime)` refuses, when it is built, a lifetime that is not a number of seconds above 0 (`0`, a
+  negative number, NaN, `True`, a `str`) with a `TypeError`, where a mint or a `seed()` cached a token already due.
+  `math.inf` is a token that never expires. Pass the provider's `expires_in` as a number.
 - `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.
