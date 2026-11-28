@@ -65,7 +65,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   lower-cased (the guard, the cache and `CassetteFilter` compare them case-insensitively). A `SigningAuth` that
   declares no name, and a `CachedTokenAuth` that overrides `attach` without declaring again what it sets, still fail
   when the class is defined. Both declare in class attributes: a `credential_headers` or `credential_params` property,
-  which `CachedTokenAuth` accepted in place of `token_headers`, raises `TypeError` when the class is defined.
+  which `CachedTokenAuth` accepted in place of `token_headers`, raises `TypeError` when the class is defined. For names
+  that differ per instance, write a subclass per set of names, each with its own class attribute, or a plain `Auth`,
+  which may still declare through a property.
 - `CachedTokenAuth` mints through one abstract hook, `mint(request)`: an async generator that yields each request the
   exchange needs and ends by yielding `Minted(token, lifetime)`. It is `mint_flow` renamed: write
   `async def mint(self, request)` where you wrote `async def mint_flow(self, request)`. A mint that makes no request of
