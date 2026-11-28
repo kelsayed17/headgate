@@ -17,12 +17,12 @@ from typing import TYPE_CHECKING, ClassVar, override
 import httpx2
 import pytest
 
-from headgate import Auth, AuthError, CachedTokenAuth, Client, HttpOptions, Raw, SigningAuth
+from headgate import Auth, AuthError, CachedTokenAuth, Client, HttpOptions, Minted, Raw, SigningAuth
 from headgate._responses import nothing
 from tests.support.tokens import premint
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
 _BASE = "https://api.example"
 #: The client's response cap in these tests, far below the 401 body.
@@ -50,9 +50,9 @@ class _Minting(CachedTokenAuth):
         self.mints = 0
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         self.mints += 1
-        return "fresh", 3600.0
+        yield Minted("fresh", 3600.0)
 
 
 class _Counted(httpx2.AsyncByteStream):

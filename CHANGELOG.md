@@ -63,6 +63,14 @@ change the public API; such changes are listed under **Changed** and **Removed**
   declares no name, and a `CachedTokenAuth` that overrides `attach` without declaring again what it sets, still fail
   when the class is defined. Both declare in class attributes: a `credential_headers` or `credential_params` property,
   which `CachedTokenAuth` accepted in place of `token_headers`, raises `TypeError` when the class is defined.
+- `CachedTokenAuth` mints through one abstract hook, `mint(request)`: an async generator that yields each request the
+  exchange needs and ends by yielding `Minted(token, lifetime)`. It is `mint_flow` renamed: write
+  `async def mint(self, request)` where you wrote `async def mint_flow(self, request)`. A mint that makes no request of
+  its own yields only the `Minted`: where `mint_token()` returned `(token, lifetime)`, write
+  `async def mint(self, request): yield Minted(token, lifetime)`. A subclass without a `mint` raises `TypeError` when
+  it is built, naming `mint`, instead of when it is defined.
+- `CachedTokenAuth.seed()` takes the shape a mint ends with: write `auth.seed(Minted(token, lifetime))` for
+  `auth.seed(token, lifetime)`.
 - `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.
@@ -71,6 +79,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 - The cache's `ClientConfigurationError` for an auth that does not declare its credentials, which no auth can now
   reach. `Partition.SHARED` remains the opt-in for public data.
+- `CachedTokenAuth.mint_token()`, which made the exchange on an `httpx2.AsyncClient` of its own: outside the client's
+  stack, so its rate budget, retries, SSRF guard, redirect hardening and deadline did not reach it, and outside
+  `fake_network`, so a test sent its client secret to the real token host. Yield the exchange's request from `mint`
+  instead (see the auth guide), or, for a mint that is not an HTTP request, yield only the `Minted`. The guide's recipe
+  for it, and the testing guide's note that it does not reach the fake, are gone with it.
 
 ### Fixed
 

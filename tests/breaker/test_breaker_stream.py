@@ -222,18 +222,13 @@ class _HangingMint(CachedTokenAuth):
         """Seed the revoked token; mint over a hop when *hop*."""
         super().__init__()
         self._hop = hop
-        self.seed("revoked", math.inf)
+        self.seed(Minted("revoked", math.inf))
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
-        await asyncio.sleep(3600)
-        return "never", math.inf
-
-    @override
-    async def mint_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         if not self._hop:
-            token, lifetime = await self.mint_token()
-            yield Minted(token, lifetime)
+            await asyncio.sleep(3600)
+            yield Minted("never", math.inf)
             return
         yield httpx2.Request("POST", "https://token.example/mint")
         yield Minted("never", math.inf)
@@ -249,7 +244,7 @@ class _ApiThenHangingTokenHost(httpx2.AsyncBaseTransport):
         return httpx2.Response(401)
 
 
-@pytest.mark.parametrize("hop", [False, True], ids=["mint_token", "mint_flow hop"])
+@pytest.mark.parametrize("hop", [False, True], ids=["no hop", "hop"])
 async def test_a_deadline_passing_during_a_401_re_mint_is_not_charged_to_the_origin(*, hop: bool) -> None:
     """Charge the API origin nothing when the deadline cuts off a re-mint: the token host is what hung."""
     breakers = _Breakers(threshold=1)

@@ -41,8 +41,7 @@ timing when it is built by default:
   drops a response closes it, and a response that arrives already read gives its slot back at once, so a slot cannot
   leak.
 - **What spends.** Every attempt spends its own turn, retries and hedges included, as do redirect hops and the hops a
-  `mint_flow` yields. A `mint_token()` exchange runs on a client of its own and spends nothing here. A cache hit spends
-  nothing: the cache sits above the budget.
+  `CachedTokenAuth`'s `mint` yields. A cache hit spends nothing: the cache sits above the budget.
 
 `budget.effective_rate`, `budget.in_flight` and `budget.pause_remaining` read the budget's state now.
 

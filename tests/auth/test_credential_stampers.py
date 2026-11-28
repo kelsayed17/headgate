@@ -17,20 +17,20 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast, override
 import httpx2
 import pytest
 
-from headgate import Auth, BearerAuth, CachedTokenAuth, Client, QueryParamAuth, SigningAuth, StaticHeaderAuth
+from headgate import Auth, BearerAuth, CachedTokenAuth, Client, Minted, QueryParamAuth, SigningAuth, StaticHeaderAuth
 from headgate._core import CredentialStamper
 from headgate._url import is_secret_param
 from tests.support.tokens import premint
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncGenerator, Callable
 
 
 class _Bearer(CachedTokenAuth):
     """A bearer auth whose exchange never runs."""
 
     @override
-    async def mint_token(self) -> tuple[str, float]:
+    def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
         raise NotImplementedError
 
 
@@ -197,7 +197,7 @@ class TestIdentity:
         """Give each instance its own stable identity, unrelated to the token it holds."""
         auth = premint(_Bearer(), "token-1")
         before = auth.credential_identity()
-        auth.seed("token-2", math.inf)
+        auth.seed(Minted("token-2", math.inf))
 
         assert auth.credential_identity() == before
         assert _Bearer().credential_identity() != before
@@ -253,8 +253,8 @@ async def test_a_401_to_a_query_token_re_mints_once() -> None:
 
     class _Minting(_QueryToken):
         @override
-        async def mint_token(self) -> tuple[str, float]:
-            return "replacement", 3600.0
+        async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+            yield Minted("replacement", 3600.0)
 
     # A seeded token's age is unknown, so a 401 on it counts as staleness, not a permissions problem.
     auth = premint(_Minting(), "seeded")

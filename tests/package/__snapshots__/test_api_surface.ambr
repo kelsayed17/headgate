@@ -481,10 +481,9 @@
       def async_auth_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request, httpx2.Response]'
       def attach(self, request: 'httpx2.Request', token: 'TokenT') -> 'None'
       def credential_identity(self) -> 'bytes'
-      def mint_flow(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request | Minted[TokenT], httpx2.Response]'
-      def mint_token(self) -> 'tuple[TokenT, float]'
+      def mint(self, request: 'httpx2.Request') -> 'AsyncGenerator[httpx2.Request | Minted[TokenT], httpx2.Response]'
       def reject_credential_rotation(self, returned: 'str | None', configured: 'str', *, setting: 'str') -> 'None'
-      def seed(self, token: 'TokenT', lifetime: 'float') -> 'None'
+      def seed(self, minted: 'Minted[TokenT]') -> 'None'
       def skips(self, request: 'httpx2.Request') -> 'bool'
   class CallOptions(dict)(no signature)
       closed
