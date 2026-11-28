@@ -8,7 +8,7 @@ above the rate budget, so a hit returns before any retry and spends no rate turn
 ```python
 from hishel import AsyncSqliteStorage
 
-from headgate import HttpCache, CallPolicy
+from headgate import CallPolicy, HttpCache
 
 cache = HttpCache(
     storage=AsyncSqliteStorage(database_path="api-cache.db"),  # yours to close; many clients may share it
@@ -23,7 +23,7 @@ policy = CallPolicy(cache=cache)
 
 ## What is stored, and for how long
 
-`HttpCache(*, storage, ttl=None, partition=Partition.CREDENTIAL, methods=frozenset({"GET"}), paths=None,
+`HttpCache(*, storage, ttl, partition=Partition.CREDENTIAL, methods=frozenset({"GET"}), paths=None,
 statuses=frozenset({200}))`:
 
 - **What is stored**: a request whose method is in `methods` (`{"GET"}` by default) and whose path matches one of
@@ -60,12 +60,18 @@ statuses=frozenset({200}))`:
   hishel's `caching` report on the response says `stored: False`.
 - **A `stream()` is never buffered.** It is served from a hit, but a miss goes up as it arrives and is not stored. A
   POST, a request with a `Range`, or any request the rules do not name, goes to the network unread and unshared.
-- **`ttl`** is the client's default lifetime in seconds; a call's `cache_ttl=` overrides it. Either must be a positive
-  finite number: anything else raises before the call is sent, and so does a `cache_ttl=` on a call that is not
-  cached, which would set the lifetime of nothing: on a client without a cache, under a route with `cache=None`, or
-  for a method or path the cache's rules leave out (a POST, say).
+- **`ttl`** is the client's default lifetime in seconds; a call's `cache_ttl=` overrides it. It is required, since an
+  entry is stored past a `no-store` and never revalidated: `ttl=None`, written out, keeps entries with no expiry, and
+  a cache that names no `ttl=` raises `TypeError`. A lifetime must be a positive finite number: anything else raises
+  before the call is sent, and so does a `cache_ttl=` on a call that is not cached, which would set the lifetime of
+  nothing: on a client without a cache, under a route with `cache=None`, or for a method or path the cache's rules
+  leave out (a POST, say).
 - **TTL, not revalidation.** An entry is served until its lifetime ends and is never revalidated with the origin. For
   revalidation, use [conditional reads](#conditional-reads).
+- **A lifetime runs on real time.** hishel's storage stamps each entry with the system clock, not the client's timing,
+  so `TestClock.advance()` does not expire an entry. A test of expiry moves the system clock, with time-machine's
+  `travel()` (`time_machine.travel(time.time() + 3600, tick=False)` around the second call), or waits out a short
+  `ttl`.
 - The body is held up to the call's `max_response_bytes=`, else `HttpOptions.max_response_bytes`, and a body past it
   raises `ResponseTooLargeError` as it would uncached. A body past the cap is not stored. An entry is checked against
   the cap of the call that reads it, so one stored for a call that raised its cap is refused to a call that did not.

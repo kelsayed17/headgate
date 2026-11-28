@@ -101,7 +101,7 @@ async def test_a_cache_lifetime_on_a_call_the_cache_does_not_store_is_refused(
 ) -> None:
     """Refuse ``cache_ttl=`` on a read the cache never stores: a method or path its rules leave out, or a route's."""
     fake = FakeTransport()
-    policy = CallPolicy(cache=HttpCache(storage=storage, methods=methods, paths=("/x",)), routes=routes)
+    policy = CallPolicy(cache=HttpCache(storage=storage, ttl=None, methods=methods, paths=("/x",)), routes=routes)
     async with Client(base_url=_BASE, policy=policy, http=HttpOptions(transport=fake)) as client:
         with pytest.raises(ValueError, match=rf"^cache_ttl= sets a cached response's lifetime, but {message}"):
             await client.get(path, expect=nothing, cache_ttl=60.0)
@@ -126,7 +126,7 @@ def _at(body: dict[str, object], cursor: str) -> dict[str, object]:
 async def test_a_cache_lifetime_on_a_walk_of_posts_is_refused(storage: AsyncSqliteStorage) -> None:
     """Refuse ``cache_ttl=`` on a walk whose pages are POSTs, which no cache stores, where the walk is made."""
     pager = BodyCursor[int, list[int], dict[str, object]](reader(list[int]), items=list, next=_no_cursor, put=_at)
-    policy = CallPolicy(cache=HttpCache(storage=storage))
+    policy = CallPolicy(cache=HttpCache(storage=storage, ttl=None))
     async with Client(base_url=_BASE, policy=policy, http=HttpOptions(transport=FakeTransport())) as client:
         with pytest.raises(ValueError, match=r"^cache_ttl= sets a cached response's lifetime, but a page with a body"):
             client.paginate("x", payload=_QUERY, pager=pager, cache_ttl=60.0)
@@ -135,7 +135,7 @@ async def test_a_cache_lifetime_on_a_walk_of_posts_is_refused(storage: AsyncSqli
 async def test_a_cache_lifetime_on_a_call_the_cache_stores_is_sent(storage: AsyncSqliteStorage) -> None:
     """Accept ``cache_ttl=`` on a GET the cache's rules store."""
     fake = FakeTransport().reply("GET", "/x", 200)
-    policy = CallPolicy(cache=HttpCache(storage=storage, paths=("/x",)))
+    policy = CallPolicy(cache=HttpCache(storage=storage, ttl=None, paths=("/x",)))
     async with Client(base_url=_BASE, policy=policy, http=HttpOptions(transport=fake)) as client:
         await client.get("x", expect=nothing, cache_ttl=60.0)
     assert len(fake.calls) == 1

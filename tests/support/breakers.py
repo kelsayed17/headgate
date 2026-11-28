@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import httpx2
 
-from headgate.health import breaker_states
+from headgate.health import breaker_snapshots
 from headgate.testing import breakers_of
 
 if TYPE_CHECKING:
@@ -31,7 +31,7 @@ def has_breaker(client: Client, host: str) -> bool:
 def _states(client: Client) -> dict[str, BreakerSnapshot]:
     """Return a snapshot per origin of *client*'s breakers, none for a client without a breaker."""
     registry = breakers_of(client)
-    return {} if registry is None else breaker_states(registry)
+    return {} if registry is None else breaker_snapshots(registry)
 
 
 def registry_of(client: Client) -> BreakerRegistry:

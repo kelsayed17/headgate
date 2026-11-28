@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from typing import TYPE_CHECKING, Any, cast, override
 
@@ -82,6 +83,17 @@ async def test_the_log_of_sends_is_read_only() -> None:
         cast("Any", network).calls = ()
 
 
+async def test_a_snapshots_headers_are_its_own() -> None:
+    """Copy the headers into each snapshot of a send, so a test that edits one changes neither the log nor another."""
+    network = FaultyTransport(schedule=[Respond(204)])
+    request, _ = _request()
+    await network.handle_async_request(request)
+
+    network.calls[0].headers["X-Edited"] = "1"
+
+    assert "X-Edited" not in network.calls[0].headers
+
+
 async def test_a_response_records_when_it_is_closed() -> None:
     """Report an open response as unclosed, and closed once it is."""
     network = FaultyTransport(schedule=[Respond(200, content=b"x")])
@@ -90,9 +102,11 @@ async def test_a_response_records_when_it_is_closed() -> None:
     response = await network.handle_async_request(request)
 
     assert network.calls[0].response is response
-    assert network.calls[0].response_closed is False
+    before = network.calls[0]
+    assert before.response_closed is False
     await response.aclose()
     assert network.calls[0].response_closed is True
+    assert before.response_closed is False, "a FaultCall is the send as it stood when it was read"
 
 
 @pytest.mark.parametrize(
@@ -371,6 +385,55 @@ def test_respond_declares_its_json_and_its_retry_after() -> None:
     assert body == b'{"a": 1}'
 
 
+def test_respond_sends_json_under_the_content_type_its_headers_set() -> None:
+    """Keep the ``Content-Type`` the step's headers set, in any case, for ``json=``, rather than add a second one."""
+    step = Respond(404, json={"title": "Gone"}, headers={"content-type": "application/problem+json"})
+
+    assert response_parts(step)[0] == [("content-type", "application/problem+json")]
+
+
+def test_respond_takes_a_retry_after_one_way() -> None:
+    """Refuse ``retry_after=`` beside a ``Retry-After`` the headers set, in any case, which sent the header twice."""
+    with pytest.raises(ValueError, match=r"^Respond takes a Retry-After as retry_after= or in headers=, not both: "):
+        Respond(503, headers={"retry-after": "5"}, retry_after=3)
+
+
+def test_respond_takes_a_body_one_way() -> None:
+    """Refuse ``content=`` beside ``json=``, where ``json=`` won unseen; a copy that changes either field is one too.
+
+    So a ``Respond`` has no field of its own for the encoding, and ``dataclasses.replace`` gives another body or
+    another status as it does any field.
+    """
+    with pytest.raises(ValueError, match=r"^Respond takes a body as json= or as content=, not both: json= is "):
+        Respond(json={"a": 1}, content=b"other")
+    step = Respond(json={"a": 1})
+
+    assert (step.content, response_parts(step)[1]) == (b"", b'{"a": 1}')
+    assert [field.name for field in dataclasses.fields(Respond)] == [
+        "status_code",
+        "headers",
+        "json",
+        "content",
+        "retry_after",
+    ]
+    assert dataclasses.replace(step, status_code=503) == Respond(503, json={"a": 1})
+    assert response_parts(dataclasses.replace(step, json={"b": 2}))[1] == b'{"b": 2}'
+
+
+def test_respond_sends_each_line_of_a_repeated_header() -> None:
+    """Send each ``Set-Cookie`` line of an ``httpx2.Headers``, which a response may repeat, rather than join them."""
+    step = Respond(headers=httpx2.Headers([("set-cookie", "a=1"), ("set-cookie", "b=2")]))
+
+    assert response_parts(step)[0] == [("set-cookie", "a=1"), ("set-cookie", "b=2")]
+
+
+def test_respond_sends_its_json_as_json_dumps_spells_it() -> None:
+    """Send ``json=`` as the step always sent it: ``json.dumps``'s defaults, ASCII, a space after each separator."""
+    step = Respond(json={"name": "é", "tags": ["a"]})
+
+    assert response_parts(step)[1] == b'{"name": "\\u00e9", "tags": ["a"]}'
+
+
 @pytest.mark.parametrize(
     ("seconds", "header"),
     [(1e6, "1000000"), (1e22, "10000000000000000000000"), (0, "0"), (2.5, "2.5"), (1e-7, "0.0000001")],
@@ -392,6 +455,20 @@ def test_a_retry_after_that_is_no_number_of_seconds_is_refused(seconds: float) -
     """Refuse a negative or non-finite ``retry_after`` when the step is built: no ``Retry-After`` can say it."""
     with pytest.raises(ValueError, match="retry_after"):
         Respond(503, retry_after=seconds)
+
+
+@pytest.mark.parametrize("seconds", [-1.0, float("nan")], ids=["negative", "nan"])
+def test_a_slow_step_that_waits_no_number_of_seconds_is_refused(seconds: float) -> None:
+    """Refuse a negative or NaN wait when the step is built, which no server takes; an infinite one never answers."""
+    with pytest.raises(ValueError, match=rf"^seconds= takes seconds, a number of 0 or more \(got {seconds}\)$"):
+        Slow(seconds=seconds)
+    assert Slow(seconds=float("inf")).seconds == float("inf")
+
+
+def test_a_drop_after_fewer_than_no_bytes_is_refused() -> None:
+    """Refuse a negative byte count when the step is built: ``after_bytes=0`` is the drop before anything is written."""
+    with pytest.raises(ValueError, match=r"^after_bytes= takes a number of bytes, an int of 0 or more \(got -1\)$"):
+        DropMidBody(after_bytes=-1)
 
 
 async def test_a_response_is_built_on_the_request_it_answers() -> None:

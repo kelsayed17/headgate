@@ -189,7 +189,8 @@ module that exports it, and the one-home test checks it. The six top-level error
 `Paginated` becomes the concrete final class the walk is, so `await client.paginate(...)` names `Paginated`.
 (F5's alternative, moving all fifteen errors to `headgate.errors`, re-opens design 8 and was not taken.)
 The cost is that `inspect.getsource` (and IPython's `Client??`) cannot find a class's source: it looks the class up in
-the module `__module__` names, where only the import is. Functions, and every traceback, keep their real file paths,
+the module `__module__` names, where only the import is, so it raises `OSError` (`rehome` drops the class's
+`__firstlineno__`, which would point into another file). Functions, and every traceback, keep their real file paths,
 since those come from the code object. The public home wins because it is what a user reads and copies: a traceback, a
 `repr`, `help()` and a pickle name the one import that works, and the private module is no second home. trio and numpy
 pay the same cost for the same reason. (Amended with the phase 3 review.)
@@ -316,6 +317,46 @@ Each phase is stacked on the one before, since all of them touch `_client.py`, t
 3. **One name per concept:** section 3.
 4. **The surface:** section 4.
 5. **Failures, testing and docs:** sections 5, 6 and 7.
+6. **Leftovers:** what the five phases left, below. (Added after phase 5.)
+
+### Phase 6: the leftovers
+
+Fixed:
+
+- A walk recognized a built-in strategy by its private `_next_after` method, so a strategy subclass's own `next_page`
+  was never called, and a custom pager with a method of that name was called through it (a bug of phase 5, in no
+  release). The walk now hands the items it read only to a pager whose class takes both `next_page` and `page_items`
+  from a built-in strategy: a subclass that overrides either is walked by its own `next_page`, so a `page_items`
+  filter cannot change what an offset counts, and one that only adds to the strategy still reads each page once.
+- Free-threaded Python (3.14t) is tested in CI as a user's interpreter runs it, with a step that fails if importing
+  headgate's modules turns the GIL back on, and declared. Every shared object (rate budget, retry budget, breaker
+  registry) has a test spending it from several threads at once, and the configuration guide says what a client
+  shares across threads and loops (its budgets) and what it does not (itself: one client per event loop).
+- An SDK on the curl transport keeps its SSRF guard under `fake_network`, now tested.
+- `inspect.getsource` of a rehomed `Protocol` or `TypedDict` (seven exports) returned lines of the public
+  `__init__.py`, since setting `__module__` does not drop their `__firstlineno__` as it does a plain class's.
+  `rehome` drops it, so `getsource` raises `OSError` for every rehomed class.
+- A header named twice in a set of default headers (`HttpOptions(headers=)`, a view's `headers=`, `Expect(headers=)`,
+  `StaticHeaderAuth(headers=)`) was sent in a form nobody wrote: two lines of an `httpx2.Headers` as one, its values
+  joined with `", "`, and keys that differ only in case joined (a view), as two lines (`HttpOptions`) or one of them
+  alone (`Expect`, `StaticHeaderAuth`). The join was kept, wrongly, as RFC 9110 section 5.3's equivalence: that holds
+  only for a field defined as a list. `Cookie` is not one: its pairs join with `"; "` (RFC 6265 section 5.4), so a
+  server read `cookie: a=1, b=2` as the one cookie `a` with the value `1, b=2`; and two `If-Modified-Since` dates made
+  an invalid header. Defaults are merged by name, so each set names a header once: one named twice, compared
+  case-insensitively, raises `ValueError` naming it and saying to join its values in one string. A call's own
+  `headers=` still sends each line as given, as httpx2 does.
+
+Kept, with the reason:
+
+- `counts_pages` is read from any pager by its name. It is a documented opt-in (`WritingPager` declares it), and a
+  protocol member would make every pager declare it.
+- `inspect.getsource` cannot find a rehomed class (3.6 amendment): `inspect` finds a class's file by `__module__`,
+  which is the public home by design, and its line by `__firstlineno__`, a line of another file.
+- `msgspec.convert` cannot build a `RetryPolicy`: its `budget` takes a share (configuration) or a shared live budget,
+  which no configuration file can hold. Splitting the field would give one concept two names.
+- The top level holds 58 names, 52 in 0.12.1. Three are renames (`CallPolicy`, `call_view`, `as_events`); `Auth` is
+  the one base every auth derives from; `as_text` is the text reader beside `as_events`; and `CallUrl`, `RawContent`,
+  `UploadFile` and `UploadFiles` are types that public signatures already named.
 
 ## Left to the builder
 

@@ -16,7 +16,7 @@ import msgspec
 import pytest
 
 from headgate import Client, ClientError, HttpOptions, RateLimitError, UpstreamStatusError, _responses, body_reader
-from headgate._responses import Expect, Reader, as_bytes, as_json, nothing
+from headgate._responses import Expect, Reader, as_bytes, as_json, as_text, nothing
 from headgate.errors import DecodeError, RefusedError, ResponseParseError
 from headgate.msgspec import decode, reader
 from headgate.testing import FakeTransport
@@ -321,8 +321,8 @@ def test_on_refuses_a_status_that_means_we_could_not_ask(status: int) -> None:
 
 @pytest.mark.parametrize("status", [0, 99, 600, 1000])
 def test_on_refuses_a_status_outside_the_http_range(status: int) -> None:
-    """Refuse a status outside 100-599."""
-    with pytest.raises(ValueError, match="not an HTTP status"):
+    """Refuse a status outside 100-599, naming the option."""
+    with pytest.raises(ValueError, match=rf"^status= takes an HTTP status, 100 to 599 \(got {status}\)$"):
         Expect(reader(_Ok)).on(status, reader(_No))
 
 
@@ -403,9 +403,33 @@ def test_an_expect_is_a_value() -> None:
     assert hash(first) == hash(copy.copy(first))
     assert first != Expect(first.ok)
     assert first != first.ok
-    assert (
-        repr(Expect(nothing, accept="text/plain"))
-        == "Expect(Reader(nothing), answers={}, headers={}, accept='text/plain')"
+    assert repr(Expect(nothing, accept="text/plain")) == "Expect(Reader(nothing), headers={}, accept='text/plain')"
+
+
+@pytest.mark.parametrize("name", ["Accept", "accept"])
+def test_an_accept_given_twice_is_refused(name: str) -> None:
+    """Refuse ``accept=`` beside an ``Accept`` in ``headers=``, where ``accept=`` won the header unseen."""
+    message = (
+        r"^accept= and headers= both set Accept: give accept=, which each response is checked against too, or the "
+        r"header alone, not both$"
+    )
+    with pytest.raises(ValueError, match=message):
+        Expect(as_bytes, headers={name: "a/b"}, accept="c/d")
+    with pytest.raises(ValueError, match=message):
+        copy.replace(Expect(as_bytes, headers={name: "a/b"}), accept="c/d")
+
+
+def test_an_expects_repr_reads_as_it_is_built() -> None:
+    """Show the constructor's arguments, then each answer as the ``.on()`` that declared it, by status.
+
+    The constructor takes no ``answers=``, so a repr naming them would show a spelling it refuses. A header's value is
+    shown as ``'***'``, since it may be a credential.
+    """
+    expect = Expect(nothing, headers={"If-Match": '"v1"', "X-Api-Key": "s3cret"}).on(409, as_text).on(404, nothing)
+
+    assert repr(expect) == (
+        "Expect(Reader(nothing), headers={'If-Match': '***', 'X-Api-Key': '***'}, accept=None)"
+        ".on(404, Reader(nothing)).on(409, Reader(as_text))"
     )
 
 

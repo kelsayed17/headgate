@@ -832,7 +832,7 @@ async def test_a_cache_lifetime_on_a_page_that_turns_into_a_post_is_refused(stor
     api = _Api(_by_param_cursor)
     client = Client(
         base_url=_BASE,
-        policy=CallPolicy(rate=_RATE, cache=HttpCache(storage=storage)),
+        policy=CallPolicy(rate=_RATE, cache=HttpCache(storage=storage, ttl=None)),
         http=HttpOptions(transport=httpx2.MockTransport(api.handle)),
     )
     paginated = client.paginate("search", pager=cast("Any", _WrittenPostsLater()), cache_ttl=60.0)
@@ -1017,6 +1017,43 @@ async def test_a_payload_that_is_not_builtins_is_refused_where_the_walk_is_made(
     fake = FakeTransport()
     async with Client(base_url="https://api.test", http=HttpOptions(transport=fake)) as client:
         with pytest.raises(TypeError, match=_NOT_BUILTINS):
+            client.paginate("search", payload=_Search("open"), pager=pager)
+    assert not fake.calls
+
+
+@dataclass(frozen=True, slots=True)
+class _WritesBodiesByItsShape:
+    """A body cursor of the protocol's shape with a writer of its own: no :class:`WritingPager`, so it is not used."""
+
+    read: Reader[Page]
+    write: Writer[_Search]
+
+    def first(self, request: PageRequest[_Search]) -> PageRequest[_Search]:
+        """Return *request* unchanged."""
+        return request
+
+    def page_items(self, page: Page) -> list[Item]:
+        """Return the items on *page*."""
+        return page.data
+
+    def next_page(
+        self, page: Page, request: PageRequest[_Search], response: httpx2.Response
+    ) -> PageRequest[_Search] | None:
+        """Return ``None``: one page."""
+        del page, request, response
+
+
+async def test_a_pager_whose_own_write_is_not_used_is_told_to_subclass_writing_pager() -> None:
+    """Say, of a payload refused as JSON, that its pager's ``write`` goes unused, not that it has none."""
+    pager = _WritesBodiesByItsShape(reader(Page), writer(_Search))
+    fake = FakeTransport()
+    message = (
+        r"^paginate\(\) sends payload= as JSON, which takes builtins, since its pager has a write but is not a "
+        r"WritingPager, so the write is not used \(got _Search\): subclass headgate\.pagination\.WritingPager, whose "
+        r"write encodes each page's body$"
+    )
+    async with Client(base_url="https://api.test", http=HttpOptions(transport=fake)) as client:
+        with pytest.raises(TypeError, match=message):
             client.paginate("search", payload=_Search("open"), pager=pager)
     assert not fake.calls
 

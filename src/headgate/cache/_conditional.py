@@ -15,25 +15,42 @@ origin; only a miss reaches the origin with the validator.
 """
 
 from dataclasses import dataclass
+from typing import Final, final
 
 import httpx2
 
-from headgate._core import check_kind
+from headgate._core import check_kind, sealed
 from headgate._responses import Expect, Reader
 
 __all__ = ["Fresh", "NotModified", "Validator", "conditional"]
 
 
+@final
+@sealed("build one with etag= and last_modified=, or Validator.of(response)")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Validator:
-    """What identifies the representation a caller holds: its ``ETag`` and its ``Last-Modified``, each as sent."""
+    """What identifies the representation a caller holds: its ``ETag`` and its ``Last-Modified``, each as sent.
+
+    :raises TypeError: for a part that is neither a ``str`` nor ``None``.
+    """
 
     etag: str | None = None
     last_modified: str | None = None
 
+    def __post_init__(self) -> None:
+        """Refuse a part that is neither a ``str``, as its header carries it, nor ``None``."""
+        check_kind("etag", self.etag, (str, type(None)), "an ETag as sent, a str, or None")
+        check_kind("last_modified", self.last_modified, (str, type(None)), "a Last-Modified as sent, a str, or None")
+
     @classmethod
     def of(cls, response: httpx2.Response, *, held: Validator | None = None) -> Validator:
-        """Return *response*'s validator, each part it does not carry taken from *held*."""
+        """Return *response*'s validator, each part it does not carry taken from *held*.
+
+        :raises TypeError: for a *response* that is not an ``httpx2.Response``, and a *held* that is neither a
+            :class:`Validator` nor ``None``.
+        """
+        check_kind("response", response, httpx2.Response, "an httpx2.Response")
+        check_kind("held", held, (Validator, type(None)), "the Validator of what you hold, or None")
         etag = response.headers.get("ETag")
         last_modified = response.headers.get("Last-Modified")
         if held is not None:
@@ -51,6 +68,12 @@ class Validator:
         return headers
 
 
+#: What a ``validator=`` takes, for the refusal of anything else.
+_VALIDATOR_WANTED: Final = "a Validator, such as Validator.of(response)"
+
+
+@final
+@sealed("read the value and the validator a conditional read returns")
 @dataclass(frozen=True, slots=True)
 class Fresh[T]:
     """The origin sent a representation: its *value*, and the *validator* to send next time."""
@@ -58,12 +81,22 @@ class Fresh[T]:
     value: T
     validator: Validator
 
+    def __post_init__(self) -> None:
+        """Refuse a validator that is not a :class:`Validator`."""
+        check_kind("validator", self.validator, Validator, _VALIDATOR_WANTED)
 
+
+@final
+@sealed("read the validator a conditional read returns")
 @dataclass(frozen=True, slots=True)
 class NotModified:
     """The origin answered 304: what the caller holds is current. *validator* is the one to send next time."""
 
     validator: Validator
+
+    def __post_init__(self) -> None:
+        """Refuse a validator that is not a :class:`Validator`."""
+        check_kind("validator", self.validator, Validator, _VALIDATOR_WANTED)
 
 
 def conditional[T](reader: Reader[T], *, validator: Validator | None = None) -> Expect[Fresh[T] | NotModified]:
@@ -73,9 +106,11 @@ def conditional[T](reader: Reader[T], *, validator: Validator | None = None) -> 
     always :class:`Fresh`, carrying the validator for the next call. A precondition the call sets itself through
     ``headers=`` wins over *validator*'s.
 
-    :raises TypeError: for a *reader* that is not a :class:`~headgate.Reader`.
+    :raises TypeError: for a *reader* that is not a :class:`~headgate.Reader`, and a *validator* that is not a
+        :class:`Validator`.
     """
     check_kind("reader", reader, Reader, "a Reader")
+    check_kind("validator", validator, (Validator, type(None)), f"{_VALIDATOR_WANTED}, or None for the first read")
 
     def fresh(response: httpx2.Response, /) -> Fresh[T]:
         return Fresh(reader(response), Validator.of(response))

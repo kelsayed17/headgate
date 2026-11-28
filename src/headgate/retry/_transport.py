@@ -25,8 +25,8 @@ For each request :class:`RetryTransport` runs a sequence of attempts under the c
 A retry or hedge spends the retry budget when it is scheduled, and gives it back when it is never sent: the breaker
 opened or the deadline came during the wait, the rate budget could not admit it before the deadline
 (``BudgetBacklogError``, ``BudgetPausedError``, after which the call ends with the failure it has), the call was
-cancelled during the wait, or the send was cancelled before the rate budget dispatched it (a hedge that lost while
-queued). A send the rate budget refused is withdrawn from the call's attempts, with no history line.
+cancelled during the wait, or the send was cancelled before it reached the network transport (a hedge that lost while
+queued in the rate budget). A send the rate budget refused is withdrawn from the call's attempts, with no history line.
 
 A hedge is sent as a copy of the request (its own headers and extensions, and a copy of its in-memory body; a
 streamed body is never hedged) on the same call context, so concurrent sends share the context's send progress. That

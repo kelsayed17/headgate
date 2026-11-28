@@ -12,13 +12,13 @@ from typing import Final, Literal, cast, final
 
 import httpx2
 
-from headgate._core import check_int
+from headgate._core import check_callable, check_int, check_kind, sealed
 from headgate._errors import ClientError
 from headgate._failures import loggable_url, shorten
-from headgate._request_body import Writer
+from headgate._request_body import EncodedBody
 from headgate._url import redact_secrets
 from headgate.errors import ForbiddenDestinationError, PageLimitError
-from headgate.pagination._pager import Pager, PageRequest, WritingPager
+from headgate.pagination._pager import ITEMS, Pager, PageRequest, WritingPager, items_hook, returned, written
 
 __all__ = ["REMEMBERED_PAGES", "OnLimit", "PageWalk", "Paginated", "Remembered", "check_page_budget"]
 
@@ -38,7 +38,8 @@ type OnLimit = Literal["raise", "stop"]
 def check_page_budget(max_pages: int | None, on_limit: OnLimit) -> None:
     """Refuse a page budget a walk cannot keep: a count below one page or not an ``int``, an unknown outcome, a stop.
 
-    :raises TypeError: for a *max_pages* that is not an ``int``, a ``bool`` included.
+    :raises TypeError: for a *max_pages* that is not an ``int``, a ``bool`` included, and an *on_limit* that is not a
+        ``str``.
     :raises ValueError: for a *max_pages* below 1, an *on_limit* that is neither ``"raise"`` nor ``"stop"``, and
         ``on_limit="stop"`` without *max_pages*, which says what happens at a limit that does not exist.
     """
@@ -48,6 +49,7 @@ def check_page_budget(max_pages: int | None, on_limit: OnLimit) -> None:
         if max_pages < 1:
             msg = f"max_pages= takes {wanted} (got {max_pages})"
             raise ValueError(msg)
+    check_kind("on_limit", on_limit, str, "'raise' or 'stop'")
     if on_limit not in {"raise", "stop"}:
         msg = f"on_limit= takes 'raise' or 'stop' (got {on_limit!r})"
         raise ValueError(msg)
@@ -56,11 +58,16 @@ def check_page_budget(max_pages: int | None, on_limit: OnLimit) -> None:
         raise ValueError(msg)
 
 
-type Fetch[P, B] = Callable[[PageRequest[B]], Awaitable[tuple[P, httpx2.Response]]]
-"""Fetches one page through the client, returning what the call's reader read and the response it read it from."""
+type Fetch[P, B] = Callable[[PageRequest[B], EncodedBody | None], Awaitable[tuple[P, httpx2.Response]]]
+"""Fetches one page through the client, returning what the call's reader read and the response it read it from.
+
+It is given the page's body as the pager's writer encoded it, once, for the walk's loop guard and the send alike, or
+``None`` for a GET or a body sent as JSON.
+"""
 
 
 @final
+@sealed("build one of its pages, Paginated(pages, items_of)")
 class Paginated[I, P = object]:
     """The pages of a paginated endpoint and the items on them, fetched one page at a time as iteration reaches them.
 
@@ -74,8 +81,8 @@ class Paginated[I, P = object]:
     and as sent), params and, for a POST, the bytes its pager's ``write`` encodes the body to, or the ``repr`` of a body
     of builtins sent as JSON. A pager that counts its pages (``counts_pages``: an offset, a page number) sends requests
     that never repeat, so a server that ignores its paging would send the same page forever: under such a pager, a page
-    with items whose body repeats an earlier page's raises ``ClientError`` too. At most :data:`REMEMBERED_PAGES` of
-    each are remembered, the oldest forgotten first. A walk with ``max_pages=`` fetches at most that many pages, then
+    with items whose body repeats an earlier page's raises ``ClientError`` too. At most 4096 of each are remembered,
+    the oldest forgotten first. A walk with ``max_pages=`` fetches at most that many pages, then
     raises ``PageLimitError`` or, with ``on_limit="stop"``, stops.
 
     ``I`` is the item type and ``P`` the page type, which defaults to ``object``: ``Paginated[Issue]`` is a walk of
@@ -90,7 +97,14 @@ class Paginated[I, P = object]:
     __slots__ = ("_items_of", "_pages")
 
     def __init__(self, pages: Callable[[], AsyncIterator[P]], items_of: Callable[[P], Iterable[I]], /) -> None:
-        """Start each iteration with *pages*, and read each page's items with *items_of*."""
+        """Start each iteration with *pages*, and read each page's items with *items_of*.
+
+        :raises TypeError: for a *pages* or an *items_of* that cannot be called.
+        """
+        check_callable(
+            "Paginated(pages)", pages, "a function that starts the pages afresh, such as an async generator function"
+        )
+        check_callable("Paginated(items_of)", items_of, "a function returning a page's items")
         self._pages: Final = pages
         # Read only with pages this walk yielded, so it is held as taking any object: P stays covariant, and a
         # Paginated[Issue, IssuePage] is a Paginated[Issue].
@@ -110,10 +124,15 @@ class Paginated[I, P = object]:
         The walk stops as soon as it has *max_items* items, so no page past the one that filled it is fetched, and
         ``max_items=0`` sends no request. A page budget (``max_pages=``) applies as it does to iteration: a walk it cuts
         short raises ``PageLimitError`` unless the items were all collected first.
+
+        :raises TypeError: for a *max_items* that is not an ``int``, a ``bool`` included.
+        :raises ValueError: for a *max_items* below 0.
         """
-        if max_items is not None and (isinstance(max_items, bool) or max_items < 0):
-            msg = f"max_items must be None or >= 0 (got {max_items!r})"
-            raise ValueError(msg)
+        if max_items is not None:
+            check_int("max_items", max_items, "None or an int of 0 or more")
+            if max_items < 0:
+                msg = f"max_items must be None or >= 0 (got {max_items!r})"
+                raise ValueError(msg)
         collected: list[I] = []
         if max_items == 0:
             return collected
@@ -135,7 +154,18 @@ class Paginated[I, P = object]:
 class PageWalk[I, P, B]:
     """The pages of one walk, and the items on them: what the :class:`Paginated` ``paginate`` returns iterates."""
 
-    __slots__ = ("_counts", "_fetch", "_first", "_held", "_max_pages", "_on_limit", "_pager", "_source", "_write")
+    __slots__ = (
+        "_counts",
+        "_fetch",
+        "_first",
+        "_given_items",
+        "_held",
+        "_max_pages",
+        "_on_limit",
+        "_pager",
+        "_source",
+        "_write",
+    )
 
     def __init__(
         self,
@@ -164,6 +194,7 @@ class PageWalk[I, P, B]:
         # A page is remembered by the body it sends: the bytes the writer encodes, as the walk's fetch encodes them.
         self._write = pager.write if isinstance(pager, WritingPager) else None
         self._counts = getattr(pager, "counts_pages", False) is True
+        self._given_items = items_hook(pager)
         # The items of a page the loop guard looked into, by the page's id, until the walk moves past the page.
         self._held: dict[int, Iterable[I]] = {}
 
@@ -174,10 +205,9 @@ class PageWalk[I, P, B]:
 
         Any other pager reads what it needs of the page itself.
         """
-        given_items = getattr(self._pager, "_next_after", None)
-        if given_items is None:
+        if self._given_items is None:
             return self._pager.next_page(page, request, response)
-        return cast("PageRequest[B] | None", given_items(page, items, request, response))
+        return cast("PageRequest[B] | None", self._given_items(page, items, request, response))
 
     def items_of(self, page: P) -> Iterable[I]:
         """Return the items on *page*: the ones the loop guard already read, else the pager's, read once either way."""
@@ -190,6 +220,8 @@ class PageWalk[I, P, B]:
         An iterator gives up its first item to be seen, so it is put back in front of the rest.
         """
         items = self._pager.page_items(page)
+        # A built-in strategy's own page_items has refused an items= that returns no sequence, naming it.
+        returned(f"{type(self._pager).__name__}.page_items()", items, Iterable, ITEMS, optional=False)
         if not isinstance(items, Iterator):
             return items, next(iter(items), _NO_ITEM) is not _NO_ITEM
         first = next(items, _NO_ITEM)
@@ -207,9 +239,11 @@ class PageWalk[I, P, B]:
                 if self._on_limit == "stop":
                     return
                 raise self._limit_error(request, fetched)
-            if not requests.add(_key(request, self._write)):
+            # The writer runs once a page: its bytes are both what the loop guard remembers and what is sent.
+            encoded = None if request.payload is None or self._write is None else written(self._write, request.payload)
+            if not requests.add(_key(request, encoded)):
                 raise self._loop_error(request, fetched)
-            page, response = await self._fetch(request)
+            page, response = await self._fetch(request, encoded)
             fetched += 1
             if request.payload is None:
                 # A next URL from the wire is absolute, so the page is remembered as it was sent too.
@@ -327,14 +361,14 @@ def _digest(data: bytes) -> bytes:
     return hashlib.blake2b(data, digest_size=_DIGEST_BYTES).digest()
 
 
-def _key[B](request: PageRequest[B], write: Writer[B] | None) -> bytes:
+def _key[B](request: PageRequest[B], encoded: EncodedBody | None) -> bytes:
     """Return a key identifying *request*'s URL (a string or a template, by its parts), query and body.
 
-    A body is keyed by the bytes *write* encodes it to, as it is sent, since a body type's ``repr`` may be its address,
-    which a later body can reuse. Without *write*, a body is builtins sent as JSON, whose ``repr`` is their value.
+    A body a writer encoded is keyed by those bytes, *encoded*, as it is sent, since a body type's ``repr`` may be its
+    address, which a later body can reuse. Without one, a body is builtins sent as JSON, whose ``repr`` is their value.
     """
     query = None if request.params is None else tuple(request.params.items())
-    body = request.payload if request.payload is None or write is None else write(request.payload).content
+    body = request.payload if encoded is None else encoded.content
     return repr((request.url, query, body)).encode()
 
 

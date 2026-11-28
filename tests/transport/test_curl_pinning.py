@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import socket
+import types
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx2
@@ -298,6 +299,17 @@ def test_a_wrapper_cannot_fake_a_binding() -> None:
     assert guard_binding(AsyncCurlTransport(impersonate="chrome")) is not None
 
 
+def test_a_subclass_is_refused_with_what_to_write_instead() -> None:
+    """Refuse a subclass, pointing to a middleware for a change to each request, and saying a wrapper is not pinned."""
+    message = (
+        r"^_Logged cannot subclass AsyncCurlTransport, which is final: change each request in a middleware "
+        r"\(Client\(middleware=\.\.\.\)\), which runs on every attempt; a transport of your own that sends through it "
+        r"is not pinned by the SSRF guard, which only vets each hop before it is sent$"
+    )
+    with pytest.raises(TypeError, match=message):
+        types.new_class("_Logged", (cast("Any", AsyncCurlTransport),))
+
+
 def test_an_object_without_attributes_of_its_own_has_no_binding() -> None:
     """Find no binding on an object with no instance dictionary, rather than fail to look."""
     assert guard_binding(cast("httpx2.AsyncBaseTransport", object())) is None
@@ -325,6 +337,9 @@ async def test_clients_with_the_same_guard_may_share_a_transport(security: Secur
         pytest.param(CurlOpt.PRE_PROXY, "socks5://proxy.example:1080", id="PRE_PROXY"),
         pytest.param(CurlOpt.RESOLVE, ["api.example:443:10.0.0.5"], id="RESOLVE"),
         pytest.param(CurlOpt.CONNECT_TO, ["api.example:443:10.0.0.5:443"], id="CONNECT_TO"),
+        pytest.param(CurlOpt.UNIX_SOCKET_PATH, "/run/docker.sock", id="UNIX_SOCKET_PATH"),
+        pytest.param(CurlOpt.ABSTRACT_UNIX_SOCKET, "internal", id="ABSTRACT_UNIX_SOCKET"),
+        pytest.param(CurlOpt.PORT, 6379, id="PORT"),
     ],
 )
 async def test_a_curl_option_choosing_the_address_is_refused_with_the_guard(option: CurlOpt, value: object) -> None:

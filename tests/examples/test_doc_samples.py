@@ -4,7 +4,8 @@
 """The guides' code samples type-check under the project's own rules, and the ones marked to run, run.
 
 Every Python fence (``python`` or ``py``) in ``docs/`` carries a marker, an HTML comment on the line before it, which
-renders as nothing, so no sample drops out of the check by losing one:
+renders as nothing, so no sample drops out of the check by losing one, and none is indented under a list item, where
+the check would not see it:
 
 * ``<!-- docs-test: check -->``: the sample type-checks. Each page's marked samples, in order, form one module after
   ``from tests.examples.doc_context import *``, the fixtures a sample names without defining (domain types, values,
@@ -18,6 +19,9 @@ renders as nothing, so no sample drops out of the check by losing one:
   sample defines is then called, and awaited when it is async, so one that takes an argument fails: the codec guide's
   sample test runs ``check_codec`` on the guide's own codec.
 * ``<!-- docs-test: skip: <reason> -->``: the sample is neither checked nor run, for the reason it must give.
+
+Every sample marked to run or to check keeps its imports sorted, as ruff's import rule (``I``) sorts them under the
+project's own configuration, each sample on its own: what a reader copies is in the order the project's lint keeps.
 
 The README's samples are excerpts of tested modules, checked by ``test_docs.py``.
 """
@@ -49,6 +53,9 @@ _PAGES: Final = sorted((_ROOT / "docs").glob("*.md"))
 #: before it, so a fence on its first line has a line before it too.
 _FENCE: Final = re.compile(r"^(?P<before>[^\n]*)\n```(?:python|py)\n(?P<code>.*?)^```$", re.MULTILINE | re.DOTALL)
 
+#: A Python fence indented under a list item, which :data:`_FENCE` does not see, so its sample would escape the check.
+_INDENTED_FENCE: Final = re.compile(r"^[ \t]+```(?:python|py)$", re.MULTILINE)
+
 #: A marker: its mode, and after a colon, its reason.
 _MARKER: Final = re.compile(r"<!-- docs-test: (?P<mode>[\w-]+)(?::(?P<reason>[^>]*))? -->")
 
@@ -60,6 +67,9 @@ _HEADER: Final[str] = "from tests.examples.doc_context import *\n"
 
 #: A diagnostic in ty's concise output: its file, line, and the rest.
 _DIAGNOSTIC: Final = re.compile(r"^(?P<file>.+?):(?P<line>\d+):\d+: (?P<text>(?:error|warning)\[.*)$", re.MULTILINE)
+
+#: A finding in ruff's concise output: its file, line, and its code and message.
+_FINDING: Final = re.compile(r"^(?P<file>.+?):(?P<line>\d+):\d+: (?P<text>[A-Z]+\d+ .*)$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -116,6 +126,11 @@ def _marker_faults(name: str, text: str) -> list[str]:
             faults.append(f"{where}: a skip without its reason, as in <!-- docs-test: skip: <reason> -->")
     if len(_MARKER.findall(text)) != marked:
         faults.append(f"{name}: a docs-test marker that stands before no Python fence")
+    faults.extend(
+        f"{name}:{text.count(chr(10), 0, match.start())}: an indented Python fence, which escapes the check: end the "
+        "list before it, and mark it"
+        for match in _INDENTED_FENCE.finditer(text)
+    )
     return faults
 
 
@@ -191,6 +206,43 @@ async def type_report(tmp_path_factory: pytest.TempPathFactory) -> dict[Path, li
     return found
 
 
+@pytest.fixture(scope="module")
+async def import_report(tmp_path_factory: pytest.TempPathFactory) -> dict[Path, list[str]]:
+    """Run ruff's import rule over every marked sample, each a file of its own; return each page's findings."""
+    root = tmp_path_factory.mktemp("doc_imports")
+    files: dict[str, _Sample] = {}
+    for page in _MARKED_PAGES:
+        for sample in _SAMPLES[page]:
+            module = root / f"docs_{page.stem.replace('-', '_')}_{sample.line}.py"
+            module.write_text(sample.code, encoding="utf-8")
+            files[str(module)] = sample
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "ruff",
+        "check",
+        "--config",
+        str(_ROOT / "pyproject.toml"),
+        "--select",
+        "I",
+        "--no-cache",
+        "--output-format",
+        "concise",
+        *files,
+        cwd=_ROOT,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    output = stdout.decode()
+    found: dict[Path, list[str]] = {page: [] for page in _MARKED_PAGES}
+    for match in _FINDING.finditer(output):
+        sample = files[match["file"]]
+        found[sample.page].append(f"{sample.page.name}:{sample.line + int(match['line']) - 1}: {match['text']}")
+    assert process.returncode == 0 or any(found.values()), output + stderr.decode()
+    return found
+
+
 def test_the_guides_mark_samples_to_check() -> None:
     """Find samples of both modes, so an emptied marker set cannot pass the checks below unnoticed."""
     modes = {sample.mode for samples in _SAMPLES.values() for sample in samples}
@@ -214,8 +266,9 @@ def test_every_python_fence_is_marked(page: Path) -> None:
         ("<!-- docs-test: runs -->\n```python\nx = 1\n```\n", "an unknown docs-test mode 'runs'"),
         ("<!-- docs-test: run -->\n\n```python\nx = 1\n```\n", "a Python fence without a docs-test marker"),
         ("<!-- docs-test: run -->\n```text\nx\n```\n", "a docs-test marker that stands before no Python fence"),
+        ("- an item:\n\n  ```python\n  x = 1\n  ```\n", "an indented Python fence, which escapes the check"),
     ],
-    ids=["python", "py", "skip-bare", "skip-blank", "unknown", "gap", "astray"],
+    ids=["python", "py", "skip-bare", "skip-blank", "unknown", "gap", "astray", "indented"],
 )
 def test_a_fence_without_a_marker_fails(text: str, fault: str) -> None:
     """Fail a page whose Python fence is unmarked, a skip without its reason, or a marker of no fence."""
@@ -233,6 +286,12 @@ def test_a_skip_with_its_reason_passes() -> None:
 def test_every_marked_sample_type_checks(page: Path, type_report: dict[Path, list[str]]) -> None:
     """Type-check the page's marked samples, as one module, with every rule an error."""
     assert not type_report[page], "\n".join(type_report[page])
+
+
+@pytest.mark.parametrize("page", _MARKED_PAGES, ids=[page.name for page in _MARKED_PAGES])
+def test_every_marked_sample_sorts_its_imports(page: Path, import_report: dict[Path, list[str]]) -> None:
+    """Sort each marked sample's imports as ruff's import rule does, so a sample copied passes the project's lint."""
+    assert not import_report[page], "\n".join(import_report[page])
 
 
 @pytest.fixture

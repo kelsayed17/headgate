@@ -33,7 +33,7 @@ and back up on success.
 import math
 import threading
 import weakref
-from typing import TYPE_CHECKING, Final, Self, override
+from typing import TYPE_CHECKING, Final, NoReturn, Self, final, override
 
 import httpx2
 
@@ -45,6 +45,8 @@ from headgate._core import (
     check_int,
     check_kind,
     current_timing,
+    refuse_pickle,
+    sealed,
 )
 from headgate.ratelimit._feedback import read_feedback
 from headgate.ratelimit._inflight import InFlightLimit
@@ -94,8 +96,8 @@ class _Turn:
 
     The send is due at ``send`` plus the budget's shift (the seconds pauses have moved its timeline). ``shift`` is the
     shift when the turn was reserved, so a turn a pause postponed reports its wait as the pause's; ``reason`` is the
-    reason it reports otherwise. ``slept`` is the shift and the pause's end when the waiter last slept until its send,
-    or ``None``.
+    reason it reports otherwise. ``slept`` is the reading the waiter's last sleep was to end at, a pause's end or its
+    send, and ``-inf`` before it slept.
     """
 
     __slots__ = ("after", "before", "reason", "send", "shift", "slept")
@@ -107,7 +109,7 @@ class _Turn:
         self.send = send
         self.shift = shift
         self.reason = reason
-        self.slept: tuple[float, float] | None = None
+        self.slept = -math.inf
 
 
 class Pacer:
@@ -328,12 +330,9 @@ class Pacer:
         :raises BudgetPausedError: when the pause outlasts the call's deadline.
         :raises BudgetBacklogError: when the turn, later than any pause, comes at or after it.
         """
-        timeline = (self._shift, self._paused_until)
-        if turn.slept == timeline:
-            # The waiter slept until its send and no pause has moved it since: its turn has come, whatever the clock
-            # reads after a sleep that ended a hair early.
-            return 0.0, turn.reason
-        now = self._clock()
+        # What the waiter slept until has come, whatever the clock reads after a sleep that ended a hair early, or at
+        # once (instant_waits()): a wait that re-read a clock no sleep moves would never end.
+        now = max(self._clock(), turn.slept)
         pause = self._paused_until - now
         due = turn.send + self._shift - now
         delay = max(pause, due)
@@ -347,8 +346,9 @@ class Pacer:
             msg = f"the rate budget's turn in {due:.3g}s comes after the call's deadline"
             raise BudgetBacklogError(msg, retry_after=due)
         if pause > 0:
+            turn.slept = self._paused_until
             return pause, PAUSED
-        turn.slept = timeline
+        turn.slept = turn.send + self._shift
         return due, PAUSED if turn.shift != self._shift else turn.reason
 
     def _pause(self, until: float) -> None:
@@ -382,6 +382,8 @@ def _send_time(turn: _Turn) -> float:
     return turn.send
 
 
+@final
+@sealed("share one budget between the clients it paces")
 class RateBudget:
     """A shareable budget: pacing at ``rate``, at most ``max_in_flight`` responses open, and server feedback.
 
@@ -457,6 +459,11 @@ class RateBudget:
         """Return this budget itself, as :meth:`__copy__` does, so a deep copy of a policy keeps sharing it."""
         del memo
         return self
+
+    @override
+    def __reduce__(self) -> NoReturn:
+        """Refuse to be pickled: a live budget is state its clients share within one process, raising ``TypeError``."""
+        refuse_pickle(self)
 
     @override
     def __repr__(self) -> str:

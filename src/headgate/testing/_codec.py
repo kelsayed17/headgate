@@ -14,7 +14,7 @@ from typing import Final
 
 from typing_extensions import TypeForm
 
-from headgate._codec import Codec, decode_with
+from headgate._codec import Codec, check_is_codec, decode_with
 from headgate.errors import DecodeError
 
 __all__ = ["check_codec"]
@@ -72,10 +72,15 @@ def check_codec(codec: Codec, *, record: TypeForm[object] | None = None) -> None
       description nor its traceback (what ``logger.exception`` logs, chained errors included) repeats the input, a
       value or a key, which may carry a credential;
     * with *record*, a type of the codec's own kind holding one field ``value: int``, a field the type does not declare
-      is ignored, since providers add fields without notice.
+      is ignored, since providers add fields without notice, while a record whose ``value`` is a numeric string and
+      an array where the record is declared are refused, each with one of its ``errors``: a codec strict for the
+      built-in containers may still build its records unchecked.
 
     Call it from a test of the codec: ``check_codec(MY_CODEC, record=Row)``.
+
+    :raises TypeError: for a *codec* that is not a :class:`~headgate.Codec`, missing one of its members.
     """
+    check_is_codec(codec)
     name = type(codec).__name__
     if not _MEDIA_TYPE.fullmatch(codec.media_type):
         msg = f"{name}.media_type {codec.media_type!r} is not a media type, such as 'application/json'"
@@ -115,3 +120,7 @@ def check_codec(codec: Codec, *, record: TypeForm[object] | None = None) -> None
         if getattr(decoded, "value", None) != 1:
             msg = f"{name} read {decoded!r} from a body with a field {record!r} does not declare: it must ignore it"
             raise AssertionError(msg)
+        mistyped = codec.encoder(dict[str, str])({"value": "1"})
+        _refused(codec, mistyped, record, "a record whose int field holds a numeric string")
+        array = codec.encoder(list[dict[str, int]])([{"value": 1}])
+        _refused(codec, array, record, "an array where a record is declared")

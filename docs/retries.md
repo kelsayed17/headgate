@@ -10,7 +10,7 @@ turn it off with `retry=None`, or set it per route with `Route(fragment, retry=.
 
 <!-- docs-test: run -->
 ```python
-from headgate import RetryPolicy, CallPolicy
+from headgate import CallPolicy, RetryPolicy
 from headgate.retry import Backoff, Hedge, RetryShare
 
 policy = CallPolicy(
@@ -106,7 +106,7 @@ each client the same object:
 
 <!-- docs-test: run -->
 ```python
-from headgate import RetryPolicy, CallPolicy
+from headgate import CallPolicy, RetryPolicy
 from headgate.retry import RetryBudget, RetryShare
 
 shared = RetryBudget(RetryShare(ratio=0.1))  # its window runs on the current timing, as TestClock.install() sets it
@@ -114,6 +114,7 @@ policy = CallPolicy(retry=RetryPolicy(budget=shared))  # every client built with
 ```
 
 Its `repr` shows the share and what the window holds now (`RetryBudget(RetryShare(...), retries=3, firsts=40)`).
+Clients on different event loops and threads can share one: its window is plain counts under a `threading.Lock`.
 
 ## Deadlines and the breaker
 
@@ -145,7 +146,7 @@ A POST is safe to retry once the server can recognize a re-send. `CallPolicy(ide
 stamps a fresh key on every POST and PATCH, under `Idempotency-Key` by default (`IdempotencyKeys(header=...,
 factory=...)` changes either). A call can pass its own with `idempotency_key=`, and a key set in `headers=` is kept.
 An empty or blank key is no key: `idempotency_key=` or a factory giving one raises `ValueError`, and one in `headers=`
-does not make the request retryable.
+does not make the request retryable. A factory returns the key as a `str`; anything else raises `TypeError`.
 The key is stamped once per call, before the retry layer, so every attempt carries the same one, and a keyed request is
 retried like an idempotent one.
 

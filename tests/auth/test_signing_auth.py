@@ -32,7 +32,7 @@ from headgate import (
 from headgate._core import CredentialStamper, Timing
 from headgate._url import is_secret_param
 from headgate.retry import Hedge
-from headgate.testing import TestClock, instant_retries
+from headgate.testing import TestClock, instant_waits
 from tests.support.responses import RESPONSE
 from tests.support.timing import built_on
 
@@ -144,7 +144,7 @@ async def test_each_attempt_is_signed_afresh() -> None:
     """Sign a retry again at the current time, so no two attempts carry the same signature."""
     auth = _Signer()
     answers = iter([httpx2.Response(503), httpx2.Response(200)])
-    with instant_retries():
+    with instant_waits():
         client, sent = _client(auth, lambda _: next(answers))
     async with client:
         response = await client.get("orders", expect=RESPONSE, retry=RetryPolicy(attempts=2))
@@ -198,7 +198,7 @@ async def test_a_request_the_caller_signed_is_never_signed() -> None:
     """Send every attempt of a call that carries its own signature as the caller wrote it."""
     auth = _Signer()
     answers = iter([httpx2.Response(503), httpx2.Response(200)])
-    with instant_retries():
+    with instant_waits():
         client, sent = _client(auth, lambda _: next(answers))
     async with client:
         await client.get("orders", headers={"X-Signature": "mine"}, expect=RESPONSE, retry=RetryPolicy(attempts=2))
@@ -242,7 +242,7 @@ async def test_each_attempt_is_signed_once_after_the_last_middleware() -> None:
 
     sent: list[str] = []
     http = HttpOptions(transport=httpx2.MockTransport(handle))
-    with instant_retries():
+    with instant_waits():
         client = Client(base_url=_BASE, auth=auth, http=http, middleware=(_Stamp(),))
     async with client:
         await client.get("orders", expect=RESPONSE, retry=RetryPolicy(attempts=2))
@@ -476,7 +476,7 @@ async def test_a_cached_clients_401_is_signed_again_once(auth: type[SigningAuth]
     client = Client(
         base_url=_BASE,
         auth=auth(),
-        policy=CallPolicy(cache=HttpCache(storage=storage)),
+        policy=CallPolicy(cache=HttpCache(storage=storage, ttl=None)),
         http=HttpOptions(transport=httpx2.MockTransport(handle)),
     )
     async with client:
@@ -588,6 +588,29 @@ async def test_a_signer_that_sets_an_undeclared_name_is_refused_before_it_sends(
     client, sent = _client(_LeakySigner(), _ok)
     async with client:
         with pytest.raises(TypeError, match=r"_LeakySigner\.sign set key_id, x-api-key, which it does not declare"):
+            await client.get("orders", expect=RESPONSE)
+
+    assert sent == []
+
+
+class _MovingSigner(SigningAuth):
+    """Signs, then sends the request to another host: one the SSRF guard never vetted."""
+
+    credential_headers: ClassVar = frozenset({"X-Sig"})
+
+    @override
+    def sign(self, request: httpx2.Request, now: float) -> None:
+        request.headers["X-Sig"] = "sig"
+        request.url = request.url.copy_with(host="10.0.0.9")
+
+
+async def test_a_signer_that_moves_the_request_is_refused_before_it_sends() -> None:
+    """Raise ``TypeError`` naming both origins when ``sign`` changes the host, and send nothing, signature or key."""
+    client, sent = _client(_MovingSigner(), _ok)
+    async with client:
+        with pytest.raises(
+            TypeError, match=r"_MovingSigner\.sign moved the request from https://\S+ to https://10\.0\.0\.9"
+        ):
             await client.get("orders", expect=RESPONSE)
 
     assert sent == []

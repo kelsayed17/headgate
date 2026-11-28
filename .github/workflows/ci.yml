@@ -76,6 +76,30 @@ jobs:
       - run: uv sync
       - run: uv run python -m pytest
 
+  free-threaded:
+    name: Tests on free-threaded Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.8"
+          python-version: "3.14t"
+      # orjson does not build on free-threaded Python, and only the codecs guide's sample (a cattrs/orjson codec) needs it.
+      - run: uv sync --locked --no-install-package orjson
+      # An extension module that does not declare free-threading support turns the GIL back on when it is imported, with
+      # a RuntimeWarning: fail here rather than test with the GIL on. The suite then runs as a user's interpreter does.
+      - run: >-
+          uv run --no-sync python -W error::RuntimeWarning -c
+          "import sys, hishel, headgate, headgate.curl, headgate.health, headgate.msgspec, headgate.otel,
+          headgate.pydantic, headgate.testing; sys.exit(sys._is_gil_enabled())"
+      - run: >-
+          uv run --no-sync python -m pytest
+          --deselect "tests/examples/test_doc_samples.py::test_every_marked_sample_type_checks[codecs.md]"
+          --deselect "tests/examples/test_doc_samples.py::test_every_run_sample_runs[codecs.md]"
+
   core-only:
     name: Install without extras
     runs-on: ubuntu-latest

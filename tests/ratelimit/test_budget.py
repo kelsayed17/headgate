@@ -313,31 +313,6 @@ async def test_a_pause_discards_abandoned_turns() -> None:
     assert slept[-1] > slept[1], "the third goes after the second, which the pause postponed"
 
 
-async def test_a_send_marks_its_own_attempt_dispatched_when_a_hedge_begins_during_its_wait() -> None:
-    """Mark the progress of the attempt that waited, not of a hedge begun meanwhile, which has not been sent."""
-    clock = TestClock()
-    blocked = asyncio.Event()
-    budget = built_on(
-        Timing(clock=clock, sleep=_blocking_sleep(clock, [], blocked)), lambda: RateBudget(Rate.per_second(1))
-    )
-    transport = RateLimitTransport(
-        budgets=PathBudgets(default=budget), transport=httpx2.MockTransport(lambda _: httpx2.Response(200))
-    )
-    context = _context(clock)
-    await pacer_of(budget).wait(context)
-    request = httpx2.Request("GET", "https://x/")
-    context.attach(request)
-    context.begin_attempt()
-    waited = context.progress
-    send = asyncio.create_task(transport.handle_async_request(request))
-    await asyncio.sleep(0)
-    context.begin_attempt()
-    hedge = context.progress
-    blocked.set()
-    await send
-    assert (waited.dispatched, hedge.dispatched) == (True, False)
-
-
 async def test_every_wait_is_reported_with_its_reason() -> None:
     """Emit ``RateLimited`` for a paced wait, nothing for an admission without one."""
     clock = TestClock()

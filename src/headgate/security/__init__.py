@@ -18,7 +18,7 @@ What else is public here is what the guard is configured with, in ``SecurityOpti
 (``resolver=``) and an :data:`AddressCheck` (``check=``), of which :func:`forbidden_reason` is the default, so a check
 of your own can defer to it (a test reaching a loopback server admits that one address).
 
-Importing headgate also redacts the URL in httpx2's own ``HTTP Request:`` log line (:mod:`headgate.security._logging`).
+Importing headgate also redacts the URL in httpx2's own ``HTTP Request:`` log line.
 """
 
 from headgate._core import CredentialCarrier, CredentialStamper

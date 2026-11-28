@@ -8,6 +8,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Added
 
+- headgate is tested on free-threaded Python (3.14t), where it keeps the GIL off, and declares it
+  (`Programming Language :: Python :: Free Threading :: 3 - Stable`). A `Client` belongs to one event loop, so build
+  one per loop or thread; a `RateBudget`, `RetryBudget` or `BreakerRegistry` shared by clients across threads keeps
+  its state under a lock, on either build (see the configuration guide's threads and event loops).
 - `headgate.Auth`, the one type `Client(auth=)` takes: an `httpx2.Auth` that declares the headers and query parameters
   it stamps (`credential_headers`, `credential_params`, each a `frozenset` of names, as class attributes or
   properties) and names its credential (`credential_identity()`). A subclass that leaves one out cannot be built.
@@ -30,7 +34,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   returning why it refuses one or `None` to admit it, on every hop and over every transport. It defaults to
   `headgate.security.forbidden_reason` itself, which a check of your own can defer to for the addresses it does not
   decide. A check of your own is accepted only with `block_private_hosts=True` (`ValueError` otherwise, as for
-  `resolver=`), and `check=None` is a `TypeError` naming the default: leave it out.
+  `resolver=`), and `check=None` is a `TypeError` naming the default: leave it out. A cached response is served
+  without its address being vetted again, so a guarded client keeps cache entries apart by its check and resolver: a
+  client whose check refuses a host is never served what a client with a laxer check fetched from it.
 - `headgate.CallUrl`, `headgate.RawContent`, `headgate.UploadFiles` and `headgate.UploadFile`, the types of a verb's
   URL, of `Raw(content)`, of `Multipart(files)` and of one file in it, which their signatures named but nothing
   exported: a wrapper writes
@@ -46,9 +52,26 @@ change the public API; such changes are listed under **Changed** and **Removed**
   block send on, and `net.clients`, those clients in order. Only `fake_network` builds one: `FakeNetwork(...)` raises
   `TypeError`. A test reads an SDK's configuration back through them,
   `budget_for(net.clients[0])`, without reaching into the SDK's private `Client`.
-- `FakeTransport.resolve(host, *addresses)`: inside `fake_network`, the SSRF guard resolves `host` to `addresses`, so a
-  test can exercise a refusal (`resolve("api.example.com", "10.0.0.1")`) or a name that does not resolve
-  (`resolve("api.example.com")`). Each address is an IP address as text; anything else raises naming it.
+- A name imported from the wrong public module is refused naming its home, where it raised the bare `cannot import
+  name`: `from headgate.retry import RetryPolicy` raises `ImportError: RetryPolicy lives in headgate: from headgate
+  import RetryPolicy`, and a name two modules export names both (`reader lives in headgate.msgspec and
+  headgate.pydantic`). Asked as an attribute (`headgate.retry.RetryPolicy`), the same message is the `AttributeError` a
+  missing attribute raises, so `hasattr()` answers `False` and `getattr()` with a default returns it, as before. The
+  homes are written out, so a miss imports nothing. Type checkers see no module `__getattr__`, so they still report
+  the import.
+- A `FakeTransport` route written as an absolute URL, `reply("POST", "https://auth.example.com/oauth/token", ...)`,
+  matches that origin's path, before a route of the bare path, which matches it on any host: a token host and the API
+  host answer apart, and an SDK that sends a token request to the wrong host matches nothing. `calls_to()` takes the
+  same two forms. Such a route matched nothing.
+- `FakeNetwork.resolve(host, *addresses)`: the SSRF guard of every client built in the block resolves `host` to
+  `addresses`, so a test can exercise a refusal (`net.resolve("api.example.com", "10.0.0.1")`) or a name that does not
+  resolve (`net.resolve("api.example.com")`). Names are the network's, so it holds whatever transport the block was
+  given, a wrapper of a `FakeTransport` included. A host is matched in any of its spellings, as the guard looks it up:
+  in any case, a Unicode name as its IDNA form, with or without one final dot (so `localhost.` resolves to loopback,
+  as `localhost` does); a host IDNA refuses raises `ValueError`. Each address is an IP address as text; anything else
+  raises naming it.
+- The docs have an imports page, every public name and the module it is imported from, generated from each module's
+  `__all__` and held to it by a test.
 
 ### Changed
 
@@ -62,7 +85,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   keyed the entry by its URL alone, so a second GET with another body was served the first one's answer. A body keyword
   on either raises `TypeError` pointing to `query()`, the safe read with a body: write
   `query(url, expect=..., body=Json(...))`. `delete()` keeps `body=`. A `stream()` with `method="GET"` or
-  `"HEAD"`, and `events()`, refuse `body=` the same way: write `stream(url, method="QUERY", body=...)`.
+  `"HEAD"` refuses `body=` the same way: write `stream(url, method="QUERY", body=...)`. `events()` takes no body
+  keyword at all: its options are `headgate.streaming.EventOptions`, a stream's less the body, so `body=` is a type
+  error, and raises `TypeError` saying `events()` opens a GET: for an event stream a POST opens, write
+  `stream(url, method="POST", body=...)` and read its `aiter_events()`.
 - A call's `httpx2.URL` must be absolute. A relative one raises `TypeError`, since its only use was to skip escaping:
   `httpx2.URL(f"items/{uid}")` type-checked and reached `/admin` for `uid = "../admin"`. Write a t-string,
   `t"items/{uid}"`, or `{fragment:raw}` for a pre-built fragment. A URL of any other kind (`None`, `bytes`, a list, a
@@ -83,12 +109,18 @@ change the public API; such changes are listed under **Changed** and **Removed**
     into text first, with `json.dumps` or the API's own format.
 - `Form.fields` and `Multipart.fields` hold the encoded values, a copy of the mapping given: `Form({"s": Status.OPEN})`
   has `fields == {"s": "open"}`. Read the values you built the body from, not the body's.
-- Parameters that take names or codes take a collection of them: `CassetteFilter(headers=, params=)` and
-  `HttpCache(methods=, paths=, statuses=)` are typed `Collection[...]`, and `RetryPolicy(methods=, statuses=)` stays
-  typed `frozenset[...]`. A bare `str` (read one letter at a time), a number or a one-shot iterator (a generator, which
-  checking would empty) raises `TypeError` naming the option: write `methods=("GET",)` (`frozenset({"GET"})` for a
-  `RetryPolicy`) or `statuses=(503,)`, and turn a generator into a tuple. `RetryPolicy(methods="GET")` retried no GET,
-  and `HttpCache(methods="GET")` raised a `ValueError` that named the letters.
+- Parameters that take names or codes take a collection of them: `CassetteFilter(headers=, params=)`,
+  `HttpCache(methods=, paths=, statuses=)`, `RetryPolicy(methods=, statuses=)` and `SecurityOptions(trusted_origins=)`
+  are typed `Collection[...]`, so a type checker takes the tuple, list or set a refusal suggests, as the runtime did
+  (`RetryPolicy` and `SecurityOptions` were typed `frozenset[...]`). The ones whose order decides which entry wins are
+  typed `Sequence[...]`: `HttpOptions(request_id_headers=)` and `CallPolicy(routes=)`, typed `tuple[...]` before, so a
+  list type-checks too; and `FaultyTransport(schedule=)` takes any `Iterable` of steps, where `list[Step]` refused a
+  `list[Respond]`. What each holds is unchanged, a `frozenset` of the names or codes and a `tuple` of a sequence, but
+  the fields read as the type they take: write `frozenset(policy.methods) | {"POST"}` for set algebra on one, or build
+  the policy from `IDEMPOTENT_METHODS | {"POST"}`. A bare `str` (read one letter at a time), a number or a one-shot
+  iterator (a generator, which checking would empty) raises `TypeError` naming the option: write `methods=("GET",)` or
+  `statuses=(503,)`, and turn a generator into a tuple. `RetryPolicy(methods="GET")` retried no GET, and
+  `HttpCache(methods="GET")` raised a `ValueError` that named the letters.
 - `SigningAuth` and `CachedTokenAuth` declare what they stamp in `credential_headers` and `credential_params`, the two
   names every `Auth` and middleware declares with. `signed_headers` and `signed_params`, `token_headers` and
   `token_params`, and the properties that mapped them onto `credential_*`, are removed: write
@@ -113,7 +145,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `CachedTokenAuth` has no constructor: its cache and lock are made on first use, so a subclass whose `__init__`
   forgets `super().__init__()` works, where it failed at its first call with an `AttributeError` naming private state.
   `super().__init__()` may stay, and does nothing. `refresh_margin` is a class attribute, a finite number of seconds of
-  0 or more checked when the class is defined, and the class's value is the one read, not an instance's: write
+  0 or more checked when the class is defined (a `TypeError` for one that is not a number, a `ValueError` for a
+  negative, NaN or infinite one), and the class's value is the one read, not an instance's: write
   `refresh_margin = 30.0` in the class body for `super().__init__(refresh_margin=30.0)`. `CachedTokenAuth(timing=)` is
   removed: a token's lifetime runs on the timing of the clients built with the auth, so build the client inside
   `timing_override()` or `TestClock.install()` (building the auth there alone does nothing). Its clients share one
@@ -125,7 +158,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   subclass that overrides one raises `TypeError` when it is defined, and ty reports `override-of-final-method`. An
   override of the flow type-checked and failed inside the call (`'NoneType' object has no attribute 'status_code'`).
   Their hooks are `sign` and `skips`, and `mint`, `attach` and `skips`; add a per-request header, such as a tenant id,
-  in a middleware.
+  in a middleware. A class of both bases, `class Both(CachedTokenAuth, SigningAuth)`, raises `TypeError` saying the
+  two cannot be combined in one auth, since each runs a flow of its own, where it blamed an override of the flow the
+  class never wrote: subclass `CachedTokenAuth` for the token, and sign each attempt in a middleware, which sees the
+  token on the request.
 - `SigningAuth.sign(request, now)` is handed the attempt's wall-clock time in Unix seconds, from the client's timing, so
   a signer whose client is built under `TestClock.install()` runs on the test clock like the rest of the client. Write
   `def sign(self, request, now)` and sign with `now` where you called `time.time()`.
@@ -137,9 +173,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
   coroutine-function `skips`, on either auth base, and `attach` on a `CachedTokenAuth`, are refused when the class is
   defined too: an `async def skips` returned a coroutine, which is truthy, so every request went out unsigned or
   without its token. Write `def skips(self, request)` and `def attach(self, request, token)`.
-- `Minted(token, lifetime)` refuses, when it is built, a lifetime that is not a number of seconds above 0 (`0`, a
-  negative number, NaN, `True`, a `str`) with a `TypeError`, where a mint or a `seed()` cached a token already due.
-  `math.inf` is a token that never expires. Pass the provider's `expires_in` as a number.
+- `Minted(token, lifetime)` refuses, when it is built, a lifetime that is not a number of seconds above 0, where a
+  mint or a `seed()` cached a token already due: a `TypeError` for one that is not a number (`True`, a `str`), a
+  `ValueError` for one not above 0 (`0`, a negative number, NaN). `math.inf` is a token that never expires. Pass the
+  provider's `expires_in` as a number.
 - `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.
@@ -164,7 +201,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `write: Writer[Query]` as fields, where a `write` property was required. Its methods stay abstract. `paginate()`
   raises `TypeError`, before the pager runs, for a pager whose `read` is missing or is not a `Reader` or an `Expect`,
   and for a writing pager with no `write`.
-- `Paginated` is the class of the walk `paginate()` returns, a final class rather than a protocol, so a mistake names
+- `Paginated` is the class of the walk `paginate()` returns, a final class rather than a protocol (a subclass raises
+  `TypeError` where it is defined), so a mistake names
   it: `await client.paginate(...)` raises `TypeError: 'Paginated' object can't be awaited`, where it named a private
   `PageWalk`. Iterate with `async for`, or `await walk.collect()`. Annotations are unchanged: `Paginated[Issue]` and
   `Paginated[Issue, IssuePage]`. A test double that stood in for a walk by the protocol's shape (a class with
@@ -191,7 +229,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `Expect(reader(Order), {404: nothing})`. `Expect` is no longer a dataclass, so no copy drops the answers `.on()` declared:
   `copy.replace(expect, accept=...)` and `copy.copy(expect)` keep them, and `dataclasses.replace(expect, ...)`, which
   built one without them, raises `TypeError`; write `copy.replace` for `dataclasses.replace`. Its `ok`, `answers`,
-  `headers` and `accept` are read-only properties, and two equal `Expect` objects hash alike.
+  `headers` and `accept` are read-only properties, and two equal `Expect` objects hash alike. Its `repr` reads as it
+  is built, `Expect(Reader(as_json), headers={}, accept=None).on(404, Reader(nothing))`, with the answers by status,
+  rather than spelling an `answers=` the constructor refuses.
 - `head()` requires `expect=`, as every verb does: write `head(url, expect=nothing)` for `head(url)`.
 - A middleware reads its call with `headgate.call_view(request)`, which returns a `CallView`: write `call_view` for
   `call_info`. Its `call` is the call's `CallInfo`, as every event's `call` is. `CallInfo.route`, the t-string
@@ -241,12 +281,38 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `headgate.msgspec.reader_for`.
 - `HttpCache(methods=(), paths=(), statuses=())`, an empty rule that made a cache store nothing, raises `ValueError`
   naming `cache=None`: write `CallPolicy(cache=None)` for a client without a cache.
-- `policy_disabled()` lives in the testing kit, beside `instant_retries()`, and `headgate.policy`, a module for one
+- `policy_disabled()` lives in the testing kit, beside `instant_waits()`, and `headgate.policy`, a module for one
   function, is removed: write `from headgate.testing import policy_disabled` for
   `from headgate.policy import policy_disabled`. It reports `headgate.testing` as its home.
+- `headgate.testing.instant_retries()` is `instant_waits()`, named for what it does: every wait of the clients built
+  in its block returns at once, a rate budget's pacing included, not only a retry's backoff, and now a server's pause
+  too, which it waited out on the real clock (see **Fixed**). Write `instant_waits()` for `instant_retries()`; a fake
+  network alone still waits on the real clock.
+- `TestClock.now` and `TestClock.epoch` are read-only properties, and `TestClock.sleeps` returns a new list each time it
+  is read, where all three were plain attributes: an assignment moved the clock backwards, or to a value that is not a
+  number, past the checks `advance()` makes, and a test could edit the record of waits. Write `clock.advance(seconds)`
+  for `clock.now += seconds`, build a `TestClock(epoch=...)` for another epoch, and read `clock.sleeps` again to see a
+  later wait. `clock.sleeps.clear()` now clears a copy and leaves the record as it was: note `len(clock.sleeps)`
+  before the waits a test is about, and read from there, `clock.sleeps[start:]`.
 - `FaultyTransport.calls` is a read-only property returning a tuple, as `FakeTransport.calls` is, where it was a
   list a test could append to or clear under the transport. Read it as before; write `list(network.calls)` where a
   test needs a list, and build a new `FaultyTransport` where it cleared the log.
+- Every exported class is final, to a type checker (`typing.final`, so ty reports a subclass) and at runtime, where
+  defining a subclass raises `TypeError` saying what to write instead, unless a guide names it a base to extend: the
+  auths (`Auth`, `SigningAuth`, `CachedTokenAuth`, `StaticHeaderAuth`, `BearerAuth`, `QueryParamAuth`), `WritingPager`
+  and the pagination strategies, whose hooks a walk calls, the flavors' codecs (`MsgspecCodec`, `PydanticCodec`), the
+  `ClientError` tree, and `CallEvent`, which headgate's own events subclass. headgate reads a final class by its
+  fields or holds it as a handle, so a subclass's override was accepted and never ran. Newly final: the option values
+  (`Timeouts`, `CallPolicy`, `HttpOptions`, `SecurityOptions`, `IdempotencyKeys`, `BreakerPolicy`, `Rate`,
+  `Adaptive`, `Hedge`, `RetryShare`, `Timing`), the shared handles (`RateBudget`, `BreakerRegistry`), `EncodedBody`,
+  `Minted`, `PageRequest`, what headgate hands out (`Fresh`, `NotModified`, `Validator`, `Problem`, the events,
+  `CallInfo`, `CallView`, `BreakerSnapshot`), `DecodeError` and `RefusedError`, `AsyncCurlTransport`,
+  `OpenTelemetryObserver`, and the testing kit (`FakeTransport`, `FaultyTransport`, its steps and `FaultCall`,
+  `CassetteFilter`, `TestClock`, `UnmatchedRequestError`). `Expect`, `Form`, `Multipart`, `Raw`, `Reader`, `Route`,
+  `RetryBudget`, `Paginated` and `FakeNetwork`, final to a type checker only, now refuse a subclass at runtime too. Hold
+  one, build it with the fields you need, or wrap it: a transport or an observer of your own delegates to it. A
+  change to each request a subclass of `AsyncCurlTransport` made belongs in a middleware: the SSRF guard does not pin
+  a transport that wraps it, and only vets each hop before it is sent.
 - `Backoff`, `RetryPolicy`, `HttpCache` and `headgate.testing.Respond` are final: a subclass raises `TypeError` when
   it is defined, naming the fields to set, and ty reports it. The methods a subclass could override (`delay`,
   `wait_after`, `caches_request`, `stores_status`, `response`) are no longer called by anything, so an override
@@ -260,7 +326,10 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `headgate.health.BreakerSnapshot` is a frozen dataclass with `state`, `refusing` and `failures` (the consecutive
   failures since the last success, which only the live breaker showed), built by keyword, rather than a named tuple:
   write `snapshot.state, snapshot.refusing` for `state, refusing = snapshot`, and compare a snapshot with
-  `BreakerSnapshot(state=..., refusing=..., failures=...)` rather than a tuple.
+  `BreakerSnapshot(state=..., refusing=..., failures=...)` rather than a tuple. The reader that returns them,
+  `breaker_states()`, is `breaker_snapshots()`, with no alias, so code written against 0.12.1 fails where it imports
+  it rather than compare a snapshot to a `BreakerState`, which is always `False`: write
+  `breaker_snapshots(registry)[origin].state == BreakerState.OPEN` for `breaker_states(registry)[origin] == ...`.
 - A client given a shared object that holds time, built on another timing than the client, raises `TypeError` before
   it builds anything, as it does for a `CachedTokenAuth` that runs on another: a `RateBudget` (as its policy's or a
   route's `rate=`), a `BreakerRegistry` (as `breaker=`) or a `RetryBudget` (as the `budget=` of its policy's or a
@@ -276,8 +345,8 @@ change the public API; such changes are listed under **Changed** and **Removed**
   call, and a `bytes` value, `{"X-N": b"1"}`, was accepted and sent); `idempotency_key=` must be a `str` (an `int` raised an `AttributeError`, and `None` is refused: leave the
   option out for no key); `events(last_event_id=)` must be a `str` or `None`; and `stream(method=)` must be one of
   `"GET"`, `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`, `"HEAD"` and `"QUERY"`, where any other value, a lower-case
-  `"get"` included, was sent as given. Write `params={"a": 1}`, `headers={"X-N": "1"}`, `idempotency_key=str(key)`
-  and `method="GET"`.
+  `"get"` included, was sent as given (a `str` that is none of them raises `ValueError`). Write `params={"a": 1}`,
+  `headers={"X-N": "1"}`, `idempotency_key=str(key)` and `method="GET"`.
 - Every number a client is configured with is an `int` or a `float`, checked where it is given, a `TypeError` naming
   the field: a `bool`, which a type checker takes for an `int`, a `str`, a `Decimal` and a `Fraction` are refused, and
   a `float` where a count goes. This covers `Timeouts`' four phases, `Rate`, `RateBudget(max_in_flight=)`,
@@ -287,7 +356,9 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `TestClock(start=, epoch=)`. `Timeouts(read=True)`, `Rate(True, 1)`, `RetryPolicy(attempts=2.5)`,
   `Timeouts(read=Decimal("5"))` and `Rate(Fraction(1, 2), 1)` were accepted, and `Timeouts(read="5")` raised a
   comparison error from inside the constructor: write `Timeouts(read=5.0)`, `Rate(1, 1)`, `RetryPolicy(attempts=3)`
-  and `float(value)` for a `Decimal` or a `Fraction`.
+  and `float(value)` for a `Decimal` or a `Fraction`. `DropMidBody(after_bytes=)` below 0 and a `Slow(seconds=)`
+  below 0 or NaN raise `ValueError` where the step is built: `after_bytes=0` drops the connection before anything is
+  written, and `Slow(seconds=math.inf)` is a server that never answers, cut by the read timeout.
 - The testing kit checks its other fields where they are given, each a `TypeError` naming the field:
   `Respond(headers=)` must map names to `str` values (a list of pairs was accepted), `Slow(then=)` must be a `Respond`
   (`Slow(1, then=200)` was accepted and failed at the send), and `TestClock(random=)` must be callable
@@ -310,7 +381,18 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `total`, `offset`, `put`, `write`) callable, `page_size` and `start` an `int`, `param` a `str` and `stop_on_empty`
   a `bool`, each a `TypeError` naming the field. `paginate(pager=)` refuses an object without callable `first`,
   `page_items` and `next_page`, naming the first it lacks, where `pager=None` raised an `AttributeError`. Pass the
-  page reader first: `Cursor(reader(Page), items=..., next=..., param=...)`.
+  page reader first: `Cursor(reader(Page), items=..., next=..., param=...)`. A class as `write=` is refused there too,
+  as `Reader` refuses one (`write=dict` failed at the first page with an `AttributeError`): write `writer(Query)` with
+  a flavor's writer, or leave `write=` out for builtins. What a hook returns is checked where the walk takes it, a
+  `TypeError` naming the hook, as a reader's `refuse=` is: an `items` that returns no sequence, as its type says (a
+  generator, which `Offset` failed to count and `Cursor` never found empty: return a list), or returns text, whose
+  characters the walk yielded one by one as items, a pager's own
+  `page_items` (a strategy subclass's override included, named `Class.page_items()`) that returns no iterable, a
+  `total` that returns neither an `int` nor `None`, a `next` that returns neither a `str` (an `httpx2.URL` too, for
+  `NextUrl`) nor `None`, a `BodyOffset` `offset` that returns no `int`, and a `write` that returns no
+  `EncodedBody`, which failed inside the walk with an `AttributeError` or a comparison error, or sent an `int`
+  cursor as its text. A `next` that reads a numeric cursor returns its text, `str(cursor)`, and a `BodyCursor`'s
+  `put` converts it back for a body that holds a number, `put=lambda body, cursor: {**body, "after": int(cursor)}`.
 - `BearerAuth(token)` refuses an empty or blank token with `ValueError`, where it sent `Authorization: Bearer ` (the
   unset environment variable); a token that is the scheme, `bearer` in any case, or starts with it and whitespace
   (`Bearer abc`, `bearer\tabc`), where it sent `Bearer Bearer abc`, while `bearertoken` is a token like any other; and
@@ -329,11 +411,18 @@ change the public API; such changes are listed under **Changed** and **Removed**
   too, naming `Json`. Write `body=writer(Order)(order)` with a flavor's writer, or `body=Json(to_builtins(order))`. A
   change to the value after the `Json` is built is no longer sent: build the `Json` from the value you mean to send.
   `Json` is a final value class rather than a dataclass: `dataclasses.replace`, `fields` and `asdict` no longer apply
-  to it, so write `copy.replace(body, value=...)` and `body.value`, a read-only property; it compares, hashes, prints
-  and matches (`case Json(value)`) as before, and a subclass raises `TypeError`.
+  to it, so write `copy.replace(body, value=...)` and `body.value`, a read-only property; it compares, hashes, prints,
+  matches (`case Json(value)`), copies, deep-copies and pickles as before, each copy a `Json` built afresh from the
+  value, and a subclass raises `TypeError`. Text holding a lone surrogate (`Json("\ud800")`), which UTF-8 cannot
+  encode, raises `ValueError` naming the surrogate where the `Json` is built, where it raised a `UnicodeEncodeError`
+  at the send.
 - `Reader` refuses a class with `TypeError` where it is built: `Reader(str)` type-checked and returned
   `'<Response [200 OK]>'`. Write `expect=as_text` for `Reader(str)`, `as_bytes` for `Reader(bytes)`, `as_json` for
   `Reader(dict)` or `Reader(list)`, and `Reader(lambda r: Cls(r))` for a class that is built from a response.
+  `body_reader(decode)` refuses a class or a type the same way, where `body_reader(str)` returned the body's `repr`
+  (`"b'...'"`) and `body_reader(Order)` an `Order` holding the bytes: write `as_text`, `as_bytes` or
+  `as_json` for a builtin, a flavor's `reader(Order)` for a model, and `body_reader(lambda body: Cls(body))` for a
+  class that is built from the bytes.
 - A codec's `decoder()` raises `TypeError` for a type it cannot decode, and `check_codec` asks it to, so a reader of
   such a type fails where it is built. `headgate.msgspec.reader(Model)` of a pydantic model, or of a plain class
   anywhere in the type (`list[Plain]`, `dict[str, Plain] | None`), built, and every 200 then raised
@@ -344,6 +433,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `TypeError` naming the class for one it has no schema for, saying decode or encode for a reader or a writer, where it
   raised pydantic's `PydanticSchemaGenerationError`: catch `TypeError`. A codec of your own whose `decoder()` builds
   for a plain class now fails `check_codec`: raise `TypeError` there.
+- `headgate.testing.check_codec(codec, record=...)` holds the record type to the strictness it holds the built-in
+  containers to: a record whose `int` field holds a numeric string (`{"value": "1"}`), and an array where the record is
+  declared, must be refused with one of the codec's `errors`. A codec that built its records by calling the class
+  passed, reading `"1"` as text in an `int` field, and so did one that raised an `AttributeError` for an array, which
+  a call raised outside the `ClientError` tree. Refuse both in the codec's decoder.
 - A reader's `refuse=` that returns anything but a `RefusedError` or `None` raises `TypeError` naming `refuse=`, where
   a call raised `ResponseParseError` ("unreadable 200 body") for the caller's own bug; a `response_check=` that does
   the same raises `TypeError` naming `response_check=`, where it raised an `AttributeError`. `RefusedError(kind=)`
@@ -375,18 +469,157 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - Inside `fake_network`, a client's SSRF guard resolves names through the fake network, in place of the system
   resolver and of a `SecurityOptions(resolver=)` of the SDK's own (test that resolver directly): every name resolves to
   one public address, and `localhost` and the names under it to loopback, which the guard refuses as in production,
-  unless `FakeTransport.resolve` says otherwise. A guarded SDK's test made real DNS queries, and failed offline or on a host
+  unless `net.resolve` says otherwise. A guarded SDK's test made real DNS queries, and failed offline or on a host
   that does not exist; it now makes none. The guard's checks still run, so a private IP literal is still refused.
 - A walk's `payload=`, when its pager has no `write`, is encoded as JSON in `paginate()`, which raises `TypeError`
   there for one that is not builtins, in a walk's words: it raised at the first iteration, and advised `body=`, which
-  a walk does not take. Write `payload=to_builtins(query)`, or give the pager `write=writer(Query)`.
+  a walk does not take. Write `payload=to_builtins(query)`, or give the pager `write=writer(Query)`. A pager of the
+  protocol's shape with a `write` of its own is told that its write is not used, since it is not a `WritingPager`:
+  subclass `headgate.pagination.WritingPager` for it to encode each page's body.
 - `Client(observers=)` and `Client(middleware=)` refuse an entry given as its class rather than an instance, with a
   `TypeError` naming it: `observers=[Metrics]` and `middleware=[Signer]` were accepted, and their methods called
   unbound. Write `observers=[Metrics()]` and `middleware=[Signer()]`.
 - A walk reads each page's items once, with its pager's `page_items`, and gives a built-in strategy those items for
   its next request, so a strategy's `items=` hook runs once per page, where it ran twice: once to find the next
-  request and once for the items yielded. A pager of your own has its `page_items` called once for every page,
-  `pages()` iterated alone included, and its `next_page` still reads the page itself. Nothing to write differently.
+  request and once for the items yielded. A subclass of a strategy that only adds to it is walked the same way; one
+  that overrides `next_page` or `page_items` is walked by its own `next_page`, which reads the page itself, as a
+  pager of your own is. A pager of your own has its `page_items` called once for every page, `pages()` iterated alone
+  included, and a writing pager's `write` runs once for each page it posts: the bytes it wrote are both what the walk
+  remembers the page by and what is sent. Nothing to write differently.
+- `headgate.pydantic` raises `TypeError` where the msgspec flavor raises it, so catch `TypeError`:
+  - `to_builtins` for a value holding a class pydantic cannot convert (a plain class, a msgspec struct), naming the
+    class, with pydantic's error chained, where it raised pydantic's `PydanticSerializationError`, a `ValueError`. A
+    model whose own serializer fails still raises `PydanticSerializationError`.
+  - `decode` for content that is neither `bytes` nor a `str`, naming `content=`, where it raised `DecodeError` (see
+    below).
+- The rest of the public surface refuses a value of the wrong kind where it is written, as the client's own options
+  do: a `TypeError` naming the option, what it takes and what it got (a `ValueError` for the right kind with a wrong
+  value), where each of these was accepted and failed later, or failed with an `AttributeError`, a `KeyError` or a
+  library's own message. Pass each parameter the kind it takes; nothing changes for code that already does. Newly
+  refused:
+  - `headgate`: `EncodedBody(content=)` that is not `bytes` (a `str` included: encode it) and `content_type=` that
+    is not a `str`; `Expect(accept=)` that is not a `str` (an `AttributeError`); `HttpCache(storage=)` that is not a
+    hishel `AsyncBaseStorage`, and `partition=` that is not a `Partition`, a plain string included (see
+    **Security**); `Multipart(files=)` that is neither a mapping nor a sequence of `(name, file)` pairs, or holds a
+    field name that is not a `str` or a file of none of an `UploadFile`'s shapes, naming its field (a number, a list,
+    a file opened in text mode, a tuple of one item or of five, a filename or content type that is not a `str`, or
+    headers that are not a mapping of `str` to `str`), each of which failed inside httpx2 at the send (a file object
+    is anything with a `read`, as httpx2 reads one, and one with only its `read` is sent once, as a file that cannot
+    be rewound);
+    `Paginated(pages, items_of)` that cannot be called; `Reader(name=)` that is not a `str` or `None`;
+    `RetryPolicy(backoff=)` that is not a `Backoff`, `respect_should_retry=` that is not a `bool`, and `hedge=` that
+    is not a `Hedge` or `None`; `body_reader(decode)` and `refuse=` that cannot be called, and `empty=` that is not
+    `bytes` or `None`; `reader_for(allow_empty_body=)` that is not a `bool` and `refuse=` that cannot be called;
+    `decode_with`, `reader_for` and `writer_for(codec=)` that is not a `Codec` (an `AttributeError`), or is a
+    codec's class, which has a codec's members as functions (pass an instance, `MsgspecCodec()` or
+    `headgate.msgspec.CODEC`);
+    `Timeouts.over(base=)` that is not a `Timeouts`; `CachedTokenAuth.seed(minted)` that is not a `Minted`, the token
+    alone included (an `AttributeError`: write `seed(Minted(token, lifetime))`);
+    `CachedTokenAuth.reject_credential_rotation(returned=, configured=)` given a credential that is not a `str`,
+    naming both kinds (`bytes` against a `str` read as a rotated credential, a `ClientConfigurationError`: decode it
+    first); and `Paginated.collect(max_items=)` that is not an `int`, a `bool` included, which raised `ValueError`.
+  - `decode_with(content=)`, and each flavor's `decode(content=)`, take `bytes` or a `str` (such as a server-sent
+    event's data, read as its UTF-8 bytes, so both flavors and any codec read it alike) and refuse anything else with
+    the same `TypeError`, naming both: a `bytearray`, which both flavors read, and a `memoryview`, which msgspec reads,
+    included. Write `bytes(buffer)`. Any other value raised msgspec's "a bytes-like object is required", or the
+    pydantic flavor's `DecodeError`. A `str` holding a lone surrogate, which no UTF-8 holds, raises `DecodeError`.
+  - `headgate.msgspec` and `headgate.pydantic`: `MsgspecCodec`, `PydanticCodec`, `decode`, `reader`, `writer` and
+    `to_builtins` refuse a `strict=`, `drop_none=` or `allow_empty_body=` that is not a `bool`: `strict="false"`,
+    which is truthy, decoded strictly.
+  - `headgate.pagination`: `PageRequest(url=)` that is not a `str`, a t-string or an `httpx2.URL`, and `params=`
+    that is not a mapping, as a call's `params=` refuses one: a list of pairs, which it read into a dict, included
+    (write the dict), where anything else raised "object is not iterable"; `PageRequest.with_param(name=)` that is
+    not a `str`; `Offset(size_param=)` that is not a `str` or `None`.
+  - `headgate.cache`: `Validator(etag=, last_modified=)` that is not a `str` or `None`; `Validator.of(response=)`
+    that is not an `httpx2.Response` (an `AttributeError`), and `held=` that is neither a `Validator` nor `None` (an
+    `AttributeError` for a response missing a part, and passed over for one carrying both); `Fresh(validator=)`,
+    `NotModified(validator=)` and `conditional(validator=)` that is not a `Validator` (an `AttributeError` from
+    `conditional`).
+  - `headgate.streaming`: `Stream.aiter_bytes(chunk_size=)`, `aiter_lines(max_line_size=)` and
+    `aiter_events(max_event_size=)` that is neither an `int` nor `None`, at the call, `aiter_events` before it checks
+    the content type, and one below 1, a `ValueError`: `chunk_size=0` yielded empty chunks in place of the body and a
+    negative one dropped part of it, and a `max_line_size` or `max_event_size` below 1 refused every line or event as
+    too large. Pass `None` for chunks as they arrive, or for no limit.
+  - `headgate.health`: `breaker_snapshots(registry=)` that is not a `BreakerRegistry` (a `KeyError`).
+  - `headgate.timing`: `Timing(clock=, sleep=, wall_clock=, random=)` that cannot be called;
+    `timing_override(timing=)` that is not a `Timing`, when its block is entered.
+  - `headgate.curl`: `AsyncCurlTransport(impersonate=)` that is not a `str`, `default_headers=` that is not a
+    `bool`, `curl_options=` that is not a mapping (an `AttributeError`) or has a key that is not a `CurlOpt`, and
+    `max_connections=` that is not an `int` (a `bool` and a `float` included), or is below 1, a `ValueError`:
+    curl_cffi never finished building its session on 0. An option's name as a string failed at the first request,
+    inside curl_cffi, and its number was taken as it is; write the member, `CurlOpt.FRESH_CONNECT`, or `CurlOpt(74)`
+    for a number.
+  - `headgate.otel`: `OpenTelemetryObserver(tracer_provider=)` that is not a `TracerProvider`, `meter_provider=` that
+    is not a `MeterProvider` (each an `AttributeError`), and `propagator=` that is not a `TextMapPropagator`, or
+    `None` for any of them.
+  - `headgate.testing`: `CassetteFilter(auths=)` that is not iterable and `replaying=` that is not a `bool`;
+    `ConnectFail(timeout=)` that is not a `bool`; `Respond(content=)` that is not `bytes`, and `json=` that is not
+    builtins JSON can carry, refused where the `Respond` is built, as a `Json` body's value is (a value `json.dumps`
+    cannot write failed at the send, and `NaN` or an infinity went out as `NaN`, which is no JSON: a test that wants
+    a body that is not JSON writes it as `content=`); `FaultyTransport(schedule=)` that is not an iterable of steps,
+    naming an entry that is not one;
+    `fake_network(transport=)` that is not an `httpx2.AsyncBaseTransport`, when its block is entered;
+    `check_codec(codec=)` that is not a `Codec` (an `AttributeError`), or is a codec's class, as `reader_for`
+    refuses one; `FakeTransport.reply(method=, path=)` and `calls_to(method=, path=)` that is not a `str` (an
+    `AttributeError` for the method, and a path that matched nothing), and a reply that is none of a reply's kinds;
+    and `TestClock.advance(seconds=)` and `sleep(seconds)` that is not a number. A status outside 100-599, which no
+    response has, raises `ValueError` where it is written, as a bare status in `FakeTransport.reply()` and as
+    `Respond(status_code=)`, both of which the fakes answered with: to test a server that sends one, reply with an
+    `httpx2.Response` of it.
+- One header spelled two ways in one object raises `ValueError`, where one spelling won unseen:
+  `HttpOptions(user_agent=)` beside a `User-Agent` in its `headers=` (the header won, and the product token was
+  dropped), and `Expect(accept=)` beside an `Accept` in its `headers=` (`accept=` won). Give `user_agent=` for a product
+  token sent before headgate's, or the header for the whole of it; give `accept=`, which each response is checked
+  against too, or the header alone.
+- Three refusals a first call meets say what to write: `expect=` given a class or a type names its reader
+  (`expect=Task`: write `reader(Task)` with a flavor's reader; `expect=str`: `as_text`); `body=` given a value that
+  is no body names the body that holds it: `body=Raw(value)` for bytes or an async stream, `body=Raw(value.read())`
+  for a file, `body=Json(value)` for a mapping, and for a model's instance (a dataclass's, a msgspec `Struct`'s, a
+  pydantic model's, an attrs class's) its writer, `body=writer(Task)(value)`, or `body=Json(to_builtins(value))`;
+  and a codec's reader refusing an empty or blank body says it is empty and that `allow_empty_body=True` reads one as
+  an empty list, where it gave the parser's words (`Input data was truncated`). The errors' types are unchanged.
+- `FakeTransport.reply()` and `calls_to()` refuse a route that can match nothing with a `ValueError` saying what to
+  write: one with a query or a fragment, which no route matches (`"/v2/tasks?page=2"`: write `"/v2/tasks"`), a
+  relative path (`"v2/tasks"`: start it with `/` and the client's base path), and an absolute URL that is malformed
+  (`"http://[::1"`, which raised httpx2's `InvalidURL`) or neither `http` nor `https` (`"ftp://..."`). It was
+  accepted, and every request to it failed as `UnmatchedRequestError`. A route path holding a character a URL
+  escapes, a space or a non-ASCII one, is escaped as an absolute URL's path is, so `"/v1/a b"` matches the
+  `/v1/a%20b` a t-string sends, as `"https://api.example/v1/a b"` does, where it matched nothing. A class as a reply
+  (`reply("GET", "/x", Respond)`) raises `TypeError`, where its route failed at the first request: reply with an
+  instance, `Respond(200)`.
+- A set of default headers names each header once: `HttpOptions(headers=)`, a view's `with_options(headers=)`,
+  `Expect(headers=)` and `StaticHeaderAuth(headers=)` raise `ValueError` naming a header named twice, by two lines of
+  an `httpx2.Headers` or by keys that differ only in case, where it is given. Defaults are merged by name, and such a
+  header was sent in a form nobody wrote. Two lines went out as one, their values joined with `", "`: a server read
+  `Cookie: a=1, b=2` as the one cookie `a` with the value `1, b=2`, and two `If-Modified-Since` dates made a header no
+  server can read. Keys that differ in case went out joined from a view, as two lines from `HttpOptions`, and as one
+  of them alone from an `Expect` (the last) or a `StaticHeaderAuth` (the first). Give the header once, its values
+  joined in one string: `{"Cookie": "a=1; b=2"}` for a cookie's pairs, `{"Accept": "application/json, text/csv"}` for
+  a list header's values. A call's own `headers=` still sends each line as given, as httpx2 does.
+- `headgate.Codec` is runtime-checkable: `isinstance(value, Codec)` asks whether a value has the protocol's five
+  members, as `reader_for`, `writer_for`, `decode_with` and `headgate.testing.check_codec` now do, raising
+  `TypeError` naming `codec=` for a value that lacks any, where they raised an `AttributeError` naming the member.
+  `issubclass` stays unsupported, as for any protocol with members that are not methods.
+- `headgate.testing.FaultCall` is frozen, as every other exported dataclass is: `FaultyTransport.calls` returns each
+  send as it stands when read, where it returned the records the transport went on filling in. A `FaultCall` read
+  before its response was closed keeps `response_closed=False`, so read `calls` again afterwards, as `fake.calls` is
+  read; setting a field raises `dataclasses.FrozenInstanceError`. Each holds a copy of the headers sent, so editing
+  one changes neither the log nor another read of it.
+- A body is given to `headgate.testing.Respond` one way: `Respond(json=..., content=...)`, where `json=` won and
+  `content=` went unsent, raises `ValueError`; give one. A `json=` is checked where the step is built, as a `Json`
+  body's value is, and sent as before (`json.dumps`'s spelling, a space after each separator and the text escaped to
+  ASCII).
+- Refusals keep one rule for their type, and name what was refused as the call reads: a `TypeError` for a value of
+  the wrong kind, a `ValueError` for the right kind with a wrong value. `paginate(on_limit=)` given a value that is
+  not a `str` raises `TypeError`, where it raised `ValueError`; a `str` other than `"raise"` and `"stop"` is still a
+  `ValueError`. `Expect.on()`'s refusal of a status outside 100-599 names the option (`status= takes an HTTP status,
+  100 to 599 (got 999)`, where it read `999 is not an HTTP status`), and so does `TestClock.advance()`'s and
+  `sleep()`'s of a negative, NaN or infinite step (`seconds=`, and `sleep(seconds)`, whose parameter is
+  positional-only). A positional-only parameter is named as its call reads, `Route(fragment)`, where the refusal named
+  `fragment=`, a keyword `Route` does not take. Code that matched a refusal's text matches the new one.
+- `HttpCache(ttl=)` is required, so every cache states its lifetime: `HttpCache(storage=...)` alone kept every 200 GET
+  with no expiry, past a `no-store` and never revalidated, and now raises `TypeError` (missing `ttl`). Write
+  `ttl=None` to keep entries with no expiry, as before, or the seconds an entry may be served.
 
 ### Removed
 
@@ -406,14 +639,15 @@ change the public API; such changes are listed under **Changed** and **Removed**
   and a backoff are values, read by their fields. A test that spent a budget by hand sends its retries through a
   client instead; one that computed a wait reads `factor` and `max_wait`.
 - `CircuitBreaker` from `headgate.breaker`, and `BreakerRegistry.breaker_for()`, `breakers()` and iteration, which
-  handed out the live breakers only the client drives: `headgate.health.breaker_states(registry)` is the one reader
-  of a registry's breakers, building none. Write `breaker_states(registry).get("https://api.example")` for
+  handed out the live breakers only the client drives: `headgate.health.breaker_snapshots(registry)` is the one reader
+  of a registry's breakers, building none. Write `breaker_snapshots(registry).get("https://api.example")` for
   `registry.breaker_for("https://api.example")`, reading `.state`, `.refusing` and `.failures` (for
-  `.failure_count`) from the snapshot, and `for origin, snapshot in breaker_states(registry).items()` for
+  `.failure_count`) from the snapshot, and `for origin, snapshot in breaker_snapshots(registry).items()` for
   `for breaker in registry`. Each key is the canonical origin, `scheme://host[:port]` with the host lower-cased and
   the scheme's default port left out, and an origin no client has called yet is absent (`.get()` returns `None`),
   where `breaker_for()` built a closed breaker for it. A registry keeps its constructor, `policy`,
-  `max_hosts`, `len()`, `clear()` and its `repr`.
+  `max_hosts`, `len()`, `clear()` and its `repr`, which shows its policy and `max_hosts` beside each origin's state:
+  `BreakerRegistry(BreakerPolicy(...), max_hosts=1024, breakers={'https://api.example': 'open'})`.
 - `headgate.health.cache_degradations()` and the process-wide count behind it, which repeated what the
   `CacheChecked` event already reported, without the call: count the `CacheChecked` events whose outcome is
   `CacheOutcome.DEGRADED` (a lookup found the storage broken) or `CacheOutcome.UNSTORED` (an accepted answer could not
@@ -434,10 +668,20 @@ change the public API; such changes are listed under **Changed** and **Removed**
 
 ### Fixed
 
+- Under `instant_waits()` (`instant_retries()` in 0.12.1), a call that waits out a server's pause (a 429's or 503's
+  `Retry-After`, or a spent quota) sleeps through it once and sends. The sleep returned at once, but the wait read a
+  clock the sleep had not moved, saw the pause still running and slept again: it spun until the real clock passed the
+  pause, with a `RateLimited` event each time round (some 200,000 for a 3-second pause), and inside
+  `TestClock.install()` as well, whose clock nothing moved, it never ended. Nothing to write differently.
+- A failure the breaker counts is charged though the retry after it never went out: when the rate budget withdrew
+  the retry (its turn came after the call's deadline), the call ended on the first attempt's 5xx, or network failure,
+  and charged the origin nothing. Nothing to write differently.
 - `copy.copy()` and `copy.deepcopy()` of a `RateBudget`, a `RetryBudget` or a `BreakerRegistry` return the object
   itself, so a deep copy of a `CallPolicy`, or of anything else holding one, keeps sharing it. A copy was a new object
   without the pacer, ledger or breakers the stack finds it by, which failed later with a bare `KeyError`, and a deep
-  copy failed with `cannot pickle '_thread.lock' object`. Nothing to write differently.
+  copy failed with `cannot pickle '_thread.lock' object`. Nothing to write differently. Pickling one, or anything
+  holding one, raises `TypeError` saying it is live state its clients share within one process, where it raised
+  `cannot pickle '_thread.lock' object`: build one in each process that uses it.
 - The value of every exported type alias evaluates at runtime: `headgate.Next.__value__`,
   `headgate.security.Resolver.__value__` and `headgate.security.AddressCheck.__value__` raised `NameError` for
   `Callable`, which their modules imported only for the type checker, so a library that reads an alias's value
@@ -462,9 +706,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `full_url=`, such as `CallInfo(method="GET", url="items/1", full_url="https://api.example/items/1")`, and an
   observer drops its `if info.full_url is not None` check.
 - `typing.get_type_hints()` resolves on every exported class and function, and on the methods they define, after a
-  bare `import headgate`, so `msgspec.convert({"read": 5.0}, Timeouts)`, pydantic and `inspect.signature(Client)` read
-  headgate's options. They raised `NameError` for a name the annotation imported only for the type checker (`Mapping`,
-  `ClassVar`, `httpx2`). headgate's modules no longer use `from __future__ import annotations`; their annotations are
+  bare `import headgate`, so `inspect.signature(Client)` reads every option, and `msgspec.convert({"read": 5.0},
+  Timeouts)` and pydantic build the value options (`Timeouts`, `Rate`, `Backoff`, `RetryShare`, `BreakerPolicy`) from
+  configuration data; `RetryPolicy` and `CallPolicy`, whose fields may hold a shared live object, are built in code.
+  They raised `NameError` for a name the annotation imported only for the type checker (`Mapping`, `ClassVar`,
+  `httpx2`). headgate's modules no longer use `from __future__ import annotations`; their annotations are
   Python 3.14's own, evaluated on demand in the module that wrote them. Nothing to write differently.
 - The codec guide's cattrs-over-orjson codec keeps the strictness headgate's codecs keep, and passes `check_codec`:
   copied as it was written, it read `"1"` as `1` where an `int` is declared, and built a decoder for a type it could
@@ -475,12 +721,101 @@ change the public API; such changes are listed under **Changed** and **Removed**
   suite, so a spelling the API no longer has cannot survive in them. The samples it found wrong are fixed: an
   `Auth` without `@override`, a conditional read typed on the SDK rather than its `Client`, a deadline sum over
   optional phases, a pager example whose page type clashed with the page's other one, and missing imports.
+- The guides and the README say what the code does. A `CachedTokenAuth` does not buffer a streamed body for its 401
+  re-send, a `SigningAuth` does; `head()` requires `expect=`, as every verb does; only a t-string is escaped, and a
+  computed `str` is sent as written, refused only by a checker that enforces `LiteralString` (ty, pyright); a lambda
+  given a pager is checked for its use of the page, not for what it returns; a middleware is a class, since a function
+  with the declarations set on it does not type-check; `max_line_size` counts characters, where `max_event_size` counts
+  bytes; a cached entry's lifetime runs on the system clock, not a `TestClock`; `ClientError` is the base of every
+  failure, not of a transport's alone; time is set through `timing_override()`, not a `timing=` on each constructor.
+  They say what they left out too: a token mint's hops run under the client's retry policy, not the call's (a POST mint
+  is re-sent only with an idempotency key), and through its middleware, each a call of its own to `call_view()`, with no
+  event; a middleware's own 5xx is retried as the network's is; an unpaced client's `budget_for()` is a budget that
+  waits out a server's pauses and paces nothing. Every README sample imports what it uses, every guide sample sorts its
+  imports as ruff does, which the doc-sample test checks with ruff's import rule, and the testing guide sets up
+  pytest-asyncio and has its fixture yield the fake beside the SDK, which it closes.
+- `help()` of the public API names only what a user can import: no docstring cites a private module
+  (`headgate._url.render_path`, `headgate._failures.mint_error`, `headgate.security._logging`) or a private name
+  (`hold_timing`, `SYSTEM_TIMING`, `AUTH_HOP`, `FRESH_TOKEN_S`); each is cited by its public home, or its value is
+  stated (a token minted in the last 60 seconds is not re-minted on a 401; a walk remembers 4096 pages). A test keeps
+  it so.
+- `Client(middleware=)` and `Client(observers=)` name a `functools.partial` they refuse by the function it wraps,
+  `middleware partial(stamp) must declare ...`, where they named every partial `partial`. Nothing to write
+  differently.
+- An entry of the wrong kind in a collection option raises `TypeError` naming the option and the entry, such as
+  `paths= takes a collection of path fragments or patterns, such as ('/items',) (got int 1 among them)`.
+  `HttpCache(paths=[1])` raised a bare `AttributeError`, a pattern compiled from bytes `re`'s own `TypeError`,
+  `SecurityOptions(trusted_origins=[5])` httpx2's `Invalid type for url`, and a collection of names holding what is
+  not a `str` said it got a `list` (`HttpOptions(request_id_headers=)`), or failed on the entry (`methods=["GET",
+  None]` an `AttributeError`, `CassetteFilter(headers=["x-key", b"x-other"])` a comparison error). Nothing to write
+  differently.
+- `headgate.msgspec.decode()` and `decode_with()` raise `DecodeError` for a JSON string whose bytes are not UTF-8,
+  `not UTF-8 text: a JSON string holds bytes that are not UTF-8`, where msgspec's own `UnicodeDecodeError` escaped;
+  inside a call it was already a `ResponseParseError`. It names no byte, since msgspec counts the bad one within the
+  string, not the body. Catch `DecodeError`.
+- `headgate.testing.Respond(headers=httpx2.Headers([...]))` sends each line of a header given twice, as a response may
+  (`Set-Cookie`), where it sent them joined into one line, which a cookie jar reads as one cookie. Nothing to write
+  differently.
+- `headgate.testing.Respond` sends `json=` under the `Content-Type` its `headers=` set, where it added
+  `application/json` beside it, a second line no reader takes: an `application/problem+json` error read no `problem`,
+  and `Expect(accept="application/vnd.api+json")` refused the body as `application/vnd.api+json, application/json`.
+  Nothing to write differently. A `retry_after=` beside a `Retry-After` in `headers=` raises `ValueError`, where both
+  went out: give it one way.
 - `params=httpx2.QueryParams([("a", "1"), ("a", "2")])` sends every value, `?a=1&a=2`, on a call and on every page
   of a walk, where it sent only the first, `?a=1`, losing the rest without a word. Nothing to write differently; a
   mapping of lists, `params={"a": ["1", "2"]}`, sends the same.
+- `Client(base_url=)` must be an `http` or `https` URL with a host and nothing after its path, and raises `ValueError`
+  naming `base_url=` and the fix where the client is built. Only its kind was checked, so a URL each call's path could
+  not be joined onto was accepted: `"api.example.com"` raised httpx2's "URL must be absolute to have an origin" (write
+  `"https://api.example.com"`); `"ftp://..."` failed at the first call; a query (`"https://api.example/v1?key=..."`)
+  had every path appended to it, key and all (send a key with `QueryParamAuth`, other parameters with `params=`); a
+  fragment was joined around the path; and a user and password (`"https://user:pw@..."`) went out as an
+  `Authorization` header no auth declares (use an `Auth`, such as `StaticHeaderAuth({"Authorization": ...})`). The
+  refusal shows the URL redacted and cut after its first `?` or `#` (`'https://api.example/v1?…'`), since a secret may
+  sit under any query name.
+- A network failure raised before the attempt reached the network no longer opens the origin's breaker: a middleware's
+  own `httpx2.ConnectError` (an offline mode), a `SigningAuth.sign` that raises `OSError` (a missing key file), or the
+  SSRF guard's failed lookup of the call's own host over a custom transport sent nothing and tested no origin, yet
+  each was charged, so a client whose signer had no key opened the breaker of a healthy origin, for every client of a
+  shared `BreakerRegistry`. An attempt counts as sent once it is handed to the network transport, below the signer,
+  and only such an attempt's failure is charged. Nothing to write differently.
+- A `CachedTokenAuth` given to clients on two event loops (one per thread, or one `asyncio.run` after another) mints
+  on each: its single mint lock was an `asyncio.Lock`, bound to the first loop that waited on it, so a mint contended
+  on a second loop raised a bare `RuntimeError` ("bound to a different event loop"). Each running event loop now has
+  its own mints, under a lock of its own made under a `threading.Lock`: the calls of a loop wait for one mint, and a
+  call behind a mint that failed raises that mint's error, while the loops mint apart and share the token. Two
+  threads that use a new auth at once make one state for it between them. The auth copies, deep-copies and pickles,
+  before a call and after: a copy starts with an empty cache of its own, and a pickle holds neither the mints nor the
+  token. Nothing to write differently.
+- Clients that share one `headgate.curl.AsyncCurlTransport`, as the security guide says clients with the same SSRF
+  guard may, keep it open until the last of them closes: the first client's `aclose()` closed the curl session under
+  the others, whose calls then failed. Each client built on it holds the transport, and the last to let go closes its
+  session; `transport.aclose()` still closes it at once. Any other transport is closed by the client it is given to,
+  when that client closes, as before: give each client its own, or close the clients together. A client built on a
+  curl transport that is closed (by its last client, or by its own `aclose()`) raises `ValueError` where it is built:
+  it was built, and each of its calls failed with `Session is closed`, retried and charged to the origin's breaker.
+  Build a new transport for it.
+- A subclass of `StaticHeaderAuth`, `BearerAuth`, `QueryParamAuth`, `SigningAuth` or `CachedTokenAuth` that overrides
+  `auth_flow` raises `TypeError` when it is defined: each writes its own `async_auth_flow`, the only flow a client
+  runs, which never calls `auth_flow`, so the override (a tenant header added before the bearer, say) was accepted and
+  never ran. An `Auth` subclass that writes no `async_auth_flow` runs its `auth_flow` through httpx2's, as before, and
+  one below an `async_auth_flow` of your own, which may drive `auth_flow`, is yours to override. Set a header computed
+  per request in a `SigningAuth`'s `sign()`.
+- A key an `IdempotencyKeys(factory=)` returns that is not a `str` raises `TypeError` naming `factory=`, before
+  anything is sent: `None` or an `int` failed with a bare `AttributeError` (`'int' object has no attribute 'strip'`),
+  and `bytes` were sent as the key. Return the key as text, as the default `str(uuid.uuid4())` does.
 
 ### Security
 
+- A `SigningAuth` whose `sign` changes the request's origin is refused before anything is sent, with a `TypeError`
+  naming both origins: the request had been vetted for its origin, and went to the new host, signature and declared
+  credentials with it, over a custom transport, which the SSRF guard does not pin. Change a URL in a middleware,
+  which runs before the checks.
+- `HttpCache(partition=)` takes a `Partition` and nothing else. A plain string was accepted, and the cache compares
+  the member itself, so `partition="credential"`, as a configuration file spells it, kept no entry apart by
+  credential: a client was served the entry another credential had fetched on the same storage. A string now raises
+  `TypeError` where the cache is built: write `Partition.CREDENTIAL`, or `Partition(value)` for a value read from
+  configuration.
 - An auth's own header or query parameter no longer follows a request to another origin. A plain `httpx2.Auth` that set
   `X-Api-Key` sent it on a cross-origin redirect and to an absolute URL on another host, since the guard withheld only
   `Authorization`, `Proxy-Authorization` and `Cookie` for an auth that declared nothing; such an auth is now refused.
@@ -514,6 +849,61 @@ change the public API; such changes are listed under **Changed** and **Removed**
   withholds only declared names, so a signer that also set `X-Api-Key` sent that long-lived key along a cross-origin
   redirect. Add every name the hook sets to `credential_headers` or `credential_params` (headers compared
   case-insensitively); a name the request already carried is not counted.
+- A query parameter a middleware declares in `credential_params`, and one an auth of your own declares there, is
+  redacted from every URL headgate shows, httpx2's own `HTTP Request:` log line included: the client registers the
+  names its auth and middleware declare when it is built. Only `QueryParamAuth`, `SigningAuth` and `CachedTokenAuth`
+  registered theirs, so a middleware that stamped `?tenant_key=...` had the key printed in clear at INFO. Nothing to
+  write differently.
+- A header the client's auth sets cannot be a default: `HttpOptions(headers=)` or `with_options(headers=)` naming
+  one the auth declares in `credential_headers` (compared case-insensitively) raises `ValueError` naming the header
+  and the auth's class, where the client or the view is built. Every request carried it before the auth ran, and an
+  auth takes a request already carrying one of its headers as the caller's own credential: a `SigningAuth` whose key
+  id was also set client-wide signed nothing and re-sent no 401, a `CachedTokenAuth` minted nothing, and a
+  `BearerAuth` sent the default's value instead of its token. Leave the header to the auth; a call that authenticates
+  itself still sets it on its own `headers=`.
+- The SSRF guard vets the host a middleware sends to over a network transport that does not pin, a custom
+  `HttpOptions(transport=...)` or a test's `fake_network`: a middleware that changed `request.url`'s host (a failover
+  to a replica, say) reached the transport with a private host unvetted, since the guard's check over such a
+  transport ran only as a request hook, before the middleware. It now runs again below the last middleware, on an
+  attempt the middleware moved to another origin (one left on its origin is not looked up twice); inside
+  `fake_network`, through the fake network's names, so a test sees the refusal the default transport, which pins where
+  it connects, gives in production. Nothing to write differently.
+- A client built outside every `fake_network` block (a module-level SDK, a session fixture built before the block)
+  refuses each call made inside one with `headgate.testing.UnmatchedRequestError`, naming the call and saying to build
+  the SDK inside the block, before anything is sent. It sent on its own network, the real one, with the test's token,
+  while the fake saw nothing. The error is an `AssertionError`, not a `ClientError`, so an SDK's own
+  `except ClientError` and its retries do not swallow it. A client built on the block's own transport
+  (`HttpOptions(transport=fake)`) sends as before, and so does one built in another block, on that block's fake, and
+  one built on a `FakeTransport` or `FaultyTransport` of its own, which reaches no network, on that fake. The block is
+  the calling task's context: a task started before it was entered, and another thread, run outside it, so their
+  calls are neither refused nor faked. Build the SDK inside the block, typically in a fixture.
+- `fake_network(transport)` takes a fake, which answers in place of the network: a transport that sends on the real
+  network, `httpx2.AsyncHTTPTransport` or `headgate.curl.AsyncCurlTransport`, raises `TypeError` where the block is
+  entered. `fake_network(AsyncCurlTransport(...))` switched a guarded client's SSRF guard off: the curl transport vets
+  and pins each request itself once a client's guard is bound to it, which a block never did, so every hop reached
+  its host unvetted, a loopback or private one included. Every client built in a block now vets each hop as a request
+  hook, whatever transport the block was given. Give the block a `FakeTransport`, and build a client that must reach
+  a real server outside it.
+- The SSRF guard refuses a `headgate.curl.AsyncCurlTransport` whose `curl_options` set `CurlOpt.UNIX_SOCKET_PATH`,
+  `ABSTRACT_UNIX_SOCKET` or `PORT`, with the `ValueError` it raises for a `PROXY`, `PRE_PROXY`, `RESOLVE` or
+  `CONNECT_TO` there, where the client is built: curl connected to that socket in place of the host the guard vetted,
+  so a guarded client reached a local service (a Docker or database socket) through a host the guard admitted; and the
+  guard pins a host on the URL's port, so on another port curl looked the name up itself. Leave the socket out of a
+  guarded client's transport, and put a port in the URL.
+- A header no request can carry is refused where it is given: a name that is not an HTTP token (a space, a colon or a
+  line break in it), and a value holding CR, LF or NUL, raise `ValueError` naming the option and the header, not the
+  value, in `HttpOptions(headers=)`, `with_options(headers=)`, `Expect(headers=)`, `StaticHeaderAuth(headers=)` (and so
+  `BearerAuth(token=)`), a call's own `headers=`, `IdempotencyKeys(header=)` (whose empty name raised `header must name
+  a header`) and `headgate.testing.Respond(headers=)`. Over the curl transport such a value went out as written, so a
+  line break in it (a tenant id taken from an incoming request, say) ended the header there and sent the rest as
+  headers the caller never wrote; httpx2's own transport refused it over HTTP/1.1 at the send, and sent it whole over
+  HTTP/2, for a proxy that forwards over HTTP/1.1 to split. Check or strip a value taken from outside before it
+  becomes a header. A call's `idempotency_key=` and `events(last_event_id=)` are refused alike, and the curl transport
+  refuses a header with such a value however it was set (a minted token, a middleware's or a signer's stamp), as
+  httpx2's own transport does, with `httpx2.LocalProtocolError`, before anything is sent.
+- The `repr` of an `HttpOptions` and of an `Expect` shows each header by its name, with `'***'` for its value
+  (`headers={'X-Api-Key': '***'}`): a default header may carry a key, which the repr printed in clear, in a log line
+  or a traceback's locals. Read a value from `.headers`, which holds it as given.
 
 ## [0.12.1] - 2026-11-16
 

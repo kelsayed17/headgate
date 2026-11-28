@@ -17,8 +17,8 @@ from typing import TYPE_CHECKING, Annotated, Literal
 import httpx2
 import msgspec
 import pytest
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, RootModel, ValidationError
-from pydantic_core import PydanticCustomError
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, RootModel, ValidationError, field_serializer
+from pydantic_core import PydanticCustomError, PydanticSerializationError
 
 from headgate import Client, HttpOptions
 from headgate import msgspec as msgspec_flavor
@@ -171,6 +171,33 @@ def test_to_builtins_handles_sequences_and_nested_models() -> None:
 def test_to_builtins_converts_a_root_model_to_its_root() -> None:
     """Convert a ``RootModel`` to whatever its root converts to."""
     assert to_builtins(RootModel[list[_Model]]([_Model(x=1)])) == [{"x": 1}]
+
+
+def test_to_builtins_refuses_a_class_pydantic_cannot_convert() -> None:
+    """Raise ``TypeError`` naming the class, as the msgspec flavor raises it, with pydantic's error chained."""
+
+    class Plain:
+        """A class pydantic has no serializer for."""
+
+    with pytest.raises(TypeError, match=r"^headgate\.pydantic cannot convert Plain to builtins, a class") as refused:
+        to_builtins({"rows": [Plain()]})
+    assert isinstance(refused.value.__cause__, PydanticSerializationError)
+
+
+def test_to_builtins_lets_a_serializers_own_failure_through() -> None:
+    """Raise a model's own serializer's failure as pydantic raised it: no class of the value is at fault."""
+
+    class Failing(BaseModel):
+        x: int
+
+        @field_serializer("x")
+        def _refuse(self, value: int) -> int:
+            del value
+            msg = "not today"
+            raise ValueError(msg)
+
+    with pytest.raises(PydanticSerializationError, match="not today"):
+        to_builtins(Failing(x=1))
 
 
 def test_drop_none_keeps_false_and_zero() -> None:

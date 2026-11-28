@@ -24,6 +24,7 @@ from headgate import (
     CachedTokenAuth,
     Client,
     HttpOptions,
+    Minted,
     QueryParamAuth,
     SigningAuth,
     StaticHeaderAuth,
@@ -263,3 +264,63 @@ def test_every_auth_headgate_ships_was_checked() -> None:
         _Digest("u", "p"),
     ):
         Client(base_url="https://api.example", auth=auth)
+
+
+class _Signer(SigningAuth):
+    """A signer that sends its key id beside the signature, as an exchange's auth does."""
+
+    credential_headers: ClassVar = frozenset({"X-Api-Key", "X-Signature"})
+
+    @override
+    def sign(self, request: httpx2.Request, now: float) -> None:
+        request.headers["X-Api-Key"] = "key-1"
+        request.headers["X-Signature"] = f"signed-at-{now}"
+
+
+class _Tokens(CachedTokenAuth):
+    """A token auth whose mint makes no request of its own."""
+
+    @override
+    async def mint(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request | Minted[str], httpx2.Response]:
+        yield Minted("t0k3n", 3600.0)
+
+
+#: Each kind of auth, with a header it sets, spelled in another case than it declares it.
+_DEFAULT_CLASHES = [
+    (_Signer(), "x-api-key"),
+    (_Tokens(), "Authorization"),
+    (BearerAuth("t0k3n"), "AUTHORIZATION"),
+    (StaticHeaderAuth({"X-Api-Key": "k"}), "X-API-KEY"),
+    (_KeyAuth(), "X-Api-Key"),
+]
+_DEFAULT_CLASH_IDS = ["signing", "cached-token", "bearer", "static", "own"]
+
+
+@pytest.mark.parametrize(("auth", "header"), _DEFAULT_CLASHES, ids=_DEFAULT_CLASH_IDS)
+def test_a_client_wide_header_the_auth_sets_is_refused(auth: headgate.Auth, header: str) -> None:
+    """Refuse a default header the auth declares: every request would carry it, so the auth would never send its own."""
+    with pytest.raises(ValueError, match=rf"^HttpOptions\(headers=\) names {header}, which {type(auth).__name__} sets"):
+        Client(base_url="https://api.example", auth=auth, http=HttpOptions(headers={header: "caller", "X-Tenant": "7"}))
+
+
+@pytest.mark.parametrize(("auth", "header"), _DEFAULT_CLASHES, ids=_DEFAULT_CLASH_IDS)
+def test_a_views_header_the_auth_sets_is_refused(auth: headgate.Auth, header: str) -> None:
+    """Refuse a view's header the auth declares, where the view is made, for the same reason."""
+    client = Client(base_url="https://api.example", auth=auth)
+
+    refusal = rf"^with_options\(headers=\) names {header}, which {type(auth).__name__} sets"
+    with pytest.raises(ValueError, match=refusal):
+        client.with_options(headers={header: "caller"})
+    client.with_options(headers={"X-Tenant": "7"})
+
+
+async def test_a_calls_own_header_is_still_the_callers_credential() -> None:
+    """Send a call's own declared header as the caller's credential, unsigned, as a call that signs itself expects."""
+    fake = FakeTransport().reply("GET", "/x", Respond(json={}))
+    async with Client(base_url="https://api.example", auth=_Signer(), http=HttpOptions(transport=fake)) as client:
+        await client.get("x", expect=as_json, headers={"X-Signature": "the-callers"})
+        await client.get("x", expect=as_json)
+
+    callers, signed = (call.headers["x-signature"] for call in fake.calls)
+    assert callers == "the-callers"
+    assert signed.startswith("signed-at-")

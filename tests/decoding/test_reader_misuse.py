@@ -69,6 +69,31 @@ def test_a_reader_refuses_a_class(cls: type, advice: str) -> None:
         Reader(cast("Callable[[httpx2.Response], object]", cls))
 
 
+@pytest.mark.parametrize(
+    ("decode", "got", "advice"),
+    [
+        (str, "the class str", r"for the body as text, use as_text"),
+        (bytes, "the class bytes", r"for the body as bytes, use as_bytes"),
+        (dict, "the class dict", r"for the body as JSON, use as_json"),
+        (_Row, "the class _Row", r"write reader\(_Row\) with a flavor's reader, from headgate.msgspec or headgate"),
+        (list[_Row], r"the type list\[_Row\]", r"write reader\(list\[_Row\]\) with a flavor's reader, from headgate"),
+    ],
+    ids=["str", "bytes", "dict", "model", "type"],
+)
+def test_a_body_reader_refuses_a_class(decode: object, got: str, advice: str) -> None:
+    """Refuse a class or a type to decode the bytes with: ``str`` returned their ``repr``, a model held them."""
+    with pytest.raises(
+        TypeError, match=rf"^body_reader\(decode\) takes a function of the body's bytes \(got {got}\): {advice}"
+    ):
+        body_reader(cast("Callable[[bytes], object]", decode))
+
+
+def test_a_body_reader_of_bytes_with_a_check_is_told_to_hand_the_bytes_on() -> None:
+    """Advise a function that hands the bytes on, for ``bytes`` with ``refuse=``: ``as_bytes`` takes no check."""
+    with pytest.raises(TypeError, match=r"write body_reader\(lambda content: content, refuse=\.\.\.\) to check"):
+        body_reader(cast("Callable[[bytes], bytes]", bytes), refuse=lambda _content: None)
+
+
 def test_a_reader_takes_a_function_and_a_callable_object() -> None:
     """Accept a function and an instance with ``__call__``, which are functions of the response."""
 
@@ -171,7 +196,9 @@ def _client(*replies: httpx2.Response) -> Client:
 
 async def test_a_refuse_that_returns_no_refusal_is_the_callers_bug() -> None:
     """Raise ``TypeError`` naming ``refuse=`` for a check that returns a string, not ``ResponseParseError``."""
-    read = body_reader(bytes, refuse=cast("Callable[[bytes], RefusedError | None]", lambda body: body.decode()))
+    read = body_reader(
+        lambda body: body, refuse=cast("Callable[[bytes], RefusedError | None]", lambda body: body.decode())
+    )
     async with _client(httpx2.Response(200, content=b"x")) as client:
         with pytest.raises(
             TypeError, match=r"^refuse= returns a RefusedError, or None to accept the value \(got str\)"
@@ -187,7 +214,7 @@ async def test_a_refuse_that_returns_a_class_names_it() -> None:
         del body
         return RefusedError
 
-    read = body_reader(bytes, refuse=cast("Callable[[bytes], RefusedError | None]", returns_the_class))
+    read = body_reader(lambda body: body, refuse=cast("Callable[[bytes], RefusedError | None]", returns_the_class))
     async with _client(httpx2.Response(200, content=b"x")) as client:
         with pytest.raises(TypeError, match=r"\(got the class RefusedError\)$"):
             await client.get("x", expect=read)

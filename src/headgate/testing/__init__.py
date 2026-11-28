@@ -9,8 +9,8 @@
 * :class:`FaultyTransport`: a network that fails on a schedule (a connect failure, a
   status, a dropped connection, a slow answer, a refused HTTP/2 stream) and records what each attempt sent.
 * :class:`TestClock`: a manual clock whose sleep advances it; :meth:`TestClock.install` builds clients on it.
-* :func:`instant_retries`: clients whose retries do not wait, and :func:`policy_disabled`: clients with no retry,
-  breaker or pacing at all.
+* :func:`instant_waits`: clients whose waits (a retry's backoff, a rate budget's pacing) return at once, and
+  :func:`policy_disabled`: clients with no retry, breaker or pacing at all.
 * :class:`CassetteFilter`: vcrpy / pytest-recording filters that keep credentials and token mints out of cassettes.
 * :func:`check_codec`: the promises a :class:`~headgate.Codec` of your own must keep, checked in one call.
 * :func:`cache_of`, :func:`budget_for` and :func:`breakers_of`: what a client was built with, read back: its cache,
@@ -19,13 +19,13 @@
 
 The context managers act on the clients **constructed** inside their block (an SDK that fixes its options where it
 builds its ``Client`` leaves no other way in), so build the SDK inside them, typically in a fixture:
-:func:`fake_network` puts every client built in its block on a transport of the test's, :meth:`TestClock.install` on
-a test clock, :func:`instant_retries` makes their retries not wait, and :func:`policy_disabled` switches their call
-policy off::
+:func:`fake_network` puts every client built in its block on a transport of the test's (and a client built before it
+refuses to send inside it), :meth:`TestClock.install` on a test clock, :func:`instant_waits` makes their waits
+instant, and :func:`policy_disabled` switches their call policy off::
 
     @pytest.fixture
     def sdk() -> Iterator[MySdk]:
-        with fake_network(FakeTransport().reply("GET", "/v1/x", 200)), instant_retries():
+        with fake_network(FakeTransport().reply("GET", "/v1/x", 200)), instant_waits():
             yield MySdk(api_key="test")
 """
 
@@ -45,7 +45,7 @@ from headgate.testing._faults import (
 )
 from headgate.testing._inspect import breakers_of, budget_for, cache_of
 from headgate.testing._recording import CassetteFilter, RecordedRequest
-from headgate.testing._time import TestClock, instant_retries
+from headgate.testing._time import TestClock, instant_waits
 from headgate.testing._transport import FakeNetwork, FakeTransport, Reply, UnmatchedRequestError, fake_network
 
 __all__ = [
@@ -70,7 +70,7 @@ __all__ = [
     "cache_of",
     "check_codec",
     "fake_network",
-    "instant_retries",
+    "instant_waits",
     "policy_disabled",
 ]
 

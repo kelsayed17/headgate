@@ -17,7 +17,7 @@ import httpx2
 import pytest
 
 from headgate import CallPolicy, Client, IdempotencyKeys, Json, Rate, RetryPolicy, TransportError, nothing
-from headgate._core import CallContext, CallInfo, SendProgress
+from headgate._core import SENDING, CallContext, CallInfo, SendProgress
 from headgate.retry import Hedge
 from headgate.retry._tracking import SendTrackingTransport, head_size
 from headgate.retry._transport import RetryTransport
@@ -169,6 +169,24 @@ async def test_the_tracking_extension_is_removed_afterwards() -> None:
         await response.aclose()
 
     assert "trace" not in request.extensions
+
+
+async def test_a_send_marks_its_own_attempt_dispatched_as_it_reaches_the_network() -> None:
+    """Mark the attempt the retry layer named for the send, not a hedge begun while it waited above, not yet sent."""
+    request = httpx2.Request("GET", "https://api.test/x")
+    context = _tracked(request)
+    sending = context.progress
+    token = SENDING.set((context, sending, 1))
+    context.begin_attempt()
+    hedge = context.progress
+    try:
+        await SendTrackingTransport(
+            transport=httpx2.MockTransport(lambda _: httpx2.Response(200))
+        ).handle_async_request(request)
+    finally:
+        SENDING.reset(token)
+
+    assert (sending.dispatched, hedge.dispatched) == (True, False)
 
 
 async def test_a_request_without_a_context_passes_through_untouched() -> None:

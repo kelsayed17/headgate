@@ -8,11 +8,11 @@
 
     RetryTransport(                    # re-sends per the RetryPolicy; begins each attempt on the call's context
       AttemptTransport(                # AttemptFinished per send (only with observers)
-        MiddlewareTransport(           # the client's middleware, once per attempt, then the credential guard again
+        MiddlewareTransport(           # the client's middleware, once per attempt, then the request hooks' checks again
           ResilientCacheTransport(     # opt-in response cache; a hit stops here
             RateLimitTransport(        # the rate budget: every network send takes its turn and feeds back
               MiddlewareTransport(     # a SigningAuth's signature, once per send, then the credential guard again
-                SendTrackingTransport( # records whether each send connected and how many request bytes it wrote
+                SendTrackingTransport( # records that each send reached the network, connected, and the bytes it wrote
                   network_transport)))))))  # httpx2.AsyncHTTPTransport(trust_env=False, ...) or HttpOptions.transport
 
 :func:`build_transport_stack` builds the layers bottom-up, one statement per layer: a new layer is one more statement in
@@ -24,9 +24,11 @@ signs each send, so a request that waited for its turn is signed when it goes ou
 
 * request hooks: the credential guard (:class:`~headgate.security.CredentialGuard`, which also runs below the last
   middleware and below the signature, where what they stamp is visible), then, over a custom network
-  transport with ``SecurityOptions(block_private_hosts=True)``, the SSRF guard's vetting
-  (:func:`~headgate.security.address_hook`); the default transport (:class:`~headgate.security.PinnedHTTPTransport`)
-  and a transport that takes the guard (``headgate.curl.AsyncCurlTransport``) pin vetted addresses themselves;
+  transport or a test's fake network with ``SecurityOptions(block_private_hosts=True)``, the SSRF guard's vetting
+  (:func:`~headgate.security.address_hook`), which also runs below the last middleware on an attempt the middleware
+  moved to another origin, since a middleware may change the host; the default transport
+  (:class:`~headgate.security.PinnedHTTPTransport`) and a transport that takes the guard
+  (``headgate.curl.AsyncCurlTransport``) pin vetted addresses themselves, on every send;
 * response hooks: the https-downgrade refusal, the refusal to re-send a one-shot body on a redirect, and the drop of a
   followed redirect's body (:mod:`headgate._redirects`).
 
@@ -41,12 +43,13 @@ import sys
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from http.cookiejar import CookieJar, DefaultCookiePolicy
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final, cast, final
 
 import httpx2
 
 from headgate._attempts import AttemptTransport
 from headgate._auth import Auth, SigningAuth
+from headgate._core import sealed
 from headgate._middleware import MiddlewareTransport
 from headgate._options import httpx_timeout
 from headgate._redirects import drop_followed_redirect_body, refuse_unreplayable_redirect
@@ -71,7 +74,29 @@ if TYPE_CHECKING:
     from headgate._options import CallPolicy, HttpOptions, Timeouts
     from headgate.ratelimit._budgets import PathBudgets
 
-__all__ = ["NETWORK_OVERRIDE", "Credentials", "NetworkOverride", "build_http_client", "build_transport_stack"]
+__all__ = [
+    "NETWORK_OVERRIDE",
+    "OFFLINE_TRANSPORTS",
+    "Credentials",
+    "NetworkOverride",
+    "UnmatchedRequestError",
+    "build_http_client",
+    "build_transport_stack",
+    "sends_on_the_network",
+]
+
+
+@final
+@sealed("catch it, or the AssertionError it is")
+class UnmatchedRequestError(AssertionError):
+    """A request the fake network did not answer: no route of a :class:`~headgate.testing.FakeTransport` matched it.
+
+    Also raised by a client built outside every :func:`~headgate.testing.fake_network` block that makes a call inside
+    one, before anything is sent, since it would send on its own network, not the block's (one on a fake of the testing
+    kit's own reaches no network, and sends on it). An ``AssertionError``, not an
+    ``httpx2`` error, so the client neither retries it nor maps it onto a ``ClientError``: it reaches the test as the
+    failure it is.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +115,10 @@ class NetworkOverride:
 
 #: The network every client built while it is set runs on: :func:`headgate.testing.fake_network` sets it.
 NETWORK_OVERRIDE: Final = ContextVar[NetworkOverride | None]("headgate_network_override", default=None)
+
+#: The testing kit's transports, which answer every request themselves, so a client built on one outside every fake
+#: network reaches no network and a block lets it send: :mod:`headgate.testing` adds them.
+OFFLINE_TRANSPORTS: Final[set[type[httpx2.AsyncBaseTransport]]] = set()
 
 #: The response hooks, in the order they run on every hop.
 _RESPONSE_HOOKS = (refuse_https_downgrade, refuse_unreplayable_redirect, drop_followed_redirect_body)
@@ -168,13 +197,15 @@ def build_transport_stack(
 
     The rate-limit layer spends from *budgets*. The cache partitions its entries by *credentials*' auth. A
     ``SigningAuth`` signs each send below the rate layer, after its wait, and the middleware layer is built for
-    *credentials*' middleware; the guard runs again below each, so what they stamp stays on trusted origins too. An
-    *observed* client's attempts are reported (``AttemptFinished``).
+    *credentials*' middleware; the guard runs again below each, so what they stamp stays on trusted origins too, and
+    below the middleware so does the SSRF guard's vetting where the network transport does not pin, on an attempt the
+    middleware moved to another origin, so a host a middleware chose is vetted too. An *observed* client's attempts are
+    reported (``AttemptFinished``).
     """
     layer = SendTrackingTransport(transport=_network(http))
     if isinstance(signer := credentials.auth, SigningAuth):
         layer = MiddlewareTransport(
-            transport=layer, middleware=(), guard=credentials.guard, signer=(signer, timing.wall_clock)
+            transport=layer, middleware=(), guards=(credentials.guard,), signer=(signer, timing.wall_clock)
         )
     layer = RateLimitTransport(budgets=budgets, transport=layer)
     if (cache := policy.cache) is not None:
@@ -183,11 +214,13 @@ def build_transport_stack(
             credentials.auth,
             middleware=credentials.middleware,
             headers=http.headers,
-            guarded=http.security.block_private_hosts,
+            guard=(http.security.check, http.security.resolver) if http.security.block_private_hosts else None,
         )
         layer = ResilientCacheTransport(layer, cache, max_body_bytes=http.max_response_bytes, scope=scope)
     if middleware := credentials.middleware:
-        layer = MiddlewareTransport(transport=layer, middleware=middleware, guard=credentials.guard, signer=None)
+        layer = MiddlewareTransport(
+            transport=layer, middleware=middleware, guards=(credentials.guard,), signer=None, vets=_vetting(http)
+        )
     if observed:
         layer = AttemptTransport(transport=layer)
     retry = SEND_ONCE if policy.retry is None else policy.retry
@@ -199,9 +232,11 @@ def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
     if (override := NETWORK_OVERRIDE.get()) is not None:
         return override.transport
     if (transport := http.transport) is not None:
-        if (bind := _guard_binder(transport)) is not None:
-            bind(_address_guard(http))
-        return transport
+        if (binding := _guard_binding(transport)) is None:
+            return transport
+        binding.bind(_address_guard(http))
+        # Clients may share a curl transport and its session: the last of them to close closes it.
+        return binding.hold(transport)
     guard = _address_guard(http)
     if guard is not None:
         return PinnedHTTPTransport(guard, ssl_context=http.ssl_context, limits=http.limits)
@@ -214,15 +249,19 @@ def _network(http: HttpOptions) -> httpx2.AsyncBaseTransport:
     )
 
 
-def _guard_binder(transport: httpx2.AsyncBaseTransport) -> Callable[[AddressGuard | None], None] | None:
+def sends_on_the_network(transport: httpx2.AsyncBaseTransport) -> bool:
+    """Return whether *transport* is one of the real network's: httpx2's own, or the curl transport."""
+    return isinstance(transport, httpx2.AsyncHTTPTransport) or _guard_binding(transport) is not None
+
+
+def _guard_binding(transport: httpx2.AsyncBaseTransport) -> GuardBinding | None:
     """Return what binds *transport* to a client's SSRF guard, for a transport that pins itself; else ``None``.
 
     Only the curl transport pins itself. Its module needs the curl extra, so it is read only once something imported
     it, which building a curl transport does.
     """
     curl = sys.modules.get("headgate._curl")
-    binding = None if curl is None else cast("GuardBinding | None", curl.guard_binding(transport))
-    return None if binding is None else binding.bind
+    return None if curl is None else cast("GuardBinding | None", curl.guard_binding(transport))
 
 
 def _address_guard(http: HttpOptions) -> AddressGuard | None:
@@ -244,14 +283,17 @@ def _request_hooks(
     credentials: CredentialGuard, http: HttpOptions
 ) -> list[Callable[[httpx2.Request], Awaitable[None]]]:
     """Return the request hooks: the credential guard, then the SSRF guard when the network transport cannot pin."""
-    hooks: list[Callable[[httpx2.Request], Awaitable[None]]] = [credentials]
+    return [credentials, *_vetting(http)]
+
+
+def _vetting(http: HttpOptions) -> tuple[Callable[[httpx2.Request], Awaitable[None]], ...]:
+    """Return the SSRF guard's vetting of each hop, as a hook, when *http* asks for the guard and nothing pins."""
     addresses = _address_guard(http)
-    override = NETWORK_OVERRIDE.get()
-    network = http.transport if override is None else override.transport
-    unpinned = network is not None and _guard_binder(network) is None
-    if addresses is not None and unpinned:
-        hooks.append(address_hook(addresses))
-    return hooks
+    # A test's network is never bound to the guard (_network returns it as it is), so it never pins, whatever it is.
+    unpinned = NETWORK_OVERRIDE.get() is not None or (
+        http.transport is not None and _guard_binding(http.transport) is None
+    )
+    return (address_hook(addresses),) if addresses is not None and unpinned else ()
 
 
 def _default_headers(http: HttpOptions) -> httpx2.Headers:

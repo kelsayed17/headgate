@@ -117,7 +117,7 @@ def _client(
     return Client(
         base_url="https://x",
         auth=auth,
-        policy=CallPolicy(cache=HttpCache(**series_rules(), storage=storage, partition=partition)),
+        policy=CallPolicy(cache=HttpCache(**series_rules(), storage=storage, ttl=None, partition=partition)),
         http=dataclasses.replace(http or HttpOptions(), transport=network),
         middleware=middleware,
     )
@@ -352,7 +352,7 @@ async def test_a_response_that_varies_on_everything_is_never_a_hit(storage: Asyn
 
 def test_a_built_in_auth_gets_a_credential_partition(storage: AsyncSqliteStorage) -> None:
     """``StaticHeaderAuth`` declares its credentials, so a credential-partitioned cache accepts it."""
-    cache = HttpCache(**series_rules(), storage=storage)
+    cache = HttpCache(**series_rules(), storage=storage, ttl=None)
 
     assert isinstance(credential_scope(cache, StaticHeaderAuth({"X-Api-Key": "k"})), CredentialScope)
 

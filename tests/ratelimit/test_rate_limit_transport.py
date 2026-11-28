@@ -106,7 +106,9 @@ async def test_a_cache_hit_takes_no_token(sqlite_storage: AsyncSqliteStorage, ac
     base = _CountingTransport()
     client = Client(
         base_url="https://x",
-        policy=CallPolicy(rate=Rate.per_second(_INSTANT), cache=HttpCache(storage=sqlite_storage, paths=("/series",))),
+        policy=CallPolicy(
+            rate=Rate.per_second(_INSTANT), cache=HttpCache(storage=sqlite_storage, ttl=None, paths=("/series",))
+        ),
         http=HttpOptions(transport=base),
     )
 

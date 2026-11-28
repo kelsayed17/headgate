@@ -58,7 +58,9 @@ part of [`examples/github_client.py`](https://github.com/kelsayed17/headgate/blo
 tested client for the GitHub REST API:
 
 ```python
-from headgate import BearerAuth, CallPolicy, Client, Expect, HttpOptions, Rate, RateBudget, nothing
+from http import HTTPStatus
+
+from headgate import BearerAuth, CallPolicy, Client, Expect, HttpOptions, Paginated, Rate, RateBudget, nothing
 from headgate.msgspec import reader
 from headgate.pagination import LinkHeader
 
@@ -140,7 +142,7 @@ is the better pick.
 
 ## Install
 
-Python 3.14 or newer.
+Python 3.14 or newer, including free-threaded Python (3.14t) with the GIL off.
 
 ```bash
 uv add 'headgate[msgspec]'    # headgate, and the msgspec codec
@@ -160,8 +162,9 @@ an extra, or bring your own (see [codecs](https://kelsayed17.github.io/headgate/
 
 - **Why 3.14:** endpoint paths are [template strings](https://peps.python.org/pep-0750/) (`t"orders/{order_id}"`), so
   each value is escaped into its own path segment by default: `BTC/USD` becomes `BTC%2FUSD` instead of a new path.
-  A computed `str` is a type error; a pre-built fragment goes in as `{fragment:raw}`, and a nested t-string splices
-  as structure (`t"{API_PREFIX}/orders"`). Template strings exist only from Python 3.14.
+  A computed `str` is a type error under a checker that enforces `LiteralString` (ty, pyright), and is sent as written
+  at runtime, where only a t-string is escaped; a pre-built fragment goes in as `{fragment:raw}`, and a nested t-string
+  splices as structure (`t"{API_PREFIX}/orders"`). Template strings exist only from Python 3.14.
 - **Why httpx2:** it is pydantic's maintained fork of httpx, and headgate is built and tested on it alone. Its API is
   httpx's, so moving a client over is mostly `import httpx2` where you had `import httpx`. Upstream `httpx` is not
   supported: passing one of its objects raises a `TypeError` naming the mistake. See
@@ -389,9 +392,9 @@ Every option, its validation and the precedence of call, view, route and policy:
 
 ## Per-call options
 
-Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`, `query`) takes the URL, `expect=` (on `head`, `nothing` unless
-given), and optionally `retry=` (a `RetryPolicy`, or `None` to send once), `follow_redirects=`, `cache_ttl=` (on a
-`get` or `head`, the only verbs a cache stores),
+Every verb (`get`, `post`, `put`, `patch`, `delete`, `head`, `query`) takes the URL and `expect=`, which every verb
+requires (`head(url, expect=nothing)` for a HEAD, which reads no body), and optionally `retry=` (a `RetryPolicy`, or
+`None` to send once), `follow_redirects=`, `cache_ttl=` (on a `get` or `head`, the only verbs a cache stores),
 `timeout=`, `deadline=`, `idempotency_key=`, `max_response_bytes=`, and the request options `params=`, `headers=` and
 `body=` (what a flavor's `writer` wrote, `Json`, `Form`, `Multipart` or `Raw`); an option left out takes the view's or
 the client's.
@@ -422,6 +425,12 @@ Every error carries `source` (the client's host), `method`, `url` (credentials r
 adds `status_code`, the provider's `code` and its RFC 9457 `problem`. All of them pickle.
 
 ```python
+from http import HTTPStatus
+
+from headgate import ClientError, ClientTimeoutError
+from headgate.errors import ClientConfigurationError
+
+
 def gateway_status(error: ClientError) -> HTTPStatus:
     """Return the status an API gateway answers with when a call to an upstream failed with *error*."""
     match error:
@@ -438,7 +447,18 @@ More in [errors](https://kelsayed17.github.io/headgate/errors/).
 ## Testing your client
 
 `headgate.testing` tests a client through its real stack, with nothing private patched: `fake_network` puts the SDKs
-built in its block on a `FakeTransport` in place of the network, and a `TestClock` makes every wait instant.
+built in its block on a `FakeTransport` in place of the network, and a `TestClock` makes every wait instant. The tests
+are `async def` functions, which pytest runs with pytest-asyncio:
+
+```bash
+uv add --dev pytest pytest-asyncio
+```
+
+```toml
+# pyproject.toml: run every async test, and async fixture, on an event loop without marking each one
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+```
 
 ```python
 from quickstart import CatalogClient

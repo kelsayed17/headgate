@@ -33,12 +33,12 @@ shape of their hooks.
 
 from collections.abc import Collection, Iterable, Mapping, MutableMapping
 from contextvars import ContextVar
-from typing import ClassVar, Protocol
+from typing import ClassVar, Final, Protocol, final
 
 import httpx2
 
 from headgate._auth import AUTH_HOP
-from headgate._core import CredentialCarrier, check_kind, check_names, check_not_letters
+from headgate._core import CredentialCarrier, check_kind, check_names, check_not_letters, sealed
 from headgate._middleware import Next
 from headgate._url import sanitize_url
 from headgate.security._credentials import check_declarations
@@ -51,6 +51,9 @@ _CREDENTIAL_HEADERS = ("authorization", "proxy-authorization", "cookie")
 #: The response headers whose URL may carry a signed query, redacted as a recorded request's URI is.
 _URL_HEADERS = frozenset({"location", "content-location"})
 
+#: What ``auths=`` takes, for the refusal of anything else.
+_AUTHS_WANTED: Final = "auths or middleware that declare credential_headers and credential_params"
+
 #: Whether the send in flight in this context is an auth flow's credential mint.
 _MINTING: ContextVar[bool] = ContextVar("headgate_recording_auth_hop", default=False)
 
@@ -61,6 +64,8 @@ class RecordedRequest(Protocol):
     uri: str
 
 
+@final
+@sealed("configure it with auths=, headers=, params= and replaying=")
 class CassetteFilter:
     """Filters for a vcrpy cassette that keep headgate's credentials and token mints out of it. See the module."""
 
@@ -83,6 +88,8 @@ class CassetteFilter:
         *replaying* (for ``record_mode="none"``) makes a mint fail the test with an ``AssertionError``: a mint is
         never recorded, so vcrpy would let it reach the network, with the auth's secret.
         """
+        check_kind("replaying", replaying, bool, "a bool")
+        check_kind("auths", auths, Iterable, _AUTHS_WANTED)
         self._replaying = replaying
         check_names("headers", headers, "a collection of header names, such as ('x-api-key',)")
         check_names("params", params, "a collection of query parameter names, such as ('api_key',)")
@@ -91,12 +98,7 @@ class CassetteFilter:
         header_names = {name.lower() for name in (*_CREDENTIAL_HEADERS, *headers)}
         param_names = set(params)
         for auth in auths:
-            check_kind(
-                "auths",
-                auth,
-                CredentialCarrier,
-                "auths or middleware that declare credential_headers and credential_params",
-            )
+            check_kind("auths", auth, CredentialCarrier, _AUTHS_WANTED)
             check_declarations(
                 type(auth).__qualname__,
                 credential_headers=auth.credential_headers,

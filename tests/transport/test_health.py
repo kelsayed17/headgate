@@ -19,7 +19,7 @@ from headgate import BreakerPolicy
 from headgate._core import OBSERVER_FAILURES
 from headgate.breaker import BreakerRegistry, BreakerState
 from headgate.breaker._registry import table_of
-from headgate.health import BreakerSnapshot, breaker_states, observer_failures
+from headgate.health import BreakerSnapshot, breaker_snapshots, observer_failures
 
 if TYPE_CHECKING:
     from headgate.breaker._breaker import CircuitBreaker
@@ -46,15 +46,17 @@ def _trip(breaker: CircuitBreaker) -> None:
             _fail_once(breaker)
 
 
-def test_breaker_states_reports_a_tripped_host_as_open() -> None:
+def test_breaker_snapshots_reports_a_tripped_host_as_open() -> None:
     """Report a host's breaker as closed and admitting, then open and refusing once it trips."""
     registry = BreakerRegistry(BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=_LONG_COOLDOWN))
     breaker = table_of(registry).breaker_for(_ORIGIN)
-    assert breaker_states(registry)[_ORIGIN] == BreakerSnapshot(state=BreakerState.CLOSED, refusing=False, failures=0)
+    assert breaker_snapshots(registry)[_ORIGIN] == BreakerSnapshot(
+        state=BreakerState.CLOSED, refusing=False, failures=0
+    )
 
     _trip(breaker)
 
-    assert breaker_states(registry)[_ORIGIN] == BreakerSnapshot(
+    assert breaker_snapshots(registry)[_ORIGIN] == BreakerSnapshot(
         state=BreakerState.OPEN, refusing=True, failures=_THRESHOLD
     )
 
@@ -64,7 +66,7 @@ def test_a_tripped_breaker_past_its_cooldown_is_open_but_not_refusing() -> None:
     registry = BreakerRegistry(BreakerPolicy(failure_threshold=_THRESHOLD, recovery_timeout=0.0))
     _trip(table_of(registry).breaker_for(_ORIGIN))
 
-    assert breaker_states(registry)[_ORIGIN] == BreakerSnapshot(
+    assert breaker_snapshots(registry)[_ORIGIN] == BreakerSnapshot(
         state=BreakerState.OPEN, refusing=False, failures=_THRESHOLD
     )
 
@@ -77,7 +79,7 @@ def test_a_snapshot_counts_failures() -> None:
         with pytest.raises(ConnectionError):
             _fail_once(breaker)
 
-    snapshot = breaker_states(registry)[_ORIGIN]
+    snapshot = breaker_snapshots(registry)[_ORIGIN]
 
     assert snapshot == BreakerSnapshot(state=BreakerState.CLOSED, refusing=False, failures=2)
     assert not isinstance(snapshot, tuple)
@@ -91,12 +93,22 @@ def test_a_snapshot_cannot_be_changed(name: str) -> None:
         setattr(snapshot, name, None)
 
 
-def test_breaker_states_is_a_copy() -> None:
+def test_breaker_snapshots_is_a_copy() -> None:
     """Return a fresh mapping each call, so clearing a snapshot leaves the registry intact."""
     registry = BreakerRegistry()
     table_of(registry).breaker_for(_ORIGIN)
-    breaker_states(registry).clear()
-    assert _ORIGIN in breaker_states(registry)
+    breaker_snapshots(registry).clear()
+    assert _ORIGIN in breaker_snapshots(registry)
+
+
+def test_the_breakers_reader_is_named_for_the_snapshots_it_returns() -> None:
+    """Name it ``breaker_snapshots``: its values are snapshots, so code comparing one to a state fails at the import.
+
+    ``breaker_states``, whose values code written for 0.12.1's named tuples may compare to a ``BreakerState``, is gone
+    with no alias, since such a comparison is silently ``False``.
+    """
+    assert "breaker_states" not in vars(headgate.health)
+    assert "breaker_snapshots" in headgate.health.__all__
 
 
 def test_health_keeps_no_cache_count() -> None:

@@ -10,13 +10,16 @@ else is observed on the requests a scripted network receives.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import importlib.metadata
 import math
 import re
 import ssl
+import sys
 import uuid
 from dataclasses import replace
+from textwrap import dedent
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, override
 
@@ -45,6 +48,7 @@ from tests.support.wire import Script
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
+    from pathlib import Path
 
 
 _RATE = Rate.per_second(1000)
@@ -151,7 +155,10 @@ def _ok(request: httpx2.Request) -> httpx2.Response:
         ),
         (lambda: Route("/"), "fragment must name at least one path segment (got '/')"),
         (lambda: Route("/x", deadline=0.0), "deadline must be > 0 and finite, or None (got 0.0)"),
-        (lambda: IdempotencyKeys(header=""), "header must name a header"),
+        (
+            lambda: IdempotencyKeys(header=""),
+            "header= takes header names that are HTTP tokens, of letters, digits and !#$%&'*+-.^_`|~ (got '')",
+        ),
     ],
     ids=["other-scheme", "unparsable", "no-scheme", "empty-route", "route-deadline", "empty-header"],
 )
@@ -347,6 +354,17 @@ async def test_a_user_agent_header_the_caller_sets_wins() -> None:
     await client.get("b", expect=nothing, headers={"User-Agent": "per-call/1"})
 
     assert [request.headers.get_list("user-agent") for request in script.sent] == [["client-wide/1"], ["per-call/1"]]
+
+
+@pytest.mark.parametrize("name", ["User-Agent", "user-agent"])
+def test_a_user_agent_given_twice_is_refused(name: str) -> None:
+    """Refuse ``user_agent=`` beside a ``User-Agent`` in ``headers=``, where the header won and dropped the token."""
+    message = (
+        r"^user_agent= and headers= both set User-Agent: give user_agent= for a product token sent before headgate's "
+        r"own, or the header for the whole of it, not both$"
+    )
+    with pytest.raises(ValueError, match=message):
+        HttpOptions(user_agent="sdk/1", headers={name: "hdr/1"})
 
 
 def test_an_uninstalled_copy_reports_an_unknown_version(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -613,10 +631,10 @@ _TRUE: Any = True
 #: five are review finding M22's, which used to pass construction and fail at the first request, or be misread.
 _WRONG_KINDS: Final[list[tuple[Callable[[], object], str]]] = [
     (lambda: CallPolicy(idempotency=_TRUE), r"^idempotency= takes IdempotencyKeys\(\), or None"),
-    (lambda: CallPolicy(routes=cast("Any", ("/x",))), r"^routes= takes a tuple of Route"),
+    (lambda: CallPolicy(routes=cast("Any", ("/x",))), r"^routes= takes a sequence of Route"),
     (lambda: HttpOptions(transport=cast("Any", httpx2.HTTPTransport())), r"^transport= takes an httpx2\.AsyncBase"),
-    (lambda: HttpOptions(request_id_headers=cast("Any", "x-request-id")), r"^request_id_headers= takes a tuple of"),
-    (lambda: SecurityOptions(trusted_origins=cast("Any", "https://cdn.example")), r"^trusted_origins= takes a frozen"),
+    (lambda: HttpOptions(request_id_headers=cast("Any", "x-request-id")), r"^request_id_headers= takes a sequence"),
+    (lambda: SecurityOptions(trusted_origins=cast("Any", "https://cdn.example")), r"^trusted_origins= takes a collec"),
     (lambda: CallPolicy(cache=cast("Any", "memory")), r"^cache= takes an HttpCache, or None"),
     (lambda: CallPolicy(deadline=cast("Any", "60")), r"^deadline= takes seconds, or None for no deadline"),
     (lambda: CallPolicy(deadline=_TRUE), r"^deadline= takes seconds, or None for no deadline"),
@@ -636,8 +654,8 @@ _WRONG_KINDS: Final[list[tuple[Callable[[], object], str]]] = [
     (lambda: IdempotencyKeys(header=cast("Any", 1)), r"^header= takes a header name"),
     (lambda: IdempotencyKeys(factory=cast("Any", "uuid")), r"^factory= takes a function returning a fresh key"),
     (lambda: Client(base_url=cast("Any", None)), r"^base_url= takes the API root"),
-    (lambda: Route(cast("Any", None)), r"^fragment= takes path segments, such as '/exports' \(got NoneType\)$"),
-    (lambda: CallPolicy(routes=cast("Any", Route("/x"))), r"^routes= takes a tuple of Route.*\(got Route\)$"),
+    (lambda: Route(cast("Any", None)), r"^Route\(fragment\) takes path segments, such as '/exports' \(got NoneType\)$"),
+    (lambda: CallPolicy(routes=cast("Any", Route("/x"))), r"^routes= takes a sequence of Route.*\(got Route\)$"),
     (lambda: Client(base_url=_BASE, policy=cast("Any", {})), r"^policy= takes CallPolicy\(\.\.\.\)"),
     (lambda: Client(base_url=_BASE, http=cast("Any", {})), r"^http= takes HttpOptions\(\.\.\.\)"),
 ]
@@ -680,9 +698,137 @@ def test_every_option_is_checked_for_its_kind(build: Callable[[], object], messa
         build()
 
 
+async def _type_errors(path: Path, source: str) -> tuple[int | None, str]:
+    """Type check *source* as a module in *path*; return the checker's exit code and its output."""
+    module = path / "probe.py"
+    module.write_text(dedent(source), encoding="utf-8")
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "ty", "check", str(module), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await process.communicate()
+    return process.returncode, stdout.decode() + stderr.decode()
+
+
+async def test_the_collections_the_refusals_suggest_type_check(tmp_path: Path) -> None:
+    """Type the tuple, list or set each refusal suggests as the runtime takes it, and a sequence where order matters."""
+    code, out = await _type_errors(
+        tmp_path,
+        """
+        from headgate import CallPolicy, HttpOptions, RetryPolicy, Route, SecurityOptions
+        from headgate.retry import IDEMPOTENT_METHODS
+        from headgate.testing import FaultyTransport, Respond
+
+        RetryPolicy(methods=("GET", "PUT"), statuses=(429, 503))
+        RetryPolicy(methods=IDEMPOTENT_METHODS | {"POST"}, statuses=[503])
+        SecurityOptions(trusted_origins=("https://cdn.example",))
+        SecurityOptions(trusted_origins={"https://cdn.example"})
+        HttpOptions(request_id_headers=["x-trace-id"])
+        CallPolicy(routes=[Route("/exports", deadline=300.0)])
+        FaultyTransport(schedule=[Respond(200), Respond(503)])
+        """,
+    )
+    assert code == 0, out
+
+    code, out = await _type_errors(
+        tmp_path,
+        """
+        from headgate import CallPolicy, HttpOptions, Route
+
+        HttpOptions(request_id_headers={"x-trace-id", "x-request-id"})
+        CallPolicy(routes={Route("/exports"), Route("/exports/big")})
+        """,
+    )
+    assert out.count("invalid-argument-type") == len(("request_id_headers", "routes")), out
+
+
+def test_the_collections_hold_what_they_held() -> None:
+    """Hold frozensets of the names and codes, and tuples of the sequences, in the order given, whatever was given."""
+    policy = RetryPolicy(methods=["get", "PUT"], statuses=[429, 503])
+    origins = SecurityOptions(trusted_origins=["https://CDN.example"]).trusted_origins
+    route = Route("/exports", deadline=300.0)
+
+    assert (policy.methods, policy.statuses) == (frozenset({"GET", "PUT"}), frozenset({429, 503}))
+    assert isinstance(policy.methods, frozenset)
+    assert isinstance(policy.statuses, frozenset)
+    assert origins == frozenset({"https://cdn.example"})
+    assert isinstance(origins, frozenset)
+    assert HttpOptions(request_id_headers=["X-Trace-Id", "X-Request-Id"]).request_id_headers == (
+        "x-trace-id",
+        "x-request-id",
+    )
+    assert CallPolicy(routes=[route]).routes == (route,)
+
+
+#: How each refusal of ``Client(base_url=)`` begins: what it takes.
+_ABSOLUTE = r"^base_url= takes an absolute http\(s\) URL, such as 'https://api\.example\.com/v1' "
+_HTTP = r"^base_url= takes an http or https URL, such as 'https://api\.example\.com/v1' "
+_NO_QUERY = r"^base_url= takes a URL with no query or fragment "
+_NO_USER = r"^base_url= takes a URL with no user or password "
+#: The fixes a refusal names.
+_ADD_SCHEME = r": start it with https:// and the host$"
+_USE_PARAMS = (
+    r": every call's path would be appended to it, a key there included; send a key with QueryParamAuth, other "
+    r"parameters with params=$"
+)
+_USE_AUTH = (
+    r": httpx2 would send them as an Authorization header no auth declares; use an Auth, such as StaticHeaderAuth"
+)
+
+#: Each ``base_url`` of the right kind that is no API root, and what its refusal says: what it got, and the fix.
+_BAD_BASE_URLS: Final = [
+    ("api.example.com", _ABSOLUTE + r"\(got 'api\.example\.com'\)" + _ADD_SCHEME),
+    ("", _ABSOLUTE + r"\(got ''\)" + _ADD_SCHEME),
+    ("/v1", _ABSOLUTE + r"\(got '/v1'\)" + _ADD_SCHEME),
+    ("localhost:8080", _ABSOLUTE + r"\(got 'localhost:8080'\)" + _ADD_SCHEME),
+    ("http://[::1", _ABSOLUTE + r"\(got 'http://\[::1'\): it is not a URL httpx2 can read$"),
+    ("ftp://api.example", _HTTP + r"\(got 'ftp://api\.example'\): headgate speaks HTTP$"),
+    ("https://api.example/v1?key=s3cret", _NO_QUERY + r"\(got 'https://api\.example/v1\?…'\)" + _USE_PARAMS),
+    ("https://api.example/v1?k=s3cret", _NO_QUERY + r"\(got 'https://api\.example/v1\?…'\)" + _USE_PARAMS),
+    ("https://api.example/v1?", _NO_QUERY + r"\(got 'https://api\.example/v1\?'\)" + _USE_PARAMS),
+    ("https://api.example/v1#s3cret", _NO_QUERY + r"\(got 'https://api\.example/v1#…'\)" + _USE_PARAMS),
+    ("https://user:s3cret@api.example/v1", _NO_USER + r"\(got 'https://\*\*\*@api\.example/v1'\)" + _USE_AUTH),
+    # A token as the user, holding a raw "#": redacted whole before the URL is cut at its first "#".
+    ("https://s3cret#x@api.example/v1", _NO_QUERY + r"\(got 'https://\*\*\*@api\.example/v1'\)" + _USE_PARAMS),
+]
+
+
+@pytest.mark.parametrize(("base_url", "message"), _BAD_BASE_URLS, ids=[url or "empty" for url, _ in _BAD_BASE_URLS])
+def test_a_base_url_that_is_no_api_root_is_refused(base_url: str, message: str) -> None:
+    """Refuse, where the client is built, a URL each call's path could not be joined onto, saying how to write it."""
+    with pytest.raises(ValueError, match=message) as caught:
+        Client(base_url=base_url)
+    assert "s3cret" not in str(caught.value)
+
+
+def test_a_base_url_httpx2_cannot_read_is_refused_without_quoting_it() -> None:
+    """Refuse a URL httpx2 cannot read without its reason, which quotes the part it read, here a password."""
+    with pytest.raises(ValueError, match=r"it is not a URL httpx2 can read$") as raised:
+        Client(base_url="https://user:s3cret#x@api.example/v1")
+
+    assert "s3cret" not in str(raised.value)
+
+
+def test_the_options_repr_shows_no_header_value() -> None:
+    """Show each default header by name, its value as ``'***'``, since a default header may carry a key."""
+    options = HttpOptions(headers={"X-Api-Key": "s3cret", "Accept-Language": "en"}, max_redirects=3)
+
+    assert repr(options).startswith(
+        "HttpOptions(transport=None, headers={'X-Api-Key': '***', 'Accept-Language': '***'}, follow_redirects=True, "
+        "max_redirects=3, max_response_bytes="
+    )
+    assert ", cookies=False, request_id_headers=('x-request-id', " in repr(options)
+    assert "s3cret" not in repr(options)
+
+
+@pytest.mark.parametrize("base_url", ["https://api.example.com/v1", "HTTP://127.0.0.1:8080", "https://@api.example"])
+def test_an_api_root_is_taken(base_url: str) -> None:
+    """Take an http(s) URL with a host, in any case, with a port, or with an empty userinfo httpx2 drops."""
+    Client(base_url=base_url)
+
+
 def test_a_one_shot_iterator_of_names_is_refused() -> None:
     """Refuse an iterator where names go, since reading it to check it would leave nothing to keep."""
-    with pytest.raises(TypeError, match=r"^request_id_headers= takes a tuple of header names.*\(got generator\)$"):
+    with pytest.raises(TypeError, match=r"^request_id_headers= takes a sequence of header names.*\(got generator\)$"):
         HttpOptions(request_id_headers=cast("Any", (name for name in ("x-trace-id",))))
 
 

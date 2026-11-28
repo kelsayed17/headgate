@@ -113,7 +113,7 @@ def cache_transport(
 
     *scope* views requests as a client with that auth would; without one, as a client with no auth.
     """
-    cache = HttpCache(**(rules or every_get_rules()), storage=storage)
+    cache = HttpCache(**(rules or every_get_rules()), storage=storage, ttl=None)
     return ResilientCacheTransport(network, cache, max_body_bytes=cap, scope=scope)
 
 

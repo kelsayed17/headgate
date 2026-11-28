@@ -40,6 +40,6 @@ def breakers_of(client: Client) -> BreakerRegistry | None:
     """Return the :class:`~headgate.breaker.BreakerRegistry` *client*'s breakers live in, or ``None`` without a breaker.
 
     It is the client's own, built from its ``BreakerPolicy``, or the shared one it was given as ``breaker=``. Read its
-    breakers' states with :func:`headgate.health.breaker_states`.
+    breakers' states with :func:`headgate.health.breaker_snapshots`.
     """
     return built_with(client).breakers

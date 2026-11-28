@@ -58,7 +58,7 @@ _HOLDERS: dict[str, _Holding] = {
 
 def _cached(storage: AsyncSqliteStorage) -> CallPolicy:
     """Return a policy caching every GET into *storage*."""
-    return CallPolicy(cache=HttpCache(**every_get_rules(), storage=storage))
+    return CallPolicy(cache=HttpCache(**every_get_rules(), storage=storage, ttl=None))
 
 
 @pytest.mark.parametrize("name", sorted(_HOLDERS))

@@ -17,11 +17,12 @@ of its files is a file object that cannot be rewound, such as a pipe. :attr:`Raw
 """
 
 import enum
+import io
 import json
 import os
 import stat
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, is_dataclass
 from datetime import date, time
 from decimal import Decimal
 from typing import IO, Final, NoReturn, final, override
@@ -29,7 +30,7 @@ from uuid import UUID
 
 import httpx2
 
-from headgate._core import check_kind, refuse_subclass
+from headgate._core import check_kind, named, refuse_subclass, sealed
 
 __all__ = [
     "Body",
@@ -114,16 +115,25 @@ def wire_fields(option: str, fields: Mapping[str, object], *, raw: bool = False)
     }
 
 
+@final
+@sealed("build one of the encoded bytes and their content type, as a flavor's writer does")
 @dataclass(frozen=True, slots=True)
 class EncodedBody:
     """A request body a :data:`Writer` encoded: its bytes, and the ``Content-Type`` they are sent with.
 
     The call sends ``content_type`` unless its own ``headers=`` set one. The body is bytes, so the call stays
     retryable.
+
+    :raises TypeError: for *content* that is not ``bytes``, and a *content_type* that is not a ``str``.
     """
 
     content: bytes
     content_type: str = "application/json"
+
+    def __post_init__(self) -> None:
+        """Refuse content that is not bytes, and a content type that is not a str."""
+        check_kind("content", self.content, bytes, "the encoded body, bytes")
+        check_kind("content_type", self.content_type, str, "a media type, such as 'application/json'")
 
 
 type Writer[T] = Callable[[T], EncodedBody]
@@ -185,6 +195,10 @@ _JSON_INSTEAD: Final = (
 )
 
 
+#: What a ``Json`` says of a change to it, which names no slot: what it holds is its value, encoded when it was built.
+_IMMUTABLE: Final = "Json is immutable: build a new one, or copy.replace(body, value=...)"
+
+
 @final
 class Json:
     """A JSON body of builtins, sent with ``Content-Type: application/json``; a codec's ``to_builtins`` builds one.
@@ -192,12 +206,14 @@ class Json:
     It is encoded once, where it is built, as httpx2 encodes JSON: ``Json(None)`` sends ``null``, a tuple an array and
     an ``int`` key a string. So a value JSON cannot carry fails there, and a change to the value afterwards changes
     nothing that is sent. The ``Content-Type`` yields to one the call's ``headers=`` (or its view's) set. A ``Json`` is
-    a value of its ``value``: equal, hashed (when the value hashes), shown and matched (``case Json(value)``) by it, and
-    copied with ``copy.replace(body, value=...)``.
+    a value of its ``value``: equal, hashed (when the value hashes), shown and matched (``case Json(value)``) by it,
+    copied with ``copy.replace(body, value=...)``, and copied, deep-copied and pickled as a ``Json`` built afresh from
+    it.
 
     :raises TypeError: for a value that is not builtins (a struct, a dataclass, a model, a ``date``, a ``set``), naming
         its type: a flavor's ``writer(Type)`` encodes a typed value, and its ``to_builtins`` turns one into builtins.
-    :raises ValueError: for ``NaN`` or an infinity, which JSON cannot carry, and for a value that holds itself.
+    :raises ValueError: for ``NaN`` or an infinity, which JSON cannot carry, a value that holds itself, and text
+        holding a lone surrogate, which UTF-8 cannot encode, naming it.
     """
 
     __slots__ = ("_encoded", "_value")
@@ -219,18 +235,21 @@ class Json:
     @override
     def __setattr__(self, name: str, value: object) -> None:
         """Refuse every change: the body was encoded when it was built."""
-        msg = f"Json is immutable: build a new one, or copy.replace(body, value=...), for another {name}"
-        raise AttributeError(msg)
+        raise AttributeError(_IMMUTABLE)
 
     @override
     def __delattr__(self, name: str) -> None:
         """Refuse every change: the body was encoded when it was built."""
-        msg = f"Json is immutable: {name} cannot be deleted"
-        raise AttributeError(msg)
+        raise AttributeError(_IMMUTABLE)
 
     def __replace__(self, *, value: object) -> Json:
         """Return a ``Json`` of *value*, for ``copy.replace``."""
         return Json(value)
+
+    @override
+    def __reduce__(self) -> tuple[type[Json], tuple[object]]:
+        """Rebuild this body from its value, for ``pickle`` and ``copy``, which would set its slots past the refusal."""
+        return Json, (self._value,)
 
     @override
     def __eq__(self, other: object) -> bool:
@@ -250,16 +269,28 @@ class Json:
         refuse_subclass(cls, Json, "build a Json of the value, or write a body with a flavor's writer")
 
 
+def _is_mapping(value: object) -> bool:
+    """Return whether *value* is a mapping JSON does not encode as one, since it is not a ``dict``."""
+    return isinstance(value, Mapping) and not isinstance(value, dict)
+
+
 def encoded_json(
-    value: object, *, subject: str = "Json", takes: str = _JSON_TAKES, instead: str = _JSON_INSTEAD
+    value: object,
+    *,
+    subject: str = "Json",
+    takes: str = _JSON_TAKES,
+    instead: str = _JSON_INSTEAD,
+    compact: bool = True,
 ) -> bytes:
     """Return *value* encoded as httpx2 encodes ``json=``, so a body reads the same whichever spelling built it.
 
-    A refusal is worded for where the value was given: *subject* is what takes it, *takes* what it takes and
-    *instead* what to write instead, a ``Json``'s by default.
+    Not *compact*, it is spelt as ``json.dumps`` spells it by default instead: a space after each separator, and the
+    text escaped to ASCII. A refusal is worded for where the value was given: *subject* is what takes it, *takes* what
+    it takes and *instead* what to write instead, a ``Json``'s by default.
 
     :raises TypeError: for a value that is not builtins, naming its type, or a key JSON cannot write.
-    :raises ValueError: for ``NaN`` or an infinity, or a value that holds itself.
+    :raises ValueError: for ``NaN`` or an infinity, a value that holds itself, or text holding a lone surrogate, which
+        UTF-8 cannot encode, naming the surrogate.
     """
     refused: list[object] = []
 
@@ -268,11 +299,20 @@ def encoded_json(
         raise TypeError(item)
 
     try:
-        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False, default=not_builtins)
+        encoded = json.dumps(
+            value,
+            ensure_ascii=not compact,
+            separators=(",", ":") if compact else None,
+            allow_nan=False,
+            default=not_builtins,
+        )
     except TypeError as exc:
         # A plain TypeError at the boundary: neither the encoder's error nor not_builtins' adds anything to it.
         got = f"got {type(refused[0]).__name__}" if refused else str(exc)
-        msg = f"{takes} ({got}): {instead}"
+        # A mapping that is not a dict (a MappingProxyType, say) is a dict away from JSON: copy it.
+        mapping = bool(refused) and _is_mapping(refused[0])
+        advice = "write dict(value) for a mapping that is not a dict" if mapping else instead
+        msg = f"{takes} ({got}): {advice}"
         raise TypeError(msg) from None
     except ValueError as exc:
         msg = (
@@ -280,10 +320,20 @@ def encoded_json(
             "infinities, and break a value that holds itself"
         )
         raise ValueError(msg) from None
-    return encoded.encode()
+    try:
+        return encoded.encode()
+    except UnicodeEncodeError as exc:
+        # Only the surrogate is named: the text around it is the body's, which may carry a credential.
+        surrogate = exc.object[exc.start : exc.end]
+        msg = (
+            f"{subject} takes a value JSON can carry (got the lone surrogate {surrogate!r}, which UTF-8 cannot "
+            "encode): decode the text it came from with errors='replace', or drop the surrogate"
+        )
+        raise ValueError(msg) from None
 
 
 @final
+@sealed("build a Form of the fields")
 @dataclass(frozen=True, slots=True)
 class Form:
     """A form body, sent as ``application/x-www-form-urlencoded``: each field's value as a query value is sent.
@@ -303,16 +353,70 @@ class Form:
         object.__setattr__(self, "fields", wire_fields("Form(fields=)", self.fields))
 
 
+#: How many items a multipart file given as a pair holds: its field name, and the file.
+_PAIR: Final = 2
+
+#: The most items a file's tuple holds: its filename, the file, its content type and its headers.
+_WITH_HEADERS: Final = 4
+
+#: What multipart files are, and each file, for the refusal of anything else.
+_UPLOAD_FILES: Final = "a mapping of field names to files, or a sequence of (name, file) pairs"
+_UPLOAD_FILE: Final = (
+    "a file for each field: bytes, text or a binary file object, alone or as (filename, file), "
+    "(filename, file, content_type) or (filename, file, content_type, headers)"
+)
+
+
+def _is_content(value: object) -> bool:
+    """Return whether *value* is what a part sends as httpx2 reads it: bytes, text, or a file object not in text mode.
+
+    A file object is told by its ``read``, as httpx2 reads it, so one that is no ``io.IOBase`` (a named temporary
+    file) is one too.
+    """
+    return isinstance(value, bytes | str) or (
+        callable(getattr(value, "read", None)) and not isinstance(value, io.TextIOBase)
+    )
+
+
+def _is_upload_file(file: object) -> bool:
+    """Return whether *file* is one of an :data:`UploadFile`'s shapes: content alone, or in a tuple of two to four."""
+    if not isinstance(file, tuple):
+        return _is_content(file)
+    if not _PAIR <= len(file) <= _WITH_HEADERS:
+        return False
+    filename, content, *rest = file
+    content_type = rest[0] if rest else None
+    headers = rest[1] if len(file) == _WITH_HEADERS else {}
+    return (
+        isinstance(filename, str | None)
+        and _is_content(content)
+        and isinstance(content_type, str | None)
+        and isinstance(headers, Mapping)
+        and all(isinstance(name, str) and isinstance(value, str) for name, value in headers.items())
+    )
+
+
+def _shape(file: object) -> str:
+    """Return what *file* is, for a refusal: a tuple by the types of its items, which keeps a file's bytes out of it."""
+    if isinstance(file, tuple):
+        return f"a tuple of {', '.join(type(item).__name__ for item in file) or 'nothing'}"
+    return named(file)
+
+
 @final
+@sealed("build a Multipart of the files and fields")
 @dataclass(frozen=True, slots=True)
 class Multipart:
     """A ``multipart/form-data`` body: *files* as httpx2 takes them, and the form *fields* sent beside them.
 
     A file is ``{"name": file}``, or a ``(filename, file, content_type)`` tuple; ``file`` is bytes, text or a binary
-    file object. The body can be sent again (:attr:`replayable`) unless a file object cannot be rewound. The *fields*
+    file object, anything with a ``read``. The body can be sent again (:attr:`replayable`) unless a file object cannot
+    be rewound: a pipe, or one with only its ``read``. The *fields*
     take the values a :class:`Form` does, and ``bytes`` too, sent as they are; they are kept encoded.
 
-    :raises TypeError: for *fields* that are not a mapping, and for a value with no wire meaning.
+    :raises TypeError: for *files* that are neither a mapping nor a sequence of pairs, a field name that is not a
+        ``str``, a file of none of an :data:`UploadFile`'s shapes (naming its field), *fields* that are not a mapping,
+        and for a value with no wire meaning.
     :raises ValueError: for no files, which httpx2 would send as a form, not as ``multipart/form-data``: send fields
         alone as :class:`Form`.
     """
@@ -321,7 +425,19 @@ class Multipart:
     fields: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Refuse fields that are not a mapping or hold a value with no wire meaning, and a body with no files."""
+        """Refuse files and fields of the wrong kind, a field with no wire meaning, and a body with no files."""
+        pairs = isinstance(self.files, Sequence) and all(
+            isinstance(pair, tuple) and len(pair) == _PAIR for pair in self.files
+        )
+        if not (isinstance(self.files, Mapping) or pairs):
+            check_kind("files", self.files, (), _UPLOAD_FILES)
+        for name, file in self.files.items() if isinstance(self.files, Mapping) else self.files:
+            if not isinstance(name, str):
+                msg = f"files= takes {_UPLOAD_FILES} (got the key {name!r}, of type {type(name).__name__})"
+                raise TypeError(msg)
+            if not _is_upload_file(file):
+                msg = f"files= takes {_UPLOAD_FILE} (got {_shape(file)} under {name!r})"
+                raise TypeError(msg)
         check_kind("fields", self.fields, Mapping, "a mapping of field names to values")
         object.__setattr__(self, "fields", wire_fields("Multipart(fields=)", self.fields, raw=True))
         if not self.files:
@@ -335,6 +451,7 @@ class Multipart:
 
 
 @final
+@sealed("build a Raw of the content and its content type")
 @dataclass(frozen=True, slots=True)
 class Raw:
     """A raw body: bytes; an async iterable of bytes, streamed once; or a callable returning one, called for each send.
@@ -385,11 +502,13 @@ class Lowered:
 def lowered(body: Body | None) -> Lowered:
     """Return what httpx2 is handed for *body*, ``None`` being no body.
 
-    :raises TypeError: for a value that is no :data:`Body`, such as bare ``bytes`` (write ``Raw(...)``) or a ``dict``
-        (write ``Json(...)``).
+    :raises TypeError: for a value that is no :data:`Body`, naming the body that holds it: ``Raw`` for bare
+        ``bytes``, a stream or a file's bytes, ``Json`` for a mapping, and a writer of its type for a model's instance.
     """
-    if body is not None:
-        check_kind("body", body, _BODY_KINDS, "a Body: Json, Form, Multipart, Raw or a writer's EncodedBody")
+    if body is not None and not isinstance(body, _BODY_KINDS):
+        msg = f"body= takes a Body: Json, Form, Multipart, Raw or a writer's EncodedBody (got {named(body)})"
+        hint = _body_hint(body)
+        raise TypeError(msg if hint is None else f"{msg}: {hint}")
     match body:
         case EncodedBody(content=content, content_type=content_type):
             return Lowered(content, content_type)
@@ -405,16 +524,46 @@ def lowered(body: Body | None) -> Lowered:
             return Lowered()
 
 
+#: The class attributes that mark a model's class: a msgspec ``Struct``, a pydantic model, an attrs class.
+_MODEL_MARKS: Final = ("__struct_fields__", "__pydantic_fields__", "__attrs_attrs__")
+
+
+def _body_hint(body: object) -> str | None:
+    """Return the body to write *body* as, a value that is no :data:`Body`, or ``None`` when no body holds it.
+
+    ``Raw`` for bytes, an async stream or a file's bytes, ``Json`` for a mapping, and a writer of its type for a model's
+    instance (a dataclass's, a msgspec ``Struct``'s, a pydantic model's, an attrs class's).
+    """
+    if isinstance(body, bytes | AsyncIterable):
+        return "write body=Raw(value)"
+    if isinstance(body, Mapping):
+        return "write body=Json(value)" if isinstance(body, dict) else "write body=Json(dict(value))"
+    if isinstance(body, type):
+        return None  # a class, a model's included, is no value to send
+    if is_dataclass(body) or any(hasattr(type(body), mark) for mark in _MODEL_MARKS):
+        name = type(body).__name__
+        return (
+            f"write body=writer({name})(value) with a flavor's writer, or body=Json(to_builtins(value)) with its "
+            "to_builtins"
+        )
+    if callable(getattr(body, "read", None)):
+        return "write body=Raw(value.read())"
+    return None
+
+
 def _rewinds(file: IO[bytes]) -> bool:
     """Return whether *file* can be read again from its start: a regular file, or an in-memory one that can seek.
 
     A descriptor is judged by its type, not by ``seekable()``: on Windows a pipe reports itself seekable, though
-    seeking it rewinds nothing.
+    seeking it rewinds nothing. A file object is told by its ``read`` alone, as httpx2 reads one, so one without a
+    descriptor rewinds only when it says it can seek and has the ``seek`` httpx2 rewinds it with: one with only its
+    ``read``, which httpx2 sends in chunks, cannot be rewound.
     """
     try:
         descriptor = file.fileno()
-    except OSError:  # io.UnsupportedOperation: no descriptor, such as a BytesIO
-        return file.seekable()
+    except AttributeError, OSError:  # no descriptor: a BytesIO's io.UnsupportedOperation, or no fileno at all
+        seekable = getattr(file, "seekable", None)
+        return callable(seekable) and bool(seekable()) and callable(getattr(file, "seek", None))
     return stat.S_ISREG(os.fstat(descriptor).st_mode)
 
 

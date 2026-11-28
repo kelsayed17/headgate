@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import enum
+import re
 from typing import Annotated, Literal, NewType
 
 import pytest
@@ -51,6 +52,17 @@ def test_a_class_defined_in_a_function_reads_by_its_name() -> None:
 def test_a_type_expression_keeps_its_strings_and_numbers(value: object, text: str) -> None:
     """Drop dotted qualifiers outside quoted strings only, so a literal's text and a number survive."""
     assert type_text(value) == text
+
+
+@pytest.mark.parametrize(
+    ("option", "subject"),
+    [("x", "x="), ("Route(fragment)", "Route(fragment)"), ("Shop.refresh_margin", "Shop.refresh_margin")],
+    ids=["keyword", "positional", "attribute"],
+)
+def test_a_refusal_names_a_keyword_by_its_keyword_and_anything_else_as_written(option: str, subject: str) -> None:
+    """Name a keyword ``x=``, and a positional parameter or a class attribute as its call or its class reads."""
+    with pytest.raises(TypeError, match=rf"^{re.escape(subject)} takes a thing \(got int\)$"):
+        check_kind(option, 5, Order, "a thing")
 
 
 def test_a_refusal_names_a_type_expression_as_a_type() -> None:

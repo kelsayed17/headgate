@@ -37,8 +37,10 @@ _STREAM_PEAK_LIMIT = 4 * _MIB
 #: Requests run before measuring, untraced: enough for every bounded cache below (hishel's storage, regex and URL
 #: caches) to fill, so a leak shows as growth that continues rather than a cache that plateaus.
 _WARMUP_REQUESTS = 2500
-#: Requests per traced window: one to settle what tracing itself allocates, then one that is measured.
+#: Requests per traced window: one to settle what tracing itself allocates, then the measured ones.
 _WINDOW_REQUESTS = 500
+#: How many windows are measured, at most, one after another: a test fails only when every one of them grew.
+_MEASURED_WINDOWS = 2
 #: The most one measured window may leave allocated after a full collection: under 128 bytes a request, less than any
 #: object a leak would retain per request.
 _GROWTH_LIMIT = 64 * 1024
@@ -90,7 +92,10 @@ async def _assert_no_growth(operation: Callable[[], Awaitable[object]]) -> None:
     """Assert that a window of *operation* runs, once warmed up, leaves less than :data:`_GROWTH_LIMIT` allocated.
 
     A leak retains something on every run, so it grows window after window; a bounded cache fills during the warmup
-    and then stops. Measuring a window after the warmup tells the two apart.
+    and then stops. Measuring a window after the warmup tells the two apart. A window that grew is measured again, by
+    the next one, and the test fails only when each grew: a leak grows every window, while a one-off growth, such as
+    the interpreter resizing its table of interned strings (whose size depends on everything the session ran before),
+    lands in one of them.
 
     The event loop turns once before each snapshot, as it does between requests in any real program. An in-memory
     transport never suspends, so without that turn the loop never purges the deadline timers each call cancels, which
@@ -103,21 +108,25 @@ async def _assert_no_growth(operation: Callable[[], Awaitable[object]]) -> None:
         await operation()
     tracemalloc.start(_TRACE_FRAMES)
     try:
-        for _ in range(_WINDOW_REQUESTS):
-            await operation()
-        await asyncio.sleep(0)
-        gc.collect()
-        before = tracemalloc.take_snapshot()
-        for _ in range(_WINDOW_REQUESTS):
-            await operation()
-        await asyncio.sleep(0)
-        gc.collect()
-        after = tracemalloc.take_snapshot()
+        after = await _window_snapshot(operation)
+        for _ in range(_MEASURED_WINDOWS):
+            before, after = after, await _window_snapshot(operation)
+            growth = sum(stat.size_diff for stat in after.compare_to(before, "filename"))
+            if growth < _GROWTH_LIMIT:
+                return
     finally:
         tracemalloc.stop()
-    growth = sum(stat.size_diff for stat in after.compare_to(before, "filename"))
-    report = _report(growth, after.compare_to(before, "traceback")[:_REPORTED_GROWTHS])
-    assert growth < _GROWTH_LIMIT, report
+    # Written once tracing has stopped: formatting a traceback reads its source into linecache, which stays allocated.
+    raise AssertionError(_report(growth, after.compare_to(before, "traceback")[:_REPORTED_GROWTHS]))
+
+
+async def _window_snapshot(operation: Callable[[], Awaitable[object]]) -> tracemalloc.Snapshot:
+    """Run a window of *operation*, let the event loop turn, collect, and return what is allocated then."""
+    for _ in range(_WINDOW_REQUESTS):
+        await operation()
+    await asyncio.sleep(0)
+    gc.collect()
+    return tracemalloc.take_snapshot()
 
 
 def _report(growth: int, stats: list[tracemalloc.StatisticDiff]) -> str:
@@ -199,6 +208,17 @@ async def test_repeated_retries_retain_nothing() -> None:
 
     client = _client(flaky)
     await _assert_no_growth(lambda: client.get("series", expect=as_bytes))
+
+
+async def test_a_leak_fails_the_growth_check() -> None:
+    """Fail an operation that retains what it allocates, every window, as a leak does: the check still sees one."""
+    retained: list[bytes] = []
+
+    async def leak() -> None:
+        retained.append(bytes(256))
+
+    with pytest.raises(AssertionError, match=r"^a window grew by \d+ B"):
+        await _assert_no_growth(leak)
 
 
 async def test_repeated_cache_hits_retain_nothing() -> None:

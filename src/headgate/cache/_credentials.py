@@ -44,6 +44,7 @@ nor is an entry whose response varies on a request header (``Vary``); they expir
 import hashlib
 import hmac
 import secrets
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, override
 
@@ -157,7 +158,7 @@ class CredentialScope:
         partition: Partition = Partition.CREDENTIAL,
         carriers: Iterable[CredentialCarrier] = (),
         client_headers: Iterable[str] = (),
-        guarded: bool = False,
+        guard: Guard | None = None,
     ) -> None:
         """Strip what *stamper* and *carriers* declare, and partition by their credentials under the default partition.
 
@@ -166,8 +167,9 @@ class CredentialScope:
         :class:`~headgate.security.CredentialStamper` and by the values otherwise. *client_headers* names the headers
         the client sets on every request, which label the partition by their values. The names are read once, here.
 
-        A *guarded* client (one that refuses private hosts) gets entries of its own under either partition, so it is
-        never served a body an unguarded client on the same storage fetched from a host it would refuse.
+        A client with a *guard* (it refuses private hosts) gets entries of its own under either partition, labeled by
+        the guard's check and resolver, so it is never served a body that an unguarded client, or one whose guard
+        admits more, fetched from a host it would refuse: a cache hit is not vetted.
         """
         sources = list(carriers)
         if stamper is not None:
@@ -192,8 +194,7 @@ class CredentialScope:
         self._represented_params = frozenset(represented_params)
         self._client_headers = frozenset(name.lower() for name in client_headers) - self._dropped_headers
         self._partitioned = partition is Partition.CREDENTIAL
-        # One label for every guarded client, since they all vet addresses alike; a configurable check needs its own.
-        self._guarded = (b"guarded",) if guarded else ()
+        self._guarded = () if guard is None else (b"guarded", _guard_label(guard))
 
     def view(self, request: httpx2.Request) -> tuple[httpx2.URL, httpx2.Headers]:
         """Return the URL and headers hishel gets for *request*: no credential, and its partition label if any."""
@@ -255,12 +256,31 @@ def credential_scope(
     *,
     middleware: Iterable[CredentialCarrier] = (),
     headers: Iterable[str] = (),
-    guarded: bool = False,
+    guard: Guard | None = None,
 ) -> CredentialScope:
     """Return the :class:`CredentialScope` for a client with *cache*, *auth*, *middleware* and client-wide *headers*.
 
-    A *guarded* client, one that refuses private hosts, gets entries of its own.
+    A client with a *guard*, one that refuses private hosts, gets entries of its own, apart from every other guard's.
     """
-    return CredentialScope(
-        auth, partition=cache.partition, carriers=middleware, client_headers=headers, guarded=guarded
-    )
+    return CredentialScope(auth, partition=cache.partition, carriers=middleware, client_headers=headers, guard=guard)
+
+
+#: What decides which hosts a guarded client reaches: its SSRF guard's address check and its resolver.
+type Guard = tuple[object, object]
+
+#: Each guard seen in this process, by the identities of its check and resolver: the label its entries are kept under,
+#: and the guard itself, held so that neither object's identity is reused by another while the process runs.
+_GUARD_LABELS: Final[dict[tuple[int, int], tuple[bytes, Guard]]] = {}
+_GUARD_LABELS_LOCK: Final = threading.Lock()
+
+
+def _guard_label(guard: Guard) -> bytes:
+    """Return the label of *guard*'s entries: one per check and resolver, so two guards that differ never share one.
+
+    Labels are per process, as the partition key is. They are keyed by identity, since a check or a resolver need not
+    be hashable (a bound method of a mutable object), and two of them that compare equal may still decide differently.
+    """
+    check, resolver = guard
+    with _GUARD_LABELS_LOCK:
+        label, _ = _GUARD_LABELS.setdefault((id(check), id(resolver)), (str(len(_GUARD_LABELS)).encode(), guard))
+    return label

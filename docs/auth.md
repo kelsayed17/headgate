@@ -45,8 +45,15 @@ class KeyAuth(Auth):
 A subclass that leaves a member out cannot be built, and a declaration that is not a `frozenset` of names, or whose
 names are all one character long (`frozenset("x-api-key")` is a set of its letters, not one name), fails when the
 class is defined (or, for a property, when the client is built). A base class of your own whose `__init_subclass__`
-skips `super().__init_subclass__()` cuts its subclasses off from those checks, so `Client()` refuses them. A fixed
-header needs no class: `StaticHeaderAuth`.
+skips `super().__init_subclass__()` cuts its subclasses off from those checks, so `Client()` refuses them. The
+declared query parameters are registered as secret when a client is built with the auth, so every URL headgate shows
+redacts them, httpx2's own log line included. A fixed header needs no class: `StaticHeaderAuth`. Every auth class
+headgate ships may be subclassed too, as `BearerAuth` subclasses `StaticHeaderAuth`: the client calls an auth through
+its declarations and its async flow, `async_auth_flow`, which `SigningAuth` and `CachedTokenAuth` keep final. httpx2's
+own `async_auth_flow` runs `auth_flow`, so an `auth_flow` override runs in an `Auth` subclass that writes no
+`async_auth_flow`, as the `Digest` below does; every auth headgate ships writes its own, which never calls `auth_flow`, so a
+subclass of one that overrides `auth_flow` raises `TypeError` when it is defined. A header computed per request
+belongs in a [`SigningAuth`](#signingauth)'s `sign()`.
 For basic auth, `StaticHeaderAuth({"Authorization": "Basic " + base64.b64encode(b"user:pass").decode()})`.
 
 Digest auth is httpx2's own flow with the declarations added, since `httpx2.DigestAuth` declares nothing:
@@ -224,6 +231,12 @@ one. What the flow can count on:
 - **Each hop is sent with the call's timeouts** unless it sets a `timeout` extension of its own, and every hop's
   timeouts are cut to what the call's deadline leaves, so a token host that never answers cannot hold the call (or
   the other calls waiting for the token) past it.
+- **Each hop is retried under the client's own retry policy**, `CallPolicy(retry=)`, not the call's: a call's
+  `retry=None` does not reach its mint. A token request is a POST, so it is re-sent after a 503 or a dropped
+  connection only when it carries an idempotency key (`headers={"Idempotency-Key": ...}` on the request the flow
+  yields) or nothing of it was sent, as any POST is; without one, a 503 fails the mint.
+- **Each hop goes through the client's middleware**, which sees it in `call_view()` as a call of its own (the hop's
+  method and URL, `remaining=None`), and no observer sees an event for it: its time is part of the call's.
 
 Each hop counts toward `HttpOptions.max_redirects`, because httpx2 keeps one history per call; a mint of several hops
 needs a higher limit. A hop may carry the mint's credentials to the origin it addresses and to same-origin redirects,
@@ -261,3 +274,12 @@ endpoint. The API host's breaker records nothing for it.
 - `self.reject_credential_rotation(returned, configured, setting=...)`, called from your `mint`, raises
   `ClientConfigurationError` when a token endpoint hands back a replacement for the long-lived credential, which an
   in-memory cache cannot persist.
+
+### A token and a signature
+
+One auth cannot be both: a class of `CachedTokenAuth` and `SigningAuth` is refused where it is defined, since each runs a
+flow of its own. Subclass `CachedTokenAuth` for the token, and sign each attempt in a
+[middleware](configuration.md#middleware), which sees the token on the request and declares what it sets. A middleware
+runs before the rate budget's wait, where a `SigningAuth` signs after it, so a signature that is valid for less time than
+a call may queue (under a tight `Rate`, or a provider's pause) needs a rate the queue stays short under, or a longer
+validity.

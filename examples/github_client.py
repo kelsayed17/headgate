@@ -16,16 +16,13 @@ endpoint method stays one line:
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Self
+from typing import Self
 
 import msgspec
 
-from headgate import BearerAuth, CallPolicy, Client, Expect, HttpOptions, Rate, RateBudget, nothing
+from headgate import BearerAuth, CallPolicy, Client, Expect, HttpOptions, Paginated, Rate, RateBudget, nothing
 from headgate.msgspec import reader
 from headgate.pagination import LinkHeader
-
-if TYPE_CHECKING:
-    from headgate import Paginated
 
 API = "https://api.github.com"
 

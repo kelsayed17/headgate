@@ -1,10 +1,13 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Send tracking: record, as facts, whether an attempt obtained a connection and how many request bytes it wrote.
+"""Send tracking: record, as facts, whether an attempt reached the network, connected, and how many bytes it wrote.
 
 :class:`SendTrackingTransport` sits directly above the network transport (see :mod:`headgate._stack`) and fills the
-current attempt's :class:`~headgate._core.SendProgress` from two sources:
+current attempt's :class:`~headgate._core.SendProgress`. It marks the attempt dispatched as it hands it to the
+network transport, past the rate budget, the middleware and a ``SigningAuth``'s signature, so a failure raised above
+(a middleware's own ``ConnectError``, a signer's ``OSError``) reads as one that sent nothing and tested no origin. The
+rest comes from two sources:
 
 * httpx2's ``trace`` request extension, which httpcore2 calls at each step of a send: a TCP or Unix-socket connection
   completing marks the attempt connected, and the request head starting to go out marks it connected and counts the
@@ -112,7 +115,7 @@ def _tracer(request: httpx2.Request, progress: SendProgress, chained: _Trace | N
 
 
 class SendTrackingTransport(httpx2.AsyncBaseTransport):
-    """Record each send's connection and written bytes on the call's context. See the module docstring."""
+    """Record each send's dispatch, connection and written bytes on the call's context. See the module docstring."""
 
     def __init__(self, *, transport: httpx2.AsyncBaseTransport) -> None:
         """Track the sends made through *transport*."""
@@ -130,6 +133,7 @@ class SendTrackingTransport(httpx2.AsyncBaseTransport):
             one_shot = context.get(REPLAYABLE_BODY) is False and not isinstance(stream, httpx2.ByteStream)
             request.stream = _CountingStream(stream, progress, context if one_shot else None)
         request.extensions[_TRACE] = _tracer(request, progress, chained)
+        progress.mark_dispatched()
         try:
             return await self._transport.handle_async_request(request)
         finally:

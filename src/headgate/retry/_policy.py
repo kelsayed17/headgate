@@ -17,8 +17,9 @@ layer concluded about the call's last attempt, which the client folds into the e
 import math
 import sys
 import weakref
+from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final, Self, final, override
+from typing import TYPE_CHECKING, Final, NoReturn, Self, final, override
 
 import httpx2
 
@@ -30,7 +31,9 @@ from headgate._core import (
     check_number,
     check_statuses,
     current_timing,
+    refuse_pickle,
     refuse_subclass,
+    sealed,
 )
 from headgate.retry._budget import RetryLedger
 
@@ -142,6 +145,8 @@ class Backoff:
         refuse_subclass(cls, Backoff, "set factor and max_wait instead; the wait is factor * 2^retry times the jitter")
 
 
+@final
+@sealed("set ratio, min_per_second and window, which are all the budget reads")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RetryShare:
     """A cap on the extra load retries add: retries in the last ``window`` seconds may not exceed a share of traffic.
@@ -171,6 +176,7 @@ _DEFAULT_SHARE: Final = RetryShare()
 
 
 @final
+@sealed("share one budget between the clients whose retries it caps")
 class RetryBudget:
     """Live shared state: one retry allowance, spent by every client given this same object.
 
@@ -207,11 +213,18 @@ class RetryBudget:
         return self
 
     @override
+    def __reduce__(self) -> NoReturn:
+        """Refuse to be pickled: a live budget is state its clients share within one process, raising ``TypeError``."""
+        refuse_pickle(self)
+
+    @override
     def __repr__(self) -> str:
         retries, firsts = self._ledger.counts()
         return f"RetryBudget({self._share!r}, retries={retries}, firsts={firsts})"
 
 
+@final
+@sealed("set after and max_extra, which are all the retry layer reads")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Hedge:
     """Hedge a slow idempotent request: if no attempt has answered after ``after`` seconds, start another.
@@ -240,8 +253,9 @@ class RetryPolicy:
     * ``attempts``: sends per call, the first included (1 never retries); hedges count as sends.
     * ``methods``: the methods treated as idempotent, re-sent after any retryable failure. Any other method (POST,
       PATCH) is re-sent only when the request carries an idempotency key, when nothing of it was written, or when the
-      failure proves the server did not process it (425, an HTTP/2 ``REFUSED_STREAM``).
-    * ``statuses``: the response statuses that are retryable.
+      failure proves the server did not process it (425, an HTTP/2 ``REFUSED_STREAM``). Held as a ``frozenset``,
+      upper-cased.
+    * ``statuses``: the response statuses that are retryable, held as a ``frozenset``.
     * ``backoff``: the wait between attempts when the response sets no ``Retry-After``.
     * ``max_retry_after``: the longest ``Retry-After`` (or ``retry-after-ms``) that is waited, exactly. A longer one
       stops the call, and the error it raises carries the delay as ``retry_after``.
@@ -255,8 +269,8 @@ class RetryPolicy:
     """
 
     attempts: int = 3
-    methods: frozenset[str] = IDEMPOTENT_METHODS
-    statuses: frozenset[int] = RETRY_STATUSES
+    methods: Collection[str] = IDEMPOTENT_METHODS
+    statuses: Collection[int] = RETRY_STATUSES
     backoff: Backoff = field(default_factory=Backoff)
     max_retry_after: float = 30.0
     budget: RetryShare | RetryBudget | None = field(default_factory=RetryShare)
@@ -278,6 +292,9 @@ class RetryPolicy:
         check_kind(
             "budget", self.budget, (RetryShare, RetryBudget, type(None)), "a RetryShare, a shared RetryBudget, or None"
         )
+        check_kind("backoff", self.backoff, Backoff, "a Backoff, such as Backoff(factor=1.0)")
+        check_kind("respect_should_retry", self.respect_should_retry, bool, "a bool")
+        check_kind("hedge", self.hedge, (Hedge, type(None)), "a Hedge, or None for no hedging")
         check_names("methods", self.methods, "a collection of methods, such as ('GET', 'PUT')")
         check_statuses("statuses", self.statuses, "a collection of statuses, such as (429, 503)")
         if informational := sorted(status for status in self.statuses if status < _FIRST_FINAL_STATUS):

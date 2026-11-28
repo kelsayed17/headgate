@@ -104,13 +104,13 @@ An observer that alerts on it finds every endpoint a client depends on that is g
 
 Every request carries `User-Agent: headgate/<version> httpx2/<version> python/<version>`.
 `HttpOptions(user_agent="shop-sync/1.4")` puts your product token first, which is what a provider's support team sees.
-A `User-Agent` in `HttpOptions(headers=...)` replaces it entirely.
+A `User-Agent` in `HttpOptions(headers=...)` replaces it entirely, so the two together raise `ValueError`: give one.
 
 ## Health snapshots
 
 `headgate.health` reads the state that says something is degraded, as fresh copies a metrics callback can poll:
 
-- `breaker_states(registry)`: a `BreakerSnapshot` per origin, of the registry you pass, with its `state`, whether
+- `breaker_snapshots(registry)`: a `BreakerSnapshot` per origin, of the registry you pass, with its `state`, whether
   it is `refusing` calls now, and its consecutive `failures` since the last success. A client's breakers are its own
   unless it is given a registry, so to watch them, build one and give it to the clients:
   `breaker=BreakerRegistry(BreakerPolicy())`;

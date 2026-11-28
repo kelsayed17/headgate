@@ -20,7 +20,7 @@ the request line as ``METHOD log_url``, so a 404, a surviving 503 and an undecod
 import json
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
@@ -160,7 +160,7 @@ class CallSite:
     method: str
     url: str
     attempts: int | None = None
-    request_id_headers: tuple[str, ...] = DEFAULT_REQUEST_ID_HEADERS
+    request_id_headers: Sequence[str] = DEFAULT_REQUEST_ID_HEADERS
     retry: RetryOutcome | None = None
     wall_clock: Clock = time.time
 

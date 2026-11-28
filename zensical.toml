@@ -33,6 +33,9 @@ nav = [
     "observability.md",
     "testing.md",
   ] },
+  { "Reference" = [
+    "imports.md",
+  ] },
   { "Project" = [
     "design.md",
     "mutation-testing.md",

@@ -37,7 +37,7 @@ Only what the origin itself showed:
 | | a failure on a hop an auth flow made to mint a credential (that is the token host's failure) |
 | | a cache hit, a stored 5xx, or an outcome shared from another identical request's fetch |
 | | a call its caller cancelled, a deadline passing before the request reached the network, a body over the size cap, a refused SSRF destination |
-| | a response a middleware answered itself, without sending the request |
+| | a response a middleware answered itself, without sending the request, and a network error raised before the attempt reached the network: a middleware's own `httpx2.ConnectError`, a `SigningAuth.sign` that raises `OSError`, the SSRF guard's failed lookup of the call's own host over a custom transport |
 | | an exception a `stream()` block's own code raises, even an `OSError` or an httpx2 error: it is the caller's, not the origin's |
 
 Every other response is a success: a 4xx says the origin is answering.
@@ -75,14 +75,14 @@ so it is not refused by a breaker a client sharing one opened.
 
 Every transition a call causes is a `BreakerChanged` event (origin, previous and new state, failure count, and the
 call); a state is a `BreakerState`, a string enum of `closed`, `open` and `half_open`.
-`headgate.health.breaker_states(registry)` returns a snapshot per origin of the registry you pass (the one your clients
-share), with `refusing` and `failures` alongside `state`: an open breaker whose cooldown has elapsed still reads open
-until a call takes the probe, so `refusing` is what says whether a call made now would be turned away, and `failures`
-counts the consecutive failures since the last success, a failed probe included. It is the one reader of a
+`headgate.health.breaker_snapshots(registry)` returns a snapshot per origin of the registry you pass (the one your
+clients share), with `refusing` and `failures` alongside `state`: an open breaker whose cooldown has elapsed still
+reads open until a call takes the probe, so `refusing` is what says whether a call made now would be turned away, and
+`failures` counts the consecutive failures since the last success, a failed probe included. It is the one reader of a
 registry's breakers, which a registry itself does not hand out. Each key is the origin in canonical form,
 `scheme://host[:port]`, with the host lower-cased and the scheme's default port left out, so a client on
 `https://API.example:443/v1` is under `"https://api.example"`; an origin no client has called yet is absent, so read
-one with `breaker_states(registry).get("https://api.example")`. See [observability](observability.md).
+one with `breaker_snapshots(registry).get("https://api.example")`. See [observability](observability.md).
 
 In tests, no breaker state crosses between tests, since each client keeps its own;
 `headgate.testing.breakers_of(client)` returns the registry a client's breakers live in. See [testing](testing.md).

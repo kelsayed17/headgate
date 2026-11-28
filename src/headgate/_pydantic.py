@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Final, Literal, cast, get_origin, overload
 
 try:
     from pydantic import BaseModel, PydanticSchemaGenerationError, RootModel, TypeAdapter, ValidationError
-    from pydantic_core import PydanticKnownError, to_json, to_jsonable_python
+    from pydantic_core import PydanticKnownError, PydanticSerializationError, to_json, to_jsonable_python
 except ImportError as exc:
     msg = "headgate.pydantic needs pydantic: pip install headgate[pydantic]"
     raise ImportError(msg) from exc
@@ -22,7 +22,7 @@ from typing_extensions import TypeForm
 
 from headgate._codec import decode_with, reader_for, writer_for
 from headgate._codec import drop_none as _drop_none
-from headgate._core import type_text
+from headgate._core import check_kind, type_text
 from headgate._failures import NESTED_TOO_DEEPLY
 from headgate._request_body import Writer
 from headgate._responses import Reader
@@ -32,6 +32,9 @@ __all__ = ["CODEC", "PydanticCodec", "decode", "reader", "to_builtins", "writer"
 
 #: The class pydantic names when it has no schema for one, as ``<class 'module.Name'>``.
 _SCHEMALESS: Final = re.compile(r"<class '([^']+)'>")
+
+#: What pydantic says of a value of a class it has no serializer for, naming the class as ``<class 'module.Name'>``.
+_UNSERIALIZABLE: Final = re.compile(r"Unable to serialize unknown type: <class '([^']+)'>")
 
 #: How many of a validation's failures a ``DecodeError`` message names; the count of the rest follows them.
 _ERRORS_SHOWN = 5
@@ -126,7 +129,12 @@ class PydanticCodec:
     errors: ClassVar[tuple[type[Exception], ...]] = (ValidationError,)
 
     def __init__(self, *, strict: bool = True, drop_none: bool = False) -> None:
-        """Validate strictly unless *strict* is false; encode without ``None`` fields when *drop_none* is true."""
+        """Validate strictly unless *strict* is false; encode without ``None`` fields when *drop_none* is true.
+
+        :raises TypeError: for a *strict* or *drop_none* that is not a ``bool``.
+        """
+        check_kind("strict", strict, bool, "a bool")
+        check_kind("drop_none", drop_none, bool, "a bool")
         self._strict = strict
         self._drop_none = drop_none
 
@@ -196,14 +204,17 @@ _LAX: Final = PydanticCodec(strict=False)
 _DROPPING_NONE: Final = PydanticCodec(drop_none=True)
 
 
-def decode[T](content: bytes, type_: TypeForm[T], *, strict: bool = True) -> T:
+def decode[T](content: bytes | str, type_: TypeForm[T], *, strict: bool = True) -> T:
     """Validate *content* as strict JSON against the type expression *type_*.
 
     ``strict=True`` rejects pydantic's lax coercions, so a JSON string where an ``int`` is declared is wire drift.
-    Invalid JSON and a type mismatch raise the same error.
+    Invalid JSON and a type mismatch raise the same error. A ``str``, such as a server-sent event's data, is read as its
+    UTF-8 bytes.
 
+    :raises TypeError: for *content* that is neither ``bytes`` nor a ``str``, and a *strict* that is not a ``bool``.
     :raises DecodeError: if *content* is not JSON or does not match *type_*.
     """
+    check_kind("strict", strict, bool, "a bool")
     return decode_with(CODEC if strict else _LAX, content, type_)
 
 
@@ -220,6 +231,7 @@ def reader[T](
     ``dict[str, Row]``, a union of shapes). One malformed element fails the whole body. ``allow_empty_body`` and
     ``refuse`` are documented on :func:`~headgate.reader_for`.
     """
+    check_kind("strict", strict, bool, "a bool")
     codec = CODEC if strict else _LAX
     return reader_for(codec, type_, allow_empty_body=allow_empty_body, refuse=refuse)
 
@@ -232,6 +244,7 @@ def writer[T](type_: TypeForm[T], *, drop_none: bool = False) -> Writer[T]:
     :func:`to_builtins` applies them. ``drop_none=True`` removes ``None``-valued fields recursively, as
     :func:`to_builtins` does.
     """
+    check_kind("drop_none", drop_none, bool, "a bool")
     return writer_for(_DROPPING_NONE if drop_none else CODEC, type_)
 
 
@@ -249,6 +262,20 @@ def to_builtins(value: object, *, drop_none: bool = False) -> object:
     Field aliases are applied (``by_alias=True``), so a model declares the wire's names once. A ``RootModel``
     converts to whatever its root converts to. ``drop_none=True`` also removes ``None``-valued fields recursively,
     keeping ``False`` and ``0``.
+
+    :raises TypeError: for a value holding a class pydantic cannot convert, naming the class, as the msgspec flavor
+        raises it; pydantic's error is chained.
     """
-    out = to_jsonable_python(value, by_alias=True)
+    check_kind("drop_none", drop_none, bool, "a bool")
+    try:
+        out = to_jsonable_python(value, by_alias=True)
+    except PydanticSerializationError as exc:
+        if (unknown := _UNSERIALIZABLE.match(str(exc))) is None:
+            raise
+        name = str(unknown[1]).rpartition(".")[2]
+        msg = (
+            f"headgate.pydantic cannot convert {name} to builtins, a class pydantic has no serializer for: declare it "
+            "as a pydantic model or a dataclass, and use headgate.msgspec.to_builtins for a msgspec.Struct"
+        )
+        raise TypeError(msg) from exc
     return _drop_none(out) if drop_none else out

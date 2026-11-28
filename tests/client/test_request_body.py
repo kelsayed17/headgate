@@ -9,6 +9,7 @@ Whether a body is sent again on a retry, a redirect or a GOAWAY is pinned end to
 
 from __future__ import annotations
 
+import collections
 import copy
 import dataclasses
 import importlib
@@ -17,10 +18,20 @@ import io
 import json
 import math
 import os
+import pathlib
+import pickle
+import re
+import tempfile
+import types
 from dataclasses import dataclass
 from datetime import date
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
+import attrs
+import httpx2
+import msgspec
+import pydantic
 import pytest
 
 from headgate import (
@@ -159,6 +170,41 @@ def test_a_json_body_is_a_value_of_its_value_alone() -> None:
         del cast("Any", body).value
 
 
+def test_a_json_body_copies_deep_copies_and_pickles_as_its_value() -> None:
+    """Copy, deep-copy and pickle a ``Json``, as the dataclass of 0.12.1 did: each equal, and sending the same bytes.
+
+    Each is built afresh from the value, by the reduce protocol ``pickle`` and ``copy.deepcopy`` both replay, so a deep
+    copy holds a copy of it, and nothing reads or names its encoding.
+    """
+    body = Json({"a": [1], "name": "naïve"})
+    copies = [copy.copy(body), copy.deepcopy(body)]
+
+    assert copies == [body, body]
+    assert [lowered(copied).content for copied in copies] == [lowered(body).content] * len(copies)
+    assert copies[1].value is not body.value
+    assert body.__reduce__() == (Json, (body.value,))
+    assert pickle.dumps(body)
+
+
+def test_a_json_body_refuses_a_change_without_naming_its_encoding() -> None:
+    """Refuse setting or deleting any attribute in words that name no private slot, its encoding above all."""
+    body = cast("Any", Json({"a": 1}))
+    for name in ("value", "_encoded"):
+        with pytest.raises(AttributeError) as refused:
+            setattr(body, name, 2)
+        assert str(refused.value) == "Json is immutable: build a new one, or copy.replace(body, value=...)"
+        with pytest.raises(AttributeError) as refused:
+            delattr(body, name)
+        assert str(refused.value) == "Json is immutable: build a new one, or copy.replace(body, value=...)"
+
+
+@pytest.mark.parametrize("value", ["\ud800", {"note": "a\udfffb"}], ids=["str", "nested"])
+def test_a_json_value_utf8_cannot_encode_is_refused_naming_it(value: object) -> None:
+    """Refuse text holding a lone surrogate where the body is built, naming the surrogate, not a raw encoder error."""
+    with pytest.raises(ValueError, match=r"^Json takes a value JSON can carry \(got the lone surrogate '\\ud[8f]"):
+        Json(value)
+
+
 def test_a_json_body_cannot_be_subclassed() -> None:
     """Refuse a subclass, whose overrides nothing would call: the body is its encoded value."""
     with pytest.raises(TypeError, match=r"^_Mine cannot subclass Json, which is final"):
@@ -183,6 +229,12 @@ def test_a_json_body_of_what_is_not_builtins_is_refused_where_it_is_built(value:
     """Refuse a value JSON cannot encode where the ``Json`` is built, naming its type and what to write instead."""
     with pytest.raises(TypeError, match=rf"^Json takes builtins.*\(got {got}\): .*writer\(.*to_builtins\(value\)"):
         Json(value)
+
+
+def test_a_json_body_of_a_mapping_that_is_no_dict_is_told_to_copy_it() -> None:
+    """Advise ``dict(value)`` for a mapping JSON does not encode, which is a dict away from builtins."""
+    with pytest.raises(TypeError, match=r"\(got mappingproxy\): write dict\(value\) for a mapping that is not a dict$"):
+        Json(MappingProxyType({"a": 1}))
 
 
 @pytest.mark.parametrize(("value", "sent"), [((1, 2), b"[1,2]"), ({1: "a"}, b'{"1":"a"}')], ids=["tuple", "int-key"])
@@ -210,19 +262,79 @@ def test_two_json_bodies_of_one_value_are_equal() -> None:
 
 
 @pytest.mark.parametrize(
-    ("value", "got"),
-    [(b"raw", "bytes"), ({"a": 1}, "dict"), ("text", "str")],
-    ids=["bytes", "dict", "str"],
+    ("value", "got", "hint"),
+    [
+        (b"raw", "bytes", ": write body=Raw(value)"),
+        (httpx2.ByteStream(b"raw"), "ByteStream", ": write body=Raw(value)"),
+        (io.BytesIO(b"raw"), "BytesIO", ": write body=Raw(value.read())"),
+        ({"a": 1}, "dict", ": write body=Json(value)"),
+        (collections.OrderedDict(a=1), "OrderedDict", ": write body=Json(value)"),
+        (types.MappingProxyType({"a": 1}), "mappingproxy", ": write body=Json(dict(value))"),
+        ("text", "str", ""),
+        (pathlib.Path("upload.bin"), type(pathlib.Path()).__name__, ""),
+        (msgspec.Struct, "the class Struct", ""),
+    ],
+    ids=["bytes", "stream", "file", "dict", "ordered-dict", "mapping", "str", "path", "model-class"],
 )
-async def test_a_value_that_is_no_body_is_refused(value: object, got: str) -> None:
-    """Refuse a ``body=`` that is not one of the ``Body`` classes, naming what it got, before sending."""
+async def test_a_value_that_is_no_body_is_refused(value: object, got: str, hint: str) -> None:
+    """Refuse a ``body=`` that is not one of the ``Body`` classes before sending, naming what it got and what to write.
+
+    Raw holds bytes, a stream and a file's bytes, Json a mapping; anything else gets no advice it could not take.
+    """
     script = Script()
     options: dict[str, Any] = {"body": value}
 
     with pytest.raises(TypeError) as raised:
         await _client(script).post("orders", expect=nothing, **options)
 
-    assert str(raised.value) == f"body= takes a Body: Json, Form, Multipart, Raw or a writer's EncodedBody (got {got})"
+    assert str(raised.value) == (
+        f"body= takes a Body: Json, Form, Multipart, Raw or a writer's EncodedBody (got {got}){hint}"
+    )
+    assert script.sent == []
+
+
+@dataclass(frozen=True)
+class _Point:
+    """A typed value, such as a model, that a writer encodes."""
+
+    x: int
+
+
+class _Struct(msgspec.Struct):
+    """A msgspec model."""
+
+    x: int
+
+
+class _Model(pydantic.BaseModel):
+    """A pydantic model."""
+
+    x: int
+
+
+@attrs.define
+class _Attrs:
+    """An attrs class."""
+
+    x: int
+
+
+@pytest.mark.parametrize(
+    "value", [_Point(1), _Struct(1), _Model(x=1), _Attrs(1)], ids=["dataclass", "msgspec", "pydantic", "attrs"]
+)
+async def test_a_typed_value_given_as_a_body_is_told_to_use_a_writer(value: object) -> None:
+    """Refuse a model's instance as ``body=``, saying to encode it with a writer of its type."""
+    script = Script()
+    options: dict[str, Any] = {"body": value}
+
+    with pytest.raises(TypeError) as raised:
+        await _client(script).post("orders", expect=nothing, **options)
+
+    name = type(value).__name__
+    assert str(raised.value) == (
+        f"body= takes a Body: Json, Form, Multipart, Raw or a writer's EncodedBody (got {name}): write "
+        f"body=writer({name})(value) with a flavor's writer, or body=Json(to_builtins(value)) with its to_builtins"
+    )
     assert script.sent == []
 
 
@@ -234,6 +346,82 @@ def test_form_fields_must_be_a_mapping() -> None:
         Form(pairs)
     with pytest.raises(TypeError, match=message):
         Multipart({"f": b"x"}, pairs)
+
+
+#: Files of none of the shapes an ``UploadFile`` takes, each with what the refusal says it got.
+_NOT_FILES: Final[list[tuple[object, str]]] = [
+    (5, "int"),
+    ([b"x"], "list"),
+    ((), "a tuple of nothing"),
+    (io.StringIO("x"), "StringIO"),
+    (("a.txt",), "a tuple of str"),
+    (("a.txt", b"x", "text/plain", {}, "more"), "a tuple of str, bytes, str, dict, str"),
+    ((5, b"x"), "a tuple of int, bytes"),
+    (("a.txt", 5), "a tuple of str, int"),
+    (("a.txt", b"x", 5), "a tuple of str, bytes, int"),
+    (("a.txt", b"x", "text/plain", [("X-Part", "1")]), "a tuple of str, bytes, str, list"),
+    (("a.txt", b"x", "text/plain", {"X-Part": 1}), "a tuple of str, bytes, str, dict"),
+]
+
+
+@pytest.mark.parametrize("as_pairs", [False, True], ids=["mapping", "pairs"])
+@pytest.mark.parametrize(
+    ("file", "got"),
+    _NOT_FILES,
+    ids=[
+        "int",
+        "list",
+        "empty-tuple",
+        "text-file",
+        "one-item",
+        "five-items",
+        "int-filename",
+        "int-file",
+        "int-content-type",
+        "header-pairs",
+        "int-header-value",
+    ],
+)
+def test_a_file_of_no_upload_shape_is_refused_where_it_is_written(file: object, got: str, *, as_pairs: bool) -> None:
+    """Refuse a file of none of an ``UploadFile``'s shapes where it is written, naming its field, not at the send."""
+    files = [("report", file)] if as_pairs else {"report": file}
+    with pytest.raises(
+        TypeError, match=rf"^files= takes a file for each field: .* \(got {re.escape(got)} under 'report'\)$"
+    ):
+        Multipart(cast("Any", files))
+
+
+@pytest.mark.parametrize("files", [{5: b"x"}, [(5, b"x")]], ids=["mapping", "pairs"])
+def test_a_file_field_named_by_no_str_is_refused(files: object) -> None:
+    """Refuse a field name that is not a ``str``, which httpx2 could not write into the part's head."""
+    with pytest.raises(
+        TypeError, match=r"^files= takes a mapping of field names to files, .* \(got the key 5, of type int\)$"
+    ):
+        Multipart(cast("Any", files))
+
+
+async def test_every_shape_of_an_upload_file_is_sent() -> None:
+    """Send each shape an ``UploadFile`` names: the file alone, as bytes, text or any binary file, or in a tuple."""
+    script = Script()
+    # A named temporary file is no io.IOBase: a file is told by its read method, as httpx2 reads it.
+    with tempfile.NamedTemporaryFile() as named:
+        named.write(b"named")
+        named.flush()
+        files = {
+            "bytes": b"x",
+            "text": "x",
+            "file": io.BytesIO(b"x"),
+            "named": named,
+            "pair": (None, b"x"),
+            "typed": ("a.csv", "a,b", None),
+            "headed": ("a.bin", io.BytesIO(b"x"), "application/octet-stream", {"X-Part": "1"}),
+        }
+        await _client(script).post("upload", expect=nothing, body=Multipart(files))
+
+    sent = script.sent[0].content
+    assert all(f'name="{name}"'.encode() in sent for name in files)
+    assert b"named" in sent
+    assert b"X-Part: 1" in sent
 
 
 #: Each body keyword this phase removed, a value for it, and what the refusal says to write.
@@ -294,6 +482,41 @@ def test_a_multipart_body_says_whether_it_can_be_sent_again(pipe: io.BufferedRea
     assert Multipart({"f": b"x"}).replayable
     assert Multipart({"f": ("a.txt", io.BytesIO(b"x"), "text/plain")}).replayable
     assert not Multipart({"f": pipe}).replayable
+
+
+class _ReadOnly:
+    """A binary file object with a ``read`` and nothing else, which httpx2 reads in chunks: no descriptor, no seek."""
+
+    def __init__(self, data: bytes) -> None:
+        """Hold *data* to read once."""
+        self._data = io.BytesIO(data)
+
+    def read(self, size: int = -1) -> bytes:
+        """Return up to *size* bytes of what is left."""
+        return self._data.read(size)
+
+
+class _SaysItSeeks(_ReadOnly):
+    """A file object that says it can seek, but has no ``seek`` to rewind it with."""
+
+    def seekable(self) -> bool:
+        """Say it can seek."""
+        return True
+
+
+async def test_a_file_object_with_only_a_read_is_sent_once() -> None:
+    """Send a file object that has only its ``read``, which ``Multipart`` takes, as one that cannot be rewound.
+
+    One that says it can seek but has no ``seek`` cannot be rewound either: httpx2 rewinds with ``seek``.
+    """
+    script = Script()
+    body = Multipart({"f": ("a.bin", cast("Any", _ReadOnly(b"only-read")))})
+
+    assert not body.replayable
+    assert not Multipart({"f": cast("Any", _SaysItSeeks(b"x"))}).replayable
+    await _client(script).post("upload", expect=nothing, body=body)
+
+    assert b"only-read" in script.sent[0].content
 
 
 def test_the_old_body_check_is_gone() -> None:

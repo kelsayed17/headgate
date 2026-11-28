@@ -14,6 +14,7 @@ import asyncio
 import copy
 import dataclasses
 import importlib
+import inspect
 import pickle
 import pkgutil
 import re
@@ -22,6 +23,7 @@ import traceback
 import types
 import typing
 from collections import defaultdict
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from string.templatelib import Template
 
@@ -33,6 +35,7 @@ import headgate
 import headgate.errors
 import headgate.retry
 import headgate.testing
+from headgate._core._homes import HOMES
 from tests.package.test_api_surface import _PUBLIC_MODULES
 
 if typing.TYPE_CHECKING:
@@ -61,7 +64,7 @@ def test_no_object_is_exported_from_two_public_modules() -> None:
 @pytest.mark.parametrize("name", ["Cursor", "LinkHeader", "Offset", "ResponseParseError", "PageLimitError", "Problem"])
 def test_the_pagers_and_the_finer_errors_are_not_at_the_top_level(name: str) -> None:
     """Leave a pager to ``headgate.pagination`` and an error outside the six to ``headgate.errors``."""
-    assert not hasattr(headgate, name)
+    assert name not in vars(headgate)
     assert name not in headgate.__all__
 
 
@@ -77,10 +80,12 @@ def test_the_pagers_and_the_finer_errors_are_not_at_the_top_level(name: str) -> 
     ],
 )
 def test_a_top_level_name_is_not_re_exported_by_its_subpackage(module_name: str, name: str) -> None:
-    """Hold no such attribute, so importing the name from the subpackage that re-exported it raises ``ImportError``."""
+    """Hold no such attribute: asking the subpackage that re-exported the name for it names its one home."""
     module = importlib.import_module(module_name)
-    assert not hasattr(module, name)
+    assert name not in vars(module)
     assert name not in module.__all__
+    with pytest.raises(AttributeError, match=rf"^{name} lives in headgate: from headgate import {name}$"):
+        getattr(module, name)
 
 
 _TOP_LEVEL_ERRORS = [
@@ -98,13 +103,111 @@ async def test_a_top_level_error_has_one_home(name: str) -> None:
     """Export the error from ``headgate`` only: importing it from ``headgate.errors`` raises ``ImportError``."""
     assert name in headgate.__all__
     assert name not in headgate.errors.__all__
-    assert not hasattr(headgate.errors, name)
+    assert name not in vars(headgate.errors)
     process = await asyncio.create_subprocess_exec(
         sys.executable, "-c", f"from headgate.errors import {name}", stderr=asyncio.subprocess.PIPE
     )
     _, stderr = await process.communicate()
     assert process.returncode != 0
-    assert f"ImportError: cannot import name '{name}' from 'headgate.errors'" in stderr.decode()
+    assert f"ImportError: {name} lives in headgate: from headgate import {name}" in stderr.decode()
+
+
+@pytest.mark.parametrize(
+    ("module_name", "name", "hint"),
+    [
+        ("headgate.retry", "RetryPolicy", "RetryPolicy lives in headgate: from headgate import RetryPolicy"),
+        ("headgate", "Backoff", "Backoff lives in headgate.retry: from headgate.retry import Backoff"),
+        ("headgate", "Respond", "Respond lives in headgate.testing: from headgate.testing import Respond"),
+        (
+            "headgate.security",
+            "SecurityOptions",
+            "SecurityOptions lives in headgate: from headgate import SecurityOptions",
+        ),
+        (
+            "headgate",
+            "reader",
+            (
+                "reader lives in headgate.msgspec and headgate.pydantic: from headgate.msgspec import reader, or from "
+                "headgate.pydantic import reader"
+            ),
+        ),
+    ],
+    ids=["top-level", "subpackage", "testing", "options", "two-homes"],
+)
+def test_a_name_asked_of_the_wrong_public_module_names_its_home(
+    module_name: str, name: str, hint: str, tmp_path: Path
+) -> None:
+    """Name the public module, or modules, that export a name another one is asked for.
+
+    Under ``from module import name`` it is an ``ImportError``, since the import statement drops an
+    ``AttributeError``'s message; asked as an attribute, it is the ``AttributeError`` a missing attribute raises, so
+    ``hasattr`` and ``getattr`` with a default answer as ever.
+    """
+    module = importlib.import_module(module_name)
+    importer = tmp_path / "misplaced.py"
+    importer.write_text(f"from {module_name} import {name}\n", encoding="utf-8")
+    spec = spec_from_file_location("misplaced", importer)
+    assert spec is not None
+    assert spec.loader is not None
+    with pytest.raises(ImportError) as imported:
+        spec.loader.exec_module(module_from_spec(spec))
+    with pytest.raises(AttributeError) as asked:
+        getattr(module, name)
+
+    assert str(imported.value) == str(asked.value) == hint
+    assert (imported.value.name, imported.value.name_from) == (module_name, name)
+    assert not hasattr(module, name)
+    assert getattr(module, name, None) is None
+
+
+@pytest.mark.parametrize("module_name", _public_modules())
+def test_a_name_no_public_module_exports_is_the_usual_missing_attribute(module_name: str) -> None:
+    """Raise the usual ``AttributeError`` for a name nothing exports, and a private or dunder one: ``hasattr`` holds."""
+    module = importlib.import_module(module_name)
+    for name in ("NoSuchName", "_no_such_name", "__path__" if not hasattr(module, "__path__") else "__nope__"):
+        with pytest.raises(AttributeError, match=rf"^module {module_name!r} has no attribute {name!r}$"):
+            getattr(module, name)
+        assert not hasattr(module, name)
+
+
+def test_the_homes_the_hints_name_are_every_public_modules_exports() -> None:
+    """Hold the written-out homes the hints name to every public module's ``__all__``, so no export goes unhinted."""
+    homes: dict[str, list[str]] = {}
+    for module_name in _public_modules():
+        for export in importlib.import_module(module_name).__all__:
+            homes.setdefault(export, []).append(module_name)
+    expected = {export: tuple(modules) for export, modules in homes.items()}
+
+    assert dict(HOMES) == expected, f"write HOMES in src/headgate/_core/_homes.py as {expected!r}"
+
+
+async def test_a_misplaced_name_imports_nothing() -> None:
+    """Name a misplaced name's home without importing a module: no codec flavor, OpenTelemetry or curl_cffi."""
+    code = (
+        "import sys\nimport headgate.retry\nassert not hasattr(headgate.retry, 'RetryPolicy')\n"
+        "print(sorted(name for name in ('msgspec', 'pydantic', 'opentelemetry', 'curl_cffi') if name in sys.modules))"
+    )
+    process = await asyncio.create_subprocess_exec(sys.executable, "-c", code, stdout=asyncio.subprocess.PIPE)
+    stdout, _ = await process.communicate()
+
+    assert process.returncode == 0
+    assert stdout.decode().strip() == "[]"
+
+
+async def test_importing_a_submodule_from_its_package_reads_no_other_module() -> None:
+    """Import a subpackage by ``from headgate import ...`` without reading every module's exports, which imports them.
+
+    ``from headgate import testing`` asks ``headgate`` for ``testing`` before it imports it, and the answer must not
+    import the codec flavors, as reading where a name lives would.
+    """
+    code = (
+        "import sys\nfrom headgate import testing\n"
+        "print(sorted(name for name in ('msgspec', 'pydantic') if name in sys.modules))"
+    )
+    process = await asyncio.create_subprocess_exec(sys.executable, "-c", code, stdout=asyncio.subprocess.PIPE)
+    stdout, _ = await process.communicate()
+
+    assert stdout.decode().strip() == "[]"
 
 
 @pytest.mark.parametrize("module_name", _public_modules())
@@ -115,6 +218,25 @@ def test_every_export_reports_its_home(module_name: str) -> None:
     homes = {value.__qualname__: value.__module__ for value in exported if isinstance(value, type | types.FunctionType)}
 
     assert homes == dict.fromkeys(homes, module_name)
+
+
+@pytest.mark.parametrize("module_name", _public_modules())
+def test_no_exported_class_shows_another_objects_source(module_name: str) -> None:
+    """Refuse ``inspect.getsource`` for a rehomed class, rather than return lines of its public module (spec 3.6).
+
+    ``inspect`` reads a class's file from its ``__module__`` and its line from its ``__firstlineno__``, which is a line
+    of the private module that defines it, so the two together named the public module's lines.
+    """
+    module = importlib.import_module(module_name)
+    shown = {}
+    for name in module.__all__:
+        value = getattr(module, name)
+        if isinstance(value, type):
+            try:
+                shown[name] = inspect.getsource(value).splitlines()[0]
+            except OSError:
+                continue
+    assert not shown
 
 
 def test_a_traceback_names_the_public_home() -> None:

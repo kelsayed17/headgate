@@ -23,11 +23,12 @@ read and write it through its methods, never through extension keys of their own
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Final, cast, override
+from typing import Final, cast, final, override
 
 import httpx2
 
 from headgate._core._events import SILENT, CallInfo, Emitter, Event
+from headgate._core._kinds import sealed
 from headgate._core._time import Clock
 
 __all__ = ["SENDING", "CallContext", "CallView", "SendProgress", "Slot", "call_view", "progress_of"]
@@ -75,7 +76,7 @@ class SendProgress:
     bytes_sent: int = 0
 
     def mark_dispatched(self) -> None:
-        """Record that the attempt passed the rate budget and was handed to the network."""
+        """Record that the attempt was handed to the network transport, past the rate budget, middleware and signer."""
         self.dispatched = True
 
     def mark_connected(self) -> None:
@@ -109,6 +110,7 @@ class CallContext:
         "_attempt",
         "_clock",
         "_deadline",
+        "_earlier",
         "_emitter",
         "_notes",
         "_progress",
@@ -136,6 +138,8 @@ class CallContext:
         self._emitter = emitter
         self._attempt = 0
         self._progress = SendProgress()
+        # The progress of each attempt begun before the current one, so a withdrawn attempt gives the call its own back.
+        self._earlier: list[SendProgress] = []
         self._sent = False
         self._notes: list[str] = []
         self._slots: dict[object, object] = {}
@@ -242,12 +246,18 @@ class CallContext:
     def begin_attempt(self) -> int:
         """Record that a send begins, reset the send progress, and return the attempt's number (from 1)."""
         self._attempt += 1
+        self._earlier.append(self._progress)
         self._progress = SendProgress()
         return self._attempt
 
     def withdraw_attempt(self) -> None:
-        """Record that the attempt just begun was never sent (its rate-budget turn came too late): it does not count."""
+        """Record that the attempt just begun was never sent (its rate-budget turn came too late): it does not count.
+
+        The send progress is the attempt's before it again, so a call that ends on that attempt's failure is judged by
+        what that attempt sent: a network failure it reached the network with still counts against the origin.
+        """
         self._attempt -= 1
+        self._progress = self._earlier.pop()
 
     @property
     def sent(self) -> bool:
@@ -302,6 +312,8 @@ def progress_of(context: CallContext) -> SendProgress:
     return sending[1] if sending is not None and sending[0] is context else context.progress
 
 
+@final
+@sealed("read the view call_view(request) returns")
 @dataclass(frozen=True, slots=True)
 class CallView:
     """A read-only view of the call a request belongs to, taken when :func:`call_view` is called.

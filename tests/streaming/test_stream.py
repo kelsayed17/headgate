@@ -485,6 +485,21 @@ async def test_bytes_come_in_the_chunk_size_asked_for() -> None:
     assert chunks == [b"0123", b"4567", b"89"]
 
 
+@pytest.mark.parametrize("size", [0, -1])
+@pytest.mark.parametrize(
+    ("method", "option"),
+    [("aiter_bytes", "chunk_size"), ("aiter_lines", "max_line_size"), ("aiter_events", "max_event_size")],
+)
+async def test_a_size_below_1_is_refused_at_the_call(method: str, option: str, size: int) -> None:
+    """Refuse a size below 1 where the iterator is asked for: no chunk is that small, and no line or event fits."""
+    handler = _answer(httpx2.Response(200, headers=_SSE, content=b"data: a\n\n"))
+    async with _client(handler).stream("events") as stream:
+        with pytest.raises(
+            ValueError, match=rf"^{option}= takes a number of \w+, an int of at least 1, .* \(got {size}\)$"
+        ):
+            getattr(stream, method)(**{option: size})
+
+
 async def test_a_connection_dropping_mid_lines_is_a_transport_error() -> None:
     """Map a network failure while lines arrive to ``TransportError``, as for bytes."""
     body = _Body(b"first\n", then=httpx2.ReadError("connection dropped"))

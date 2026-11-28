@@ -12,7 +12,9 @@ It imports nothing at runtime beyond the standard library, since every layer abo
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, TypedDict, Unpack, override
+from typing import TYPE_CHECKING, TypedDict, Unpack, final, override
+
+from headgate._core import sealed
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -37,6 +39,8 @@ __all__ = [
 ]
 
 
+@final
+@sealed("raise DecodeError itself, which the client turns into ResponseParseError")
 class DecodeError(Exception):
     """A response body could not be decoded into the declared type; raised for every :class:`~headgate.Codec`."""
 
@@ -79,7 +83,7 @@ class ErrorDetails(TypedDict, total=False):
 
 
 class ClientError(Exception):
-    """Base for every transport-layer failure.
+    """Base for every failure a client raises: the network's, the upstream's answer, the call's own configuration.
 
     ``source`` names the originating client by its ``base_url``'s host (``api.github.com``), and prefixes the message
     as ``[source]``. Subclasses distinguish failure
@@ -150,7 +154,7 @@ class ClientError(Exception):
 
     @override
     def __reduce__(self) -> tuple[_ClientErrorRebuild, _ClientErrorState]:
-        """Reduce to :func:`_rebuild_client_error`, which every subclass shares through ``type(self)``."""
+        """Reduce to a rebuild of ``type(self)`` from its arguments and attributes, which every subclass shares."""
         return (_rebuild_client_error, (type(self), self.args, dict[str, object](self.__dict__)))
 
 
@@ -188,6 +192,8 @@ def _thaw(value: object) -> object:
 type _ProblemState = tuple[str, str | None, int | None, str | None, str | None, object]
 
 
+@final
+@sealed("read the Problem an UpstreamStatusError carries")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Problem:
     """An RFC 9457 problem detail an upstream sent as ``application/problem+json``.
@@ -294,6 +300,8 @@ class AuthError(UpstreamStatusError):
     """
 
 
+@final
+@sealed("name the error it becomes with kind=, an UpstreamStatusError subclass of your own if need be")
 class RefusedError(Exception):
     """A provider's refusal, as a reader or a response check saw it.
 

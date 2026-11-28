@@ -19,7 +19,9 @@ from collections.abc import Awaitable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, final
+
+from headgate._core._kinds import check_callable, check_kind, sealed
 
 __all__ = [
     "SYSTEM_TIMING",
@@ -68,6 +70,8 @@ async def asyncio_sleep(seconds: float, /) -> None:
 system_random: RandomSource = random.SystemRandom().random
 
 
+@final
+@sealed("build a Timing of the clock, sleep, wall_clock and random you need")
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Timing:
     """The clocks, the sleep and the random source a client, a token auth, a budget or a registry runs on.
@@ -76,12 +80,21 @@ class Timing:
     * ``sleep``: how a wait is waited.
     * ``wall_clock``: Unix seconds, which a ``Retry-After`` date and a ``RateLimit`` epoch are read against.
     * ``random``: the draw a backoff's jitter is made from.
+
+    :raises TypeError: for a field that cannot be called.
     """
 
     clock: Clock = field(default=time.monotonic)
     sleep: Sleep = field(default=asyncio_sleep)
     wall_clock: Clock = field(default=time.time)
     random: RandomSource = field(default=system_random)
+
+    def __post_init__(self) -> None:
+        """Refuse a clock, a sleep or a random source that cannot be called."""
+        check_callable("clock", self.clock, "a function returning monotonic seconds, such as time.monotonic")
+        check_callable("sleep", self.sleep, "an async function of seconds, such as asyncio.sleep")
+        check_callable("wall_clock", self.wall_clock, "a function returning Unix seconds, such as time.time")
+        check_callable("random", self.random, "a function returning a draw in [0, 1), such as random.random")
 
 
 #: Production timing: ``time.monotonic``, ``asyncio.sleep``, ``time.time`` and the operating system's random draw.
@@ -98,7 +111,11 @@ def current_timing() -> Timing:
 
 @contextmanager
 def timing_override(timing: Timing) -> Generator[None]:
-    """Build with *timing* instead of :data:`SYSTEM_TIMING` everything constructed inside the block with none given."""
+    """Build with *timing*, not the system's (``Timing()``), everything constructed inside the block with none given.
+
+    :raises TypeError: for a *timing* that is not a :class:`Timing`, when the block is entered.
+    """
+    check_kind("timing", timing, Timing, "a Timing, such as TestClock().timing")
     token = _TIMING.set(timing)
     try:
         yield

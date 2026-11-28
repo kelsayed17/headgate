@@ -83,7 +83,7 @@ async def test_only_a_status_the_cache_names_is_stored(
 ) -> None:
     """Store a 203 the cache's ``statuses`` names, and send again for one it does not, though hishel would store it."""
     network = _Provider(b"partial", status=httpx2.codes.NON_AUTHORITATIVE_INFORMATION)
-    client = stub_client(transport=network, cache=HttpCache(storage=storage, statuses=statuses))
+    client = stub_client(transport=network, cache=HttpCache(storage=storage, ttl=None, statuses=statuses))
     try:
         answers = [await client.get("reading", expect=as_bytes) for _ in range(2)]
     finally:
@@ -95,7 +95,7 @@ async def test_only_a_status_the_cache_names_is_stored(
 async def test_a_stream_is_never_stored_but_is_served_from_a_hit(storage: AsyncSqliteStorage) -> None:
     """Store no stream's miss, since its body is never held, but serve a stream from what a verb stored."""
     network = _Provider(_ANSWER)
-    client = stub_client(transport=network, cache=HttpCache(**every_get_rules(), storage=storage))
+    client = stub_client(transport=network, cache=HttpCache(**every_get_rules(), storage=storage, ttl=None))
     try:
         async with client.stream("reading") as stream:
             assert [chunk async for chunk in stream.aiter_bytes()] == [_ANSWER]
@@ -166,7 +166,7 @@ async def test_a_variant_no_later_request_could_be_matched_to_is_never_stored(
     entries; a header the request did not send, or one the view keeps as a digest, is matched as usual.
     """
     counting = _CountingStorage(storage)
-    cache = HttpCache(storage=counting, partition=partition)
+    cache = HttpCache(storage=counting, ttl=None, partition=partition)
     transport = ResilientCacheTransport(_Varying(vary), cache, max_body_bytes=GENEROUS_CAP)
 
     await accept(await transport.handle_async_request(httpx2.Request("GET", "https://x/reading", headers=sent)))

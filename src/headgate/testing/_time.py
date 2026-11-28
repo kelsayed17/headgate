@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Khaled Elsayed
 # SPDX-License-Identifier: MIT
 
-"""Time for tests: a clock that moves only when told to, and retries that do not wait.
+"""Time for tests: a clock that moves only when told to, and waits that return at once.
 
 Both plug into :func:`headgate._core.timing_override`, which sets the clock and sleep of the clients constructed inside
 a block, so they reach an SDK that fixes its client's options where it builds it.
@@ -14,7 +14,7 @@ import math
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import replace
-from typing import Final, Self
+from typing import Final, Self, final
 
 from headgate._core import (
     RandomSource,
@@ -22,17 +22,21 @@ from headgate._core import (
     check_callable,
     check_number,
     current_timing,
+    option_text,
+    sealed,
     system_random,
     timing_override,
 )
 
-__all__ = ["TestClock", "instant_retries"]
+__all__ = ["TestClock", "instant_waits"]
 
 #: How many turns of the event loop pass with no sleep beginning or ending before the clock moves to the next wake:
 #: room for the tasks that are not sleeping, and for those just woken, to run until they wait again.
 _SETTLE_TURNS: Final = 16
 
 
+@final
+@sealed("drive it with advance(), and build under install()")
 class TestClock:
     """A monotonic clock a test drives: it reads :attr:`now`, and its :meth:`sleep` advances it instead of waiting.
 
@@ -63,10 +67,10 @@ class TestClock:
         check_number("start", start, "seconds, a number")
         check_number("epoch", epoch, "Unix seconds, a number")
         check_callable("random", random, "a function returning a draw in [0, 1)")
-        self.now = start
-        self.epoch = epoch
+        self._now = start
+        self._epoch = epoch
         self._random = random
-        self.sleeps: list[float] = []
+        self._sleeps: list[float] = []
         self._sleepers: list[tuple[float, int, asyncio.Future[None]]] = []
         self._order = itertools.count()
         self._driven_on: asyncio.AbstractEventLoop | None = None
@@ -74,12 +78,27 @@ class TestClock:
 
     def __call__(self) -> float:
         """Return the current reading."""
-        return self.now
+        return self._now
+
+    @property
+    def now(self) -> float:
+        """The current reading, which only :meth:`advance` and :meth:`sleep` move."""
+        return self._now
+
+    @property
+    def epoch(self) -> float:
+        """The Unix seconds the wall clock reads at a reading of 0."""
+        return self._epoch
+
+    @property
+    def sleeps(self) -> list[float]:
+        """Every wait :meth:`sleep` was asked for, in order, as a new list each time it is read."""
+        return list(self._sleeps)
 
     def advance(self, seconds: float) -> None:
-        """Move the clock forward by *seconds*; ``ValueError`` for a negative or NaN step, which no clock takes."""
-        _check_step(seconds)
-        self.now += seconds
+        """Move the clock forward by *seconds*; ``ValueError`` for a negative, NaN or infinite step, no clock's step."""
+        _check_step("seconds", seconds)
+        self._now += seconds
 
     async def sleep(self, seconds: float, /) -> None:
         """Record *seconds* and return once the clock reads *seconds* past now, moving it there if nothing wakes first.
@@ -87,11 +106,11 @@ class TestClock:
         A sleep cancelled before it wakes leaves the clock where it was. ``ValueError`` for a step :meth:`advance`
         refuses.
         """
-        _check_step(seconds)
-        self.sleeps.append(seconds)
+        _check_step("sleep(seconds)", seconds)
+        self._sleeps.append(seconds)
         loop = asyncio.get_running_loop()
         wake = loop.create_future()
-        heapq.heappush(self._sleepers, (self.now + seconds, next(self._order), wake))
+        heapq.heappush(self._sleepers, (self._now + seconds, next(self._order), wake))
         self._drive(loop)
         await wake
 
@@ -113,8 +132,8 @@ class TestClock:
         if self._quiet_turns < _SETTLE_TURNS:
             self._quiet_turns += 1
         else:
-            self.now = max(self.now, sleepers[0][0])
-            while sleepers and sleepers[0][0] <= self.now:
+            self._now = max(self._now, sleepers[0][0])
+            while sleepers and sleepers[0][0] <= self._now:
                 _, _, wake = heapq.heappop(sleepers)
                 if not wake.done():
                     wake.set_result(None)
@@ -123,7 +142,7 @@ class TestClock:
 
     def wall_clock(self) -> float:
         """Return Unix seconds: the *epoch* plus the current reading."""
-        return self.epoch + self.now
+        return self._epoch + self._now
 
     @property
     def timing(self) -> Timing:
@@ -137,10 +156,16 @@ class TestClock:
             yield self
 
 
-def _check_step(seconds: float) -> None:
-    """Raise ``ValueError`` for a negative, NaN or infinite step, which no clock takes."""
+def _check_step(option: str, seconds: float) -> None:
+    """Raise ``ValueError`` for a negative, NaN or infinite step, which no clock takes, and ``TypeError`` for no number.
+
+    A ``bool`` is no number of seconds either. *option* names the step as the call reads: ``seconds`` for a keyword,
+    ``sleep(seconds)`` for the positional-only parameter.
+    """
+    check_number(option, seconds, "seconds, a number")
     if not seconds >= 0 or math.isinf(seconds):
-        msg = f"a clock only moves forward by a finite step (got {seconds})"
+        wanted = "a finite number of seconds, 0 or more: a clock only moves forward"
+        msg = f"{option_text(option)} takes {wanted} (got {seconds})"
         raise ValueError(msg)
 
 
@@ -150,11 +175,13 @@ async def _yield_once(_seconds: float, /) -> None:
 
 
 @contextmanager
-def instant_retries() -> Generator[None]:
-    """Build the clients constructed inside the block with a sleep that returns at once.
+def instant_waits() -> Generator[None]:
+    """Build the clients constructed inside the block with a sleep that returns at once, for every wait they make.
 
-    A mocked failure is then retried exactly as production retries it, without waiting through the backoff. The clock
-    is left as it is, so this composes with :meth:`TestClock.install` (whose sleep it replaces).
+    A mocked failure is then retried exactly as production retries it, without waiting through the backoff, and a
+    rate budget's pacing and the pauses a server asks for take no time either: a call sleeps through a pause once. The
+    clock is left as it is, so this composes with :meth:`TestClock.install` (whose sleep it replaces), and a budget's
+    ``pause_remaining`` still reads a pause the calls have slept through.
     """
     with timing_override(replace(current_timing(), sleep=_yield_once)):
         yield

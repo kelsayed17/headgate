@@ -17,8 +17,9 @@ escaping up would corrupt the value for display, comparison and the response mod
 t-string path and escapes every interpolation with :func:`escape_segment`. Query parameters need none of this: httpx2
 encodes ``params=`` itself.
 
-**Redaction.** :data:`SECRET_QUERY_PARAMS` names the query parameters that carry a credential, and a ``QueryParamAuth``
-adds the names it injects with :func:`register_secret_params`. :func:`sanitize_url` redacts every URL a ``ClientError``
+**Redaction.** :data:`SECRET_QUERY_PARAMS` names the query parameters that carry a credential, and every client adds
+the names its auth and middleware declare (``credential_params``) with :func:`register_secret_params`, as a
+``QueryParamAuth`` adds the names it injects. :func:`sanitize_url` redacts every URL a ``ClientError``
 message names, :func:`redact_secrets` redacts ``name=value`` pairs and URL userinfo in free text such as an httpx2
 exception message, and the HTTP cache strips the same parameters before it stores a request. A URL's whole userinfo is a
 credential, a bare ``user@`` included: a token sent as the username (``https://ghp_…@host``) is how several hosts

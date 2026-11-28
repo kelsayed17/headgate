@@ -41,16 +41,32 @@ class GitHub:
 
 A `ClientError` the client raises names its `base_url`'s host as its `source`, `[api.github.com] ...`.
 
-Every option object is a frozen, keyword-only dataclass that validates when it is built, so a bad value fails where it
-is written, and freezes the collections it is given. Change one with `dataclasses.replace`.
+Every option object is a frozen dataclass that takes its fields by keyword and validates when it is built, so a bad
+value fails where it is written, and freezes the collections it is given. Change one with `dataclasses.replace`. Two
+take positions too: a `Rate` its requests and its period, `Rate(10, 1.0)` (or `Rate.per_second(10)`), and a `Route`
+its fragment, first, `Route("/exports", deadline=300.0)`. A `Route` is a plain value, not a dataclass, so build a new
+one to change it.
 
 - **`base_url`**: the API root. A relative path in a call is joined onto it (a trailing `/` is added if missing), and
-  its origin is the one credentials are sent to.
+  its origin is the one credentials are sent to. It is an `http` or `https` URL with a host and nothing after its path:
+  one without a scheme (`"api.example.com"`), with a query or a fragment (a key there would have every path appended
+  to it: use `QueryParamAuth` or `params=`), or with a user or password (use an `Auth`) raises `ValueError`.
 - **`auth`**: a `headgate.Auth`, usually one of headgate's. See [auth](auth.md). A plain `httpx2.Auth`, which declares
   nothing it stamps, and an upstream `httpx` object raise `TypeError`.
 - **`observers`**: receive the client's [events](observability.md#events).
 - **`middleware`**: per-attempt hooks; see [middleware](#middleware). They are parts of the stack, not settings of how a
   request is sent, so they are the client's own rather than `HttpOptions` fields.
+
+### Threads and event loops
+
+A `Client` belongs to one event loop: its connection pool and the cache's coalescing of identical requests are asyncio
+objects bound to the loop that first uses them. Build one client per event loop, so one per thread that runs a loop of
+its own, and close it before its loop closes. What clients on several loops and threads share is their budgets: a
+`RateBudget`, a [`RetryBudget`](retries.md) and a [`BreakerRegistry`](breaker.md) keep their state under a
+`threading.Lock`, so one object given to every client paces, caps the retries of, and opens breakers for all of them
+together. This holds on free-threaded Python (3.14t) as on the default build. A `CachedTokenAuth` may be given to
+clients on several loops too: its token is shared, and it keeps one mint lock per event loop, so the calls of each loop
+wait for one mint while the loops mint apart.
 
 ## CallPolicy
 
@@ -97,8 +113,8 @@ How requests are sent and responses read.
 
 | Field | Default | |
 | --- | --- | --- |
-| `transport` | `None` | a custom network transport (a test double, `headgate.curl.AsyncCurlTransport`); the default is an HTTP/2 `httpx2.AsyncHTTPTransport` |
-| `headers` | `{}` | sent on every request to `base_url`'s origin and the `trusted_origins`; any other origin gets only `User-Agent` and the `Accept` headers among them ([security](security.md)); any header the call implies or sets wins a clash (see [precedence](#precedence)) |
+| `transport` | `None` | a custom network transport (a test double, `headgate.curl.AsyncCurlTransport`), which the client closes when it closes: a curl transport other clients share, when the last of them closes, and a client built on a closed one raises `ValueError`; the default is an HTTP/2 `httpx2.AsyncHTTPTransport` |
+| `headers` | `{}` | sent on every request to `base_url`'s origin and the `trusted_origins`; any other origin gets only `User-Agent` and the `Accept` headers among them ([security](security.md)); any header the call implies or sets wins a clash (see [precedence](#precedence)); each named once, and none the auth sets |
 | `follow_redirects` | `True` | the client's default; a call can override it |
 | `max_redirects` | `5` | the hop limit, auth-flow hops included |
 | `max_response_bytes` | 32 MiB | the cap on a buffered body, counted after decompression; a call's own `max_response_bytes=` replaces it for that call; `stream()` is uncapped |
@@ -143,7 +159,13 @@ http = HttpOptions(transport=AsyncCurlTransport(impersonate="chrome"))
 It behaves like a native httpx2 transport wherever the stack can tell: it reads no proxy from the environment, keeps no
 cookie, follows no redirect (headgate's hooks see every hop), maps curl's error codes onto httpx2's exceptions so the
 retry rules apply, and aborts the transfer when a response is closed early, so the size cap holds. It decompresses
-bodies itself, so its responses carry no `Content-Encoding`. The SSRF guard vets its hops but cannot pin them.
+bodies itself, so its responses carry no `Content-Encoding`. The SSRF guard pins it as it pins the default transport:
+curl is handed the addresses the guard vetted, and never looks a name up itself (see [security](security.md)).
+
+It is final: a subclass raises `TypeError`. A change to each request (a header, a log line) belongs in a
+[middleware](#middleware), which runs on every attempt. A transport of your own that wraps it and sends through it
+works, but the guard does not pin a wrapper: it vets each hop before it is sent, as for any custom transport, and curl
+then looks the name up itself.
 
 ## Middleware
 
@@ -169,9 +191,11 @@ class AttemptId:
         return await call_next(request)
 ```
 
-A middleware is async: an object whose `__call__` is a coroutine function, or an `async def` function (or a
-`functools.partial` of one) with the two declarations set on it. `Client()` refuses one that is not, since it awaits
-the response a middleware returns.
+A middleware is a class like this one: its `__call__` is a coroutine function, and it declares what it stamps in two
+class attributes (or properties). `Client()` refuses one whose `__call__` is not async, since it awaits the response a
+middleware returns. A response a middleware returns of its own is judged as the network's would be: a 503 from a
+middleware that answers for a host in maintenance is retried under the call's policy, through the middleware again,
+and raises as the network's 503 would once the retries are spent.
 
 A signature that must be fresh on every attempt (a timestamp, a nonce) belongs in a
 [`SigningAuth`](auth.md#signingauth) passed as the client's `auth=`, not in a middleware: it signs each attempt inside
@@ -207,14 +231,17 @@ class HmacSigner(SigningAuth):
 A middleware runs inside the transport stack, below the [credential guard](security.md#credentials-stay-on-your-origin)
 the client runs as a request hook, so the guard runs again below the last middleware. The headers and query parameters a
 middleware declares in `credential_headers` and `credential_params` are removed there from any hop not addressed to
-`base_url`'s origin or a trusted one, a cross-origin redirect hop included. Both are required, each a `frozenset` of
+`base_url`'s origin or a trusted one, a cross-origin redirect hop included, and the parameters are
+[redacted](security.md#redaction) from every URL headgate shows. Both are required, each a `frozenset` of
 names, empty when the middleware stamps none, as a class attribute or a property; the client raises `TypeError` for a
 middleware that lacks either, for one whose names are all one character long (`frozenset("X-Api-Key")` is eight
 letters: write `frozenset({"X-Api-Key"})`), and for a plain function. `request.content` is available for a
 buffered body; a streamed body is not readable there. A middleware that replaces the request
 (`call_next(httpx2.Request(...))`) keeps `request.extensions` on the new one, or a `SigningAuth` cannot sign that
 attempt. Even then the signature goes on the replacement, not on the request the client made, so a `SigningAuth`'s one
-re-send on a 401 is lost.
+re-send on a 401 is lost. A middleware may send to another host, and the [SSRF guard](security.md#the-ssrf-guard)
+vets that host as it vets the hop's own: the default and curl transports where they connect, any other transport
+below the last middleware.
 
 The two declarations are the `headgate.security.CredentialCarrier` protocol, and one that also gives a
 `credential_identity()` (so a cache can partition by it) is a `headgate.security.CredentialStamper`; implement either
@@ -223,11 +250,16 @@ from `headgate.security`, never from a private module. An auth subclasses [`head
 A middleware reads its call through `headgate.call_view(request)`, a `headgate.events.CallView` taken when asked: its
 `call`, the call's `CallInfo` (method, URL, absolute URL and `template`, the same record events carry), its `attempt` (1 on the first send,
 2 on the first retry or hedge) and the seconds `remaining` before its deadline, or `None` without one. It returns
-`None` for a request no client call built.
+`None` for a request no client call built. A request a `CachedTokenAuth`'s `mint` yields goes through the middleware
+too, as every request the client sends does, and its view is the hop's own: its `call` names the hop's method and URL,
+and `remaining` is `None`, though the hop's timeouts are still cut to what the call's deadline leaves. No observer sees
+an event for a hop: its time is part of the call's.
 
 <!-- docs-test: run -->
 ```python
-from headgate import call_view
+import httpx2
+
+from headgate import Next, call_view
 
 
 class TracesFirstReportSends:
@@ -287,10 +319,12 @@ even past `no-store`, as an entry of `HttpCache(ttl=None)` is.
 The options are typed, so a wrapper can forward them with every key checked. `CallOptions` is the TypedDict of a
 read's options, all that `get()`, `head()` and `paginate()` take; `RequestOptions` is a body verb's (`CallOptions`
 less `cache_ttl`, plus the body); `headgate.streaming.StreamOptions` is `stream()`'s (`RequestOptions` less
-`max_response_bytes`); and `ViewOptions` is what `with_options()` takes.
+`max_response_bytes`); `headgate.streaming.EventOptions` is `events()`'s (`StreamOptions` less the body); and
+`ViewOptions` is what `with_options()` takes.
 `CallUrl` is what a verb takes as its URL: a literal `str`, a t-string or an absolute `httpx2.URL`. A computed `str`
-is a type error, so a path built from values is a t-string, `t"items/{item_id}"`, each value escaped into its own
-segment; a pre-built fragment goes in as `{fragment:raw}`, and a nested t-string splices as structure
+is a type error under a checker that enforces `LiteralString` (ty, pyright), and is sent as written at runtime, since
+only a t-string is escaped, so a path built from values is a t-string, `t"items/{item_id}"`, each value escaped into
+its own segment; a pre-built fragment goes in as `{fragment:raw}`, and a nested t-string splices as structure
 (`t"{API_PREFIX}/items"`), see [security](security.md#paths-built-from-values). A wrapper typed on them forwards the
 URL and every option at once:
 
@@ -326,6 +360,8 @@ observers. Options left out keep the client's; a view of a view layers on the ou
 
 <!-- docs-test: check -->
 ```python
+from headgate import Timeouts
+
 patient = client.with_options(timeout=Timeouts(read=120.0), deadline=600.0)
 report = await patient.get(t"reports/{report_id}", expect=REPORT)
 ```
@@ -340,3 +376,21 @@ matching `Route`'s, then the policy's. Headers merge the same way: the call's `h
 headers the call's declarations imply (its body's `Content-Type`, its `Expect`'s `accept=` and `headers=`), then the
 client's `HttpOptions.headers`. A call policy switched off with `policy_disabled()` overrides them all (see
 [testing](testing.md#switching-the-policy-off)).
+
+Headers merge by name, so each set of defaults (`HttpOptions(headers=)`, a view's, an `Expect`'s and a
+`StaticHeaderAuth`'s) names a header once: one named twice, by two lines of an `httpx2.Headers` or by keys that differ
+only in case, raises `ValueError` where it is given. Give its values in one string, `"; "` between a cookie's pairs
+(`{"Cookie": "a=1; b=2"}`) and `", "` between a list header's values. A call's own `headers=` is sent line by line, as
+httpx2 sends it.
+
+Every header given as an option (those four, a call's own `headers=`, and `IdempotencyKeys(header=)`) is one a request
+can carry: a name that is not an HTTP token (letters, digits and ``!#$%&'*+-.^_`|~``, so no space, colon or line
+break), and a value holding CR, LF or NUL, raise `ValueError` where they are given, naming the option and the header,
+not the value. A transport that writes headers as given, as curl does, would end the header at the line break and send
+the rest as another.
+
+A header the client's auth sets (one it declares in `credential_headers`) cannot be a default: `HttpOptions(headers=)`
+or a view's `headers=` naming one raises `ValueError` where it is given. Every request would carry it before the auth
+ran, and the auth takes a request that already carries one of its headers as the caller's own credential, so it would
+never send its own (and a 401 would never be re-sent). A call that signs or authenticates itself sets the header on its
+own `headers=`, which the auth leaves alone.

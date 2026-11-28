@@ -55,7 +55,7 @@ class _Echo(httpx2.AsyncBaseTransport):
 async def test_a_different_accept_has_an_entry_of_its_own(storage: AsyncSqliteStorage) -> None:
     """Fetch a CSV for a call that accepts one, though the JSON for the same URL is stored."""
     network = _Echo()
-    client = stub_client(transport=network, cache=HttpCache(storage=storage))
+    client = stub_client(transport=network, cache=HttpCache(storage=storage, ttl=None))
     async with client:
         json = await client.get("report", expect=as_bytes, headers={"Accept": "application/json"})
         csv = await client.get("report", expect=as_bytes, headers={"Accept": "text/csv"})
@@ -70,7 +70,7 @@ async def test_a_different_accept_has_an_entry_of_its_own(storage: AsyncSqliteSt
 async def test_a_range_request_is_never_answered_from_the_cache(storage: AsyncSqliteStorage) -> None:
     """Send a ``Range`` request to the network though the whole body is stored, and store nothing of its answer."""
     network = _Echo()
-    client = stub_client(transport=network, cache=HttpCache(storage=storage, statuses={200}))
+    client = stub_client(transport=network, cache=HttpCache(storage=storage, ttl=None, statuses={200}))
     async with client:
         await client.get("report", expect=as_bytes)
         part = await client.get("report", expect=RESPONSE, headers={"Range": "bytes=0-3"})
@@ -88,7 +88,7 @@ async def test_a_shared_entry_varying_on_a_credential_never_answers_one_that_sen
 ) -> None:
     """Fetch an authenticated call's own answer, though an anonymous one for the same URL varying on it is stored."""
     network = _Echo(vary="Authorization")
-    client = stub_client(transport=network, cache=HttpCache(storage=storage, partition=Partition.SHARED))
+    client = stub_client(transport=network, cache=HttpCache(storage=storage, ttl=None, partition=Partition.SHARED))
     async with client:
         anonymous = await client.get("report", expect=as_bytes)
         mine = await client.get("report", expect=RESPONSE, headers={"Authorization": "Bearer alice"})
@@ -118,7 +118,7 @@ class _FirstHangs(httpx2.AsyncBaseTransport):
 async def test_a_hedge_of_a_cached_get_answers_the_call(storage: AsyncSqliteStorage) -> None:
     """Answer a cached GET from its hedge when its first send never answers."""
     network = _FirstHangs()
-    client = stub_client(transport=network, cache=HttpCache(storage=storage))
+    client = stub_client(transport=network, cache=HttpCache(storage=storage, ttl=None))
     hedged = RetryPolicy(hedge=Hedge(after=0.05), budget=None)
     async with client, asyncio.timeout(5):
         body = await client.get("report", expect=as_bytes, retry=hedged)

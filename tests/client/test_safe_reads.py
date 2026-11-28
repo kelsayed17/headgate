@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from textwrap import dedent
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx2
 import pytest
@@ -86,15 +86,47 @@ async def test_a_get_or_head_stream_refuses_a_body(method: Method) -> None:
     assert fake.calls == ()
 
 
-async def test_an_event_stream_refuses_a_body() -> None:
-    """Refuse a body on ``events()``, a GET stream, the same way."""
+@pytest.mark.parametrize("keyword", ["body", "json", "data", "content", "files"])
+async def test_an_event_stream_refuses_a_body(keyword: str) -> None:
+    """Refuse a body keyword on ``events()``, a GET stream, in its own words: a stream a POST opens is ``stream()``."""
     fake = FakeTransport()
+    message = (
+        rf"^events\(\) got an unexpected keyword argument '{keyword}': events\(\) opens a GET, which has no body; "
+        r"for an event stream a POST opens, write stream\(url, method='POST', body=\.\.\.\) and read its "
+        r"aiter_events\(\)$"
+    )
     async with Client(base_url="https://api.example", http=HttpOptions(transport=fake)) as client:
-        with pytest.raises(TypeError, match=r"takes no body= for a GET: .*method='QUERY'"):
-            async with client.events("feed", body=Json({"q": "alice"})):
+        with pytest.raises(TypeError, match=message):
+            async with client.events("feed", **cast("dict[str, Any]", {keyword: Json({"q": "alice"})})):
                 pass
 
     assert fake.calls == ()
+
+
+async def test_a_body_on_events_does_not_type_check(tmp_path: Path) -> None:
+    """Report ``body=`` and ``cache_ttl=`` on ``events()`` as type errors: its options are a stream's, less the body."""
+    module = tmp_path / "probe.py"
+    module.write_text(
+        dedent(
+            """
+            from headgate import Client, Json
+
+
+            def probe(c: Client) -> None:
+                c.events("x", body=Json({"q": "alice"}))
+                c.events("x", cache_ttl=5.0)
+            """
+        )
+    )
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "ty", "check", str(module), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, _ = await process.communicate()
+
+    out = stdout.decode()
+    assert "Argument `body` does not match any known parameter of bound method `Client.events`" in out, out
+    assert "Argument `cache_ttl` does not match any known parameter of bound method `Client.events`" in out, out
+    assert "Found 2 diagnostics" in out, out
 
 
 async def test_a_query_stream_takes_a_body() -> None:

@@ -9,7 +9,7 @@ import asyncio
 import itertools
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, assert_type, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, Final, assert_type, cast, override
 
 import httpx2
 import msgspec
@@ -21,6 +21,7 @@ from headgate import (
     CallPolicy,
     Client,
     ClientError,
+    EncodedBody,
     Expect,
     HttpCache,
     HttpOptions,
@@ -31,7 +32,7 @@ from headgate import (
 )
 from headgate._client import _paired
 from headgate.errors import ForbiddenDestinationError, PageLimitError, ResponseParseError
-from headgate.msgspec import reader
+from headgate.msgspec import reader, writer
 from headgate.pagination import BodyCursor, BodyOffset, Cursor, LinkHeader, NextUrl, Offset, PageNumber, PageRequest
 from headgate.testing import FakeTransport
 
@@ -415,7 +416,7 @@ async def test_every_page_carries_the_walks_cache_ttl(storage: AsyncSqliteStorag
     pages = Cursor(reader(Page), items=items_of, next=cursor_of, param="after")
     client = Client(
         base_url=_BASE,
-        policy=CallPolicy(rate=_RATE, cache=HttpCache(storage=storage)),
+        policy=CallPolicy(rate=_RATE, cache=HttpCache(storage=storage, ttl=None)),
         http=HttpOptions(transport=httpx2.MockTransport(answer)),
     )
     paginated = client.paginate("items", pager=pages, cache_ttl=ttl)
@@ -743,9 +744,10 @@ async def test_a_walk_that_ends_exactly_at_its_limit_is_complete() -> None:
         ({"max_pages": 0}, ValueError, "max_pages= takes None or an int of at least 1 (got 0)"),
         ({"max_pages": True}, TypeError, "max_pages= takes None or an int of at least 1 (got bool)"),
         ({"max_pages": 5, "on_limit": "truncate"}, ValueError, "on_limit= takes 'raise' or 'stop' (got 'truncate')"),
+        ({"max_pages": 5, "on_limit": True}, TypeError, "on_limit= takes 'raise' or 'stop' (got bool)"),
         ({"on_limit": "stop"}, ValueError, "on_limit='stop' says what happens at max_pages=, so it needs one"),
     ],
-    ids=["zero", "a-bool", "unknown-outcome", "stop-without-a-budget"],
+    ids=["zero", "a-bool", "unknown-outcome", "an-outcome-not-text", "stop-without-a-budget"],
 )
 def test_a_bad_page_budget_is_refused_before_anything_is_sent(
     budget: dict[str, Any], error: type[Exception], message: str
@@ -823,12 +825,19 @@ async def test_collect_past_the_page_limit_raises() -> None:
     assert len(api.sent) == _BUDGET
 
 
-@pytest.mark.parametrize("max_items", [-1, True], ids=["negative", "a-bool"])
-async def test_collect_refuses_a_bad_count(max_items: int) -> None:
+@pytest.mark.parametrize(
+    ("max_items", "error", "message"),
+    [
+        (-1, ValueError, r"^max_items must be None or >= 0 \(got -1\)$"),
+        (True, TypeError, r"^max_items= takes None or an int of 0 or more \(got bool\)$"),
+    ],
+    ids=["negative", "a-bool"],
+)
+async def test_collect_refuses_a_bad_count(max_items: int, error: type[Exception], message: str) -> None:
     """Refuse a negative count, and a ``bool`` passed as one, before sending anything."""
     api = _Api(_endless)
     paginated = api.client().paginate("items", pager=_cursor())
-    with pytest.raises(ValueError, match=f"^max_items must be None or >= 0 \\(got {max_items!r}\\)$"):
+    with pytest.raises(error, match=message):
         await paginated.collect(max_items=max_items)
     assert api.sent == []
 
@@ -1224,22 +1233,150 @@ def _three_pages(request: httpx2.Request) -> httpx2.Response:
     return response
 
 
-@pytest.mark.parametrize("strategy", ["offset", "page-number", "cursor", "link", "next-url"])
-async def test_a_strategy_calls_its_items_hook_once_per_page(strategy: str) -> None:
-    """Read a page's items once, for the loop guard, the next request and the items yielded alike."""
-    items = _CountedItems()
-    pagers: dict[str, Any] = {
-        "offset": Offset(reader(Page), items=items, page_size=2),
-        "page-number": PageNumber(reader(Page), items=items, more=has_next),
-        "cursor": Cursor(reader(Page), items=items, next=cursor_of, param="after"),
-        "link": LinkHeader(reader(Page), items=items),
-        "next-url": NextUrl(reader(Page), items=items, next=next_of),
-    }
-    api = _Api(_by_cursor if strategy == "cursor" else _three_pages)
-    walked = [item.id async for item in api.client().paginate("items", pager=pagers[strategy])]
+#: Five items in three pages, linked by the cursors ``b`` and ``c``.
+_FIVE_BY_CURSOR: Final = {None: ([1, 2], "b"), "b": ([3, 4], "c"), "c": ([5], None)}
 
-    assert walked
+
+def _five_by_cursor(request: httpx2.Request) -> httpx2.Response:
+    """Serve five items in three pages, linked by the cursor sent as the query parameter ``after``."""
+    ids, following = _FIVE_BY_CURSOR[request.url.params.get("after")]
+    return _page(request, ids, cursor=following)
+
+
+def _by_body(request: httpx2.Request) -> httpx2.Response:
+    """Serve the pages a walk of POSTs asks for in its body: by ``offset``, two items a page, or by the cursor."""
+    body = msgspec.json.decode(request.content or b"{}")
+    if "offset" in body:
+        return _page(request, [[1, 2], [3, 4], [5]][body["offset"] // 2])
+    ids, following = _FIVE_BY_CURSOR[body.get("after")]
+    return _page(request, ids, cursor=following)
+
+
+#: Each strategy as a walk of the same five items: its class, its options but ``read`` and ``items``, the API that
+#: answers it, and the walk's ``payload=``.
+_STRATEGIES: dict[str, tuple[type[Any], dict[str, Any], Callable[[httpx2.Request], httpx2.Response], object]] = {
+    "offset": (Offset, {"page_size": 2}, _three_pages, None),
+    "page-number": (PageNumber, {"more": has_next}, _three_pages, None),
+    "cursor": (Cursor, {"next": cursor_of, "param": "after"}, _five_by_cursor, None),
+    "link": (LinkHeader, {}, _three_pages, None),
+    "next-url": (NextUrl, {"next": next_of}, _three_pages, None),
+    "body-cursor": (BodyCursor, {"next": cursor_of, "put": lambda body, after: {**body, "after": after}}, _by_body, {}),
+    "body-offset": (
+        BodyOffset,
+        {"page_size": 2, "offset": lambda body: body.get("offset", 0), "put": lambda body, at: {**body, "offset": at}},
+        _by_body,
+        {},
+    ),
+}
+
+
+def _walk(strategy: str, cls: type[Any], items: Callable[[Page], Sequence[Item]]) -> tuple[_Api, Any]:
+    """Return the API that answers *strategy* and a walk of it by a pager of *cls* reading items with *items*."""
+    _, options, answer, payload = _STRATEGIES[strategy]
+    api = _Api(answer)
+    return api, api.client().paginate("items", pager=cls(reader(Page), items=items, **options), payload=payload)
+
+
+@pytest.mark.parametrize("subclassed", [False, True], ids=["itself", "subclass"])
+@pytest.mark.parametrize("strategy", sorted(_STRATEGIES))
+async def test_a_strategy_calls_its_items_hook_once_per_page(strategy: str, *, subclassed: bool) -> None:
+    """Read a page's items once, for the loop guard, the next request and the items yielded alike.
+
+    A subclass that only adds to the strategy, overriding neither ``next_page`` nor ``page_items``, is walked as the
+    strategy is.
+    """
+    base = _STRATEGIES[strategy][0]
+    items = _CountedItems()
+    api, walk = _walk(strategy, type(f"My{base.__name__}", (base,), {}) if subclassed else base, items)
+    walked = [item.id async for item in walk]
+
+    assert walked == [1, 2, 3, 4, 5]
     assert items.calls == len(api.sent), "each page's items are read once"
+
+
+async def test_a_strategys_items_that_returns_text_is_refused() -> None:
+    """Refuse ``items=`` returning a ``str``, a sequence of characters the walk would yield one by one as items."""
+    api = _Api(_three_pages)
+    pager = Offset(reader(Page), items=cast("Any", lambda _page: "abc"), page_size=2)
+    with pytest.raises(TypeError, match=r"^items= returns the items on a page, a sequence, such as a list, not text"):
+        await api.client().paginate("items", pager=pager).collect()
+
+
+@pytest.mark.parametrize("strategy", ["body-cursor", "body-offset"])
+async def test_a_writing_pager_encodes_each_page_once(strategy: str) -> None:
+    """Call a writer once a page: the bytes it wrote are both what the loop guard remembers and what is sent."""
+    base, options, answer, payload = _STRATEGIES[strategy]
+    encode = writer(dict[str, object])
+    calls: list[object] = []
+
+    def write(body: dict[str, object]) -> EncodedBody:
+        calls.append(body)
+        return encode(body)
+
+    api = _Api(answer)
+    pager = base(reader(Page), items=items_of, write=write, **options)
+    walked = [item.id async for item in api.client().paginate("items", pager=pager, payload=payload)]
+
+    assert walked == [1, 2, 3, 4, 5]
+    assert len(calls) == len(api.sent), "each page's body is written once"
+
+
+@pytest.mark.parametrize("strategy", sorted(_STRATEGIES))
+async def test_a_strategy_subclass_that_overrides_next_page_is_walked_by_it(strategy: str) -> None:
+    """Walk by a subclass's own ``next_page``, never the strategy's: here, one that ends the walk at its first page."""
+    base = _STRATEGIES[strategy][0]
+
+    class FirstPageOnly(base):
+        @override
+        def next_page(self, page: Page, request: Any, response: httpx2.Response) -> None:
+            del page, request, response
+
+    api, walk = _walk(strategy, FirstPageOnly, items_of)
+    walked = [item.id async for item in walk]
+
+    assert walked == [1, 2], "the subclass's next_page ended the walk after the first page"
+    assert len(api.sent) == 1
+
+
+async def test_a_strategy_subclass_that_filters_page_items_is_still_counted_by_the_strategy() -> None:
+    """Step an offset by the items the strategy reads, not by the ones a subclass's ``page_items`` keeps."""
+
+    class OddItems(Offset[Item, Page, None]):
+        @override
+        def page_items(self, page: Page) -> list[Item]:
+            return [item for item in page.data if item.id % 2]
+
+    api, walk = _walk("offset", OddItems, items_of)
+    walked = [item.id async for item in walk]
+
+    assert walked == [1, 3, 5]
+    assert [url.params["offset"] for url in api.sent] == ["0", "2", "4"]
+
+
+async def test_a_custom_pager_is_walked_by_its_next_page_whatever_else_it_defines() -> None:
+    """Walk a pager of the caller's own by ``next_page``, though it has a method named as a strategy's private one."""
+
+    @dataclass(frozen=True)
+    class OnePage:
+        read: Reader[Page] = field(default_factory=lambda: reader(Page))
+
+        def first(self, request: PageRequest) -> PageRequest:
+            return request
+
+        def page_items(self, page: Page) -> list[Item]:
+            return page.data
+
+        def next_page(self, page: Page, request: PageRequest, response: httpx2.Response) -> None:
+            del page, request, response
+
+        def _next_after(self, *args: object) -> PageRequest:
+            """Stand in for a strategy's private hook, which the walk must not take for one."""
+            return PageRequest("never-called", params={"args": len(args)})
+
+    api = _Api(_three_pages)
+    walked = [item.id async for item in api.client().paginate("items", pager=OnePage())]
+
+    assert walked == [1, 2]
 
 
 def test_a_strategy_called_directly_reads_its_page_itself() -> None:
@@ -1267,3 +1404,143 @@ def test_a_strategy_called_directly_reads_its_page_itself() -> None:
     assert str(next_url.url) == f"{_BASE}/items?page=2"
     assert body is not None
     assert body.payload == {"q": 1, "after": "c"}
+
+
+def _one_page(request: httpx2.Request) -> httpx2.Response:
+    """Answer every page with two items, a cursor and a next URL, which the hooks below are handed."""
+    return _page(request, [1, 2], cursor="b", next="https://api.test/next")
+
+
+def _returning(value: object) -> Callable[..., Any]:
+    """Return a hook returning *value*, whatever it is handed: a hook of the wrong kind, typed as any hook."""
+
+    def hook(*args: object) -> object:
+        del args
+        return value
+
+    return hook
+
+
+def _with_cursor(query: dict[str, object], cursor: str) -> dict[str, object]:
+    """Return *query* with *cursor* in it."""
+    return {**query, "cursor": cursor}
+
+
+#: Each pager with a hook returning the wrong kind, the payload its walk takes, and the refusal naming the hook.
+_WRONG_RETURNS: Final[list[tuple[Pager[Any, Page, Any], dict[str, object] | None, str]]] = [
+    (
+        Cursor(reader(Page), items=_returning(None), next=cursor_of, param="after"),
+        None,
+        r"^items= returns the items on a page, a sequence, such as a list \(got NoneType\)$",
+    ),
+    (
+        Offset(reader(Page), items=_returning(item for item in ()), page_size=2),
+        None,
+        r"^items= returns the items on a page, a sequence, such as a list \(got generator\)$",
+    ),
+    (
+        Offset(reader(Page), items=items_of, page_size=2, total=_returning("10")),
+        None,
+        r"^total= returns the collection's exact size, an int, or None \(got str\)$",
+    ),
+    (
+        Offset(reader(Page), items=items_of, page_size=2, total=_returning(value=True)),
+        None,
+        r"^total= returns the collection's exact size, an int, or None \(got bool\)$",
+    ),
+    (
+        Cursor(reader(Page), items=items_of, next=_returning(5), param="after"),
+        None,
+        r"^next= returns the next page's cursor, a str, or None \(got int\)$",
+    ),
+    (
+        BodyCursor(reader(Page), items=items_of, next=_returning(5), put=_with_cursor),
+        {"q": "x"},
+        r"^next= returns the next page's cursor, a str, or None \(got int\)$",
+    ),
+    (
+        NextUrl(reader(Page), items=items_of, next=_returning(5)),
+        None,
+        r"^next= returns the next page's URL, a str or an httpx2\.URL, or None \(got int\)$",
+    ),
+    (
+        Cursor(reader(Page), items=items_of, next=cursor_of, param="after", write=_returning(b"{}")),
+        {"q": "x"},
+        r"^write= returns an EncodedBody, as a flavor's writer\(Type\) builds one \(got bytes\)$",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("pager", "payload", "message"),
+    _WRONG_RETURNS,
+    ids=["items", "items-generator", "total", "total-bool", "next-cursor", "next-body-cursor", "next-url", "write"],
+)
+async def test_a_hook_that_returns_the_wrong_kind_is_refused_naming_it(
+    pager: Pager[Any, Page, Any], payload: dict[str, object] | None, message: str
+) -> None:
+    """Refuse what a hook returned when it is of the wrong kind, naming the hook, as a reader's ``refuse=`` is."""
+    paginated = _Api(_one_page).client().paginate("items", payload=payload, pager=pager)
+
+    with pytest.raises(TypeError, match=message):
+        await paginated.collect()
+
+
+class _ItemsOfNothing:
+    """A pager of its own whose ``page_items`` returns no iterable."""
+
+    read: Final = reader(Page)
+
+    def first(self, request: PageRequest) -> PageRequest:
+        """Return *request* unchanged."""
+        return request
+
+    def page_items(self, page: Page) -> None:
+        """Return ``None``, where a page's items go."""
+        del page
+
+    def next_page(self, page: Page, request: PageRequest, response: httpx2.Response) -> PageRequest | None:
+        """Return ``None``: one page."""
+        del page, request, response
+
+
+async def test_a_pagers_own_page_items_returning_no_iterable_is_refused_naming_it() -> None:
+    """Name a pager's own ``page_items`` when it returns what is not an iterable, as ``items=`` is named."""
+    paginated = _Api(_one_page).client().paginate("items", pager=cast("Any", _ItemsOfNothing()))
+
+    with pytest.raises(TypeError, match=r"^_ItemsOfNothing\.page_items\(\) returns the items on a page, an iterable"):
+        await paginated.collect()
+
+
+async def test_a_strategy_subclasss_own_page_items_is_named_for_what_it_returns() -> None:
+    """Name a subclass's ``page_items``, not the ``items=`` it overrides, when it returns no iterable."""
+
+    class NoItems(Offset[Item, Page, None]):
+        @override
+        def page_items(self, page: Page) -> Any:
+            del page
+
+    _, walk = _walk("offset", NoItems, items_of)
+
+    with pytest.raises(
+        TypeError, match=r"^NoItems\.page_items\(\) returns the items on a page, an iterable \(got NoneType\)$"
+    ):
+        await walk.collect()
+
+
+def test_a_body_offset_whose_offset_returns_no_int_is_refused_naming_it() -> None:
+    """Refuse an ``offset`` that returns what is not an ``int``, which the walk compares and adds to, naming it."""
+    pager = BodyOffset(reader(Page), items=items_of, page_size=2, offset=_returning("0"), put=_returning({}))
+
+    with pytest.raises(TypeError, match=r"^offset= returns a body's offset, an int \(got str\)$"):
+        _Api(_one_page).client().paginate("items", payload={"offset": 0}, pager=pager)
+
+
+def test_a_class_given_as_write_is_refused_where_the_pager_is_built() -> None:
+    """Refuse a class as ``write=``, which is called with the payload and returns no ``EncodedBody``, as ``Reader``."""
+    message = (
+        r"^write= takes a writer, such as a flavor's writer\(Query\), or None to send builtins as JSON \(got the class "
+        r"dict\): write writer\(dict\) with a flavor's writer, or leave write= out to send builtins as JSON$"
+    )
+    with pytest.raises(TypeError, match=message):
+        Cursor(reader(Page), items=items_of, next=cursor_of, param="after", write=cast("Any", dict))

@@ -61,7 +61,7 @@ def test_a_registry_shows_only_its_settings() -> None:
 
 
 def test_circuit_breaker_is_not_exported() -> None:
-    """Keep the breaker itself out of ``headgate.breaker``: it is read through ``headgate.health.breaker_states``."""
+    """Keep the breaker itself out of ``headgate.breaker``: it is read through ``headgate.health.breaker_snapshots``."""
     assert "CircuitBreaker" not in headgate.breaker.__all__
     assert not hasattr(headgate.breaker, "CircuitBreaker")
 

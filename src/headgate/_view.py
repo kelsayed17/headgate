@@ -20,6 +20,7 @@ import httpx2
 from typing_extensions import TypedDict
 
 from headgate._call_options import check_overrides
+from headgate._core import check_default_headers
 from headgate._options import Timeouts, check_deadline
 from headgate.retry._policy import SEND_ONCE, RetryPolicy
 
@@ -29,7 +30,8 @@ __all__ = ["KEEP", "ROOT_DEFAULTS", "VIEW_KEYS", "Keep", "ViewDefaults", "ViewOp
 class ViewOptions(TypedDict, total=False, closed=True):
     """The defaults :meth:`~headgate.Client.with_options` changes; an option left out keeps the outer one.
 
-    * ``headers``: sent on every call of the view, over the client's; a call's ``headers=`` still wins a clash.
+    * ``headers``: sent on every call of the view, over the client's; a call's ``headers=`` still wins a clash. Each
+      is named once, and none is a header the client's auth sets, as for the client's.
     * ``timeout``: :class:`~headgate.Timeouts` whose set phases replace the client's; the others are kept.
     * ``deadline``: seconds each call may take, or ``None`` for no deadline.
     * ``retry``: a :class:`~headgate.RetryPolicy` that replaces the client's and its routes', or ``None`` to send each
@@ -85,11 +87,12 @@ class ViewDefaults:
 
         :raises TypeError: for a ``retry`` or ``follow_redirects`` of the wrong kind (see
             :func:`~headgate._call_options.check_overrides`).
-        :raises ValueError: for a deadline that is not positive and finite.
+        :raises ValueError: for a deadline that is not positive and finite, and headers that name a header twice.
         """
         check_overrides(options)
         changed = self
         if (headers := options.get("headers")) is not None:
+            check_default_headers("headers", headers)
             merged = httpx2.Headers(list(self.headers))
             merged.update(headers)
             changed = replace(changed, headers=tuple(merged.items()))

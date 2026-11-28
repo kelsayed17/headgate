@@ -21,7 +21,9 @@ to when the client is built (``headgate._curl.guard_binding``), and resolves, ve
 
 **Any other custom transport** (``HttpOptions(transport=...)``) resolves names itself, so the guard cannot choose its
 address: :func:`address_hook` vets every hop as a request hook, which refuses a forbidden host before anything is
-sent, but the transport's own lookup could still be answered differently a moment later.
+sent, but the transport's own lookup could still be answered differently a moment later. The stack runs the same hook
+again below the client's last middleware, on an attempt the middleware moved to another origin (see
+:mod:`headgate._stack`).
 """
 
 import asyncio

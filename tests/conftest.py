@@ -17,7 +17,7 @@ import pytest
 from hishel import AsyncSqliteStorage
 
 from headgate.ratelimit._budget import Pacer
-from headgate.testing import instant_retries
+from headgate.testing import instant_waits
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -31,7 +31,7 @@ def instant_retry_sleep() -> Iterator[None]:
 
     Clients read their timing when they are built, and every client in a test is built inside this fixture's block.
     """
-    with instant_retries():
+    with instant_waits():
         yield
 
 

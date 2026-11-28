@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, cast, override
+from typing import TYPE_CHECKING, override
 
 import anysqlite
 import httpx2
@@ -74,7 +74,7 @@ def test_a_urls_segments_are_split_before_they_are_decoded(url: str, fragment: s
         lambda: check_fragment("//"),
         lambda: Route("", rate=Rate.per_second(1)),
         lambda: Route("/"),
-        lambda: HttpCache(storage=cast("Any", None), paths=("/orders", "")),
+        lambda: HttpCache(storage=AsyncSqliteStorage(database_path=":memory:"), ttl=None, paths=("/orders", "")),
     ],
     ids=["check", "rate-rule", "route", "cache-filter"],
 )

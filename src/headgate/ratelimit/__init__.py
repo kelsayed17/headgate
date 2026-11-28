@@ -8,7 +8,7 @@ A path's own budget is set by its :class:`~headgate.Route` (``Route("/exports", 
 A client given no rate (``rate=None``) paces nothing of its own, but still waits out the pauses a server asks for. The
 layer that spends the budgets is the client's own, in this package's private modules.
 
-Self-contained: it imports only ``httpx2``, the standard library and :mod:`headgate._core`.
+Self-contained: it imports only ``httpx2``, the standard library and headgate's private core.
 """
 
 from headgate._core import rehome as _rehome
