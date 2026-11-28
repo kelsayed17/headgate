@@ -301,11 +301,12 @@ class Client:
     **URLs.** A t-string URL (``t"series/{series_id}"``) is rendered by :func:`headgate._url.render_path`, which
     escapes every interpolation as one path segment and raises ``ValueError`` for a value no segment can hold (as
     :func:`~headgate._url.escape_segment` does): that is a programming error at the call site. Its template is the
-    call's route in events. An ``httpx2.URL`` is passed through verbatim, so a paginator can forward an absolute cursor
-    URL from a response body; a literal ``str`` is passed through the same way. A computed ``str``, such as an f-string,
-    does not type-check, because it skipped escaping. A URL httpx2 cannot parse raises the root ``ClientError``, since
-    such a URL often comes from the wire rather than the code; a redirect to one is the host's failure, a
-    ``TransportError``. Every message names a URL redacted and cut to a few hundred characters.
+    call's route in events. An absolute ``httpx2.URL`` is passed through verbatim, so a paginator can forward a cursor
+    URL from a response body; a literal ``str`` is passed through the same way. A relative ``httpx2.URL`` raises
+    ``TypeError``, since its only use would be to skip escaping, and so does a URL of any other kind. A computed
+    ``str``, such as an f-string, does not type-check, because it skipped escaping. A URL httpx2 cannot parse raises the
+    root ``ClientError``, since such a URL often comes from the wire rather than the code; a redirect to one is the
+    host's failure, a ``TransportError``. Every message names a URL redacted and cut to a few hundred characters.
 
     **Time.** The client takes its timing from :func:`headgate.timing.current_timing` when it is built.
     """
@@ -837,9 +838,10 @@ class Client:
 
         Raises ``ValueError`` for a t-string value no path segment can hold, for a call that would follow redirects
         on a client with a ``response_check``, for a ``deadline=`` that is not positive and finite and for a ``Json``
-        body JSON cannot carry; ``TypeError`` for a ``body=`` that is no ``Body``; and ``ClientError`` for a URL httpx2
-        cannot parse.
+        body JSON cannot carry; ``TypeError`` for a URL that is neither a ``str``, a t-string nor an absolute
+        ``httpx2.URL``, and for a ``body=`` that is no ``Body``; and ``ClientError`` for a URL httpx2 cannot parse.
         """
+        _check_url(call.url)
         if isinstance(call.url, Template):
             url, route = render_path(call.url), route_template(call.url)
         else:
@@ -1220,6 +1222,23 @@ class Client:
     def _unsent_site(self, prepared: _Prepared) -> CallSite:
         """Return :meth:`_site` for a call whose current attempt never reached the network: it does not count."""
         return replace(self._site(prepared), attempts=prepared.context.attempt - 1)
+
+
+def _check_url(url: object) -> None:
+    """Refuse a call's *url* unless it is a ``str``, a t-string or an absolute ``httpx2.URL``.
+
+    A relative ``httpx2.URL`` is the one escape from escaping a t-string does not make greppable, and every URL a pager
+    forwards from the wire is absolute, so it has no other use.
+
+    :raises TypeError: naming what to write instead.
+    """
+    check_kind("url", url, (str, Template, httpx2.URL), "a literal str, a t-string or an absolute httpx2.URL")
+    if isinstance(url, httpx2.URL) and not url.is_absolute_url:
+        msg = (
+            "a relative httpx2.URL skips escaping: write a t-string, t'items/{uid}', or {fragment:raw} for a "
+            f"pre-built fragment (got {loggable_url(str(url))!r})"
+        )
+        raise TypeError(msg)
 
 
 def _check_auth(auth: object) -> None:

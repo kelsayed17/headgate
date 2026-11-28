@@ -49,8 +49,9 @@ __all__ = [
     "sanitize_url",
 ]
 
-#: What a call takes as its URL: a literal, a t-string (escaped, and the call's route) or an ``httpx2.URL`` (a wire URL,
-#: sent as it is). A computed ``str`` is none of these: it skipped escaping.
+#: What a call takes as its URL: a literal, a t-string (escaped, and the call's route) or an absolute ``httpx2.URL`` (a
+#: wire URL, sent as it is; a relative one is refused at the call). A computed ``str`` is none of these: it skipped
+#: escaping.
 CallUrl = LiteralString | Template | httpx2.URL
 
 #: Query parameter names that carry a credential, compared after :func:`_fold` (case-insensitive, ``_`` and ``-``

@@ -132,9 +132,11 @@ await client.delete(t"positions/{symbol}", expect=nothing)  # "BTC/USD" -> posit
 So a value cannot change the URL's structure: `/`, `?`, `#` and whitespace are percent-encoded, a value of `.` or `..`
 is sent as `%2E` or `%2E%2E` rather than resolved as a dot segment, and an empty value raises `ValueError` rather than
 addressing the collection. A nested t-string splices as structure (`t"{API_PREFIX}/accounts"`, its own values still
-escaped), and `{fragment:raw}` is the one explicit escape hatch for a pre-built fragment. A literal or an
+escaped), and `{fragment:raw}` is the one explicit escape hatch for a pre-built fragment. A literal or an absolute
 `httpx2.URL` is sent as it is, which is what lets a paginator follow an absolute URL from a response: it forwards that
-URL as an `httpx2.URL`.
+URL as an `httpx2.URL`. A relative `httpx2.URL` raises `TypeError`, since all it could do is skip the escaping
+(`httpx2.URL(f"items/{uid}")` with `uid = "../admin"` reaches `/admin`), and a URL of any other kind (`None`, `bytes`)
+raises `TypeError` rather than being sent as its text.
 
 ## Redaction
 

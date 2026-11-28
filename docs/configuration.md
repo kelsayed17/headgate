@@ -232,7 +232,7 @@ route's or the client's; `None` turns it off:
 
 ```python
 await client.get(
-    url,  # a literal, a t-string (escaped, and the call's route) or an httpx2.URL (sent as it is)
+    url,  # a literal, a t-string (escaped, and the call's route) or an absolute httpx2.URL (sent as it is)
     expect=reader_or_expect,
     retry=RetryPolicy(attempts=5),  # replaces the view's, the route's or the client's; None: send once
     follow_redirects=False,  # a 3xx raises as itself; True follows it
