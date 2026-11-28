@@ -41,10 +41,13 @@ The key is per process, so credential-partitioned entries in a persistent storag
 nor is an entry whose response varies on a request header (``Vary``); they expire by their TTL like any other.
 """
 
+import contextlib
 import hashlib
 import hmac
+import itertools
 import secrets
 import threading
+import weakref
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, override
 
@@ -268,10 +271,12 @@ def credential_scope(
 #: What decides which hosts a guarded client reaches: its SSRF guard's address check and its resolver.
 type Guard = tuple[object, object]
 
-#: Each guard seen in this process, by the identities of its check and resolver: the label its entries are kept under,
-#: and the guard itself, held so that neither object's identity is reused by another while the process runs.
-_GUARD_LABELS: Final[dict[tuple[int, int], tuple[bytes, Guard]]] = {}
-_GUARD_LABELS_LOCK: Final = threading.Lock()
+#: Each live guard's label, by the identities of its check and resolver: an entry goes when either is collected.
+_GUARD_LABELS: Final[dict[tuple[int, int], bytes]] = {}
+#: Reentrant: a collection run while the table is locked may finalize a check or a resolver, whose entry then goes.
+_GUARD_LABELS_LOCK: Final = threading.RLock()
+#: Where the next label is drawn from: a count, so a label is never handed out twice, even after its entry went.
+_GUARD_SERIAL: Final = itertools.count()
 
 
 def _guard_label(guard: Guard) -> bytes:
@@ -279,8 +284,22 @@ def _guard_label(guard: Guard) -> bytes:
 
     Labels are per process, as the partition key is. They are keyed by identity, since a check or a resolver need not
     be hashable (a bound method of a mutable object), and two of them that compare equal may still decide differently.
+    An entry holds neither object: it is dropped when either is collected, so a guard's closure is not kept alive, and
+    an identity reused by a later object finds no entry and draws a new label.
     """
-    check, resolver = guard
+    key = (id(guard[0]), id(guard[1]))
     with _GUARD_LABELS_LOCK:
-        label, _ = _GUARD_LABELS.setdefault((id(check), id(resolver)), (str(len(_GUARD_LABELS)).encode(), guard))
+        label = _GUARD_LABELS.get(key)
+        if label is None:
+            label = _GUARD_LABELS[key] = str(next(_GUARD_SERIAL)).encode()
+            for part in guard:
+                # None and a builtin take no weak reference, and are never collected: their entry stays.
+                with contextlib.suppress(TypeError):
+                    weakref.finalize(part, _forget_guard, key)
     return label
+
+
+def _forget_guard(key: tuple[int, int]) -> None:
+    """Drop the label of a guard whose check or resolver was collected."""
+    with _GUARD_LABELS_LOCK:
+        _GUARD_LABELS.pop(key, None)

@@ -10,6 +10,7 @@ caller's bug, not a body of the wrong shape.
 
 from __future__ import annotations
 
+import io
 from typing import TYPE_CHECKING, Any, Final, cast, override
 
 import httpx2
@@ -86,6 +87,16 @@ def test_a_body_reader_refuses_a_class(decode: object, got: str, advice: str) ->
         TypeError, match=rf"^body_reader\(decode\) takes a function of the body's bytes \(got {got}\): {advice}"
     ):
         body_reader(cast("Callable[[bytes], object]", decode))
+
+
+def test_a_body_reader_takes_a_class_built_from_bytes() -> None:
+    """Accept a class a body's bytes build, such as ``io.BytesIO`` for a zip reader, as 0.12.1 did.
+
+    Only a class that misreads every body is refused: a builtin with a reader of its own, a model, a type expression.
+    """
+    read = body_reader(io.BytesIO)
+
+    assert read(httpx2.Response(200, content=b"PK")).getvalue() == b"PK"
 
 
 def test_a_body_reader_of_bytes_with_a_check_is_told_to_hand_the_bytes_on() -> None:

@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import gc
 import math
+import weakref
 from typing import TYPE_CHECKING, Final, override
 
 import httpx2
@@ -23,6 +25,7 @@ import pytest
 from headgate import CallPolicy, Client, HttpCache, HttpOptions, Method, SecurityOptions, as_bytes
 from headgate._core import CallContext, CallInfo
 from headgate.cache import Partition
+from headgate.cache._credentials import _GUARD_LABELS
 from headgate.errors import ForbiddenDestinationError
 from headgate.events import CacheOutcome
 from tests.cache._helpers import (
@@ -351,6 +354,48 @@ async def test_a_guarded_client_is_never_served_an_entry_a_laxer_guard_fetched(
         assert await lax.get("series", expect=as_bytes) == NETWORK_BODY
         with pytest.raises(ForbiddenDestinationError):
             await strict.get("series", expect=as_bytes)
+
+
+async def test_clients_with_one_guard_share_their_cache_entries(storage: AsyncSqliteStorage) -> None:
+    """Serve a client the entry another client with the very same check and resolver fetched: one guard, one label."""
+    cache = HttpCache(storage=storage, ttl=None)
+    names = _Names(x="8.8.8.8")
+    network = Network()
+    security = SecurityOptions(block_private_hosts=True, resolver=names, check=_admit_everything)
+    first, second = (stub_client(transport=network, cache=cache, http=HttpOptions(security=security)) for _ in "ab")
+    async with first, second:
+        assert await first.get("series", expect=as_bytes) == NETWORK_BODY
+        assert await second.get("series", expect=as_bytes) == NETWORK_BODY
+
+    assert network.calls == 1, "the second client was served the first one's entry"
+
+
+class _Tenant:
+    """A tenant whose resolver is a bound method: the guard's label must not keep the tenant alive."""
+
+    async def resolve(self, host: str, port: int) -> Sequence[str]:
+        """Answer every name with a public address."""
+        del host, port
+        return ("8.8.8.8",)
+
+
+async def test_a_guards_cache_label_keeps_its_resolver_no_longer_than_its_clients(storage: AsyncSqliteStorage) -> None:
+    """Free a guard's resolver and what it holds once its clients are gone, though the cache labeled their entries."""
+    tenant = _Tenant()
+    alive = weakref.ref(tenant)
+    labels = len(_GUARD_LABELS)
+    client = stub_client(
+        transport=Network(),
+        cache=HttpCache(storage=storage, ttl=None),
+        http=HttpOptions(security=SecurityOptions(block_private_hosts=True, resolver=tenant.resolve)),
+    )
+    async with client:
+        assert await client.get("series", expect=as_bytes) == NETWORK_BODY
+    del client, tenant
+    gc.collect()
+
+    assert alive() is None
+    assert len(_GUARD_LABELS) == labels, "the guard's label went with its resolver"
 
 
 # L31: a per-call cache_ttl is checked before anything is sent.

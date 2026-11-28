@@ -10,6 +10,7 @@ raises ``ForbiddenDestinationError``, which is not retried and not charged to th
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import socket
 from typing import TYPE_CHECKING, Any, Final, cast, override
@@ -33,6 +34,7 @@ from headgate.breaker import BreakerRegistry
 from headgate.curl import AsyncCurlTransport
 from headgate.errors import ForbiddenDestinationError
 from headgate.health import breaker_snapshots
+from headgate.retry import Hedge
 from headgate.security import forbidden_reason
 from headgate.testing import FakeTransport, fake_network
 from tests.security._servers import serving
@@ -40,7 +42,7 @@ from tests.security._web import BASE, Web
 from tests.support.responses import RESPONSE
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from headgate import Middleware
     from headgate.security import AddressCheck
@@ -462,6 +464,83 @@ async def test_a_hop_is_vetted_again_below_the_middleware_only_for_an_origin_it_
         await client.get("x", expect=RESPONSE)
 
     assert names.asked == asked
+
+
+class _ToReplica:
+    """A failover middleware that moves each attempt, in place, to ``replica.example``: a retry comes back moved."""
+
+    credential_headers = frozenset[str]()
+    credential_params = frozenset[str]()
+
+    def __init__(self, on_second: Callable[[], None] = lambda: None) -> None:
+        """Call *on_second* when the second attempt comes in."""
+        self.calls = 0
+        self._on_second = on_second
+
+    async def __call__(self, request: httpx2.Request, call_next: Next) -> httpx2.Response:
+        """Move the request to the replica, then send."""
+        self.calls += 1
+        if self.calls == len(("first", "second")):
+            self._on_second()
+        request.url = request.url.copy_with(host="replica.example")
+        return await call_next(request)
+
+
+def _guarded_over(web: Web, names: _Names, failover: _ToReplica, retry: RetryPolicy) -> Client:
+    """Build a client over *web*, guarded with *names*, through *failover*, retrying by *retry*."""
+    return Client(
+        base_url=BASE,
+        policy=CallPolicy(rate=Rate.per_second(1000), retry=retry),
+        http=HttpOptions(
+            transport=httpx2.MockTransport(web), security=SecurityOptions(block_private_hosts=True, resolver=names)
+        ),
+        middleware=(failover,),
+    )
+
+
+async def test_a_retry_of_an_attempt_a_middleware_moved_is_vetted_where_it_goes() -> None:
+    """Vet a retry the middleware moved before the guard admitted the move, which comes back already moved.
+
+    The replica does not resolve on the first attempt, a failure that is retried, and resolves to a private address by
+    the second: the retry, which enters the middleware on the replica already, is vetted there and refused.
+    """
+    web = Web()
+    names = _Names(api_example=_PUBLIC)
+    failover = _ToReplica(on_second=lambda: names.table.update({"replica.example": "10.0.0.9"}))
+    client = _guarded_over(web, names, failover, RetryPolicy(attempts=2))
+    async with client:
+        with pytest.raises(ForbiddenDestinationError, match=r"refused to connect to replica\.example"):
+            await client.get("x", expect=RESPONSE)
+
+    assert failover.calls == len(("first", "second"))
+    assert web.sent == []
+
+
+class _SlowNames(_Names):
+    """A resolver that takes a while for the replica, so a hedge starts before its first lookup ends."""
+
+    @override
+    async def __call__(self, host: str, _port: int) -> Sequence[str]:
+        """Answer the replica a fifth of a second late."""
+        if host == "replica.example":
+            await asyncio.sleep(0.2)
+        return await super().__call__(host, _port)
+
+
+async def test_a_hedge_of_an_attempt_a_middleware_moved_is_vetted_where_it_goes() -> None:
+    """Vet a hedge copied from an attempt the middleware moved while the guard was still looking the move up."""
+    web = Web()
+    client = _guarded_over(
+        web,
+        _SlowNames(api_example=_PUBLIC, replica_example="10.0.0.9"),
+        _ToReplica(),
+        RetryPolicy(attempts=2, hedge=Hedge(after=0.01)),
+    )
+    async with client:
+        with pytest.raises(ForbiddenDestinationError, match=r"refused to connect to replica\.example"):
+            await client.get("x", expect=RESPONSE)
+
+    assert web.sent == []
 
 
 async def test_a_host_a_middleware_chose_is_vetted_inside_a_fake_network() -> None:

@@ -1298,7 +1298,7 @@ async def test_a_strategys_items_that_returns_text_is_refused() -> None:
     """Refuse ``items=`` returning a ``str``, a sequence of characters the walk would yield one by one as items."""
     api = _Api(_three_pages)
     pager = Offset(reader(Page), items=cast("Any", lambda _page: "abc"), page_size=2)
-    with pytest.raises(TypeError, match=r"^items= returns the items on a page, a sequence, such as a list, not text"):
+    with pytest.raises(TypeError, match=r"^items= returns the items on a page, a collection, such as a list, not text"):
         await api.client().paginate("items", pager=pager).collect()
 
 
@@ -1431,12 +1431,12 @@ _WRONG_RETURNS: Final[list[tuple[Pager[Any, Page, Any], dict[str, object] | None
     (
         Cursor(reader(Page), items=_returning(None), next=cursor_of, param="after"),
         None,
-        r"^items= returns the items on a page, a sequence, such as a list \(got NoneType\)$",
+        r"^items= returns the items on a page, a collection, such as a list \(got NoneType\)$",
     ),
     (
         Offset(reader(Page), items=_returning(item for item in ()), page_size=2),
         None,
-        r"^items= returns the items on a page, a sequence, such as a list \(got generator\)$",
+        r"^items= returns the items on a page, a collection, such as a list \(got generator\)$",
     ),
     (
         Offset(reader(Page), items=items_of, page_size=2, total=_returning("10")),

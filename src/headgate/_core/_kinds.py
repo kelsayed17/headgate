@@ -5,6 +5,7 @@
 
 import re
 from collections.abc import Callable, Collection, Mapping
+from dataclasses import is_dataclass
 from typing import Any, Final, NewType, NoReturn, TypeAliasType, cast, get_origin
 
 import httpx2
@@ -25,6 +26,7 @@ __all__ = [
     "check_status",
     "check_statuses",
     "check_str_mapping",
+    "is_model_class",
     "is_type",
     "named",
     "option_text",
@@ -68,6 +70,19 @@ def named(value: object) -> str:
     if isinstance(value, type):
         return f"the class {value.__name__}"
     return type(value).__name__
+
+
+#: The class attributes that mark a model a codec builds from a body: a msgspec ``Struct``'s, a pydantic model's, an
+#: attrs class's. A dataclass is told by ``dataclasses.is_dataclass``.
+_MODEL_MARKS: Final = ("__struct_fields__", "__pydantic_fields__", "__attrs_attrs__")
+
+
+def is_model_class(value: object) -> bool:
+    """Return whether *value* is a model class: a dataclass, a msgspec ``Struct``, a pydantic model or an attrs class.
+
+    Such a class takes its fields, not a body's bytes, so where a function of the body goes it is a codec's reader.
+    """
+    return isinstance(value, type) and (is_dataclass(value) or any(hasattr(value, mark) for mark in _MODEL_MARKS))
 
 
 def option_text(option: str) -> str:

@@ -22,7 +22,7 @@ import json
 import os
 import stat
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable, Mapping, Sequence
-from dataclasses import dataclass, field, is_dataclass
+from dataclasses import dataclass, field
 from datetime import date, time
 from decimal import Decimal
 from typing import IO, Final, NoReturn, final, override
@@ -30,7 +30,7 @@ from uuid import UUID
 
 import httpx2
 
-from headgate._core import check_kind, named, refuse_subclass, sealed
+from headgate._core import check_kind, is_model_class, named, refuse_subclass, sealed
 
 __all__ = [
     "Body",
@@ -525,9 +525,6 @@ def lowered(body: Body | None) -> Lowered:
 
 
 #: The class attributes that mark a model's class: a msgspec ``Struct``, a pydantic model, an attrs class.
-_MODEL_MARKS: Final = ("__struct_fields__", "__pydantic_fields__", "__attrs_attrs__")
-
-
 def _body_hint(body: object) -> str | None:
     """Return the body to write *body* as, a value that is no :data:`Body`, or ``None`` when no body holds it.
 
@@ -540,7 +537,7 @@ def _body_hint(body: object) -> str | None:
         return "write body=Json(value)" if isinstance(body, dict) else "write body=Json(dict(value))"
     if isinstance(body, type):
         return None  # a class, a model's included, is no value to send
-    if is_dataclass(body) or any(hasattr(type(body), mark) for mark in _MODEL_MARKS):
+    if is_model_class(type(body)):
         name = type(body).__name__
         return (
             f"write body=writer({name})(value) with a flavor's writer, or body=Json(to_builtins(value)) with its "

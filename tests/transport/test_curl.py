@@ -188,6 +188,14 @@ def test_curl_following_redirects_itself_is_refused(sessions: list[_Session], va
     assert sessions == []
 
 
+@pytest.mark.parametrize("option", [CurlOpt.URL, CurlOpt.CURLU], ids=["URL", "CURLU"])
+def test_curl_sending_every_request_to_one_url_is_refused(sessions: list[_Session], option: CurlOpt) -> None:
+    """Refuse ``CurlOpt.URL`` and ``CURLU``: curl would send every request there, past every hook and the guard."""
+    with pytest.raises(ValueError, match=r"must not set CurlOpt\.URL or CurlOpt\.CURLU"):
+        _transport(sessions, curl_options={option: "http://127.0.0.1:6379/"})
+    assert sessions == []
+
+
 @pytest.mark.parametrize("count", [0, -1])
 def test_fewer_than_one_connection_is_refused(sessions: list[_Session], count: int) -> None:
     """Refuse a connection count below 1, on which curl_cffi never finishes building its session, before building it."""

@@ -49,7 +49,7 @@ from headgate._core import (
 )
 from headgate._failures import DEFAULT_REQUEST_ID_HEADERS, shorten
 from headgate._responses import ResponseCheck
-from headgate._url import redact_secrets
+from headgate._url import hide_userinfo
 from headgate.breaker._policy import BreakerPolicy
 from headgate.breaker._registry import BreakerRegistry
 from headgate.cache._policy import HttpCache
@@ -473,7 +473,7 @@ def check_base_url(base_url: str) -> None:
     """
     # Redacted as text, which keeps an empty "?" or "#" that splitting the URL would drop, and a "#" in a userinfo,
     # then cut: a secret may sit under any query name, not only those redaction knows.
-    shown = repr(shorten(_AFTER_QUERY.sub("…", redact_secrets(base_url), count=1)))
+    shown = repr(shorten(_AFTER_QUERY.sub("…", hide_userinfo(base_url), count=1)))
     absolute = f"base_url= takes an absolute http(s) URL, such as {_BASE_URL_EXAMPLE} (got {shown})"
     try:
         url = httpx2.URL(base_url)
@@ -731,6 +731,7 @@ class HttpOptions:
         """Return the options as a dataclass shows them, but each header's value as ``'***'``: it may be a key."""
         shown = {item.name: getattr(self, item.name) for item in fields(self)}
         shown["headers"] = dict.fromkeys(self.headers, "***")
+        shown["proxy"] = None if self.proxy is None else hide_userinfo(self.proxy)
         return f"HttpOptions({', '.join(f'{name}={value!r}' for name, value in shown.items())})"
 
     def _check_kinds(self) -> None:

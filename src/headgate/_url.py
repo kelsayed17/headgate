@@ -40,6 +40,7 @@ __all__ = [
     "SECRET_QUERY_PARAMS",
     "CallUrl",
     "escape_segment",
+    "hide_userinfo",
     "is_secret_param",
     "redact_secrets",
     "register_secret_params",
@@ -137,6 +138,21 @@ def redact_secrets(text: str) -> str:
     """
     text = _USERINFO.sub(f"//{_REDACTED}@", text)
     return _PAIR.sub(lambda m: f"{m[1]}{m[2]}={_REDACTED}" if is_secret_param(m[2]) else m[0], text)
+
+
+#: Everything from a URL's ``//`` to its last ``@``: the userinfo of a URL nothing parsed, a password with a ``/``, a
+#: quote or a space in it included.
+_ANY_USERINFO: Final = re.compile(r"//.*@", re.DOTALL)
+
+
+def hide_userinfo(url: str) -> str:
+    """Return the configured *url* with every secret hidden, its userinfo whatever it holds, for a message or a repr.
+
+    :func:`redact_secrets` finds a userinfo in free text, so it stops at a character a URL in a sentence ends with; a
+    URL given as a setting is the whole string, so everything up to its last ``@`` is hidden, a ``@`` in its path
+    included, which a message can spare.
+    """
+    return redact_secrets(_ANY_USERINFO.sub(f"//{_REDACTED}@", url, count=1))
 
 
 def escape_segment(value: object) -> str:

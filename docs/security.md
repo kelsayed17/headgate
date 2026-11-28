@@ -117,9 +117,10 @@ name, so TLS still sends it as SNI and verifies the certificate against it, and 
   guard refuses them.
 - Any other custom transport (`HttpOptions(transport=...)`) resolves names itself: every hop is still vetted before
   it is sent, but the transport's own lookup is not pinned. An attempt a [middleware](configuration.md#middleware)
-  moved to another origin is vetted again below the last middleware, so a host a middleware sends to (a failover
-  replica, say) is refused as the hop's own would be; so it is inside a test's `fake_network`, through the fake
-  network's names. One left on its origin is not looked up a second time.
+  sends to an origin the guard has not admitted is vetted again below the last middleware, a retry or a hedge of it
+  included, so a host a middleware sends to (a failover replica, say) is refused as the hop's own would be; so it is
+  inside a test's `fake_network`, through the fake network's names. One left where the guard vetted it is not looked
+  up a second time.
 - The guard cannot be combined with `proxy=`, since a proxy resolves the target itself.
 - `HttpOptions(security=SecurityOptions(resolver=...))` replaces the event loop's `getaddrinfo` (an async function of
   host and port returning addresses as text), and is accepted only with the guard on. Inside a test's

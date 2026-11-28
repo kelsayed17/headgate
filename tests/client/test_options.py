@@ -808,6 +808,14 @@ def test_a_base_url_httpx2_cannot_read_is_refused_without_quoting_it() -> None:
     assert "s3cret" not in str(raised.value)
 
 
+def test_the_options_repr_shows_no_proxy_password() -> None:
+    """Show a proxy URL's user and password as ``***``, which a log line or a traceback's locals would show."""
+    shown = repr(HttpOptions(proxy="http://user:SECRET@proxy.example:8080"))
+
+    assert "proxy='http://***@proxy.example:8080'" in shown
+    assert "SECRET" not in shown
+
+
 def test_the_options_repr_shows_no_header_value() -> None:
     """Show each default header by name, its value as ``'***'``, since a default header may carry a key."""
     options = HttpOptions(headers={"X-Api-Key": "s3cret", "Accept-Language": "en"}, max_redirects=3)

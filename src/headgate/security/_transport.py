@@ -30,7 +30,7 @@ import asyncio
 import contextlib
 import ssl
 from collections.abc import Awaitable, Callable, Iterable
-from typing import override
+from typing import Final, override
 
 import httpcore2
 import httpx2
@@ -39,7 +39,11 @@ from httpcore2._backends.base import SOCKET_OPTION
 
 from headgate.security._addresses import AddressGuard
 
-__all__ = ["PinnedHTTPTransport", "address_hook", "vet_request"]
+__all__ = ["VETTED_ORIGIN", "PinnedHTTPTransport", "address_hook", "vet_request"]
+
+#: The request extension holding the origin the SSRF guard last vetted the request for, set only once it was admitted:
+#: a layer that must vet a request someone may have moved compares the request's origin with it.
+VETTED_ORIGIN: Final = "headgate.vetted_origin"
 
 
 class _VettingBackend(httpcore2.AsyncNetworkBackend):
@@ -114,6 +118,9 @@ def address_hook(guard: AddressGuard) -> Callable[[httpx2.Request], Awaitable[No
 
     async def vet(request: httpx2.Request) -> None:
         await vet_request(guard, request)
+        # Marked once admitted, never before: a retry or a hedge of a request moved since carries the mark of where it
+        # was, and is vetted again where it is now.
+        request.extensions[VETTED_ORIGIN] = httpx2.Origin(request.url)
 
     return vet
 

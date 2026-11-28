@@ -37,6 +37,7 @@ from headgate._core import (
     check_default_headers,
     check_kind,
     check_status,
+    is_model_class,
     is_type,
     named,
     sealed,
@@ -132,6 +133,16 @@ def reader_hint(value: object) -> str | None:
     if isinstance(value, type) and value in _READERS_FOR:
         return _READERS_FOR[value]
     return f"write reader({type_text(value)}) with a flavor's reader, from headgate.msgspec or headgate.pydantic"
+
+
+def _is_trap(decode: object) -> bool:
+    """Return whether *decode*, a class or a type given as a function of a body's bytes, would misread every body.
+
+    A builtin with a reader of its own (``str`` returned the bytes' ``repr``), a model class (which takes its fields,
+    not bytes) and a type expression (``list[Row]``) are; a class built from bytes (``io.BytesIO``, ``bytearray``)
+    decodes the body as it is written to.
+    """
+    return decode in _READERS_FOR or is_model_class(decode) or not isinstance(decode, type)
 
 
 def _name_of(read: object) -> str:
@@ -416,7 +427,7 @@ def _body_reader[T](
     :raises TypeError: as :func:`body_reader` documents.
     """
     check_callable("body_reader(decode)", decode, "a function of the body's bytes")
-    if (hint := reader_hint(decode)) is not None:
+    if (hint := reader_hint(decode)) is not None and _is_trap(decode):
         if decode is bytes and refuse is not None:
             # as_bytes takes no refuse=, so the bytes are read with a function that hands them on as they are.
             hint = "write body_reader(lambda content: content, refuse=...) to check the body's bytes"

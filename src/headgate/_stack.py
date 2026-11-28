@@ -25,8 +25,8 @@ signs each send, so a request that waited for its turn is signed when it goes ou
 * request hooks: the credential guard (:class:`~headgate.security.CredentialGuard`, which also runs below the last
   middleware and below the signature, where what they stamp is visible), then, over a custom network
   transport or a test's fake network with ``SecurityOptions(block_private_hosts=True)``, the SSRF guard's vetting
-  (:func:`~headgate.security.address_hook`), which also runs below the last middleware on an attempt the middleware
-  moved to another origin, since a middleware may change the host; the default transport
+  (:func:`~headgate.security.address_hook`), which also runs below the last middleware on an attempt whose origin it
+  has not admitted, since a middleware may change the host; the default transport
   (:class:`~headgate.security.PinnedHTTPTransport`) and a transport that takes the guard
   (``headgate.curl.AsyncCurlTransport``) pin vetted addresses themselves, on every send;
 * response hooks: the https-downgrade refusal, the refusal to re-send a one-shot body on a redirect, and the drop of a
@@ -198,8 +198,8 @@ def build_transport_stack(
     The rate-limit layer spends from *budgets*. The cache partitions its entries by *credentials*' auth. A
     ``SigningAuth`` signs each send below the rate layer, after its wait, and the middleware layer is built for
     *credentials*' middleware; the guard runs again below each, so what they stamp stays on trusted origins too, and
-    below the middleware so does the SSRF guard's vetting where the network transport does not pin, on an attempt the
-    middleware moved to another origin, so a host a middleware chose is vetted too. An *observed* client's attempts are
+    below the middleware so does the SSRF guard's vetting where the network transport does not pin, on an attempt whose
+    origin it has not admitted, so a host a middleware chose is vetted too. An *observed* client's attempts are
     reported (``AttemptFinished``).
     """
     layer = SendTrackingTransport(transport=_network(http))

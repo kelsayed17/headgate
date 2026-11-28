@@ -275,6 +275,13 @@ class GuardBinding:
             self._holds -= 1
             return self._holds == 0
 
+    def close(self) -> bool:
+        """Mark the transport closed; return whether it was open, so that two closes at once close it once."""
+        with self._lock:
+            was_open = not self.closed
+            self.closed = True
+            return was_open
+
     def bind(self, guard: AddressGuard | None) -> None:
         """Serve only requests the SSRF *guard* vets (``None``: an unguarded client), pinning each to its addresses.
 
@@ -410,6 +417,12 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
                 "the credential guard included; headgate follows redirects itself (HttpOptions(follow_redirects=...))"
             )
             raise ValueError(msg)
+        if CurlOpt.URL in given or CurlOpt.CURLU in given:
+            msg = (
+                "curl_options must not set CurlOpt.URL or CurlOpt.CURLU: curl would send every request to that URL, "
+                "past every hook and the SSRF guard; headgate sets each request's URL"
+            )
+            raise ValueError(msg)
         options: dict[CurlOpt, Any] = {
             CurlOpt.NOPROXY: "" if CurlOpt.PROXY in given else "*",
             CurlOpt.CAINFO: certifi.where(),
@@ -473,10 +486,8 @@ class AsyncCurlTransport(httpx2.AsyncBaseTransport):
     async def aclose(self) -> None:
         """Close the curl session at once, though clients built on the transport may still hold it."""
         # The last client's hold closes it again later; `curl_cffi` 0.16 crashes closing a closed session.
-        if self._guard.closed:
-            return
-        self._guard.closed = True
-        await self._session.close()
+        if self._guard.close():
+            await self._session.close()
 
 
 def _httpx_response(request: httpx2.Request, response: _Response) -> httpx2.Response:
