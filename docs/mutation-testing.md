@@ -200,11 +200,11 @@ few families:
 | `headgate.security._downgrade` | `refuse_https_downgrade #18` | header-name case |
 | `headgate.security._downgrade` | `refuse_https_downgrade #19` | header-name case |
 | `headgate.streaming._stream` | `OpenStream.aiter_events #10` | header-name case |
-| `headgate.streaming._events` | `EventParser.__init__ #3` | `_after_cr` is only tested for truth |
-| `headgate.streaming._events` | `EventParser.__init__ #9` | an event's type is read only as `type or "message"`, where `None` is as falsy as `""` |
-| `headgate.streaming._events` | `EventParser.feed #4` | `_after_cr` is only tested for truth |
-| `headgate.streaming._events` | `EventParser._end_line #3` | `_first_line` is only tested for truth |
-| `headgate.streaming._events` | `EventParser._end_line #24` | codec names are case-insensitive |
+| `headgate._sse` | `EventParser.__init__ #3` | `_after_cr` is only tested for truth |
+| `headgate._sse` | `EventParser.__init__ #9` | an event's type is read only as `type or "message"`, where `None` is as falsy as `""` |
+| `headgate._sse` | `EventParser.feed #4` | `_after_cr` is only tested for truth |
+| `headgate._sse` | `EventParser._end_line #3` | `_first_line` is only tested for truth |
+| `headgate._sse` | `EventParser._end_line #24` | codec names are case-insensitive |
 | `headgate.testing._transport` | `_path #7` | codec names are case-insensitive |
 | `headgate.testing._codec` | `check_codec #27` | the planted key's value only has to be a string where an int is declared, which this one still is |
 | `headgate.testing._codec` | `check_codec #28` | the planted key's value only has to be a string where an int is declared, which this one still is |

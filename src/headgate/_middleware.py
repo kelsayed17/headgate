@@ -19,8 +19,6 @@ shape every headgate auth has, empty when it stamps none), and has them removed 
 than ``base_url``'s and ``SecurityOptions.trusted_origins``. ``Client()`` refuses a middleware that declares neither.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, Protocol, override
 
 import httpx2

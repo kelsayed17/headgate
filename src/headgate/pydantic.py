@@ -23,10 +23,8 @@ shows the names the type declares and ``[...]`` for a key of the input's own (a 
 Requires the ``pydantic`` extra: ``pip install headgate[pydantic]``.
 """
 
-from __future__ import annotations
-
 import functools
-from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, overload
+from typing import Any, ClassVar, Final, cast, overload
 
 from headgate._core import rehome
 
@@ -37,20 +35,18 @@ except ImportError as exc:
     msg = "headgate.pydantic needs pydantic: pip install headgate[pydantic]"
     raise ImportError(msg) from exc
 
+from collections.abc import Callable, Mapping
+
+from pydantic_core import ErrorDetails
+from pydantic_core.core_schema import ErrorType
+from typing_extensions import TypeForm
+
 from headgate._codec import decode_with, reader_for, writer_for
 from headgate._codec import drop_none as _drop_none
 from headgate._failures import NESTED_TOO_DEEPLY
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
-
-    from pydantic_core import ErrorDetails
-    from pydantic_core.core_schema import ErrorType
-    from typing_extensions import TypeForm
-
-    from headgate._request_body import Writer
-    from headgate._responses import Reader
-    from headgate.errors import RefusedError
+from headgate._request_body import Writer
+from headgate._responses import Reader
+from headgate.errors import RefusedError
 
 __all__ = ["CODEC", "PydanticCodec", "decode", "reader", "to_builtins", "writer"]
 

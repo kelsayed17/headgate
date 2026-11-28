@@ -25,10 +25,8 @@ types the result as exactly that expression.
 Requires the ``msgspec`` extra: ``pip install headgate[msgspec]``.
 """
 
-from __future__ import annotations
-
 import re
-from typing import TYPE_CHECKING, ClassVar, Final, cast, overload
+from typing import ClassVar, Final, cast, overload
 
 from headgate._core import rehome
 
@@ -38,17 +36,15 @@ except ImportError as exc:
     msg = "headgate.msgspec needs msgspec: pip install headgate[msgspec]"
     raise ImportError(msg) from exc
 
+from collections.abc import Callable, Mapping
+
+from typing_extensions import TypeForm
+
 from headgate._codec import decode_with, reader_for, writer_for
 from headgate._codec import drop_none as _drop_none
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
-
-    from typing_extensions import TypeForm
-
-    from headgate._request_body import Writer
-    from headgate._responses import Reader
-    from headgate.errors import RefusedError
+from headgate._request_body import Writer
+from headgate._responses import Reader
+from headgate.errors import RefusedError
 
 __all__ = ["CODEC", "MsgspecCodec", "decode", "reader", "to_builtins", "writer"]
 

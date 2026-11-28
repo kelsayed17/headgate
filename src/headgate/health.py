@@ -12,15 +12,11 @@ These functions, and the snapshot type the first returns, are the whole read sur
 caller can neither mutate the state nor see it change mid-iteration; a metrics callback can call them on a timer.
 """
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING, NamedTuple
+from typing import NamedTuple
 
 from headgate._core import OBSERVER_FAILURES, BreakerState, rehome
+from headgate.breaker import BreakerRegistry
 from headgate.cache._transport import CACHE_DEGRADATIONS
-
-if TYPE_CHECKING:
-    from headgate.breaker import BreakerRegistry
 
 __all__ = ["BreakerSnapshot", "breaker_states", "cache_degradations", "observer_failures"]
 

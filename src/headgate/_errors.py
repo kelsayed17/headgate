@@ -9,8 +9,6 @@
 It imports nothing at runtime beyond the standard library, since every layer above a client imports it.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType

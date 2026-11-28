@@ -16,23 +16,18 @@ The cache is TTL-only: an entry is served until its lifetime ends and is never r
 that wants revalidation sends its own validator with :func:`headgate.cache.conditional`.
 """
 
-from __future__ import annotations
-
 import enum
 import math
+import re
+from collections.abc import Collection
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import Final
 from urllib.parse import unquote
 
 import httpx2
+from hishel import AsyncBaseStorage
 
 from headgate._core import check_collection, check_fragment, check_names, path_has_fragment
-
-if TYPE_CHECKING:
-    import re
-    from collections.abc import Collection
-
-    from hishel import AsyncBaseStorage
 
 __all__ = ["HttpCache", "Partition"]
 

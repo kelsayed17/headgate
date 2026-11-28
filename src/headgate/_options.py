@@ -13,17 +13,15 @@ Every one is frozen, slotted and keyword-only, validates on construction so a ba
 written, and freezes the collections it is given.
 """
 
-from __future__ import annotations
-
 import functools
 import inspect
 import math
 import ssl
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Final, Unpack, final, override
+from typing import ClassVar, Final, Unpack, final, override
 
 import httpx2
 
@@ -31,7 +29,6 @@ import httpx2
 from typing_extensions import TypedDict
 
 from headgate._body import DEFAULT_MAX_RESPONSE_BYTES
-from headgate._call_options import check_options
 from headgate._core import (
     check_callable,
     check_collection,
@@ -40,23 +37,20 @@ from headgate._core import (
     check_kind,
     check_names,
     check_not_letters,
+    check_options,
     origin_of,
     origin_text,
     path_has_fragment,
 )
 from headgate._failures import DEFAULT_REQUEST_ID_HEADERS
+from headgate._responses import ResponseCheck
 from headgate.breaker._policy import BreakerPolicy
 from headgate.breaker._registry import BreakerRegistry
 from headgate.cache._policy import HttpCache
 from headgate.ratelimit._budget import RateBudget
 from headgate.ratelimit._rate import Rate
 from headgate.retry._policy import RetryPolicy
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
-
-    from headgate._responses import ResponseCheck
-    from headgate.security import Resolver
+from headgate.security import Resolver
 
 __all__ = [
     "DEFAULT_LIMITS",

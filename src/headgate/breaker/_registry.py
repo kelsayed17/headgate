@@ -20,24 +20,17 @@ loops in different threads can share a registry; each breaker guards its own sta
 :mod:`headgate.breaker._breaker`).
 """
 
-from __future__ import annotations
-
 import threading
 from collections import OrderedDict
-from contextlib import contextmanager
-from typing import TYPE_CHECKING, Final, Protocol, override
+from collections.abc import Generator, Iterator
+from contextlib import AbstractContextManager, contextmanager
+from typing import Final, Protocol, override
 
 import httpx2
 
 from headgate._core import BreakerState, check_kind, current_timing, origin_of, origin_text, timing_override
-from headgate.breaker._breaker import CircuitBreaker, Verdict
+from headgate.breaker._breaker import CircuitBreaker, TransitionListener, Verdict
 from headgate.breaker._policy import BreakerPolicy
-
-if TYPE_CHECKING:
-    from collections.abc import Generator, Iterator
-    from contextlib import AbstractContextManager
-
-    from headgate.breaker._breaker import TransitionListener
 
 __all__ = ["DEFAULT_MAX_HOSTS", "NO_BREAKER", "Breaker", "BreakerRegistry"]
 

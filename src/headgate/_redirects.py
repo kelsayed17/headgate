@@ -12,8 +12,6 @@ them whether this request's redirects are being followed. Where a redirect may t
 may carry there, is :mod:`headgate.security`'s.
 """
 
-from __future__ import annotations
-
 from typing import Final
 
 import httpx2

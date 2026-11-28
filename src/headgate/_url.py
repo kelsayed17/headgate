@@ -25,8 +25,6 @@ credential, a bare ``user@`` included: a token sent as the username (``https://g
 take one.
 """
 
-from __future__ import annotations
-
 import re
 from string.templatelib import Template
 from typing import TYPE_CHECKING, Final, LiteralString

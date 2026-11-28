@@ -9,16 +9,12 @@ links, which is why the header is scanned rather than split. The parser is lenie
 up to the next comma that separates links, and it never raises.
 """
 
-from __future__ import annotations
-
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 import httpx2
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
 
 __all__ = ["Link", "next_link", "parse_link_header"]
 

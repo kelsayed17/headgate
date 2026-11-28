@@ -46,8 +46,6 @@ middleware and the signature, where their output is visible. That pass trusts no
 middleware's credentials, since the middleware did not choose it.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, Final
 
 import httpx2

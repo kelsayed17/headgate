@@ -3,8 +3,6 @@
 
 """The breaker option a client is configured with."""
 
-from __future__ import annotations
-
 import math
 from dataclasses import dataclass
 

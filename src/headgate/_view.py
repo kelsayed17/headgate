@@ -9,11 +9,10 @@ them, and the client consults it where it applies a call's own options, so the p
 view's, then the route's, then the policy's.
 """
 
-from __future__ import annotations
-
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import TYPE_CHECKING, Final, Literal
+from typing import Final, Literal
 
 import httpx2
 
@@ -21,14 +20,8 @@ import httpx2
 from typing_extensions import TypedDict
 
 from headgate._call_options import check_overrides
-from headgate._options import check_deadline
-from headgate.retry._policy import SEND_ONCE
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
-
-    from headgate._options import Timeouts
-    from headgate.retry._policy import RetryPolicy
+from headgate._options import Timeouts, check_deadline
+from headgate.retry._policy import SEND_ONCE, RetryPolicy
 
 __all__ = ["KEEP", "ROOT_DEFAULTS", "VIEW_KEYS", "Keep", "ViewDefaults", "ViewOptions"]
 

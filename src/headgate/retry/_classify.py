@@ -25,8 +25,6 @@ handled inside httpcore2, which moves the request to a new connection itself, so
 that covers the request's stream may have been processed and follows the ordinary rules.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 

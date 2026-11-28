@@ -28,18 +28,13 @@ across an ``await`` or a call into the caller's code (the transition callback ru
 ``asyncio.Lock`` would be wrong here: it binds to the loop that first awaits it.
 """
 
-from __future__ import annotations
-
 import enum
 import threading
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, NamedTuple
+from typing import NamedTuple
 
 from headgate._core import BreakerState, current_timing
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
-
 
 __all__ = ["BreakerOpenError", "CircuitBreaker", "Transition", "Verdict"]
 

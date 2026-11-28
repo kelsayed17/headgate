@@ -7,8 +7,6 @@ Two layers act on the same answer, so it is read in one place: the retry layer w
 budget pauses every sender sharing it until it has passed. Reading it the same way is what makes the two waits one.
 """
 
-from __future__ import annotations
-
 import math
 import re
 import time

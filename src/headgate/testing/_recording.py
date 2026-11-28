@@ -31,23 +31,17 @@ record and replay through real vcrpy. The filter itself depends on neither vcrpy
 shape of their hooks.
 """
 
-from __future__ import annotations
-
-from collections.abc import Mapping
+from collections.abc import Collection, Iterable, Mapping, MutableMapping
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, ClassVar, Protocol
+from typing import ClassVar, Protocol
+
+import httpx2
 
 from headgate._auth import AUTH_HOP
 from headgate._core import CredentialCarrier, check_kind, check_names, check_not_letters
+from headgate._middleware import Next
 from headgate._url import sanitize_url
 from headgate.security._credentials import check_declarations
-
-if TYPE_CHECKING:
-    from collections.abc import Collection, Iterable, MutableMapping
-
-    import httpx2
-
-    from headgate._middleware import Next
 
 __all__ = ["CassetteFilter", "RecordedRequest"]
 

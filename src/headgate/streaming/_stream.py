@@ -8,24 +8,18 @@ Its iterators read the body as it arrives, after content-decoding, and map a fai
 mapping (and the breaker charge that goes with a network failure) is the client's, passed in as *fail*.
 """
 
-from __future__ import annotations
-
+import codecs
 import functools
-from typing import TYPE_CHECKING, Final, Protocol, final
+from collections.abc import AsyncIterator, Callable, Iterator
+from typing import Final, Protocol, final
 
-from headgate._failures import parse_error
+import httpx2
+
+from headgate._errors import ClientError
+from headgate._failures import CallSite, parse_error
+from headgate._sse import EventParser, EventTooLargeError, text_decoder
 from headgate.errors import ResponseTooLargeError
 from headgate.retry._policy import NETWORK_ERRORS
-from headgate.streaming._events import EventParser, EventTooLargeError, text_decoder
-
-if TYPE_CHECKING:
-    import codecs
-    from collections.abc import AsyncIterator, Callable, Iterator
-
-    import httpx2
-
-    from headgate._errors import ClientError
-    from headgate._failures import CallSite
 
 __all__ = ["DEFAULT_MAX_EVENT_SIZE", "NetworkFailure", "OpenStream", "Stream"]
 

@@ -13,8 +13,6 @@ suppressing a close failure: closing a partly read compressed stream makes httpx
 ``DecodingError`` on the truncated input, and that must not replace the error in flight.
 """
 
-from __future__ import annotations
-
 import contextlib
 from typing import TYPE_CHECKING
 

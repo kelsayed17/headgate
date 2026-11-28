@@ -44,10 +44,8 @@ does not use.
 Requires the ``otel`` extra: ``pip install headgate[otel]`` (``opentelemetry-api`` only; bring your own SDK).
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Final
+from typing import ClassVar, Final
 from urllib.parse import urlsplit
 
 from headgate._core import rehome
@@ -61,19 +59,16 @@ except ImportError as exc:
     msg = "headgate.otel needs opentelemetry-api: pip install headgate[otel]"
     raise ImportError(msg) from exc
 
-from headgate._core import CallContext, CallFinished, CallInfo, CallStarted
+import httpx2
+from opentelemetry.metrics import MeterProvider
+from opentelemetry.propagators.textmap import TextMapPropagator
+from opentelemetry.trace import Span, TracerProvider
+from opentelemetry.util.types import AttributeValue
+
+from headgate._core import CallContext, CallFinished, CallInfo, CallStarted, Event
+from headgate._middleware import Next
 from headgate._user_agent import headgate_version
 from headgate.cache._transport import TRACE_HEADERS
-
-if TYPE_CHECKING:
-    import httpx2
-    from opentelemetry.metrics import MeterProvider
-    from opentelemetry.propagators.textmap import TextMapPropagator
-    from opentelemetry.trace import Span, TracerProvider
-    from opentelemetry.util.types import AttributeValue
-
-    from headgate._core import Event
-    from headgate._middleware import Next
 
 __all__ = ["OpenTelemetryObserver"]
 

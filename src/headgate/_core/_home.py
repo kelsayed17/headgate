@@ -7,8 +7,6 @@ A class defined in a private module would otherwise name that module in its ``re
 ``help()``, which is a second home no import may use. Each public module calls :func:`rehome` last.
 """
 
-from __future__ import annotations
-
 import types
 from typing import TYPE_CHECKING, cast
 

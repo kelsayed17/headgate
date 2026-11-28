@@ -9,16 +9,10 @@ cache it keeps (and, through :meth:`~headgate.HttpCache.caches_request` and
 anything.
 """
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
+from headgate import Client, HttpCache
 from headgate._client import built_with
-
-if TYPE_CHECKING:
-    from headgate import Client, HttpCache
-    from headgate.breaker import BreakerRegistry
-    from headgate.ratelimit._budget import RateBudget
+from headgate.breaker import BreakerRegistry
+from headgate.ratelimit._budget import RateBudget
 
 __all__ = ["breakers_of", "budget_for", "cache_of"]
 

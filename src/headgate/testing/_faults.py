@@ -17,13 +17,12 @@ layer above counts it as it would on a real network. Each send is recorded in :a
 response it returned, if any, with whether that was closed.
 """
 
-from __future__ import annotations
-
 import json as jsonlib
 import math
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import TYPE_CHECKING, override
+from typing import override
 
 import h2.errors
 import h2.events
@@ -32,9 +31,6 @@ import httpx2
 
 from headgate._core import CallContext, current_timing
 from headgate.retry._tracking import head_size
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Mapping
 
 __all__ = [
     "ConnectFail",

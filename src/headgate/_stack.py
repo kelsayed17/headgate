@@ -37,8 +37,6 @@ Nothing here reads the environment: the client and the default transport are bui
 cookie jar refuses every cookie unless ``HttpOptions(cookies=True)``.
 """
 
-from __future__ import annotations
-
 from contextvars import ContextVar
 from dataclasses import dataclass
 from http.cookiejar import CookieJar, DefaultCookiePolicy

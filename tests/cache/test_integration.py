@@ -201,7 +201,8 @@ _VERBS = ("delete", "get", "head", "patch", "post", "put")
 def test_every_http_verb_takes_a_cache_ttl(verb: str) -> None:
     """Accept ``cache_ttl`` on every verb, through its options, so the forwarding test below covers them all."""
     options = {"get": CallOptions, "head": CallOptions}.get(verb, RequestOptions)
-    assert inspect.signature(getattr(Client, verb)).parameters["options"].annotation == f"Unpack[{options.__name__}]"
+    unpacked = Unpack[CallOptions] if options is CallOptions else Unpack[RequestOptions]
+    assert inspect.signature(getattr(Client, verb)).parameters["options"].annotation == unpacked
     assert "cache_ttl" in options.__optional_keys__
 
 

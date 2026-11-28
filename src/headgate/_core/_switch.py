@@ -7,14 +7,9 @@ It lives here, below every layer, because a rate budget honors it when it is bui
 policy subpackages may import only this core. :mod:`headgate.policy` is its public face and documents what "off" means.
 """
 
-from __future__ import annotations
-
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from collections.abc import Generator
 
 __all__ = ["policy_disabled", "policy_is_disabled"]
 

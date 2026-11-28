@@ -3,8 +3,6 @@
 
 """A rate (:class:`Rate`) and adaptive throttling (:class:`Adaptive`)."""
 
-from __future__ import annotations
-
 import math
 from dataclasses import dataclass
 

@@ -24,23 +24,18 @@ address: :func:`address_hook` vets every hop as a request hook, which refuses a 
 sent, but the transport's own lookup could still be answered differently a moment later.
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING, Protocol, override, runtime_checkable
+import ssl
+from collections.abc import Awaitable, Callable, Iterable
+from typing import Protocol, override, runtime_checkable
 
 import httpcore2
 import httpx2
 from httpcore2._backends.anyio import AnyIOBackend
+from httpcore2._backends.base import SOCKET_OPTION
 
-if TYPE_CHECKING:
-    import ssl
-    from collections.abc import Awaitable, Callable, Iterable
-
-    from httpcore2._backends.base import SOCKET_OPTION
-
-    from headgate.security._addresses import AddressGuard
+from headgate.security._addresses import AddressGuard
 
 __all__ = ["GuardedTransport", "PinnedHTTPTransport", "address_hook", "vet_request"]
 

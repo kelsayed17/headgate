@@ -42,8 +42,6 @@ attempt on the network: a response or network failure another identical GET fetc
 circuit breaker: one upstream failure shared by five waiting requests is one failure, not five.
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import dataclasses
