@@ -21,6 +21,7 @@ A reader's shape errors (a :class:`~headgate.errors.DecodeError`, or a ``ValueEr
 from code over ``response.json()``, or nesting too deep to parse) become ``ResponseParseError`` on a 2xx.
 """
 
+import codecs
 import functools
 import json
 import math
@@ -385,14 +386,19 @@ as_bytes: Final[Reader[bytes]] = Reader(_as_bytes, name="as_bytes")
 
 
 def _as_text(resp: httpx2.Response, /) -> str:
-    return text_decoder(resp.encoding).decode(resp.content, final=True)
+    content = resp.content
+    if content.startswith(codecs.BOM_UTF8):
+        return content.removeprefix(codecs.BOM_UTF8).decode("utf-8", "replace")
+    return text_decoder(resp.encoding).decode(content, final=True)
 
 
 #: Return the body as text, decoded by the response's ``charset``, as ``Stream.aiter_lines`` decodes it.
 #:
-#: A plain-text, CSV or HTML body a parser of text reads later. It never raises: a ``charset`` that names no text
-#: encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is, and bytes the charset cannot decode become
-#: replacement characters. Where ``response.text`` raises for such a ``charset``, this reader does not.
+#: A plain-text, CSV or HTML body a parser of text reads later. A leading UTF-8 byte order mark is dropped, and the
+#: rest read as UTF-8, which the mark says it is, whatever the ``charset``. A ``charset`` that names no text encoding
+#: (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is, where ``response.text`` raises, and bytes the charset
+#: decodes badly become replacement characters. A body the ``charset`` cannot decode at all (UTF-16 without a byte
+#: order mark) raises ``UnicodeDecodeError``, which the client reports as ``ResponseParseError``.
 as_text: Final[Reader[str]] = Reader(_as_text, name="as_text")
 
 

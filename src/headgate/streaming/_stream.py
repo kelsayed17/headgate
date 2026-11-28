@@ -90,8 +90,9 @@ class Stream(Protocol):
 
         A line past *max_line_size* characters (1 MiB by default, as an event; ``None`` for no limit) raises
         ``ResponseTooLargeError``, before it ends if it never does. The body is decoded by its ``charset``; one that is
-        no text encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is, and a body its ``charset``
-        cannot decode raises ``ResponseParseError``.
+        no text encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is. Bytes the ``charset`` decodes
+        badly become replacement characters, and a body it cannot decode at all (UTF-16 without a byte order mark)
+        raises ``ResponseParseError``.
         """
         ...
 
@@ -170,8 +171,9 @@ class OpenStream:
 
         A line past *max_line_size* characters (1 MiB by default, as an event; ``None`` for no limit) raises
         ``ResponseTooLargeError``, before it ends if it never does. The body is decoded by its ``charset``; one that is
-        no text encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is, and a body its ``charset``
-        cannot decode raises ``ResponseParseError``.
+        no text encoding (``base64``, ``rot13``) is read as UTF-8, as no ``charset`` is. Bytes the ``charset`` decodes
+        badly become replacement characters, and a body it cannot decode at all (UTF-16 without a byte order mark)
+        raises ``ResponseParseError``.
         """
         decoder = text_decoder(self._response.encoding)
         chunks = _Guarded(self._response.aiter_bytes(), self._fail)
