@@ -271,6 +271,14 @@ class Auth(httpx2.Auth, CredentialStamper, ABC):
     long, as ``frozenset("X-Api-Key")`` is. A declaration through a property is checked when a client is built.
     """
 
+    def __init__(self) -> None:
+        """Hold nothing: a subclass's constructor need not call this.
+
+        It is here so the constructor reads as what it takes, ``()``, not the protocol base's ``(*args, **kwargs)``.
+        It shadows the constructor of any base listed after it, so a subclass that wraps another ``httpx2.Auth`` lists
+        that one first: ``class Digest(httpx2.DigestAuth, Auth)``.
+        """
+
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Refuse a declaration given as a class attribute that is not a frozenset of names, or splits a name."""
         super().__init_subclass__(**kwargs)

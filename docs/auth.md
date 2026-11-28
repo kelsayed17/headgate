@@ -42,7 +42,8 @@ names are all one character long (`frozenset("x-api-key")` is a set of its lette
 class is defined (or, for a property, when the client is built). A fixed header needs no class: `StaticHeaderAuth`.
 For basic auth, `StaticHeaderAuth({"Authorization": "Basic " + base64.b64encode(b"user:pass").decode()})`.
 
-Digest auth is httpx2's own flow with the declarations added, since `httpx2.DigestAuth` declares nothing:
+Digest auth is httpx2's own flow with the declarations added, since `httpx2.DigestAuth` declares nothing. The wrapped
+auth goes first, so its constructor is the one `Digest(...)` calls:
 
 ```python
 from typing import ClassVar
@@ -52,7 +53,7 @@ import httpx2
 from headgate import Auth
 
 
-class Digest(Auth, httpx2.DigestAuth):
+class Digest(httpx2.DigestAuth, Auth):
     credential_headers: ClassVar = frozenset({"authorization"})
     credential_params: ClassVar = frozenset[str]()
 

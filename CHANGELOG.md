@@ -13,14 +13,17 @@ change the public API; such changes are listed under **Changed** and **Removed**
   properties) and names its credential (`credential_identity()`). A subclass that leaves one out cannot be built.
   `BearerAuth`, `StaticHeaderAuth`, `QueryParamAuth`, `SigningAuth` and `CachedTokenAuth` all derive from it. It is
   `headgate.security.CredentialStamper` made a base class, and derives from it, so the contract is defined once; the
-  protocol remains for a middleware that has a credential identity of its own.
+  protocol remains for a middleware that has a credential identity of its own. `Auth()`, `SigningAuth()` and
+  `CachedTokenAuth()` read as taking nothing (`inspect.signature`, `help()`), not the protocol base's
+  `(*args, **kwargs)`. A subclass that wraps another `httpx2.Auth` lists the wrapped one first, so its constructor is
+  the one called: `class Digest(httpx2.DigestAuth, Auth)`.
 
 ### Changed
 
 - `Client(auth=)` takes a `headgate.Auth`. A plain `httpx2.Auth`, `httpx2.BasicAuth` and `httpx2.DigestAuth` included,
   raises `TypeError` when the client is built, since it declares nothing the guard could withhold from another origin:
   subclass `headgate.Auth` and declare what it stamps, or write `StaticHeaderAuth({"Authorization": ...})` for a fixed
-  header such as basic auth. Digest auth is `class Digest(Auth, httpx2.DigestAuth)` with the two declarations and a
+  header such as basic auth. Digest auth is `class Digest(httpx2.DigestAuth, Auth)` with the two declarations and a
   `credential_identity()` (see the auth guide). A virtual subclass made with `Auth.register` is refused too, since
   registering declares nothing.
 - `get()` and `head()` take no `body=` (their options are `CallOptions`): a GET's body has no meaning, and the cache
@@ -86,12 +89,11 @@ change the public API; such changes are listed under **Changed** and **Removed**
 - `SigningAuth.sign(request, now)` is handed the attempt's wall-clock time in Unix seconds, from the client's timing, so
   a signer runs on `TestClock.install()` like the rest of the client. Write `def sign(self, request, now)` and sign with
   `now` where you called `time.time()`.
-- A hook of the wrong color is refused where it is given, where it type-checked as an error but ran: a
-  `SigningAuth` whose `sign` is a coroutine function raises `TypeError` when the class is defined (its requests went
-  out unsigned, with only a "never awaited" warning): write `def sign(self, request, now)`. `Client()` raises
-  `TypeError` for an observer whose `notify` is a coroutine function (its events were dropped): write
-  `def notify(self, event)`; and for a middleware whose `__call__` is not one (it failed at the first call): write
-  `async def __call__(self, request, call_next)`.
+- A hook of the wrong color is refused where it is given, as ty already reported it: a `SigningAuth` whose `sign` is
+  a coroutine function raises `TypeError` when the class is defined (its requests went out unsigned, with only a
+  "never awaited" warning): write `def sign(self, request, now)`. `Client()` raises `TypeError` for an observer whose
+  `notify` is a coroutine function (its events were dropped): write `def notify(self, event)`; and for a middleware
+  whose `__call__` is not one (it failed at the first call): write `async def __call__(self, request, call_next)`.
 - `CassetteFilter(auths=)` takes auths and middleware (`Iterable[CredentialCarrier]`). An entry that declares no
   `credential_headers` and `credential_params`, which it skipped, raises `TypeError`: pass only auths and middleware,
   and name any other credential in `headers=` or `params=`. A middleware's declared names are now filtered too.
