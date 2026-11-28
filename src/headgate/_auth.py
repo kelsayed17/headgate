@@ -602,10 +602,6 @@ class SigningAuth(Auth):
 
     def skips(self, request: httpx2.Request) -> bool:
         """Return whether *request* is sent unsigned: by default, one already carrying a signed header or parameter."""
-        return self._carries(request)
-
-    def _carries(self, request: httpx2.Request) -> bool:
-        """Return whether *request* carries any of the signed headers or parameters."""
         return _carries(self, request)
 
     @final
@@ -621,7 +617,7 @@ class SigningAuth(Auth):
         response = yield request
         # A 401 to a request its signature never reached (the credential guard withheld it) judged no signature, so it
         # is not re-sent.
-        if response.status_code == httpx2.codes.UNAUTHORIZED and self._carries(response.request):
+        if response.status_code == httpx2.codes.UNAUTHORIZED and _carries(self, response.request):
             await _drop_body(response)
             yield request
 

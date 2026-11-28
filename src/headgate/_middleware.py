@@ -78,24 +78,24 @@ class MiddlewareTransport(httpx2.AsyncBaseTransport):
         transport: httpx2.AsyncBaseTransport,
         middleware: tuple[Middleware, ...],
         guard: Callable[[httpx2.Request], Awaitable[None]],
-        signer: SigningAuth | None,
-        wall_clock: Clock,
+        signer: tuple[SigningAuth, Clock] | None,
     ) -> None:
         """Chain *middleware* before *signer*, *guard* and *transport*, once, so each attempt only walks the chain.
 
-        *signer* is the client's auth when it is a ``SigningAuth``: only its marks are signed, since the guard withholds
-        only what the client's auth declares. *guard* is the client's credential guard, run on what the last middleware
-        passes on, once it is signed. *wall_clock* is the client's, which each signature is made at.
+        *signer* is the client's auth when it is a ``SigningAuth``, with the client's wall clock, which each signature
+        is made at: only its marks are signed, since the guard withholds only what the client's auth declares. *guard*
+        is the client's credential guard, run on what the last middleware passes on, once it is signed.
         """
         self._transport = transport
 
         async def guarded(request: httpx2.Request) -> httpx2.Response:
-            if signer is not None and request.extensions.get(SIGNER_EXT) is signer:
+            if signer is not None and request.extensions.get(SIGNER_EXT) is signer[0]:
+                auth, wall_clock = signer
                 # A hedge's copy and a redirect hop are new requests over the body the flow buffered: read it again.
                 await request.aread()
                 before = stamped_names(request)
-                signer.sign(request, wall_clock())
-                refuse_undeclared(signer, "sign", request, before)
+                auth.sign(request, wall_clock())
+                refuse_undeclared(auth, "sign", request, before)
             await guard(request)
             return await transport.handle_async_request(request)
 
