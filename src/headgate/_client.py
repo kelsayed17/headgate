@@ -148,6 +148,9 @@ type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "QUERY"]
 #: The methods :data:`Method` names, in its order: what ``stream(method=)`` takes.
 _METHODS: Final = get_args(Method.__value__)
 
+#: What makes an object a :class:`~headgate.pagination.Pager`, besides its ``read``.
+_PAGER_METHODS: Final = ("first", "page_items", "next_page")
+
 #: How much of a refused or failed streamed response is read, for the ``ClientError``'s body snippet.
 _STREAM_ERROR_HEAD_BYTES = 4096
 
@@ -1427,9 +1430,16 @@ def _expectation[T](expect: Reader[T] | Expect[T]) -> Expect[T]:
 def _page_reader[I, P, B](pager: Pager[I, P, B]) -> Reader[P] | Expect[P]:
     """Return the reader *pager* reads its pages with, its ``read``.
 
-    :raises TypeError: for a pager with no ``read``, or a ``read`` that is neither a :class:`~headgate.Reader` nor an
+    :raises TypeError: for a pager without callable ``first``, ``page_items`` and ``next_page``, naming the first it
+        lacks; and for one with no ``read``, or a ``read`` that is neither a :class:`~headgate.Reader` nor an
         ``Expect``, naming what it got.
     """
+    if missing := next((name for name in _PAGER_METHODS if not callable(getattr(pager, name, None))), None):
+        msg = (
+            f"pager= takes a Pager, such as Cursor(reader(Page), items=..., next=..., param=...) (got "
+            f"{type(pager).__name__}, which has no {missing})"
+        )
+        raise TypeError(msg)
     read: object = getattr(pager, "read", None)
     if not isinstance(read, Reader | Expect):
         got = "no read" if read is None else f"a read of {named(read)}"

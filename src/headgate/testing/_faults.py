@@ -29,7 +29,15 @@ import h2.events
 import httpcore2
 import httpx2
 
-from headgate._core import CallContext, current_timing, refuse_subclass
+from headgate._core import (
+    CallContext,
+    check_headers,
+    check_int,
+    check_kind,
+    check_number,
+    current_timing,
+    refuse_subclass,
+)
 from headgate.retry._tracking import head_size
 
 __all__ = [
@@ -74,7 +82,11 @@ class Respond:
     retry_after: float | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a ``retry_after`` no ``Retry-After`` can say: a negative or non-finite one."""
+        """Refuse a field of the wrong kind, and a ``retry_after`` no ``Retry-After`` can say: negative or infinite."""
+        check_int("status_code", self.status_code, "a status, an int")
+        check_headers("headers", self.headers)
+        if self.retry_after is not None:
+            check_number("retry_after", self.retry_after, "seconds, a number, or None")
         if self.retry_after is not None and not (math.isfinite(self.retry_after) and self.retry_after >= 0):
             msg = f"retry_after must be a finite, non-negative number of seconds, got {self.retry_after!r}"
             raise ValueError(msg)
@@ -102,6 +114,10 @@ class DropMidBody:
 
     after_bytes: int
 
+    def __post_init__(self) -> None:
+        """Refuse a count that is not an ``int``."""
+        check_int("after_bytes", self.after_bytes, "a number of bytes, an int")
+
 
 @dataclass(frozen=True, slots=True)
 class Slow:
@@ -113,6 +129,11 @@ class Slow:
 
     seconds: float
     then: Respond = field(default_factory=Respond)
+
+    def __post_init__(self) -> None:
+        """Refuse a wait that is not a number, and a step to take after it that is not a :class:`Respond`."""
+        check_number("seconds", self.seconds, "seconds, a number")
+        check_kind("then", self.then, Respond, "a Respond")
 
 
 @dataclass(frozen=True, slots=True)

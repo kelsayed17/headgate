@@ -32,7 +32,7 @@ from typing import Final, NoReturn, cast, final, override
 
 import httpx2
 
-from headgate._core import check_headers, check_kind
+from headgate._core import check_headers, check_int, check_kind
 from headgate._sse import EventParser, text_decoder
 from headgate.errors import DecodeError, RefusedError
 
@@ -213,11 +213,13 @@ class Expect[T]:
         No ranges and no ``default``: OpenAPI allows ``4XX``, but a range is a claim about statuses nobody documented.
         This ``Expect`` is left as it was.
 
-        :raises TypeError: for a *read* that is not a :class:`Reader`.
+        :raises TypeError: for a *status* that is not an ``int`` (``"404"`` and ``True`` included), and a *read* that is
+            not a :class:`Reader`.
         :raises ValueError: for a status outside 100-599; for 401, 407, 429 or any 5xx, which mean we could not ask
             (the credentials are ours, and the transport owns 429 and 5xx through retry and the breaker); or for a
             status already declared. It is raised where the ``Expect`` is built, usually at import.
         """
+        check_int("status", status, "an HTTP status, an int such as HTTPStatus.NOT_FOUND")
         check_kind("read", read, Reader, "a Reader")
         _refuse_unclaimable(status)
         if status in self._answers:

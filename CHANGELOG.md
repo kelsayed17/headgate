@@ -271,6 +271,30 @@ change the public API; such changes are listed under **Changed** and **Removed**
   `"GET"`, `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`, `"HEAD"` and `"QUERY"`, where any other value, a lower-case
   `"get"` included, was sent as given. Write `params={"a": 1}`, `headers={"X-N": "1"}`, `idempotency_key=str(key)`
   and `method="GET"`.
+- Every number a client is configured with is checked for its kind where it is given, a `TypeError` naming the field:
+  a `bool`, which a type checker takes for an `int`, and a `str` are refused, and a `float` where a count goes. This
+  covers `Timeouts`' four phases, `Rate`, `RateBudget(max_in_flight=)`, `RetryPolicy(attempts=, max_retry_after=,
+  min_attempt_time=)`, `Backoff`, `Hedge`, `RetryShare`, `Adaptive`, `BreakerPolicy`, `BreakerRegistry(max_hosts=)`,
+  `HttpCache(ttl=)`, the pagers' `page_size` and `start`, and the testing kit's `DropMidBody`, `Respond`, `Slow` and
+  `TestClock`. `Timeouts(read=True)`, `Rate(True, 1)` and `RetryPolicy(attempts=2.5)` were accepted, and
+  `Timeouts(read="5")` raised a comparison error from inside the constructor: write `Timeouts(read=5.0)`,
+  `Rate(1, 1)` and `RetryPolicy(attempts=3)`.
+- `RateBudget(rate)` takes a `Rate` (`RateBudget(5)` raised an `AttributeError`: write
+  `RateBudget(Rate.per_second(5))`), and `adaptive=` an `Adaptive` or `None`.
+- `RetryPolicy(statuses=)` and `HttpCache(statuses=)` hold `int` statuses from 100 to 599: a `bool` or a numeric
+  string, which no response's status equals, is a `TypeError`, and `999` a `ValueError`, where
+  `RetryPolicy(statuses=frozenset({"500"}))` was accepted and never matched. Write `frozenset({500})`.
+- `Expect.on(status, ...)` takes an `int`: `on("404", ...)` raised a comparison error and `on(True, ...)` a
+  `ValueError` about status 1; both are a `TypeError` naming `status=`. Write `on(HTTPStatus.NOT_FOUND, ...)`.
+- `Client(observers=)` refuses an entry with no callable `notify`, such as `print` or an observer whose method is
+  misspelled, with a `TypeError` naming it: such an observer was accepted, and every event failed into
+  `observer_failures()`. Write a class with `def notify(self, event)`.
+- Every built-in pager checks its fields when it is built: `read` must be a `Reader` or an `Expect`
+  (`Cursor(5, items=...)` was accepted, and the walk failed at its first page), each hook (`items`, `next`, `more`,
+  `total`, `offset`, `put`, `write`) callable, `page_size` and `start` an `int`, `param` a `str` and `stop_on_empty`
+  a `bool`, each a `TypeError` naming the field. `paginate(pager=)` refuses an object without callable `first`,
+  `page_items` and `next_page`, naming the first it lacks, where `pager=None` raised an `AttributeError`. Pass the
+  page reader first: `Cursor(reader(Page), items=..., next=..., param=...)`.
 
 ### Removed
 

@@ -37,6 +37,7 @@ from headgate._core import (
     BreakerState,
     Clock,
     Timing,
+    check_int,
     check_kind,
     current_timing,
     origin_of,
@@ -184,10 +185,12 @@ class BreakerRegistry:
     ) -> None:
         """Start empty, building each breaker with *policy*'s thresholds.
 
-        :raises TypeError: for a *policy* that is not a :class:`~headgate.BreakerPolicy`.
+        :raises TypeError: for a *policy* that is not a :class:`~headgate.BreakerPolicy`, and a *max_hosts* that is not
+            an ``int``.
         :raises ValueError: for a *max_hosts* below one.
         """
         check_kind("policy", policy, BreakerPolicy, "a BreakerPolicy, such as BreakerPolicy(failure_threshold=3)")
+        check_int("max_hosts", max_hosts, "a number of origins, an int of at least 1")
         if max_hosts < 1:
             msg = f"max_hosts must be >= 1 (got {max_hosts})"
             raise ValueError(msg)
