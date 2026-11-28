@@ -3,6 +3,7 @@
 
 """A network transport for tests: a route table of canned replies, and a log of every request it was sent."""
 
+import inspect
 import ipaddress
 from collections.abc import Awaitable, Callable, Generator
 from contextlib import contextmanager
@@ -178,6 +179,9 @@ class FakeNetwork[T: httpx2.AsyncBaseTransport]:
     """
 
     __slots__ = ("_override", "_transport")
+
+    #: What ``inspect`` and ``help()`` show it takes: nothing, since ``fake_network`` builds it.
+    __signature__ = inspect.Signature()
 
     _transport: T
 

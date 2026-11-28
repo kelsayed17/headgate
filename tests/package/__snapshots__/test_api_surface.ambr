@@ -373,7 +373,7 @@
       field timeout: bool = False
   class DropMidBody(object)(after_bytes: 'int') -> 'None'
       field after_bytes: int
-  class FakeNetwork(Generic)(*args: 'object', **kwargs: 'object') -> 'None'
+  class FakeNetwork(Generic)()
       property clients
       property transport
   class FakeTransport(AsyncBaseTransport)() -> 'None'
